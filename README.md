@@ -4,87 +4,61 @@
 
 ## 📋 Visión del Proyecto
 
-Para psicólogos que trabajan con información fragmentada y sesgada de sus pacientes , **Alethea** es una plataforma de journaling interactivo que convierte las vivencias diarias en registros clínicos estructurados y objetivos en tiempo real.
+Para psicólogos que trabajan con información fragmentada y sesgada de sus pacientes, **Alethea** es una plataforma de journaling interactivo que convierte las vivencias diarias en registros clínicos estructurados y objetivos en tiempo real.
 
 A diferencia del journaling manual, nuestro producto simplifica el registro mediante una conversación guiada vía WhatsApp, permitiendo al profesional expandir su visión diagnóstica con datos ya organizados para la sesión.
-
-### ¿Por qué existimos?
-
-* **Eliminar el sesgo de memoria:** Evita que el paciente dependa de recordar detalles días después del evento.
-
-
-* **Journaling en tiempo real:** Registro de emociones en el momento exacto en que ocurren.
-
-
-* **Optimización de la sesión:** El psicólogo se enfoca en acompañar el presente con datos objetivos en lugar de reconstruir el pasado.
-
-
-* **Continuidad terapéutica:** Transforma la terapia en un puente de comunicación constante.
-
-
 
 ---
 
 ## 🏗️ Arquitectura Técnica
 
-El proyecto está construido bajo un paradigma de **Monolito Modular** aplicando **Arquitectura Hexagonal (Ports & Adapters)** para garantizar la mantenibilidad y la soberanía de los datos.
+El proyecto se basa en un **Monolito Modular** bajo **Arquitectura Hexagonal**, priorizando la soberanía de los datos y la resiliencia clínica.
 
 ### Stack Tecnológico
 
-* **Backend:** [Phoenix Framework (Elixir)](https://www.google.com/search?q=https://phoenixframework.org/) para alta concurrencia y tolerancia a fallos.
-
-
-* **IA Orchestration:** [LangChain](https://www.google.com/search?q=https://github.com/elixir-langchain/langchain) utilizando modelos **RoBERTa** (análisis de emociones) y **Phi-4 mini** (conversación guiada).
-
-
-* **Bases de Datos:** * **PostgreSQL** con extensión `pgvector` para búsqueda semántica y RAG.
-* **Neo4j** para el mapeo de grafos de conducta verbal.
-
-
-
-
-* **Infraestructura de Mensajería:** **WhatsApp Business API** como interfaz principal.
-
-
-* **Background Jobs:** **Oban** para el procesamiento asíncrono y resiliente de mensajes de IA.
+*   **Backend:** [Phoenix Framework (Elixir)](https://phoenixframework.org/) para alta concurrencia y gestión de estado en tiempo real.
+*   **IA Orchestration:** [LangChain](https://github.com/elixir-langchain/langchain) con **RoBERTa** (análisis de sentimiento local vía `Nx/Bumblebee`) y **Phi-4 mini** (conversación guiada).
+*   **Bases de Datos:**
+    *   **PostgreSQL + pgvector:** Almacenamiento principal y búsqueda semántica de vectores protegidos.
+    *   **Neo4j:** Mapeo de grafos de conducta verbal (probabilísticos y pendientes de verificación clínica).
+*   **Infraestructura:**
+    *   **WhatsApp Business API:** Tratada como un **Puerto Transitorio** (sin persistencia en el proveedor).
+    *   **Oban:** Procesamiento asíncrono para garantizar el patrón de **Recibo Transaccional** y mitigar la latencia de inferencia.
 
 ---
 
 ## 🔒 Seguridad y Privacidad (Innegociable)
 
-La seguridad y la precisión clínica son la prioridad máxima del proyecto.
+*   **Soberanía de Datos:** Cifrado en reposo mediante `Cloak.Ecto` (AES-256). Las llaves son específicas por paciente, permitiendo el **Borrado Criptográfico** al finalizar el proceso terapéutico.
+*   **Protección de Vectores:** Los embeddings se tratan como PII sensible, protegidos con el mismo rigor que el texto plano para evitar ataques de inversión.
+*   **Auditoría Clínica:** Registro estricto de accesos y modificaciones, asegurando que la "Verdad Clínica" sea siempre trazable al origen.
+*   **Interfaz:** Dashboard diseñado exclusivamente para **Light Mode** para asegurar legibilidad en entornos clínicos.
 
-* **Cifrado en Reposo:** Implementado mediante `Cloak.Ecto` con algoritmos AES-256 para todo contenido sensible (registros de diario y números de teléfono).
-* **Auditoría Clínica:** Registro estricto de accesos a los datos del paciente por parte de los profesionales.
-* **Interfaz:** El Dashboard profesional está diseñado exclusivamente para **Light Mode** para asegurar legibilidad en entornos clínicos.
+---
+
+## ⚖️ Principios Éticos y de IA
+
+*   **IA de Personalidad Deficiente:** El bot mantiene un tono clínico y neutro para evitar el "Atrapamiento de Transferencia" y preservar el vínculo humano con el terapeuta.
+*   **Seguridad Determinista:** Filtro de "Banderas Rojas" por palabras clave que opera en paralelo a la IA para detección inmediata de crisis sin depender de la "intuición" del modelo.
+*   **Transparencia de Fuente:** Cada hallazgo o nodo del grafo incluye un enlace directo al mensaje original o al audio (Whisper) para evitar el sesgo de automatización.
+*   **Matiz Acústico:** La transcripción de sesiones incluye metadatos de prosodia (silencios, tono, velocidad) para no perder la carga emocional del lenguaje no verbal.
 
 ### Lo que Alethea NO es
-
-* 🚫 NO diagnostica de forma autónoma.
-
-
-* 🚫 NO reemplaza la terapia presencial/virtual.
-
-
-* 🚫 NO funciona sin supervisión profesional activa.
-
-
+*   🚫 **NO** es un servicio de intervención en crisis.
+*   🚫 **NO** diagnostica de forma autónoma ni genera juicios clínicos finales.
+*   🚫 **NO** sustituye el juicio ni la supervisión activa del profesional.
 
 ---
 
 ## 🚀 Roadmap de Desarrollo
 
-El proyecto se desarrolla en un ciclo de **6 meses (6 iteraciones)**:
-
-1. **Iteración 1:** Core de mensajería WhatsApp + Cifrado base.
-2. **Iteración 2:** Implementación de RAG y Chat para el profesional.
-3. **Iteración 3:** Integración de Whisper para transcripción de sesiones (RAG de voz).
-4. **Iteración 4:** Configuración de Triggers Activos y Pasivos para detección de crisis.
-5. **Iteración 5:** Módulo de Pricing y analítica clínica avanzada.
-6. **Iteración 6:** Pruebas de seguridad y cumplimiento normativo.
+1.  **Iteración 1:** Core de mensajería (WhatsApp asíncrono) + Cifrado base (`Cloak.Ecto`).
+2.  **Iteración 2:** Implementación de RAG Protegido y Dashboard de visualización inicial.
+3.  **Iteración 3:** RAG de Voz (Whisper) con integración de matices acústicos.
+4.  **Iteración 4:** Triggers Deterministas y detección de patrones de riesgo.
+5.  **Iteración 5:** Módulo de analítica avanzada y exportación de datos (Portabilidad).
+6.  **Iteración 6:** Auditoría de seguridad final y cumplimiento normativo.
 
 ---
 
 Este proyecto se desarrolla en cumplimiento de los requisitos académicos de la materia Proyecto Final.
-
----
