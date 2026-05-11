@@ -12,6 +12,7 @@ defmodule Alethea.Application do
       Alethea.Repo,
       {DNSCluster, query: Application.get_env(:alethea, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Alethea.PubSub},
+      Alethea.Encryption.Vault,
       # Start a worker by calling: Alethea.Worker.start_link(arg)
       # {Alethea.Worker, arg},
       # Start to serve requests, typically the last entry
