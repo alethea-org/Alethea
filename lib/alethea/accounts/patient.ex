@@ -5,13 +5,21 @@ defmodule Alethea.Accounts.Patient do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "patients" do
-    field :encrypted_phone, Alethea.Encryption.Binary
-    field :encryption_key_id, :binary_id
-    field :clinical_settings, :map, default: %{}
-    field :last_interaction, :utc_datetime
-    field :phone, :string, virtual: true
+    field :whatsapp_number_hash, :string
+    field :encrypted_whatsapp_number, :binary
+    field :alias, :string
+    field :status, :string, default: "active"
+    field :encryption_version, :integer, default: 1
+
+    # Virtual field for the raw number during input
+    field :whatsapp_number, :string, virtual: true
 
     belongs_to :professional, Alethea.Accounts.Professional
+    belongs_to :encryption_key, Alethea.Accounts.EncryptionKey
+
+    has_many :messages, Alethea.Clinical.Message
+    has_many :summaries, Alethea.Clinical.Summary
+    has_many :trends, Alethea.Clinical.Trend
 
     timestamps(type: :utc_datetime)
   end
@@ -19,20 +27,16 @@ defmodule Alethea.Accounts.Patient do
   def changeset(patient, attrs) do
     patient
     |> cast(attrs, [
-      :phone,
+      :whatsapp_number,
+      :alias,
+      :status,
       :professional_id,
       :encryption_key_id,
-      :clinical_settings,
-      :last_interaction
+      :encryption_version
     ])
-    |> validate_required([:phone, :professional_id])
-    |> put_encrypted_phone()
-  end
+    |> validate_required([:whatsapp_number, :alias, :professional_id])
+    |> validate_inclusion(:status, ["active", "archived", "deleted"])
 
-  defp put_encrypted_phone(changeset) do
-    case get_change(changeset, :phone) do
-      nil -> changeset
-      phone -> put_change(changeset, :encrypted_phone, phone)
-    end
+    # Logic for hashing and encrypting the number would go here or in a context
   end
 end
