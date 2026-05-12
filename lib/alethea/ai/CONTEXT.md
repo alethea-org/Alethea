@@ -11,6 +11,13 @@ Orquestar la inferencia híbrida para proporcionar una conversación guiada, an�
 *   **`roberta_worker.ex`**: Worker local para sentimiento (Bumblebee). No requiere internet.
 *   **`phi_worker.ex`**: Interfaz con Phi-4 para la conversación interactiva.
 
+## Esquema de Base de Datos (ER)
+*   **Table `ai_diagnoses`**: 
+    *   `id` (UUIDv4)
+    *   `message_id` (Unique, FK -> `messages.id`)
+    *   `extracted_emotions` (JSONB, RoBERTa output)
+    *   `ai_response` (Text, Phi-4 raw output)
+
 ## Guía para Desarrolladores y Agentes
 1.  **Privacidad:** Nunca envíes contenido en claro a `phi_worker.ex` sin pasar por el filtro de sanitización.
 2.  **Asincronía:** El procesamiento de IA es pesado. Siempre debe ser disparado por un worker de Oban para no bloquear el proceso de recepción del mensaje.

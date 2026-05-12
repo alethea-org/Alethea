@@ -10,6 +10,20 @@ Modelar la conducta verbal, detectar crisis y organizar el diario del paciente d
 *   **Crisis Triggers**: Filtros deterministas y pasivos para detección de riesgo.
 *   **Journaling**: Gestión del historial de entradas y sesiones de voz.
 
+## Esquema de Base de Datos (ER)
+*   **Table `messages`**: 
+    *   `id` (UUIDv4)
+    *   `patient_id` (FK -> `patients.id`)
+    *   `direction` (inbound, outbound)
+    *   `encrypted_content` (AES-256)
+    *   `timestamp` (UTC)
+*   **Table `clinical_summaries`**: 
+    *   `id` (UUIDv4)
+    *   `patient_id` (FK -> `patients.id`)
+    *   `period_start`, `period_end`
+    *   `summary_text` (Consolidated diagnosis)
+    *   `status_level` (Estable, Alerta, Intervención Requerida)
+
 ## Guía para Desarrolladores y Agentes
 1.  **Validación Clínica**: Los datos generados aquí deben ser verificables. Siempre guarda el `source_id` del mensaje original.
 2.  **Etiquetado**: Distingue rigurosamente entre datos `SPONTANEOUS` y `ELICITED`.
