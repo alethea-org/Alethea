@@ -16,13 +16,22 @@ Modelar la conducta verbal, detectar crisis y organizar el diario del paciente d
     *   `patient_id` (FK -> `patients.id`)
     *   `direction` (inbound, outbound)
     *   `encrypted_content` (AES-256)
+    *   `encryption_version` (Integer)
+    *   `synced_to_graph` (Boolean, for Neo4j projection)
     *   `timestamp` (UTC)
 *   **Table `clinical_summaries`**: 
-    *   `id` (UUIDv4)
+...
     *   `patient_id` (FK -> `patients.id`)
     *   `period_start`, `period_end`
     *   `summary_text` (Consolidated diagnosis)
     *   `status_level` (Estable, Alerta, Intervención Requerida)
+*   **Table `clinical_trends`**:
+    *   `id` (UUIDv4)
+    *   `patient_id` (FK -> `patients.id`)
+    *   `indicator_name` (Ej. Ansiedad, Sueño, Socialización)
+    *   `score` (Float para gráficas de progreso)
+    *   `delta` (Cambio respecto a la medición anterior)
+    *   `timestamp`
 
 ## Guía para Desarrolladores y Agentes
 1.  **Validación Clínica**: Los datos generados aquí deben ser verificables. Siempre guarda el `source_id` del mensaje original.

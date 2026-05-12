@@ -14,9 +14,11 @@ Orquestar la inferencia híbrida para proporcionar una conversación guiada, an�
 ## Esquema de Base de Datos (ER)
 *   **Table `ai_diagnoses`**: 
     *   `id` (UUIDv4)
-    *   `message_id` (Unique, FK -> `messages.id`)
+    *   `message_id` (FK -> `messages.id`)
+    *   `model_version` (Ej. RoBERTa-v1, Phi-4-mini)
     *   `extracted_emotions` (JSONB, RoBERTa output)
     *   `ai_response` (Text, Phi-4 raw output)
+*   **Clinical Trends Logic**: La IA debe comparar el `ai_diagnoses` actual con registros anteriores para alimentar la tabla `clinical_trends`.
 
 ## Guía para Desarrolladores y Agentes
 1.  **Privacidad:** Nunca envíes contenido en claro a `phi_worker.ex` sin pasar por el filtro de sanitización.

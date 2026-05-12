@@ -18,9 +18,26 @@ Manejar el registro, autenticación y la relación jerárquica entre el terapeut
 *   **Table `patients`**: 
     *   `id` (UUIDv4)
     *   `professional_id` (FK -> `professionals.id`)
-    *   `whatsapp_number` (Hashed/Encrypted)
+    *   `whatsapp_number_hash` (Salted hash unique per professional for privacy)
+    *   `encrypted_whatsapp_number` (AES-256 with versioning)
+    *   `encryption_key_id` (FK -> `encryption_keys.id`)
     *   `alias` (Anonymized display name)
     *   `status` (Default: 'active')
+    *   `encryption_version` (Integer)
+*   **Table `encryption_keys`**:
+    *   `id` (UUIDv4)
+    *   `patient_id` (FK -> `patients.id`, null for professional keys)
+    *   `encrypted_key` (The key itself, wrapped by a higher-level key)
+    *   `type` (patient, professional)
+    *   `version` (Integer)
+*   **Table `audit_logs`**:
+...
+    *   `professional_id` (FK -> `professionals.id`)
+    *   `action` (LOGIN, VIEW_PATIENT, EXPORT_DATA, etc.)
+    *   `resource_type` (Patient, Message, Summary)
+    *   `resource_id` (UUID)
+    *   `details` (JSONB)
+    *   `timestamp`
 
 ## Guía para Desarrolladores y Agentes
 1.  **Contextos de Phoenix**: Usa este módulo para todas las queries relacionadas con la identidad de los usuarios.

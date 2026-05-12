@@ -11,6 +11,9 @@ Si eres nuevo en Phoenix, piensa en esta carpeta como el lugar donde defines **q
 *   **`encryption/`**: La bóveda de seguridad. Gestiona las llaves dinámicas y el cifrado AES-256.
 *   **`ai/`**: Orquestación de inteligencia artificial. Aquí es donde LangChain une los modelos con los datos clínicos.
 
+## Arquitectura de Datos
+Para un detalle exhaustivo de la estructura de tablas y el racional de seguridad, consulta el [**Manual del DER**](DER.md).
+
 ## Guía para Agentes de IA
 Al trabajar en esta carpeta:
 1.  **Mantén la pureza:** No importes módulos de `AletheaWeb`.
