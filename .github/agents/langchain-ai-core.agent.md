@@ -5,20 +5,8 @@ description: >
   de Alethea usando la librería `langchain` de Elixir (v0.3.0). Conoce a fondo
   el dominio clínico, las restricciones de privacidad y el stack técnico del proyecto.
   Usa este agente para cualquier tarea dentro de `lib/alethea/ai/`.
-model: claude-sonnet-4-5
-tools:
-  - type: builtin
-    name: codebase_search
-  - type: builtin
-    name: read_file
-  - type: builtin
-    name: create_file
-  - type: builtin
-    name: edit_file
-  - type: builtin
-    name: run_terminal_command
-  - type: builtin
-    name: grep_search
+model: "GPT-5.3-Codex (copilot)"
+tools: [read, edit, search, execute]
 ---
 
 # LangChain AI Core Engineer

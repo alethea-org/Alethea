@@ -1,6 +1,5 @@
 ---
 description: Crea un Oban Worker que orqueste el pipeline completo de IA (RoBERTa + LangChain)
-mode: agent
 ---
 
 # Prompt: Crear Oban Worker para el Pipeline de IA

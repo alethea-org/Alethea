@@ -1,6 +1,5 @@
 ---
 description: Crea una nueva LLMChain de LangChain Elixir para un flujo clínico en Alethea
-mode: agent
 ---
 
 # Prompt: Crear LangChain Chain para Flujo Clínico

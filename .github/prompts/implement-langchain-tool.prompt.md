@@ -1,6 +1,5 @@
 ---
 description: Crea una nueva LangChain Tool (Function) para que el LLM acceda a datos internos de Alethea
-mode: agent
 ---
 
 # Prompt: Crear LangChain Tool para el LLM
