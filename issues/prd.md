@@ -20,12 +20,12 @@ Alethea es un diario clínico inteligente que transforma el registro emocional e
 ### Implementation Decisions
 - **Módulos**:
     - `Alethea.Clinical.InferencePipeline`: Orquestador de la lógica de IA (Seguridad -> Sentimiento -> Respuesta).
-    - `Alethea.Encryption.SecureVault`: Encapsulamiento del esquema de "Double Encryption" (Master Key + Patient Keys).
+    - `Alethea.Encryption.Vault`: Encapsulamiento del esquema de "Double Encryption" (Master Key + Patient Keys).
     - `Alethea.Clinical.SessionManager`: Gestor del estado de la sesión diaria y timeouts vía Oban.
     - `Alethea.Alerts.CrisisMonitor`: Detector de triggers clínicos y despachador de notificaciones de emergencia.
 - **Interfaces**:
     - `InferencePipeline.process_input(patient_id, text)`: Devuelve el análisis y la respuesta generada.
-    - `SecureVault.encrypt_clinical_data(patient_id, plaintext)`: Provee cifrado determinista y seguro por paciente.
+    - `Alethea.Encryption.Vault.encrypt_clinical_data(patient_id, plaintext)`: Provee cifrado determinista y seguro por paciente.
 - **Arquitectura**: Modular Monolith en Elixir/Phoenix. PostgreSQL con `pgvector` para el RAG clínico. Procesamiento asíncrono mandatorio con Oban. Inferencia de sentimiento local con Bumblebee (RoBERTa).
 - **Líneas Rojas (Prompt Engineering)**: Prohibición absoluta de diagnóstico médico, prohibición de consejos terapéuticos directos y mantenimiento de neutralidad socrática inquebrantable.
 
