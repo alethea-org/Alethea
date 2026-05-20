@@ -33,6 +33,11 @@ config :phoenix, :json_library, Jason
 # Configure Cloak
 config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
 
+config :alethea, Alethea.AI.PhiWorker,
+  model: "phi-4-mini",
+  stream: false,
+  api_key: System.get_env("PHI_API_KEY")
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
