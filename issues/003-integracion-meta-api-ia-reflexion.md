@@ -69,7 +69,7 @@ Completar el pipeline clínico completo: validar la seguridad del webhook de Met
 | Arquitectura del pipeline | Un solo `ProcessMessageWorker` ejecuta todo el flujo secuencialmente | Menor latencia que un segundo job; la IA es suficientemente rápida en el caso de Phi-4 mini |
 | Backend de Phi-4 mini | `ChatOpenAI` con `endpoint_url` configurable vía `OPENAI_BASE_URL` | Dev → Groq/Azure (Phi-4 mini gratuito); Prod → Ollama local. Cero cambios de código entre entornos |
 | Contexto de conversación | Últimos N mensajes descifrados del paciente concatenados en el system prompt — N configurable (`app env`), default 10 | Provee continuidad clínica sin enviar el historial completo al LLM |
-| System Prompt | Almacenado en `config/config.exs`, leído con `Application.get_env/2` | Patrón ya establecido en `GuidedConversationChain`; ajustable sin recompilación (runtime.exs) |
+| System Prompt | Almacenado en `config/runtime.exs`, leído con `Application.get_env/2` | Patrón ya establecido en `GuidedConversationChain`; ajustable en runtime con restart de la release, sin recompilación |
 | Persistencia en DB | 3 registros por interacción: `Message` inbound (`spontaneous`), `Message` outbound (`elicited`), `AIDiagnosis` del chain | Trazabilidad completa (Source Anchoring del GEMINI.md); `AIDiagnosis.message_id` apunta al mensaje inbound |
 | `behavior_type` | Campo string `"spontaneous"` / `"elicited"` en `messages`, asignado en el worker al guardar | Cumple el mandato de trazabilidad del GEMINI.md |
 | Tests | Tests unitarios con `Mox` (mockear `PhiWorker` y `WhatsApp.Client`) | Aísla el pipeline del LLM real y de la API de Meta; rápidos y deterministas |
