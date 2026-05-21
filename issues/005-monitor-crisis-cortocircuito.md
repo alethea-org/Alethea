@@ -62,7 +62,7 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
   │     ├── :safe → continúa al pipeline clínico normal (issue 003)
   │     └── {:crisis, level, triggers}
   │           ├── 1. Clinical.save_message(patient, texto, dek, "inbound", "spontaneous") — guardar cifrado
-  │           ├── 2. Clinical.save_ai_diagnosis(msg_id, %{ai_response: nil, extracted_emotions: %{crisis: true, level: level, triggers: triggers}})
+  │           ├── 2. Clinical.save_ai_diagnosis(msg_id, %{ai_response: mensaje_soporte_predefinido, extracted_emotions: %{crisis: true, level: level, triggers: triggers}})
   │           ├── 3. Accounts.update_patient(patient, %{urgent_intervention: true})
   │           ├── 4. Phoenix.PubSub.broadcast(Alethea.PubSub, "crisis:alerts", {:crisis_detected, patient.id, level, triggers})
   │           └── 5. WhatsApp.Client.send_message(phone, mensaje_soporte_predefinido) → :ok
