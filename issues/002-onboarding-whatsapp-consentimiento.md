@@ -74,7 +74,7 @@ POST /webhooks/whatsapp
   └── WhatsappWebhookController.receive/2
         └── Oban.insert(ProcessMessageWorker, %{from: número, text: texto})
               └── ProcessMessageWorker.perform/1
-                    ├── lookup_patient(número)  ← itera pacientes, descifra DEKs, compara HMAC
+                    ├── lookup_patient(número)  ← calcula `whatsapp_number_hash` con `phone_hash_secret` y busca por índice (O(1))
                     │     ├── {:error, :not_found} → send_message(número, "No estás registrado...") → :ok
                     │     └── {:ok, patient}
                     │           ├── terms_accepted: false
