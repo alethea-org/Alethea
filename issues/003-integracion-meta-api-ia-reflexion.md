@@ -70,7 +70,7 @@ Completar el pipeline clínico completo: validar la seguridad del webhook de Met
 | Backend de Phi-4 mini | `ChatOpenAI` con `endpoint_url` configurable vía `OPENAI_BASE_URL` | Dev → Groq/Azure (Phi-4 mini gratuito); Prod → Ollama local. Cero cambios de código entre entornos |
 | Contexto de conversación | Últimos N mensajes descifrados del paciente concatenados en el system prompt — N configurable (`app env`), default 10 | Provee continuidad clínica sin enviar el historial completo al LLM |
 | System Prompt | Almacenado en `config/runtime.exs`, leído con `Application.get_env/2` | Patrón ya establecido en `GuidedConversationChain`; ajustable en runtime con restart de la release, sin recompilación |
-| Persistencia en DB | 3 registros por interacción: `Message` inbound (`spontaneous`), `Message` outbound (`elicited`), `AIDiagnosis` del chain | Trazabilidad completa (Source Anchoring del GEMINI.md); `AIDiagnosis.message_id` apunta al mensaje inbound |
+| Persistencia en DB | 3 registros por interacción: `Message` inbound (`spontaneous`), `Message` outbound (`elicited`), `Diagnosis` del chain | Trazabilidad completa (Source Anchoring del GEMINI.md); `Diagnosis.message_id` apunta al mensaje inbound |
 | `behavior_type` | Campo string `"spontaneous"` / `"elicited"` en `messages`, asignado en el worker al guardar | Cumple el mandato de trazabilidad del GEMINI.md |
 | Tests | Tests unitarios con `Mox` (mockear `PhiWorker` y `WhatsApp.Client`) | Aísla el pipeline del LLM real y de la API de Meta; rápidos y deterministas |
 
@@ -84,7 +84,7 @@ ProcessMessageWorker.perform/1
   ├── 4. PhiWorker.process(%{message_id: inbound_id, raw_content: texto, patient_context: ctx})
   │         └── GuidedConversationChain.run/1 → LLM (Phi-4 mini via OpenAI-compatible API)
   ├── 5. Guardar Message outbound (cifrado con DEK, direction: "outbound", behavior_type: "elicited")
-  ├── 6. Guardar AIDiagnosis (message_id: inbound_id, model_version, extracted_emotions: %{}, ai_response)
+  ├── 6. Guardar Diagnosis (message_id: inbound_id, model_version, extracted_emotions: %{}, ai_response)
   └── 7. WhatsApp.Client.send_message(phone, respuesta_ia)
 ```
 
@@ -152,7 +152,7 @@ ProcessMessageWorker.perform/1
 
 ### Tests
 - [ ] Actualizar `test/alethea_jobs/process_message_worker_test.exs` con test del pipeline completo:
-  - `terms_accepted: true` → mockear `PhiWorker` y `WhatsApp.Client.send_message`; verificar que se crean 2 `Message` y 1 `AIDiagnosis` en DB
+  - `terms_accepted: true` → mockear `PhiWorker` y `WhatsApp.Client.send_message`; verificar que se crean 2 `Message` y 1 `Diagnosis` (Alethea.AI.Diagnosis) en DB
 - [ ] Crear `test/alethea_web/controllers/whatsapp_webhook_controller_test.exs`:
   - Firma válida → encola job, devuelve 200
   - Firma inválida → devuelve 403, no encola job
@@ -179,5 +179,5 @@ ProcessMessageWorker.perform/1
 
 - **`OPENAI_BASE_URL` en dev**: Groq Cloud (`https://api.groq.com/openai/v1`) ofrece `llama-3.3-70b-versatile` o `meta-llama/llama-4-scout` gratis. Para Phi-4 mini específicamente, usar Azure AI Foundry o Together.ai. En prod, Ollama en el mismo servidor con `http://localhost:11434/v1` y `api_key: "ollama"`.
 - **Raw body y HMAC**: Phoenix consume el body al parsearlo. El `CacheBodyReader` debe configurarse **antes** del parser JSON en el endpoint para que el raw body esté disponible. Es un patrón estándar documentado en la guía de seguridad de Phoenix.
-- **`extracted_emotions` en `AIDiagnosis`**: En esta issue se guarda como `%{}` vacío. El análisis de sentimiento con RoBERTa (Bumblebee) que lo rellena es parte de la issue de monitoreo de crisis o dashboard.
+- **`extracted_emotions` en `Diagnosis`**: En esta issue se guarda como `%{}` vacío. El análisis de sentimiento con RoBERTa (Bumblebee) que lo rellena es parte de la issue de monitoreo de crisis o dashboard.
 - **Idempotencia**: el worker debe evitar guardar mensajes duplicados si Oban reintenta. Añadir una clave de unicidad usando el `wamid` (WhatsApp Message ID) del payload de Meta como campo único en `messages`.

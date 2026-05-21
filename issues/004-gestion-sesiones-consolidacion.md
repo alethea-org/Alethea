@@ -32,12 +32,15 @@ end
 defmodule Alethea.Clinical.Summary do
   use Ecto.Schema
   @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
   schema "clinical_summaries" do
-    field :content, :string
-    field :type, :string, default: "session" # "session" / "weekly"
-    belongs_to :patient, Alethea.Accounts.Patient, type: :binary_id
-    belongs_to :session, Alethea.Clinical.Session, type: :binary_id, optional: true
-    timestamps()
+    field :summary_text, :string
+    field :period_start, :utc_datetime
+    field :period_end, :utc_datetime
+    field :status_level, :string # "Estable", "Alerta", "Intervención Requerida"
+    field :type, :string, default: "session" # "session" / "weekly" (añadido en esta issue)
+    belongs_to :patient, Alethea.Accounts.Patient
+    timestamps(type: :utc_datetime)
   end
 end
 ```
@@ -47,13 +50,14 @@ end
 defmodule Alethea.Clinical.Trend do
   use Ecto.Schema
   @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
   schema "clinical_trends" do
     field :indicator_name, :string # "joy", "sadness", "anger", "fear", "neutral"
     field :score, :float
     field :delta, :float, default: 0.0
-    belongs_to :patient, Alethea.Accounts.Patient, type: :binary_id
-    belongs_to :session, Alethea.Clinical.Session, type: :binary_id
-    timestamps()
+    field :recorded_at, :utc_datetime
+    belongs_to :patient, Alethea.Accounts.Patient
+    timestamps(type: :utc_datetime)
   end
 end
 ```
@@ -136,9 +140,9 @@ WeeklyReportWorker.perform/1
 ### IA — Análisis de Emoción (Bumblebee local)
 - [ ] Crear `lib/alethea/ai/roberta_worker.ex` (`Alethea.AI.RoBERTaWorker`):
   - Inicia `Nx.Serving` con `Bumblebee.load_model({:hf, "pysentimiento/robertuito-emotion-analysis"})`
-  - Expone `analyze(text)` → `[%{label: "alegría", score: 0.82}, ...]`
-  - Expone `analyze_batch(texts)` → lista de resultados; promedia scores por emoción si `texts` tiene N elementos y retorna keys canónicas para trends (`joy/sadness/anger/fear/neutral`)
-  - Documentar mapeo explícito de labels del modelo → keys canónicas antes de persistir trends (p. ej. `"alegría"→"joy"`, `"tristeza"→"sadness"`, `"ira"→"anger"`, `"miedo"→"fear"`, `"neutral"→"neutral"`)
+  - Expone `analyze(text)` → `[%{label: "joy", score: 0.82}, ...]` (las emociones devueltas por la función deben estar ya mapeadas a las keys canónicas `"joy"`, `"sadness"`, `"anger"`, `"fear"`, `"neutral"`)
+  - Expone `analyze_batch(texts)` → lista de resultados; promedia scores por emoción si `texts` tiene N elementos y retorna las keys canónicas para trends (`joy/sadness/anger/fear/neutral`)
+  - Implementar un mapeo explícito de los labels originales del modelo a las keys canónicas de trends antes de retornar o persistir (p. ej., si el modelo retorna labels en español o keys alternativas, convertirlas: `"others"`/`"neutral"` → `"neutral"`, `"joy"`/`"alegría"` → `"joy"`, `"sadness"`/`"tristeza"` → `"sadness"`, `"anger"`/`"ira"` → `"anger"`, `"fear"`/`"miedo"` → `"fear"`), descartando `"surprise"` y `"disgust"`.
 - [ ] Añadir `{Alethea.AI.RoBERTaWorker, []}` al supervision tree en `lib/alethea/application.ex`
 
 ### Dominio — `SessionManager` y contexto `Clinical`

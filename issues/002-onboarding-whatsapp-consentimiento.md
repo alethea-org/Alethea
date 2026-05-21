@@ -96,11 +96,22 @@ POST /webhooks/whatsapp
   - Calcula el hash: `hash = :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone_e164) |> Base.encode64()`
   - Consulta O(1): `Repo.get_by(Patient, whatsapp_number_hash: hash)`
   - Retorna `{:ok, patient}` o `{:error, :not_found}`
-  - Configurar `:phone_hash_secret` en `config/runtime.exs` para asegurar consistencia entre entornos:
-
-    ```elixir
-    config :alethea, :phone_hash_secret, System.fetch_env!("PHONE_HASH_SECRET")
-    ```
+  - Configurar `:phone_hash_secret` de manera segura en todos los entornos para evitar crashes al compilar o correr tests:
+    - En `config/dev.exs` y `config/test.exs`:
+      ```elixir
+      config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+      ```
+    - En `config/runtime.exs` (solo para producción):
+      ```elixir
+      if config_env() == :prod do
+        phone_hash_secret =
+          System.get_env("PHONE_HASH_SECRET") ||
+            raise """
+            environment variable PHONE_HASH_SECRET is missing.
+            """
+        config :alethea, :phone_hash_secret, phone_hash_secret
+      end
+      ```
 
 ### Cliente WhatsApp
 - [ ] Crear `lib/alethea/whatsapp/client.ex` con `send_message(to_number, body_text)`:

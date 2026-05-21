@@ -11,9 +11,9 @@ defmodule Alethea.AI.Sanitizer do
   def sanitize(content) when is_binary(content) do
     content
     |> redact_email()
-    |> redact_phone()
     |> redact_ssn()
     |> redact_document_id()
+    |> redact_phone()
     |> String.trim()
   end
 

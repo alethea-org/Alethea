@@ -49,7 +49,7 @@ Implementar una capa de seguridad crítica que detecte riesgo clínico en el tex
 | Patrones de riesgo | Lista de regex por nivel en `config/runtime.exs`, leída con `Application.get_env/2` | Ajustable sin recompilación (evaluado en runtime al iniciar la release); evita hardcodear terminología clínica en el código |
 | Niveles de crisis | 3 niveles: `:low` (ideación pasiva), `:high` (ideación activa/plan), `:immediate` (emergencia inminente) | Granularidad clínica; cada nivel tiene su propio conjunto de patrones |
 | Respuesta al paciente | Un solo mensaje de soporte predefinido para todos los niveles | El nivel se usa solo para la alerta al profesional; el paciente siempre recibe el mismo mensaje de contención |
-| Persistencia al detectar crisis | Guardar mensaje inbound cifrado en DB + `AIDiagnosis` con `ai_response: nil` y `extracted_emotions: %{crisis: true, level: level}` | Trazabilidad completa (Source Anchoring del GEMINI.md); el dashboard puede ver el disparador |
+| Persistencia al detectar crisis | Guardar mensaje inbound cifrado en DB + `Diagnosis` con `ai_response: nil` y `extracted_emotions: %{crisis: true, level: level}` | Trazabilidad completa (Source Anchoring del GEMINI.md); el dashboard puede ver el disparador |
 | Marcado del paciente | `Accounts.update_patient(patient, %{urgent_intervention: true})` — campo ya existe desde issue 001 | Sin migración nueva; solo actualizar el booleano existente |
 | Notificación al dashboard | `Phoenix.PubSub.broadcast(Alethea.PubSub, "crisis:alerts", {:crisis_detected, patient_id, level, triggers})` directamente en el worker | PubSub ya está en el supervision tree; el dashboard de issue 006 se suscribe a este topic |
 | Tests | Tests de regresión unitarios puros sobre `CrisisMonitor.detect/1` — sin DB, Oban ni efectos secundarios | La función es pura por diseño; los tests son la red de seguridad ante cambios accidentales en los patrones |
@@ -62,7 +62,7 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
   │     ├── :safe → continúa al pipeline clínico normal (issue 003)
   │     └── {:crisis, level, triggers}
   │           ├── 1. Clinical.save_message(patient, texto, dek, "inbound", "spontaneous") — guardar cifrado
-  │           ├── 2. Clinical.save_ai_diagnosis(msg_id, %{ai_response: mensaje_soporte_predefinido, extracted_emotions: %{crisis: true, level: level, triggers: triggers}})
+  │           ├── 2. Clinical.save_ai_diagnosis(msg_id, %{ai_response: mensaje_soporte_predefinido, extracted_emotions: %{crisis: true, level: level, triggers: triggers}}) (que guarda en la tabla `ai_diagnoses` via `Alethea.AI.Diagnosis`)
   │           ├── 3. Accounts.update_patient(patient, %{urgent_intervention: true})
   │           ├── 4. Phoenix.PubSub.broadcast(Alethea.PubSub, "crisis:alerts", {:crisis_detected, patient.id, level, triggers})
   │           └── 5. WhatsApp.Client.send_message(phone, mensaje_soporte_predefinido) → :ok
@@ -146,5 +146,5 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
 - **Texto en claro vs. cifrado**: `CrisisMonitor.detect/1` recibe el texto **en claro** (antes del cifrado), igual que `Sanitizer.sanitize/1`. El pipeline primero detecta, luego cifra.
 - **`urgent_intervention` y reseteo**: el campo `urgent_intervention: true` no se resetea automáticamente. El profesional lo desactiva manualmente desde el dashboard (issue 006) al atender la alerta.
 - **Ausencia de dependencias**: `CrisisMonitor` no tiene `alias`, `import` ni llamadas a módulos externos — es una función pura sobre texto. Esto la hace trivialmente testeable y resistente a errores de runtime.
-- **Privacidad de `triggers`**: los triggers guardados en `AIDiagnosis.extracted_emotions` son los patrones (regex como string), no el texto del paciente. El texto ya está guardado cifrado en `messages`.
-- **Sin migración**: esta issue no requiere cambios de schema. El campo `urgent_intervention` ya existe (issue 001) y `AIDiagnosis` ya acepta `extracted_emotions` como JSONB libre.
+- **Privacidad de `triggers`**: los triggers guardados en `Diagnosis.extracted_emotions` son los patrones (regex como string), no el texto del paciente. El texto ya está guardado cifrado en `messages`.
+- **Sin migración**: esta issue no requiere cambios de schema. El campo `urgent_intervention` ya existe (issue 001) y `Diagnosis` ya acepta `extracted_emotions` como JSONB libre.

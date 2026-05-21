@@ -105,12 +105,23 @@ Vault global (AES-256-GCM, key del config)
   6. Insertar `Patient` con `encrypted_whatsapp_number`, `whatsapp_number_hash`, `encryption_key_id`
   7. Actualizar `EncryptionKey` con el `patient_id` resultante del paso 6
 
-### Configuración — `config/runtime.exs`
-- [ ] Añadir la configuración de `:phone_hash_secret`:
-
-  ```elixir
-  config :alethea, :phone_hash_secret, System.fetch_env!("PHONE_HASH_SECRET")
-  ```
+### Configuración — Entornos y `config/runtime.exs`
+- [ ] Configurar `:phone_hash_secret` de manera segura en todos los entornos para evitar crashes al compilar o correr tests:
+  - En `config/dev.exs` y `config/test.exs`:
+    ```elixir
+    config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+    ```
+  - En `config/runtime.exs` (solo para producción):
+    ```elixir
+    if config_env() == :prod do
+      phone_hash_secret =
+        System.get_env("PHONE_HASH_SECRET") ||
+          raise """
+          environment variable PHONE_HASH_SECRET is missing.
+          """
+      config :alethea, :phone_hash_secret, phone_hash_secret
+    end
+    ```
 
 > *Nota: el paso 2 requiere realizar el wrapping de la DEK del paciente usando la KEK del profesional (usando `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` para este propósito). La KEK del profesional se almacena cifrada por el Vault global en la base de datos (segundo nivel), y la DEK cifrada del paciente se almacena en `encryption_keys.encrypted_key` (type: `'patient'`). Así, no se mezcla el cifrado global del Vault con las claves individuales de cada paciente.
 
