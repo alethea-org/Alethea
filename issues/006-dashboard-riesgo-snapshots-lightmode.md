@@ -14,7 +14,7 @@ El LiveView se monta dentro de la sesión de `AuthMock` (detallada en Issue 001)
 ### 2. Contrato de Datos Ficticios: `Alethea.Clinical.MockData`
 El desarrollador creará de inmediato un generador de datos simulados en `lib/alethea/clinical/mock_data.ex` que retorne registros ficticios con la estructura exacta definida en la Issue 004:
 *   `list_mock_patients(professional_id)`: lista de pacientes (con algunos en `urgent_intervention: true` y horarios de sesión definidos).
-*   `list_mock_trends(patient_id)`: 5 registros de tendencias con scores de alegría, tristeza, ira, miedo y neutro para graficar barras de progreso.
+*   `list_mock_trends(patient_id)`: 5 registros de tendencias con scores de emociones para graficar barras de progreso, usando explícitamente las keys canónicas `joy`, `sadness`, `anger`, `fear` y `neutral` (alegría, tristeza, ira, miedo y neutro).
 *   `list_mock_summaries(patient_id, type)`: resúmenes semanales (`"weekly"`) y de sesión (`"session"`) de prueba.
 *   `list_mock_messages(patient_id)`: 50 mensajes en claro e inbound/outbound para simular el chat descifrado de inmediato.
 
