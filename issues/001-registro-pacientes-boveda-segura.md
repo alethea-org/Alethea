@@ -21,8 +21,15 @@ defmodule AletheaWeb.AuthMock do
       full_name: "Dra. Constanza (Mock)",
       email: "constanza@alethea.com"
     }
-    # KEK simulada de 32 bytes para operaciones criptográficas
-    mock_kek = :crypto.strong_rand_bytes(32)
+
+    # KEK mock determinista de 32 bytes para desarrollo local.
+    # Debe permanecer estable entre mounts/reloads para poder reutilizar
+    # datos cifrados con DEKs envueltas por este mock.
+    mock_kek =
+      :crypto.hash(
+        :sha256,
+        "alethea-dev-auth-mock-kek:" <> mock_prof.id
+      )
 
     {:cont,
      socket
