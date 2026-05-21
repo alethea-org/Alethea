@@ -59,7 +59,7 @@ Manejar el primer contacto del paciente a través de WhatsApp. El sistema debe i
 | Rutas del webhook | `GET /webhooks/whatsapp` (challenge de Meta), `POST /webhooks/whatsapp` (mensajes) | Convención estándar de Meta Graph API |
 | Validación de firma `X-Hub-Signature-256` | **Diferido a issue 003** | Esta issue no tiene credenciales reales de Meta; la validación forma parte de la integración completa |
 | Arquitectura de workers | Un solo `AletheaJobs.ProcessMessageWorker` que comprueba `terms_accepted` al inicio | Evita duplicar lógica de lookup; el worker es el coordinador de todo el pipeline |
-| Lookup de paciente por teléfono | Iterar pacientes del profesional, descifrar cada DEK con el Vault global, recalcular HMAC y comparar con `whatsapp_number_hash` almacenado | Consecuencia de la decisión de issue 001: HMAC usa la DEK del paciente como clave, imposibilitando lookup directo |
+| Lookup de paciente por teléfono | Iterar todos los pacientes, descifrar cada DEK con el Vault global, recalcular HMAC y comparar con `whatsapp_number_hash` almacenado | El webhook sólo recibe el número entrante y no dispone de `professional_id` previo; consecuencia de la decisión de issue 001: HMAC usa la DEK del paciente como clave, imposibilitando lookup directo |
 | Formato del mensaje de consentimiento | Texto libre (type: `'text'`) | Sin dependencia de aprobación de plantillas de Meta; compatible con cualquier cuenta Business |
 | Detección de aceptación | Comparar `String.downcase(String.trim(texto))` contra `"acepto"` | Simple, inequívoco, sin ambigüedades de interpretación |
 | Mensajes previos al consentimiento | **Descartar sin guardar** + re-enviar mensaje de consentimiento | La transitoriedad de datos pre-consentimiento es un mandato del GEMINI.md |
