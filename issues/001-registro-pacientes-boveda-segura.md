@@ -101,7 +101,7 @@ Vault global (AES-256-GCM, key del config)
   2. Cifrar/wrap de la DEK con la KEK del profesional: `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` (usando la KEK pasada como argumento, **no** el Vault global — ver nota abajo*)
   3. Insertar `EncryptionKey` (type: `'patient'`, patient_id aún nil)
   4. Cifrar número: `PatientVault.encrypt_for_patient(whatsapp_number, dek_bytes)`
-  5. Calcular hash determinista global: `:crypto.mac(:hmac, :sha256, Application.get_env(:alethea, :phone_hash_secret), whatsapp_number)` → Base64
+  5. Calcular hash determinista global: `:crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), whatsapp_number)` → Base64 (configurar `:phone_hash_secret` explícitamente en `config/runtime.exs`)
   6. Insertar `Patient` con `encrypted_whatsapp_number`, `whatsapp_number_hash`, `encryption_key_id`
   7. Actualizar `EncryptionKey` con el `patient_id` resultante del paso 6
 
