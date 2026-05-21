@@ -47,7 +47,7 @@ defmodule Alethea.Clinical do
 
   # Stub para guardar diagnóstico de la IA
   def save_ai_diagnosis(message_id, chain_result) do
-    {:ok, %Alethea.Clinical.AIDiagnosis{
+    {:ok, %Alethea.AI.Diagnosis{
       id: "diag-999",
       message_id: message_id,
       extracted_emotions: %{}
