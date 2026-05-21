@@ -89,8 +89,8 @@ Refinar la interfaz del psicólogo para que sea su "Centro de Control", prioriza
   - Descifre la DEK del paciente usando la KEK del profesional: `PatientVault.decrypt_for_patient(key.encrypted_key, professional_kek)`.
   - Cargue los últimos 50 mensajes de la base de datos para este paciente.
   - Descifre el `encrypted_content` de cada mensaje en el servidor con la DEK descifrada.
-  - Asigne la lista de mensajes descifrados como strings de texto plano al socket (ej. `socket.assigns.decrypted_messages`) para ser renderizados inmediatamente en el navegador en un contenedor de burbujas de chat (`chat-bubble`).
-- [ ] Añadir botón de "Cargar mensajes anteriores" que realice la misma operación con un offset de 50 mensajes.
+  - Renderice la lista de mensajes descifrados como strings de texto plano en el navegador en un contenedor de burbujas de chat (`chat-bubble`), evitando retener ese texto plano en un assign persistente del LiveView; usar `temporary_assigns` para `:decrypted_messages` o un mecanismo explícito de limpieza/expiración inmediatamente después del render.
+- [ ] Añadir botón de "Cargar mensajes anteriores" que realice la misma operación con un offset de 50 mensajes, manteniendo el mismo manejo efímero del texto plano y sin acumular mensajes descifrados en memoria del socket más tiempo del necesario.
 
 ### 5. Configuración de Horario de Sesión
 - [ ] Crear un formulario compacto en la sección inferior/lateral de la vista de detalle:
