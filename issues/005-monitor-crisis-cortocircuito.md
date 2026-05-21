@@ -12,7 +12,7 @@ Esta issue de seguridad perimetral se desacopla por completo del pipeline de IA 
 El monitor de crisis es un procesador de texto puro sin estado ni efectos secundarios:
 ```elixir
 defmodule Alethea.Alerts.CrisisMonitor do
-  @spec detect(String.t()) :: :safe | {:crisis, atom(), list(String.t())}
+  @spec detect(String.t()) :: :safe | {:crisis, :immediate | :high | :low, list(String.t())}
   def detect(text) do
     # Lógica de escaneo con regex y categorización de niveles (:immediate, :high, :low)
   end
