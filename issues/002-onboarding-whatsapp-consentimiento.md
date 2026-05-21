@@ -1,8 +1,51 @@
 # Issue 002: Onboarding de WhatsApp y Consentimiento
 
 **Type**: AFK
-**Blocked by**: issues/001-registro-pacientes-boveda-segura.md
+**Blocked by**: None (Accounts and Crypto Contracts / Contract-Driven Development)
 **User Stories Covered**: 4
+
+## 🤝 Contrato de Paralelización (Contract-Driven Development)
+
+Para desacoplar esta issue del desarrollo de la Bóveda Segura (Issue 001) y permitir el trabajo concurrente del equipo, establecemos contratos explícitos de interfaces en Elixir.
+
+### Contrato Criptográfico: `Alethea.Encryption.PatientVaultBehavior`
+Para aislar la lógica del webhook del motor criptográfico real, definimos la interfaz del Vault de Pacientes:
+```elixir
+defmodule Alethea.Encryption.PatientVaultBehavior do
+  @callback encrypt_for_patient(binary(), binary()) :: {:ok, binary()} | {:error, any()}
+  @callback decrypt_for_patient(binary(), binary()) :: {:ok, binary()} | {:error, any()}
+end
+```
+
+### Contrato de Cuentas: Stubs en `Alethea.Accounts`
+En `lib/alethea/accounts.ex`, creamos inicialmente las firmas de funciones vacías o stubs que simulan la interacción con la base de datos:
+```elixir
+defmodule Alethea.Accounts do
+  # Stub para lookup de paciente por teléfono normalizado
+  def lookup_patient_by_phone(phone_e164) do
+    # Durante el desarrollo paralelo, si Issue 001 no está lista,
+    # este stub puede retornar un paciente mock guardado en memoria/ETS
+    # o una estructura fija con 'terms_accepted: false' para pruebas.
+    case phone_e164 do
+      "+56912345678" -> 
+        {:ok, %Alethea.Accounts.Patient{
+          id: "11111111-1111-1111-1111-111111111111", 
+          alias: "Paciente Mock", 
+          terms_accepted: false,
+          encryption_key_id: "key-123"
+        }}
+      _ -> 
+        {:error, :not_found}
+    end
+  end
+
+  # Stub para actualizar el estado del consentimiento legal
+  def update_patient_terms(patient, accepted?) do
+    {:ok, %{patient | terms_accepted: accepted?}}
+  end
+end
+```
+Esto permite al desarrollador de WhatsApp escribir y probar 100% de la lógica del webhook y el Oban worker (`ProcessMessageWorker`) con datos mockeados en local sin esperar a que la base de datos o el motor de Envelope Encryption real estén listos.
 
 ## Description
 

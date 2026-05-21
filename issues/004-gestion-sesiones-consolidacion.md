@@ -1,8 +1,72 @@
 # Issue 004: Gestión de Sesiones y Consolidación (Heavy Processing)
 
 **Type**: AFK
-**Blocked by**: issues/003-integracion-meta-api-ia-reflexion.md
+**Blocked by**: None (Clinical Schema & RoBERTa Contracts / Contract-Driven Development)
 **User Stories Covered**: 6, 3
+
+## 🤝 Contrato de Paralelización (Contract-Driven Development)
+
+Para desacoplar esta issue de la Issue 003 y habilitar de forma paralela y síncrona el desarrollo del Dashboard Clínico (Issue 006), definimos las estructuras de datos clínicas (Structs/Schemas) y el comportamiento del procesador de emociones de forma contractual.
+
+### Contrato de Modelos: Structs Clínicos
+Los esquemas de bases de datos y structs de Elixir se acuerdan de antemano con la siguiente estructura exacta:
+
+#### `Alethea.Clinical.Session`
+```elixir
+defmodule Alethea.Clinical.Session do
+  use Ecto.Schema
+  @primary_key {:id, :binary_id, autogenerate: true}
+  schema "clinical_sessions" do
+    field :started_at, :utc_datetime
+    field :closed_at, :utc_datetime
+    field :status, :string, default: "open" # "open" / "closed"
+    belongs_to :patient, Alethea.Accounts.Patient, type: :binary_id
+    has_many :messages, Alethea.Clinical.Message
+    timestamps()
+  end
+end
+```
+
+#### `Alethea.Clinical.Summary`
+```elixir
+defmodule Alethea.Clinical.Summary do
+  use Ecto.Schema
+  @primary_key {:id, :binary_id, autogenerate: true}
+  schema "clinical_summaries" do
+    field :content, :string
+    field :type, :string, default: "session" # "session" / "weekly"
+    belongs_to :patient, Alethea.Accounts.Patient, type: :binary_id
+    belongs_to :session, Alethea.Clinical.Session, type: :binary_id, optional: true
+    timestamps()
+  end
+end
+```
+
+#### `Alethea.Clinical.Trend`
+```elixir
+defmodule Alethea.Clinical.Trend do
+  use Ecto.Schema
+  @primary_key {:id, :binary_id, autogenerate: true}
+  schema "clinical_trends" do
+    field :indicator_name, :string # "joy", "sadness", "anger", "fear", "neutral"
+    field :score, :float
+    field :delta, :float, default: 0.0
+    belongs_to :patient, Alethea.Accounts.Patient, type: :binary_id
+    belongs_to :session, Alethea.Clinical.Session, type: :binary_id
+    timestamps()
+  end
+end
+```
+
+### Contrato de Inferencia Emocional: `Alethea.AI.RoBERTaWorkerBehavior`
+```elixir
+defmodule Alethea.AI.RoBERTaWorkerBehavior do
+  @callback analyze_batch(list(String.t())) :: list(map())
+end
+```
+Esto permite al desarrollador del backend de procesamiento de fondo escribir y verificar los workers de inactividad de Oban (`SessionTimeoutWorker` y `WeeklyReportWorker`) utilizando Mox, simulando distribuciones de emociones predefinidas (ej. `[%{label: "sadness", score: 0.75}, %{label: "neutral", score: 0.25}]`) y reportes simulados.
+
+Al mismo tiempo, la definición formal de los campos de estos Structs **desbloquea inmediatamente la Issue 006 (Dashboard Clínico)**, permitiendo que el desarrollador del front-end monte todas las vistas y gráficos de tendencias usando datos de prueba simulados, sin esperar a que el pipeline de procesamiento asíncrono o la descarga física de Bumblebee estén listos.
 
 ## Description
 

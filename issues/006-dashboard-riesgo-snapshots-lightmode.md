@@ -1,8 +1,35 @@
 # Issue 006: Dashboard de Riesgo y Snapshots (Light Mode)
 
 **Type**: AFK
-**Blocked by**: issues/004-gestion-sesiones-consolidacion.md, issues/005-monitor-crisis-cortocircuito.md
+**Blocked by**: None (MockData & PubSub / Contract-Driven Development)
 **User Stories Covered**: 2, 3
+
+## 🤝 Contrato de Paralelización (Contract-Driven Development)
+
+Para eliminar por completo el cuello de botella lineal y permitir que el desarrollador del Dashboard trabaje en paralelo con el backend de procesamiento pesado y de crisis, se implementa una estrategia de datos ficticios sobre los contratos acordados.
+
+### 1. Bypass de Autenticación: `AletheaWeb.AuthMock`
+El LiveView se monta dentro de la sesión de `AuthMock` (detallada en Issue 001), lo que asigna automáticamente una `@current_professional` activa y una KEK simulada (`@professional_kek`) en el socket en tiempo de desarrollo.
+
+### 2. Contrato de Datos Ficticios: `Alethea.Clinical.MockData`
+El desarrollador creará de inmediato un generador de datos simulados en `lib/alethea/clinical/mock_data.ex` que retorne registros ficticios con la estructura exacta definida en la Issue 004:
+*   `list_mock_patients(professional_id)`: lista de pacientes (con algunos en `urgent_intervention: true` y horarios de sesión definidos).
+*   `list_mock_trends(patient_id)`: 5 registros de tendencias con scores de alegría, tristeza, ira, miedo y neutro para graficar barras de progreso.
+*   `list_mock_summaries(patient_id, type)`: resúmenes semanales (`"weekly"`) y de sesión (`"session"`) de prueba.
+*   `list_mock_messages(patient_id)`: 50 mensajes en claro e inbound/outbound para simular el chat descifrado de inmediato.
+
+En `AletheaWeb.DashboardLive.mount/3` and `handle_params/3`, si los registros reales en la base de datos están vacíos o si se detecta un flag de entorno de desarrollo, el LiveView consumirá directamente este módulo de mocks.
+
+### 3. Prueba de Reactividad PubSub vía Consola
+No es necesario esperar a la Issue 005 (Monitor de Crisis) para verificar la reactividad. El desarrollador puede simular alertas críticas ejecutando en una terminal interactiva `iex -S mix`:
+```elixir
+Phoenix.PubSub.broadcast(
+  Alethea.PubSub, 
+  "crisis:alerts", 
+  {:crisis_detected, "paciente-uuid-123", :immediate, ["me voy a matar"]}
+)
+```
+Esto permite programar, pulir estéticamente en DaisyUI Light Mode, y verificar el 100% de la funcionalidad interactiva del Centro de Control desde el primer día.
 
 ## Description
 

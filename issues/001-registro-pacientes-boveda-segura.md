@@ -1,8 +1,44 @@
 # Issue 001: Registro de Pacientes y Bóveda Segura
 
 **Type**: AFK
-**Blocked by**: issues/000-autenticacion-profesional.md
+**Blocked by**: None (AuthMock / Contract-Driven Development)
 **User Stories Covered**: 1, 8
+
+## 🤝 Contrato de Paralelización (Contract-Driven Development)
+
+Para permitir el desarrollo de esta issue de forma paralela y síncrona con la Issue 000 (Autenticación del Profesional), se define un bypass de autenticación para desarrollo en local.
+
+### Contrato: `AletheaWeb.AuthMock`
+El desarrollador creará de inmediato en `lib/alethea_web/auth_mock.ex` un módulo dummy que cumpla con los asignados esperados de LiveView:
+```elixir
+defmodule AletheaWeb.AuthMock do
+  import Phoenix.Component
+  import Phoenix.LiveView
+
+  def on_mount(:require_authenticated_professional, _params, _session, socket) do
+    mock_prof = %Alethea.Accounts.Professional{
+      id: "00000000-0000-0000-0000-000000000000",
+      full_name: "Dra. Constanza (Mock)",
+      email: "constanza@alethea.com"
+    }
+    # KEK simulada de 32 bytes para operaciones criptográficas
+    mock_kek = :crypto.strong_rand_bytes(32)
+
+    {:cont,
+     socket
+     |> assign(:current_professional, mock_prof)
+     |> assign(:professional_kek, mock_kek)}
+  end
+end
+```
+En `router.ex`, bajo el pipeline y scopes de LiveView, se utilizará temporalmente `AletheaWeb.AuthMock` en vez de `AletheaWeb.Auth` para montar la live session:
+```elixir
+live_session :require_authenticated_professional,
+  on_mount: [{AletheaWeb.AuthMock, :require_authenticated_professional}] do
+  live "/patients", PatientLive.Index, :index
+end
+```
+Esto habilita la visualización y pruebas de la UI de registro de pacientes en el navegador de manera inmediata. Una vez completada la Issue 000, simplemente se cambiará `AuthMock` por `Auth` en `router.ex`.
 
 ## Description
 

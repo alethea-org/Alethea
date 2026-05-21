@@ -1,8 +1,61 @@
 # Issue 003: Integración con Meta API e IA de Reflexión
 
 **Type**: HITL (Requiere tokens de Meta WhatsApp API)
-**Blocked by**: issues/002-onboarding-whatsapp-consentimiento.md
+**Blocked by**: None (WhatsApp Client & PhiWorker Contracts / Contract-Driven Development)
 **User Stories Covered**: 5
+
+## 🤝 Contrato de Paralelización (Contract-Driven Development)
+
+Para desacoplar esta issue del Onboarding de WhatsApp (Issue 002) y del cliente de Meta, definimos contratos estables de interfaz para el envío de mensajes y el procesamiento de la IA de reflexión.
+
+### Contrato WhatsApp: `Alethea.WhatsApp.ClientBehavior`
+Definimos la interfaz para la comunicación con la API externa de WhatsApp:
+```elixir
+defmodule Alethea.WhatsApp.ClientBehavior do
+  @callback send_message(String.t(), String.t()) :: :ok | {:error, any()}
+end
+```
+
+### Contrato de Inferencia de IA: `Alethea.AI.PhiWorkerBehavior`
+Establecemos la interfaz para la inferencia de la IA de Reflexión basada en Phi-4 mini:
+```elixir
+defmodule Alethea.AI.PhiWorkerBehavior do
+  @callback process(map()) :: {:ok, String.t()}
+end
+```
+
+### Stubs Clínicos en `Alethea.Clinical`
+Definimos inicialmente las firmas de funciones vacías en `lib/alethea/clinical.ex`:
+```elixir
+defmodule Alethea.Clinical do
+  # Stub para guardar mensajes cifrados
+  def save_message(patient, text, dek_bytes, direction, behavior_type) do
+    {:ok, %Alethea.Clinical.Message{
+      id: "msg-999",
+      patient_id: patient.id,
+      encrypted_content: "cifrado_mock",
+      direction: direction,
+      behavior_type: behavior_type
+    }}
+  end
+
+  # Stub para listar historial reciente
+  def list_recent_messages(patient_id, limit) do
+    # Retorna una lista simulada de mensajes durante el desarrollo concurrente
+    []
+  end
+
+  # Stub para guardar diagnóstico de la IA
+  def save_ai_diagnosis(message_id, chain_result) do
+    {:ok, %Alethea.Clinical.AIDiagnosis{
+      id: "diag-999",
+      message_id: message_id,
+      extracted_emotions: %{}
+    }}
+  end
+end
+```
+Esto habilita al desarrollador de IA a refinar y testear localmente toda la lógica de orquestación de LangChain (`GuidedConversationChain`) e integrar de inmediato la lógica del pipeline dentro de `ProcessMessageWorker`, ejecutándolo vía tests unitarios e interfaces de mocks (`Mox`), de forma independiente a la completitud de las APIs físicas de Meta o de las migraciones de consentimiento de Issue 002.
 
 ## Description
 

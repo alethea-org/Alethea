@@ -1,8 +1,41 @@
 # Issue 005: Monitor de Crisis y Cortocircuito (Bypass)
 
 **Type**: AFK
-**Blocked by**: issues/003-integracion-meta-api-ia-reflexion.md
+**Blocked by**: None (Pure Function & PubSub Contract / Contract-Driven Development)
 **User Stories Covered**: 7
+
+## 🤝 Contrato de Paralelización (Contract-Driven Development)
+
+Esta issue de seguridad perimetral se desacopla por completo del pipeline de IA y WhatsApp, permitiendo su desarrollo de forma 100% paralela desde el inicio.
+
+### Contrato Funcional: `Alethea.Alerts.CrisisMonitor`
+El monitor de crisis es un procesador de texto puro sin estado ni efectos secundarios:
+```elixir
+defmodule Alethea.Alerts.CrisisMonitor do
+  @spec detect(String.t()) :: :safe | {:crisis, atom(), list(String.t())}
+  def detect(text) do
+    # Lógica de escaneo con regex y categorización de niveles (:immediate, :high, :low)
+  end
+end
+```
+
+### Contrato del Canal PubSub y Evento de Alerta
+Para notificar al Dashboard LiveView de manera reactiva, se define formalmente el canal y el formato del mensaje:
+*   **Canal PubSub**: `"crisis:alerts"`
+*   **Tuple del Evento**: `{:crisis_detected, patient_id, level, triggers}`
+    *   `patient_id`: uuid / binary_id del paciente
+    *   `level`: atom (`:immediate`, `:high`, `:low`)
+    *   `triggers`: list(string) (ej. `["me quiero morir"]`)
+
+Al diseñar esta funcionalidad como un contrato puro, el desarrollador del Dashboard LiveView (Issue 006) puede suscribirse inmediatamente a `"crisis:alerts"` y probar la recepción y los Toasts interactivos enviando broadcasts manuales desde la consola `iex`:
+```elixir
+Phoenix.PubSub.broadcast(
+  Alethea.PubSub, 
+  "crisis:alerts", 
+  {:crisis_detected, "paciente-uuid-123", :high, ["quiero morir"]}
+)
+```
+Esto elimina por completo la necesidad de tener listo el webhook de WhatsApp o el worker de Oban de la Issue 003 para poder programar y verificar la reactividad del dashboard clínico.
 
 ## Description
 
