@@ -137,7 +137,8 @@ WeeklyReportWorker.perform/1
 - [ ] Crear `lib/alethea/ai/roberta_worker.ex` (`Alethea.AI.RoBERTaWorker`):
   - Inicia `Nx.Serving` con `Bumblebee.load_model({:hf, "pysentimiento/robertuito-emotion-analysis"})`
   - Expone `analyze(text)` → `[%{label: "alegría", score: 0.82}, ...]`
-  - Expone `analyze_batch(texts)` → lista de resultados; promedia scores por emoción si `texts` tiene N elementos
+  - Expone `analyze_batch(texts)` → lista de resultados; promedia scores por emoción si `texts` tiene N elementos y retorna keys canónicas para trends (`joy/sadness/anger/fear/neutral`)
+  - Documentar mapeo explícito de labels del modelo → keys canónicas antes de persistir trends (p. ej. `"alegría"→"joy"`, `"tristeza"→"sadness"`, `"ira"→"anger"`, `"miedo"→"fear"`, `"neutral"→"neutral"`)
 - [ ] Añadir `{Alethea.AI.RoBERTaWorker, []}` al supervision tree en `lib/alethea/application.ex`
 
 ### Dominio — `SessionManager` y contexto `Clinical`
