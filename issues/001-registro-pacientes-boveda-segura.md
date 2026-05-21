@@ -66,7 +66,7 @@ Vault global (AES-256-GCM, key del config)
   └── KEK del profesional (almacenada cifrada en encryption_keys type:'professional')
         └── DEK del paciente (almacenada cifrada en encryption_keys type:'patient')
               ├── encrypted_whatsapp_number (AES-256-GCM via PatientVault)
-              └── whatsapp_number_hash (HMAC-SHA256, clave = DEK)
+              └── whatsapp_number_hash (HMAC-SHA256, clave = phone_hash_secret)
 ```
 
 **Borrado Criptográfico**: destruir/nilificar el registro de DEK en `encryption_keys` hace irrecuperables todos los datos del paciente sin afectar a otros. Destruir la KEK del profesional hace irrecuperables los datos de *todos* sus pacientes.
