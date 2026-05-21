@@ -129,7 +129,7 @@ WeeklyReportWorker.perform/1
 
 ### Schemas
 - [ ] Crear `lib/alethea/clinical/session.ex` (`Alethea.Clinical.Session`) con el schema de `clinical_sessions`
-- [ ] Actualizar `Alethea.Clinical.Message` añadiendo `session_id`, `embedding` (tipo `:array, :float` o `Pgvector.Ecto.Vector`)
+- [ ] Actualizar `Alethea.Clinical.Message` añadiendo `session_id`, `embedding` (tipo `Pgvector.Ecto.Vector`, correspondiente a la columna pgvector `:vector, size: 384`)
 - [ ] Actualizar `Alethea.Clinical.Summary` añadiendo campo `type` con `validate_inclusion(["session", "weekly"])`
 - [ ] Actualizar `Alethea.Accounts.Patient` añadiendo `session_day_of_week` y `session_time`
 
