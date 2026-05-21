@@ -60,7 +60,7 @@ Implementar la interfaz completa para que el psicólogo registre pacientes y ase
 | KEK por profesional | KEK derivada con PBKDF2 de la contraseña del profesional, **almacenada cifrada** en `encryption_keys` (type: `'professional'`) protegida por el `Vault` global | Más correcto criptográficamente que una KEK global; habilita borrado criptográfico por profesional |
 | Lifecycle de la KEK | La KEK se descifra del Vault al hacer login, se retiene en memoria (assign del LiveView) y se pasa a `create_patient/2` | No requiere re-descifrado en cada operación; se libera al cerrar sesión |
 | Cifrado del número de WhatsApp | `Alethea.Encryption.PatientVault.encrypt_for_patient/2` usando `:crypto.crypto_one_time_aead/6` (AES-256-GCM), IV aleatorio prefijado al ciphertext | Permite cifrado con DEKs arbitrarias sin atar el Vault global |
-| Hash para búsqueda (ADR 02) | HMAC-SHA256 con un **secreto global del sistema** (`Application.get_env(:alethea, :phone_hash_secret)`) como clave y el número como mensaje | Permite lookup O(1) desde el webhook (que no tiene la KEK en memoria) y garantiza unicidad global |
+| Hash para búsqueda (ADR 02) | HMAC-SHA256 con un **secreto global del sistema** (`Application.fetch_env!(:alethea, :phone_hash_secret)`) como clave y el número como mensaje | Permite lookup O(1) desde el webhook (que no tiene la KEK en memoria) y garantiza unicidad global |
 | Transacción DB | `Ecto.Multi` | Rollback atómico de todos los pasos: DEK, registro de llave, cifrado, inserción de paciente |
 | UI de registro | `PatientLive.Index` con modal in-place | Sin navegación extra; coherente con el patrón de la app |
 | Campos del formulario | `alias` + `whatsapp_number` (formato E.164) | Mínimo necesario al crear; `urgent_intervention` se gestiona después |
@@ -104,6 +104,13 @@ Vault global (AES-256-GCM, key del config)
   5. Calcular hash determinista global: `:crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), whatsapp_number)` → Base64 (configurar `:phone_hash_secret` explícitamente en `config/runtime.exs`)
   6. Insertar `Patient` con `encrypted_whatsapp_number`, `whatsapp_number_hash`, `encryption_key_id`
   7. Actualizar `EncryptionKey` con el `patient_id` resultante del paso 6
+
+### Configuración — `config/runtime.exs`
+- [ ] Añadir la configuración de `:phone_hash_secret`:
+
+  ```elixir
+  config :alethea, :phone_hash_secret, System.fetch_env!("PHONE_HASH_SECRET")
+  ```
 
 > *Nota: el paso 2 requiere realizar el wrapping de la DEK del paciente usando la KEK del profesional (usando `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` para este propósito). La KEK del profesional se almacena cifrada por el Vault global en la base de datos (segundo nivel), y la DEK cifrada del paciente se almacena en `encryption_keys.encrypted_key` (type: `'patient'`). Así, no se mezcla el cifrado global del Vault con las claves individuales de cada paciente.
 
