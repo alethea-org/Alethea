@@ -22,7 +22,7 @@ Implementar el sistema de autenticación para el profesional (psicólogo). El sc
 | UI de login | LiveView en `/login` | Consistente con el resto de la app; permite validación en tiempo real |
 | MFA | **Diferido** a issue separada | El campo `mfa_secret` ya existe en el schema, pero el flujo TOTP es scope propio |
 | Protección de rutas | Módulo `AletheaWeb.Auth` con un Plug + hook `on_mount` | Un solo lugar para toda la lógica de autenticación |
-| Paths | `GET/POST /login`, `DELETE /logout` | Convencional y limpio |
+| Paths | `GET /login` (LiveView), `POST /login` y `DELETE /logout` (Controller) | El `POST /login` es estrictamente necesario para que un endpoint HTTP tradicional pueda escribir la cookie HttpOnly de sesión (LiveView no puede) |
 | Redirect post-login | `/dashboard` | Raíz de todas las LiveViews autenticadas downstream |
 
 ## Tasks
@@ -39,8 +39,10 @@ Implementar el sistema de autenticación para el profesional (psicólogo). El sc
   - Scope público: `live "/login", ProfessionalAuthLive, :new` en `live_session :unauthenticated`
   - Scope público: `delete "/logout", SessionController, :delete`
   - Scope autenticado: `live "/dashboard", DashboardLive, :index` en `live_session :require_authenticated_professional`
-- [ ] Crear `lib/alethea_web/controllers/session_controller.ex` — acción `delete` para logout (necesario para escribir cookies de sesión, que LiveView no puede hacer directamente)
-- [ ] Crear `lib/alethea_web/live/professional_auth_live.ex` — LiveView de login con formulario email + contraseña, flash de error en credenciales inválidas, redirect a `/dashboard` en éxito
+- [ ] Crear `lib/alethea_web/controllers/session_controller.ex` con:
+  - `create/2`: maneja el `POST /login`, verifica la contraseña con `Accounts.authenticate_professional/2`, setea la cookie con `log_in_professional/2` y redirige a `/dashboard`
+  - `delete/2`: maneja el `DELETE /logout` para limpiar la sesión
+- [ ] Crear `lib/alethea_web/live/professional_auth_live.ex` — LiveView de login con formulario (`action="/login" method="post"`). Usa `phx-submit` para validación de formato, pero el submit exitoso hace un POST HTML estándar hacia `SessionController`
 - [ ] Crear `lib/alethea_web/live/dashboard_live.ex` — LiveView placeholder protegida, muestra bienvenida con `@current_professional.full_name`; desbloquea todas las features downstream
 - [ ] Crear `test/alethea_web/auth_test.exs` con 3 tests de integración:
   1. `GET /dashboard` sin sesión → redirige a `/login`
