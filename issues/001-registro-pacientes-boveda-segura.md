@@ -55,14 +55,14 @@ Vault global (AES-256-GCM, key del config)
 - [ ] Añadir `load_professional_kek(professional)` que llama a `ProfessionalKek.load_kek/1` — usado por el LiveView de login para obtener la KEK en memoria tras autenticación
 - [ ] Reemplazar `create_patient/1` por `create_patient(attrs, kek_bytes)` implementado con `Ecto.Multi`:
   1. Generar DEK: `:crypto.strong_rand_bytes(32)`
-  2. Cifrar DEK con KEK: `Vault.encrypt!(dek_bytes)` (usando la KEK pasada como argumento, **no** el Vault global — ver nota abajo*)
+  2. Cifrar/wrap de la DEK con la KEK del profesional: `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` (usando la KEK pasada como argumento, **no** el Vault global — ver nota abajo*)
   3. Insertar `EncryptionKey` (type: `'patient'`, patient_id aún nil)
   4. Cifrar número: `PatientVault.encrypt_for_patient(whatsapp_number, dek_bytes)`
   5. Calcular hash: `:crypto.mac(:hmac, :sha256, dek_bytes, whatsapp_number)` → Base64
   6. Insertar `Patient` con `encrypted_whatsapp_number`, `whatsapp_number_hash`, `encryption_key_id`
   7. Actualizar `EncryptionKey` con el `patient_id` resultante del paso 6
 
-> *Nota: el paso 2 requiere cifrar con la KEK del profesional, no con el Vault global. Se llamará a `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` para este propósito, manteniendo el Vault global como KEK de segundo nivel (wrapping KEK del profesional).
+> *Nota: el paso 2 requiere realizar el wrapping de la DEK del paciente usando la KEK del profesional (usando `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` para este propósito). La KEK del profesional se almacena cifrada por el Vault global en la base de datos (segundo nivel), y la DEK cifrada del paciente se almacena en `encryption_keys.encrypted_key` (type: `'patient'`). Así, no se mezcla el cifrado global del Vault con las claves individuales de cada paciente.
 
 ### Web — LiveView
 - [ ] Crear `lib/alethea_web/live/patient_live/index.ex` (`PatientLive.Index`):

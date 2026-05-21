@@ -65,9 +65,7 @@ ProcessMessageWorker.perform/1
     preguntas exploratorias con tono socrático.
     PROHIBIDO: emitir diagnósticos, validar o refutar pensamientos del paciente,
     dar consejos médicos directos o sugerir tratamientos.
-    Si el paciente expresa riesgo de daño propio o a terceros, responde únicamente:
-    "Entiendo que estás pasando por algo muy difícil. Por favor contacta a tu
-    terapeuta o llama al 600 360 7777 (Salud Responde Chile)."
+    (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa, utilizando el mensaje configurado en `:crisis_support_message`.)
     """
   ```
 - [ ] Añadir a `config/runtime.exs`:

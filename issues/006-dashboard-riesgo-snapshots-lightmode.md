@@ -18,7 +18,7 @@ Refinar la interfaz del psicólogo para que sea su "Centro de Control", prioriza
 | **Diseño Global** | Forzar Light Mode mediante el atributo `data-theme="light"` en la etiqueta `<html>` de `root.html.heex` | Requerimiento de diseño innegociable. Uso de paleta de colores limpia (blanco, gris claro, acentos esmeralda/ámbar/carmesí). |
 | **Semáforo de Estado de Ánimo** | Dinámico basado en emociones predominantes y CrisisMonitor | **Verde**: predominan `neutral`, `joy` o `surprise`. **Amarillo**: predominan `sadness`, `fear` o `disgust` o alerta `:low`. **Rojo**: predominan `anger` o alertas `:high`/`:immediate`. |
 | **Consumo de Emociones** | Granular en tabla `clinical_trends` por emoción independiente | Cada emoción tiene su propio registro (joy, sadness, etc.) con score 0.0 a 1.0. Se promedia el score en una ventana móvil de los últimos 7 días. |
-| **Descifrado de Chat** | Bajo demanda en el servidor en `handle_event/3` | Los mensajes se descifran usando la DEK del paciente (obtenida descifrando `EncryptionKey.encrypted_key` con la `professional_kek` en memoria del socket). El texto plano solo vive en el HTML renderizado, nunca en el cliente. |
+| **Descifrado de Chat** | Bajo demanda en el servidor en `handle_event/3` | Los mensajes se descifran usando la DEK del paciente (obtenida descifrando `EncryptionKey.encrypted_key` con la `professional_kek` en memoria del socket). El texto plano se descifra en el servidor y se envía solo para rendering; no se expone vía endpoints/JSON, no se guarda en DB ni en `localStorage` y se minimiza su retención en memoria. |
 | **Límite de Historial** | Cargar los últimos 50 mensajes por defecto | Previene sobrecarga del servidor y base de datos. Botón de "Cargar anteriores" para paginar otros 50. |
 | **Alertas en Tiempo Real** | PubSub en topic `"crisis:alerts"` + Alerta Toast flotante | Notificación instantánea en banner superior/toast con el alias del paciente en crisis, además de moverlo reactivamente a la sección superior. |
 | **Configuración de Horario** | Formulario en el detalle del paciente | Permite configurar `session_day_of_week` (integer 1-7) y `session_time` (time) directamente para el WeeklyReportWorker de la Issue 004. |
@@ -36,7 +36,7 @@ Refinar la interfaz del psicólogo para que sea su "Centro de Control", prioriza
 - [ ] En `AletheaWeb.DashboardLive.mount/3`:
   - Suscribir el proceso LiveView al topic de PubSub `"crisis:alerts"` mediante `Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")`.
   - Cargar inicialmente los pacientes del profesional que tengan `urgent_intervention == true` en un stream/lista superior de "Alertas Críticas".
-- [ ] Implementar `handle_info({:crisis_alert, patient_id, level}, socket)` en el LiveView para:
+- [ ] Implementar `handle_info({:crisis_detected, patient_id, level, triggers}, socket)` en el LiveView para reaccionar al mismo broadcast definido por el monitor de crisis:
   - Cargar el paciente correspondiente de la base de datos (validando que pertenezca a este profesional).
   - Mostrar una notificación flotante/toast instantánea: `put_flash(socket, :error, "¡Alerta Crítica!: El paciente #{patient.alias} ha entrado en crisis (Nivel: #{level})")`.
   - Re-streamear o mover reactivamente al paciente a la sección de "Alertas Críticas" del tope sin requerir refrescar la página.
@@ -95,6 +95,6 @@ Refinar la interfaz del psicólogo para que sea su "Centro de Control", prioriza
 ### Tests Automatizados
 - [ ] Crear `test/alethea_web/live/dashboard_live_test.exs` cubriendo:
   - **Autorización Cruzada**: Un profesional autenticado que intente acceder por URL a `/dashboard/patients/id-de-otro` debe recibir un error de no encontrado / redirección, y debe registrarse un intento fallido o no cargarse datos.
-  - **Detección PubSub en Tiempo Real**: Simular el envío de un broadcast PubSub en `"crisis:alerts"` y verificar que el dashboard del psicólogo añade al paciente en tiempo real a las "Alertas Críticas" y muestra el toast de error con el alias del paciente.
+  - **Detección PubSub en Tiempo Real**: Simular el envío de un broadcast PubSub en `"crisis:alerts"` con el evento `{:crisis_detected, patient_id, level, triggers}` y verificar que el dashboard del psicólogo añade al paciente en tiempo real a las "Alertas Críticas" y muestra el toast de error con el alias del paciente.
   - **Descifrado Seguro**: Simular el evento `"decrypt_chat"` con la KEK del profesional en el socket, verificar que los mensajes se renderizan descifrados y que se genera el registro inmutable de auditoría correspondiente en `audit_logs`.
   - **Guardado de Horario**: Enviar el formulario de horario y verificar que los datos se persisten correctamente en la base de datos para el paciente seleccionado.

@@ -13,7 +13,7 @@ Implementar una capa de seguridad crítica que detecte riesgo clínico en el tex
 | Decisión | Elección | Justificación |
 |---|---|---|
 | Punto de ejecución | Dentro de `ProcessMessageWorker`, antes de llamar a `PhiWorker` | Separa la lógica clínica de la capa web; el controlador solo recibe y encola |
-| Patrones de riesgo | Lista de regex por nivel en `config/config.exs`, leída con `Application.get_env/2` | Ajustable sin recompilación; evita hardcodear terminología clínica en el código |
+| Patrones de riesgo | Lista de regex por nivel en `config/runtime.exs`, leída con `Application.get_env/2` | Ajustable sin recompilación (evaluado en runtime al iniciar la release); evita hardcodear terminología clínica en el código |
 | Niveles de crisis | 3 niveles: `:low` (ideación pasiva), `:high` (ideación activa/plan), `:immediate` (emergencia inminente) | Granularidad clínica; cada nivel tiene su propio conjunto de patrones |
 | Respuesta al paciente | Un solo mensaje de soporte predefinido para todos los niveles | El nivel se usa solo para la alerta al profesional; el paciente siempre recibe el mismo mensaje de contención |
 | Persistencia al detectar crisis | Guardar mensaje inbound cifrado en DB + `AIDiagnosis` con `ai_response: nil` y `extracted_emotions: %{crisis: true, level: level}` | Trazabilidad completa (Source Anchoring del GEMINI.md); el dashboard puede ver el disparador |
@@ -45,8 +45,8 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
   - `triggers` es la lista de substrings/patrones que hicieron match
   - La función no tiene efectos secundarios (sin llamadas a DB, sin PubSub, sin Oban)
 
-### Configuración de Patrones
-- [ ] Añadir a `config/config.exs`:
+### Configuración de Patrones y Soporte (Runtime)
+- [ ] Añadir a `config/runtime.exs`:
   ```elixir
   config :alethea, :crisis_patterns, %{
     immediate: [
@@ -68,7 +68,7 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
     ]
   }
   ```
-- [ ] Añadir el mensaje de soporte predefinido en `config/config.exs`:
+- [ ] Añadir el mensaje de soporte predefinido en `config/runtime.exs`:
   ```elixir
   config :alethea, :crisis_support_message,
     """
@@ -104,7 +104,7 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
 | NEW | `lib/alethea/alerts/crisis_monitor.ex` |
 | MODIFY | `lib/alethea_jobs/process_message_worker.ex` |
 | MODIFY | `lib/alethea/accounts.ex` (añadir `update_patient/2` si no existe) |
-| MODIFY | `config/config.exs` (patrones + mensaje de soporte) |
+| MODIFY | `config/runtime.exs` (patrones + mensaje de soporte) |
 | NEW | `test/alethea/alerts/crisis_monitor_test.exs` |
 
 ## Notas
