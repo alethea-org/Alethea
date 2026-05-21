@@ -5,24 +5,148 @@
 **User Stories Covered**: 6, 3
 
 ## Description
-Gestionar el ciclo de vida de la interacción diaria. El sistema debe detectar la inactividad y disparar el procesamiento pesado de datos de forma asíncrona para que el dashboard del psicólogo sea instantáneo.
+
+Gestionar el ciclo de vida de la interacción diaria. El sistema detecta inactividad, dispara procesamiento pesado asíncrono (análisis de emoción + snapshot clínico) y genera un reporte semanal personalizado por horario de sesión del paciente, para que el dashboard del psicólogo sea instantáneo.
+
+## Decisiones de Diseño
+
+| Decisión | Elección | Justificación |
+|---|---|---|
+| Migraciones | Una sola migración agrupa todos los cambios de schema | Cambios interdependientes; historial limpio |
+| `SessionManager` | Módulo de contexto puro (sin OTP) — estado de sesión en DB | El timer está en Oban; no se necesita proceso en memoria |
+| Timer de inactividad | `SessionTimeoutWorker` con `unique: [fields: [:args], period: 40*60, on_conflict: :replace]` y `scheduled_at: now + 30min` | Cada mensaje nuevo reemplaza el job, reiniciando el timer sin duplicados |
+| Modelo de emoción | `pysentimiento/robertuito-emotion-analysis` vía Bumblebee local (`Nx.Serving`) | Español, 7 emociones, jerga informal; privacidad total, latencia 0 |
+| Embeddings | Columna `vector(384)` creada en migración; **generación diferida** a issue futura | No hay feature que los consuma en issues 005/006 |
+| Scope de análisis emocional | Todos los mensajes `inbound` de la sesión — promedio de scores por emoción | Perfil emocional representativo de toda la sesión |
+| Trends | Un `Trend` por emoción (hasta 7 registros por sesión); `delta` vs. último trend de esa emoción | Granularidad clínica; el dashboard puede graficar evolución por emoción |
+| Snapshot de sesión | Mismo LLM/endpoint que issue 003 (`ChatOpenAI` configurable) con prompt de resumen diferente | Sin nueva dependencia; reutiliza la configuración existente |
+| Agenda del reporte semanal | `session_day_of_week` (integer 1-7) + `session_time` (time) añadidos a `patients` en esta migración | El profesional configura el horario real del paciente; el cron encola dinámicamente |
+| Trigger del `WeeklyReportWorker` | Cron diario de barrido (`DailySchedulerWorker`) a las 00:00 UTC que encola `WeeklyReportWorker` con `scheduled_at = mañana session_time - 2h` | Distribuye la carga durante la semana; el reporte llega antes de la sesión real |
+| Tests | Unitarios con Mox para workers; mock de `Nx.Serving` para RoBERTa | Sin modelo ni API reales en CI |
+
+## Flujo al Cerrar una Sesión
+
+```
+SessionTimeoutWorker.perform/1 (o cierre explícito)
+  ├── 1. SessionManager.close_session(session) → actualiza status: "closed", closed_at: now
+  ├── 2. Cargar todos los Messages inbound de la sesión → descifrar con DEK del paciente
+  ├── 3. RoBERTaWorker.analyze_batch(messages) → [{emoción, score}] promediados por emoción
+  ├── 4. Clinical.save_trends(patient, emotion_scores, session) → hasta 7 Trend records
+  ├── 5. SummaryChain.run(messages, emotion_scores) → texto de 4 líneas
+  ├── 6. Clinical.save_summary(patient, session, summary_text, type: "session")
+  └── 7. WhatsApp.Client.send_message(phone, mensaje_despedida)
+```
+
+```
+DailySchedulerWorker (cron 00:00 UTC)
+  └── Para cada paciente cuyo session_day_of_week == mañana:
+        └── Oban.insert(WeeklyReportWorker, %{patient_id: id},
+              scheduled_at: tomorrow_at(session_time) - 2h)
+
+WeeklyReportWorker.perform/1
+  ├── 1. Recuperar summaries type "session" de los últimos 7 días del paciente
+  ├── 2. Recuperar trends del período → agregar scores por emoción → emociones predominantes
+  ├── 3. WeeklySummaryChain.run(summaries, aggregated_trends) → reporte ≤ 8 líneas
+  └── 4. Clinical.save_summary(patient, period, reporte, type: "weekly")
+```
 
 ## Tasks
-- [ ] Crear las siguientes migraciones antes de implementar cualquier lógica:
-    - **`clinical_sessions`** (tabla nueva): `id` (binary_id PK), `patient_id` (FK → patients), `started_at` (utc_datetime), `closed_at` (utc_datetime, nullable), `status` (string: `"open" | "closed"`).
-    - **`messages.session_id`** (FK → clinical_sessions, nullable): permite agrupar mensajes por sesión sin depender de rangos de timestamps frágiles.
-    - **`messages.embedding`** (columna `vector(384)`): para guardar el vector de sentence transformers por mensaje, habilitando búsqueda semántica via pgvector.
-    - **`clinical_summaries.type`** (string: `"session" | "weekly"`, NOT NULL): distingue los snapshots de sesión del Weekly Pre-Session Report.
-- [ ] Implementar `Alethea.Clinical.SessionManager` para manejar estados de sesión (`open` / `closed`).
-- [ ] Configurar un timeout de 30 minutos por paciente usando Oban con política `unique` y `on_conflict: :replace` sobre `scheduled_at`, de forma que cada mensaje nuevo reinicie el timer sin acumular jobs duplicados.
-- [ ] Al cumplirse el timeout o cierre explícito, ejecutar en secuencia:
-    - **Análisis de sentimiento** (RoBERTa vía Bumblebee): clasificar cada mensaje de la sesión como positivo/negativo/neutral y guardar los scores en la tabla `trends`. RoBERTa produce scores de clasificación, no vectores.
-    - **Generación de embeddings** (modelo de sentence transformers vía Bumblebee, ej: `sentence-transformers/all-MiniLM-L6-v2`): producir un vector de alta dimensión por mensaje o por sesión y guardarlo en la columna `pgvector`. Este es un modelo distinto a RoBERTa con un propósito distinto (búsqueda semántica, no clasificación).
-    - **Snapshot clínico** (LangChain + LLM externo): generar el resumen de 4 líneas usando los scores y mensajes de la sesión como input, y guardarlo en la tabla `summaries`.
-- [ ] Enviar mensaje automático de despedida al paciente al cerrar la sesión.
-- [ ] Implementar un Oban job recurrente (`WeeklyReportWorker`) que se ejecute una vez por semana por paciente activo:
-    - Recuperar todos los `summaries` de la semana del paciente.
-    - Agregar los scores de `trends` del período para identificar emociones predominantes y disparadores recurrentes.
-    - Generar con LangChain un **Weekly Pre-Session Report** (máximo 8 líneas) que consolide: estado emocional de la semana, temas recurrentes, eventos significativos y nivel de riesgo observado.
-    - Guardar el reporte en la tabla `summaries` con un campo `type` que distinga `:session` de `:weekly`.
-- [ ] Actualizar Issue 006 para que la vista de detalle del paciente muestre el **Weekly Pre-Session Report** de forma prominente, por encima de los snapshots individuales de sesión.
+
+### Migración
+- [ ] Generar migración `add_sessions_and_embeddings` con:
+  - **Tabla nueva `clinical_sessions`**: `id` (binary_id PK), `patient_id` (FK → patients, `on_delete: :delete_all`), `started_at` (:utc_datetime, null: false), `closed_at` (:utc_datetime, nullable), `status` (:string, default: `"open"`, null: false)
+  - `alter table(:messages)`: añadir `session_id` (FK → clinical_sessions, nullable, `on_delete: :nilify_all`)
+  - `alter table(:messages)`: añadir `embedding` (`:vector`, size: 384, nullable) — llenado diferido
+  - `alter table(:clinical_summaries)`: añadir `type` (:string, null: false, default: `"session"`)
+  - `alter table(:patients)`: añadir `session_day_of_week` (:integer, nullable) — 1=lunes … 7=domingo
+  - `alter table(:patients)`: añadir `session_time` (:time, nullable)
+  - Crear índice: `index(:clinical_sessions, [:patient_id, :status])`
+  - Crear índice: `index(:messages, [:session_id])`
+
+### Schemas
+- [ ] Crear `lib/alethea/clinical/session.ex` (`Alethea.Clinical.Session`) con el schema de `clinical_sessions`
+- [ ] Actualizar `Alethea.Clinical.Message` añadiendo `session_id`, `embedding` (tipo `:array, :float` o `Pgvector.Ecto.Vector`)
+- [ ] Actualizar `Alethea.Clinical.Summary` añadiendo campo `type` con `validate_inclusion(["session", "weekly"])`
+- [ ] Actualizar `Alethea.Accounts.Patient` añadiendo `session_day_of_week` y `session_time`
+
+### IA — Análisis de Emoción (Bumblebee local)
+- [ ] Crear `lib/alethea/ai/roberta_worker.ex` (`Alethea.AI.RoBERTaWorker`):
+  - Inicia `Nx.Serving` con `Bumblebee.load_model({:hf, "pysentimiento/robertuito-emotion-analysis"})`
+  - Expone `analyze(text)` → `[%{label: "alegría", score: 0.82}, ...]`
+  - Expone `analyze_batch(texts)` → lista de resultados; promedia scores por emoción si `texts` tiene N elementos
+- [ ] Añadir `{Alethea.AI.RoBERTaWorker, []}` al supervision tree en `lib/alethea/application.ex`
+
+### Dominio — `SessionManager` y contexto `Clinical`
+- [ ] Crear `lib/alethea/clinical/session_manager.ex` (`Alethea.Clinical.SessionManager`) con:
+  - `open_session(patient)` → crea `Session` con `status: "open"`, retorna `{:ok, session}`
+  - `close_session(session)` → actualiza `closed_at` y `status: "closed"`, retorna `{:ok, session}`
+  - `current_open_session(patient_id)` → busca sesión abierta o crea una nueva
+- [ ] Añadir a `Alethea.Clinical` (context):
+  - `save_trends(patient, emotion_scores, session)` — guarda hasta 7 `Trend`, calculando `delta` vs. último trend de cada emoción
+  - `save_summary(attrs)` — crea `Summary` con `type` incluido
+  - `list_session_summaries(patient_id, since)` — para el `WeeklyReportWorker`
+  - `aggregate_trends(patient_id, since)` — agrega scores por `indicator_name` en período
+
+### IA — Chains de Resumen
+- [ ] Crear `lib/alethea/ai/chains/session_summary_chain.ex` (`SummaryChain`) con prompt de snapshot de 4 líneas: estado emocional, temas tratados, cambios observados, nivel de atención requerido
+- [ ] Crear `lib/alethea/ai/chains/weekly_summary_chain.ex` (`WeeklySummaryChain`) con prompt de reporte semanal ≤ 8 líneas: estado emocional de la semana, temas recurrentes, eventos significativos, nivel de riesgo observado
+- [ ] Ambas chains leen el modelo y `endpoint_url` del mismo `Application.get_env` que `GuidedConversationChain`
+
+### Workers Oban
+- [ ] Crear `lib/alethea_jobs/session_timeout_worker.ex` (`AletheaJobs.SessionTimeoutWorker`):
+  - `use Oban.Worker, queue: :sessions, unique: [fields: [:args], period: 40 * 60, on_conflict: :replace]`
+  - `perform/1`: ejecuta el flujo de cierre de sesión (ver diagrama arriba)
+- [ ] Actualizar `AletheaJobs.ProcessMessageWorker` para, tras guardar el mensaje inbound:
+  - Llamar a `SessionManager.current_open_session(patient)` para asociar el mensaje a la sesión abierta
+  - Encolar/reemplazar `SessionTimeoutWorker` con `scheduled_at: DateTime.add(now, 30, :minute)`
+- [ ] Crear `lib/alethea_jobs/daily_scheduler_worker.ex` (`AletheaJobs.DailySchedulerWorker`):
+  - `use Oban.Worker, queue: :schedulers`
+  - Configurar como cron en `config/config.exs`: `{"0 0 * * *", AletheaJobs.DailySchedulerWorker}`
+  - `perform/1`: carga pacientes con `session_day_of_week` = mañana (UTC), encola `WeeklyReportWorker`
+- [ ] Crear `lib/alethea_jobs/weekly_report_worker.ex` (`AletheaJobs.WeeklyReportWorker`):
+  - `use Oban.Worker, queue: :reports`
+  - `perform/1`: agrega trends, genera resumen semanal via `WeeklySummaryChain`, guarda en `clinical_summaries` con `type: "weekly"`
+- [ ] Añadir las colas `sessions`, `schedulers`, `reports` a la configuración de Oban en `config/config.exs`
+
+### Tests
+- [ ] `test/alethea_jobs/session_timeout_worker_test.exs`:
+  - Mock de `WhatsApp.Client` y `SummaryChain`; mock de `RoBERTaWorker.analyze_batch` via Mox
+  - Verificar que se crean `Trend` records y un `Summary` type `"session"` tras el cierre
+- [ ] `test/alethea/ai/roberta_worker_test.exs`:
+  - Test de regresión: mockear `Nx.Serving.run` y verificar que `analyze_batch/1` retorna la estructura esperada
+- [ ] `test/alethea_jobs/daily_scheduler_worker_test.exs`:
+  - Verificar que el cron encola `WeeklyReportWorker` con el `scheduled_at` correcto para los pacientes cuya sesión es mañana
+  - Verificar que los pacientes con `session_day_of_week` distinto al día de mañana no reciben job
+
+## Archivos Involucrados
+
+| Acción | Archivo |
+|---|---|
+| NEW (migración) | `priv/repo/migrations/<ts>_add_sessions_and_embeddings.exs` |
+| NEW | `lib/alethea/clinical/session.ex` |
+| MODIFY | `lib/alethea/clinical/message.ex` |
+| MODIFY | `lib/alethea/clinical/summary.ex` |
+| MODIFY | `lib/alethea/accounts/patient.ex` |
+| NEW | `lib/alethea/ai/roberta_worker.ex` |
+| MODIFY | `lib/alethea/application.ex` (añadir RoBERTaWorker al supervision tree) |
+| NEW | `lib/alethea/clinical/session_manager.ex` |
+| MODIFY | `lib/alethea/clinical.ex` |
+| NEW | `lib/alethea/ai/chains/session_summary_chain.ex` |
+| NEW | `lib/alethea/ai/chains/weekly_summary_chain.ex` |
+| NEW | `lib/alethea_jobs/session_timeout_worker.ex` |
+| MODIFY | `lib/alethea_jobs/process_message_worker.ex` |
+| NEW | `lib/alethea_jobs/daily_scheduler_worker.ex` |
+| NEW | `lib/alethea_jobs/weekly_report_worker.ex` |
+| MODIFY | `config/config.exs` (colas Oban + cron + System Prompts de resumen) |
+| NEW | `test/alethea_jobs/session_timeout_worker_test.exs` |
+| NEW | `test/alethea/ai/roberta_worker_test.exs` |
+| NEW | `test/alethea_jobs/daily_scheduler_worker_test.exs` |
+
+## Notas
+
+- **Descarga del modelo RoBERTa**: `pysentimiento/robertuito-emotion-analysis` (~500MB) se descarga en el primer arranque. En producción, pre-descargar en la imagen Docker durante el build con `mix run --no-start -e "Bumblebee.load_model({:hf, \"pysentimiento/robertuito-emotion-analysis\"})"`.
+- **`session_day_of_week` nulo**: pacientes sin horario configurado no reciben `WeeklyReportWorker`. El profesional puede configurar el campo desde el detalle del paciente (issue 006).
+- **`delta` en Trends**: si no existe un trend previo de esa emoción para el paciente, `delta` = 0.0. Si existe, `delta = score_actual - score_anterior`.
+- **Pgvector**: la columna `embedding vector(384)` requiere que la extensión `pgvector` esté habilitada en PostgreSQL (`CREATE EXTENSION IF NOT EXISTS vector`). Añadir esto a la migración o a un migration previo.
+- **Embeddings diferidos**: la columna se crea nullable; ningún código la llena en esta issue. La generación de embeddings se documenta como deuda técnica en una issue separada.
+- **Issue 006**: actualizar el issue 006 para que la vista de detalle del paciente tenga un campo de edición de `session_day_of_week` y `session_time`.
