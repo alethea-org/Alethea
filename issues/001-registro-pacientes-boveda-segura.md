@@ -53,7 +53,7 @@ Implementar la interfaz completa para que el psicólogo registre pacientes y ase
 | KEK por profesional | KEK derivada con PBKDF2 de la contraseña del profesional, **almacenada cifrada** en `encryption_keys` (type: `'professional'`) protegida por el `Vault` global | Más correcto criptográficamente que una KEK global; habilita borrado criptográfico por profesional |
 | Lifecycle de la KEK | La KEK se descifra del Vault al hacer login, se retiene en memoria (assign del LiveView) y se pasa a `create_patient/2` | No requiere re-descifrado en cada operación; se libera al cerrar sesión |
 | Cifrado del número de WhatsApp | `Alethea.Encryption.PatientVault.encrypt_for_patient/2` usando `:crypto.crypto_one_time_aead/6` (AES-256-GCM), IV aleatorio prefijado al ciphertext | Permite cifrado con DEKs arbitrarias sin atar el Vault global |
-| Hash para búsqueda (ADR 02) | HMAC-SHA256 con la **DEK del paciente** como clave y el número como mensaje | Cero correlación entre profesionales; el hash es único per-patient, no per-professional |
+| Hash para búsqueda (ADR 02) | HMAC-SHA256 con un **secreto global del sistema** (`Application.get_env(:alethea, :phone_hash_secret)`) como clave y el número como mensaje | Permite lookup O(1) desde el webhook (que no tiene la KEK en memoria) y garantiza unicidad global |
 | Transacción DB | `Ecto.Multi` | Rollback atómico de todos los pasos: DEK, registro de llave, cifrado, inserción de paciente |
 | UI de registro | `PatientLive.Index` con modal in-place | Sin navegación extra; coherente con el patrón de la app |
 | Campos del formulario | `alias` + `whatsapp_number` (formato E.164) | Mínimo necesario al crear; `urgent_intervention` se gestiona después |
@@ -94,7 +94,7 @@ Vault global (AES-256-GCM, key del config)
   2. Cifrar/wrap de la DEK con la KEK del profesional: `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` (usando la KEK pasada como argumento, **no** el Vault global — ver nota abajo*)
   3. Insertar `EncryptionKey` (type: `'patient'`, patient_id aún nil)
   4. Cifrar número: `PatientVault.encrypt_for_patient(whatsapp_number, dek_bytes)`
-  5. Calcular hash: `:crypto.mac(:hmac, :sha256, dek_bytes, whatsapp_number)` → Base64
+  5. Calcular hash determinista global: `:crypto.mac(:hmac, :sha256, Application.get_env(:alethea, :phone_hash_secret), whatsapp_number)` → Base64
   6. Insertar `Patient` con `encrypted_whatsapp_number`, `whatsapp_number_hash`, `encryption_key_id`
   7. Actualizar `EncryptionKey` con el `patient_id` resultante del paso 6
 
@@ -113,7 +113,7 @@ Vault global (AES-256-GCM, key del config)
 - [ ] Crear `test/alethea/accounts_test.exs` con 3 tests de integración:
   1. **Ilegibilidad SQL directa**: tras `create_patient/2`, query directa a `patients` via `Repo.query!("SELECT encrypted_whatsapp_number FROM patients WHERE id = $1", [id])` confirma que el resultado es binario y distinto del número original
   2. **Borrado criptográfico**: eliminar/nilificar el registro `EncryptionKey` del paciente y verificar que `decrypt_for_patient(ciphertext, nil)` falla o que el DEK ya no puede reconstituirse
-  3. **Constraint de unicidad**: registrar el mismo número de WhatsApp dos veces para el mismo profesional lanza `{:error, changeset}` con error en `whatsapp_number_hash`
+  3. **Constraint de unicidad**: registrar el mismo número de WhatsApp dos veces lanza `{:error, changeset}` con error en `whatsapp_number_hash` (unicidad global asegurada por índice único)
 
 ## Archivos Involucrados
 

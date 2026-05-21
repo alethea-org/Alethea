@@ -82,7 +82,7 @@ Gestionar el ciclo de vida de la interacción diaria. El sistema detecta inactiv
 | Modelo de emoción | `pysentimiento/robertuito-emotion-analysis` vía Bumblebee local (`Nx.Serving`) | Español, 7 emociones, jerga informal; privacidad total, latencia 0 |
 | Embeddings | Columna `vector(384)` creada en migración; **generación diferida** a issue futura | No hay feature que los consuma en issues 005/006 |
 | Scope de análisis emocional | Todos los mensajes `inbound` de la sesión — promedio de scores por emoción | Perfil emocional representativo de toda la sesión |
-| Trends | Un `Trend` por emoción (hasta 7 registros por sesión); `delta` vs. último trend de esa emoción | Granularidad clínica; el dashboard puede graficar evolución por emoción |
+| Trends | Un `Trend` por emoción (hasta 5 registros por sesión, filtrando surprise y disgust); `delta` vs. último trend de esa emoción | Granularidad clínica; el dashboard puede graficar evolución por emoción (set canónico de 5) |
 | Snapshot de sesión | Mismo LLM/endpoint que issue 003 (`ChatOpenAI` configurable) con prompt de resumen diferente | Sin nueva dependencia; reutiliza la configuración existente |
 | Agenda del reporte semanal | `session_day_of_week` (integer 1-7) + `session_time` (time) añadidos a `patients` en esta migración | El profesional configura el horario real del paciente; el cron encola dinámicamente |
 | Trigger del `WeeklyReportWorker` | Cron diario de barrido (`DailySchedulerWorker`) a las 00:00 UTC que encola `WeeklyReportWorker` con `scheduled_at = mañana session_time - 2h` | Distribuye la carga durante la semana; el reporte llega antes de la sesión real |
@@ -95,7 +95,7 @@ SessionTimeoutWorker.perform/1 (o cierre explícito)
   ├── 1. SessionManager.close_session(session) → actualiza status: "closed", closed_at: now
   ├── 2. Cargar todos los Messages inbound de la sesión → descifrar con DEK del paciente
   ├── 3. RoBERTaWorker.analyze_batch(messages) → [{emoción, score}] promediados por emoción
-  ├── 4. Clinical.save_trends(patient, emotion_scores, session) → hasta 7 Trend records
+  ├── 4. Clinical.save_trends(patient, emotion_scores, session) → hasta 5 Trend records (filtrado)
   ├── 5. SummaryChain.run(messages, emotion_scores) → texto de 4 líneas
   ├── 6. Clinical.save_summary(patient, session, summary_text, type: "session")
   └── 7. WhatsApp.Client.send_message(phone, mensaje_despedida)
@@ -146,7 +146,7 @@ WeeklyReportWorker.perform/1
   - `close_session(session)` → actualiza `closed_at` y `status: "closed"`, retorna `{:ok, session}`
   - `current_open_session(patient_id)` → busca sesión abierta o crea una nueva
 - [ ] Añadir a `Alethea.Clinical` (context):
-  - `save_trends(patient, emotion_scores, session)` — guarda hasta 7 `Trend`, calculando `delta` vs. último trend de cada emoción
+  - `save_trends(patient, emotion_scores, session)` — guarda hasta 5 `Trend` (descartando surprise y disgust), calculando `delta` vs. último trend de cada emoción
   - `save_summary(attrs)` — crea `Summary` con `type` incluido
   - `list_session_summaries(patient_id, since)` — para el `WeeklyReportWorker`
   - `aggregate_trends(patient_id, since)` — agrega scores por `indicator_name` en período

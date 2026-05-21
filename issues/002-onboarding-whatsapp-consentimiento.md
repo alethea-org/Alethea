@@ -59,7 +59,7 @@ Manejar el primer contacto del paciente a través de WhatsApp. El sistema debe i
 | Rutas del webhook | `GET /webhooks/whatsapp` (challenge de Meta), `POST /webhooks/whatsapp` (mensajes) | Convención estándar de Meta Graph API |
 | Validación de firma `X-Hub-Signature-256` | **Diferido a issue 003** | Esta issue no tiene credenciales reales de Meta; la validación forma parte de la integración completa |
 | Arquitectura de workers | Un solo `AletheaJobs.ProcessMessageWorker` que comprueba `terms_accepted` al inicio | Evita duplicar lógica de lookup; el worker es el coordinador de todo el pipeline |
-| Lookup de paciente por teléfono | Iterar todos los pacientes, descifrar cada DEK con el Vault global, recalcular HMAC y comparar con `whatsapp_number_hash` almacenado | El webhook sólo recibe el número entrante y no dispone de `professional_id` previo; consecuencia de la decisión de issue 001: HMAC usa la DEK del paciente como clave, imposibilitando lookup directo |
+| Lookup de paciente por teléfono | Búsqueda directa O(1) en la base de datos hasheando el número entrante con el secreto global (`phone_hash_secret`) | Resuelve el O(n) y permite al webhook (que no tiene la KEK del profesional) identificar al paciente al instante |
 | Formato del mensaje de consentimiento | Texto libre (type: `'text'`) | Sin dependencia de aprobación de plantillas de Meta; compatible con cualquier cuenta Business |
 | Detección de aceptación | Comparar `String.downcase(String.trim(texto))` contra `"acepto"` | Simple, inequívoco, sin ambigüedades de interpretación |
 | Mensajes previos al consentimiento | **Descartar sin guardar** + re-enviar mensaje de consentimiento | La transitoriedad de datos pre-consentimiento es un mandato del GEMINI.md |
@@ -93,9 +93,8 @@ POST /webhooks/whatsapp
 - [ ] Añadir `terms_accepted` al schema de `Alethea.Accounts.Patient` y al changeset
 - [ ] Añadir `update_patient_terms/2` a `Alethea.Accounts` que actualiza `terms_accepted: true`
 - [ ] Añadir `lookup_patient_by_phone(phone_e164)` a `Alethea.Accounts`:
-  - Carga todos los pacientes de todos los profesionales (con sus `encryption_key_id`)
-  - Para cada paciente: descifra la DEK del `EncryptionKey` usando `Alethea.Encryption.Vault.decrypt!/1`
-  - Recalcula `HMAC-SHA256(dek_bytes, phone_e164)` y compara con `whatsapp_number_hash`
+  - Calcula el hash: `hash = :crypto.mac(:hmac, :sha256, Application.get_env(:alethea, :phone_hash_secret), phone_e164) |> Base.encode64()`
+  - Consulta O(1): `Repo.get_by(Patient, whatsapp_number_hash: hash)`
   - Retorna `{:ok, patient}` o `{:error, :not_found}`
 
 ### Cliente WhatsApp
@@ -157,7 +156,7 @@ POST /webhooks/whatsapp
 
 ## Notas
 
-- **Lookup O(n)**: El lookup iterando todos los pacientes es costoso a escala. Es aceptable para Iteración 1 con pocos pacientes. Una issue técnica futura debería añadir un índice secundario (ej. hash con salt fija de profesional) para lookup O(1), sin romper la privacidad cruzada.
+- **Lookup O(1) Garantizado**: Al usar un secreto global del sistema para hashear el número (Issue 001), la búsqueda es instantánea y escalable.
 - **Normalización E.164**: El número entrante del webhook de Meta ya viene en formato E.164 (ej. `5215512345678`). Verificar antes de calcular el HMAC que el formato es consistente con el almacenado en registro.
 - **Idempotencia del worker**: Si Meta reintenta el webhook con el mismo mensaje, el worker debe ser seguro de re-ejecutar. El job de Oban usa el `message_id` del payload de Meta como clave de deduplicación en `unique: [fields: [:args]]`.
 - **Texto de los términos**: El contenido del mensaje de consentimiento debe almacenarse en el config o en una constante del módulo, no hardcodeado inline, para facilitar revisión legal.
