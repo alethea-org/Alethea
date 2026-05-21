@@ -18,7 +18,7 @@ El desarrollador creará de inmediato un generador de datos simulados en `lib/al
 *   `list_mock_summaries(patient_id, type)`: resúmenes semanales (`"weekly"`) y de sesión (`"session"`) de prueba.
 *   `list_mock_messages(patient_id)`: 50 mensajes en claro e inbound/outbound para simular el chat descifrado de inmediato.
 
-En `AletheaWeb.DashboardLive.mount/3` y `handle_params/3`, si los registros reales en la base de datos están vacíos o si se detecta un flag de entorno de desarrollo, el LiveView consumirá directamente este módulo de mocks.
+En `AletheaWeb.DashboardLive.mount/3` y `handle_params/3`, el LiveView solo consumirá directamente este módulo de mocks cuando exista un gate explícito de entorno/configuración para desarrollo (por ejemplo, `config_env() == :dev` o un flag dedicado como `:use_mock_data`). La ausencia de registros reales en la base de datos no debe activar mocks por sí sola; en entornos no-dev, una base vacía debe tratarse como estado sin datos reales.
 
 ### 3. Prueba de Reactividad PubSub vía Consola
 No es necesario esperar a la Issue 005 (Monitor de Crisis) para verificar la reactividad. El desarrollador puede simular alertas críticas ejecutando en una terminal interactiva `iex -S mix`:
