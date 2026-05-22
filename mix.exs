@@ -58,9 +58,9 @@ defmodule Alethea.MixProject do
       {:cloak_ecto, "~> 1.3"},
       {:langchain, "~> 0.3.0"},
       {:pgvector, "~> 0.3.0"},
-      {:bumblebee, "~> 0.6.0"},
-      {:nx, "~> 0.9"},
-      {:exla, "~> 0.9"},
+      {:bumblebee, "~> 0.6.0", only: [:prod]},
+      {:nx, "~> 0.9", only: [:prod]},
+      {:exla, "~> 0.9", only: [:prod]},
       {:pbkdf2_elixir, "~> 2.2"}
     ]
   end
