@@ -61,7 +61,8 @@ defmodule Alethea.MixProject do
       {:bumblebee, "~> 0.6.0", only: [:prod]},
       {:nx, "~> 0.9", only: [:prod]},
       {:exla, "~> 0.9", only: [:prod]},
-      {:pbkdf2_elixir, "~> 2.2"}
+      {:pbkdf2_elixir, "~> 2.2"},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 
