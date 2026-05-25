@@ -9,6 +9,7 @@ defmodule AletheaWeb.SessionController do
         return_to = get_session(conn, :return_to) || "/dashboard"
 
         conn
+        |> configure_session(renew: true)
         |> put_session(:professional_id, professional.id)
         |> delete_session(:return_to)
         |> redirect(to: return_to)
