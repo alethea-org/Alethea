@@ -68,6 +68,20 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
+  phone_hash_secret =
+    System.get_env("PHONE_HASH_SECRET") ||
+      if config_env() == :prod do
+        raise "environment variable PHONE_HASH_SECRET is missing."
+      else
+        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+      end
+
+  config :alethea, :phone_hash_secret, phone_hash_secret
+
+  config :alethea, :whatsapp,
+    api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
+    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
+
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key

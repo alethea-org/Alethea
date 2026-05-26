@@ -30,6 +30,12 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Configure Oban
+config :alethea, Oban,
+  engine: Oban.Engines.Basic,
+  queues: [default: 10, whatsapp: 20],
+  repo: Alethea.Repo
+
 # Configure Cloak
 config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
 

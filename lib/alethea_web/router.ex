@@ -14,6 +14,13 @@ defmodule AletheaWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/webhooks", AletheaWeb do
+    pipe_through :api
+
+    get "/whatsapp", WhatsappWebhookController, :verify
+    post "/whatsapp", WhatsappWebhookController, :receive
+  end
+
   scope "/", AletheaWeb do
     pipe_through :browser
 

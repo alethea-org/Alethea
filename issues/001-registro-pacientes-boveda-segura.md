@@ -57,7 +57,7 @@ Implementar la interfaz completa para que el psicólogo registre pacientes y ase
 |---|---|---|
 | Migraciones | Una sola migración nueva que agrupa todos los cambios de schema | Simplifica el historial; los cambios son interdependientes |
 | Generación de DEK | `32` bytes aleatorios con `:crypto.strong_rand_bytes(32)` | Estándar NIST para AES-256; entropía máxima |
-| KEK por profesional | KEK derivada con PBKDF2 de la contraseña del profesional, **almacenada cifrada** en `encryption_keys` (type: `'professional'`) protegida por el `Vault` global | Más correcto criptográficamente que una KEK global; habilita borrado criptográfico por profesional |
+| KEK por profesional | KEK aleatoria de 32 bytes generada al crear el profesional, **almacenada cifrada** en `encryption_keys` (type: `'professional'`) protegida por el `Vault` global | Evita la pérdida de datos al cambiar la contraseña del profesional; permite rotación de KEK si es necesario |
 | Lifecycle de la KEK | La KEK se descifra del Vault al hacer login, se retiene en memoria (assign del LiveView) y se pasa a `create_patient/2` | No requiere re-descifrado en cada operación; se libera al cerrar sesión |
 | Cifrado del número de WhatsApp | `Alethea.Encryption.PatientVault.encrypt_for_patient/2` usando `:crypto.crypto_one_time_aead/6` (AES-256-GCM), IV aleatorio prefijado al ciphertext | Permite cifrado con DEKs arbitrarias sin atar el Vault global |
 | Hash para búsqueda (ADR 02) | HMAC-SHA256 con un **secreto global del sistema** (`Application.fetch_env!(:alethea, :phone_hash_secret)`) como clave y el número como mensaje | Permite lookup O(1) desde el webhook (que no tiene la KEK en memoria) y garantiza unicidad global |
@@ -90,7 +90,7 @@ Vault global (AES-256-GCM, key del config)
   - `encrypt_for_patient(plaintext, dek_bytes)` → `{:ok, ciphertext}` usando `:crypto.crypto_one_time_aead/6` (AES-256-GCM) con IV de 12 bytes aleatorios prefijados al ciphertext binario
   - `decrypt_for_patient(ciphertext, dek_bytes)` → `{:ok, plaintext}` extrayendo el IV del prefijo
 - [ ] Crear `lib/alethea/encryption/professional_kek.ex` con:
-  - `derive_kek(password, professional_id)` → 32 bytes usando `:crypto.pbkdf2_hmac(:sha256, password, professional_id, 100_000, 32)` — la KEK es determinista a partir de la contraseña y el ID del profesional
+  - `generate_kek()` → genera 32 bytes aleatorios con `:crypto.strong_rand_bytes(32)`
   - `store_kek(professional, kek_bytes)` → cifra la KEK con `Vault.encrypt!/1` y guarda en `encryption_keys` (type: `'professional'`, `professional_id` = professional.id)
   - `load_kek(professional)` → busca el registro `type: 'professional'` del profesional, descifra con `Vault.decrypt!/1` y retorna los bytes
 

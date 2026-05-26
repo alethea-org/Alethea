@@ -31,6 +31,23 @@ defmodule Alethea.Accounts do
 
   def get_patient!(id), do: Repo.get!(Patient, id)
 
+  def lookup_patient_by_phone(phone_e164) do
+    hash =
+      :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone_e164)
+      |> Base.encode64()
+
+    case Repo.get_by(Patient, whatsapp_number_hash: hash) do
+      nil -> {:error, :not_found}
+      patient -> {:ok, patient}
+    end
+  end
+
+  def update_patient_terms(%Patient{} = patient, accepted?) do
+    patient
+    |> Patient.changeset(%{terms_accepted: accepted?})
+    |> Repo.update()
+  end
+
   def create_patient(attrs \\ %{}) do
     %Patient{}
     |> Patient.changeset(attrs)

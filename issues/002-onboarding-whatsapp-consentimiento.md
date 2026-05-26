@@ -62,6 +62,7 @@ Manejar el primer contacto del paciente a través de WhatsApp. El sistema debe i
 | Lookup de paciente por teléfono | Búsqueda directa O(1) en la base de datos hasheando el número entrante con el secreto global (`phone_hash_secret`) | Resuelve el O(n) y permite al webhook (que no tiene la KEK del profesional) identificar al paciente al instante |
 | Formato del mensaje de consentimiento | Texto libre (type: `'text'`) | Sin dependencia de aprobación de plantillas de Meta; compatible con cualquier cuenta Business |
 | Detección de aceptación | Comparar `String.downcase(String.trim(texto))` contra `"acepto"` | Simple, inequívoco, sin ambigüedades de interpretación |
+| Control de reintentos | Caché de "Consentimiento en Progreso" (TTL 1 min) vía `Alethea.WhatsApp.ConsentCache` | Evita saturar al paciente con el mensaje de términos si envía múltiples mensajes seguidos antes de aceptar |
 | Mensajes previos al consentimiento | **Descartar sin guardar** + re-enviar mensaje de consentimiento | La transitoriedad de datos pre-consentimiento es un mandato del GEMINI.md |
 | Número no registrado | Responder con mensaje genérico y terminar el job sin error | No guardar nada; evitar revelar información sobre otros pacientes |
 | Cliente WhatsApp | Crear `Alethea.WhatsApp.Client` con `send_message/2` usando `Req` ya en esta issue | Evita reescribir el worker en issue 003; da estructura al módulo que 003 expandirá |
@@ -114,6 +115,9 @@ POST /webhooks/whatsapp
       ```
 
 ### Cliente WhatsApp
+- [ ] Crear `lib/alethea/whatsapp/consent_cache.ex`:
+  - Implementar un proceso `GenServer` simple que use `Map` o `ETS` para registrar `phone_e164` con un TTL de 60 segundos.
+  - Funciones: `mark_in_progress(phone)`, `in_progress?(phone)`.
 - [ ] Crear `lib/alethea/whatsapp/client.ex` con `send_message(to_number, body_text)`:
   - Usa `Req.post/2` hacia `https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages`
   - Cabecera `Authorization: Bearer {WHATSAPP_API_TOKEN}`
