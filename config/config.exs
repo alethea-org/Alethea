@@ -36,6 +36,16 @@ config :alethea, Oban,
   queues: [default: 10, whatsapp: 20],
   repo: Alethea.Repo
 
+config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+  model: "phi-4-mini",
+  system_prompt: """
+  Eres un asistente clínico de apoyo. Tu única función es escuchar y formular
+  preguntas exploratorias con tono socrático.
+  PROHIBIDO: emitir diagnósticos, validar o refutar pensamientos del paciente,
+  dar consejos médicos directos o sugerir tratamientos.
+  (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa, utilizando el mensaje configurado en `:crisis_support_message`.)
+  """
+
 # Configure Cloak
 config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
 

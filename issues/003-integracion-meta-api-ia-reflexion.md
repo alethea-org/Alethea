@@ -91,17 +91,17 @@ ProcessMessageWorker.perform/1
 ## Tasks
 
 ### Migración
-- [ ] Generar migración `add_behavior_type_to_messages` con:
+- [x] Generar migración `add_behavior_type_to_messages` con:
   - `alter table(:messages)`: añadir `behavior_type` (`:string`, null: `false`, default: `"spontaneous"`)
   - Crear check constraint: `behavior_type IN ('spontaneous', 'elicited')`
 
 ### Schema y Contexto Clínico
-- [ ] Añadir `behavior_type` al schema de `Alethea.Clinical.Message` y al changeset
-- [ ] Añadir `Alethea.Clinical.list_recent_messages(patient_id, limit)` al contexto clinical — query ordenada por `timestamp DESC`, limit configurable, con preload vacío (solo los campos necesarios para descifrado)
-- [ ] Crear `Alethea.Clinical` context module (`lib/alethea/clinical.ex`) si no existe, o añadir la función al módulo existente
+- [x] Añadir `behavior_type` al schema de `Alethea.Clinical.Message` y al changeset
+- [x] Añadir `Alethea.Clinical.list_recent_messages(patient_id, limit)` al contexto clinical — query ordenada por `timestamp DESC`, limit configurable, con preload vacío (solo los campos necesarios para descifrado)
+- [x] Crear `Alethea.Clinical` context module (`lib/alethea/clinical.ex`) si no existe, o añadir la función al módulo existente
 
 ### Seguridad del Webhook
-- [ ] Actualizar `WhatsappWebhookController.receive/2` para validar `X-Hub-Signature-256`:
+- [x] Actualizar `WhatsappWebhookController.receive/2` para validar `X-Hub-Signature-256`:
   - Leer el header `x-hub-signature-256` de la request
   - Comparar con `HMAC-SHA256(app_secret, raw_body)` usando `:crypto.mac/4`
   - Si falla: responder HTTP 403 inmediatamente, sin encolar job
@@ -109,7 +109,7 @@ ProcessMessageWorker.perform/1
   - **Nota**: Phoenix parsea el body antes de llegar al controlador; se necesita un Plug custom (`CacheBodyReader`) que preserve el raw body en `conn.assigns` para poder calcular el HMAC
 
 ### Configuración del LLM
-- [ ] Añadir a `config/config.exs` el System Prompt completo con los "No Negociables":
+- [x] Añadir a `config/config.exs` el System Prompt completo con los "No Negociables":
   ```elixir
   config :alethea, Alethea.AI.Chains.GuidedConversationChain,
     model: "phi-4-mini",
@@ -121,7 +121,7 @@ ProcessMessageWorker.perform/1
     (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa, utilizando el mensaje configurado en `:crisis_support_message`.)
     """
   ```
-- [ ] Añadir a `config/runtime.exs`:
+- [x] Añadir a `config/runtime.exs`:
   ```elixir
   config :alethea, Alethea.AI.Chains.GuidedConversationChain,
     endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -132,13 +132,13 @@ ProcessMessageWorker.perform/1
   ```
 
 ### AI Chain — Contexto de Conversación
-- [ ] Actualizar `GuidedConversationChain.run/1` para:
+- [x] Actualizar `GuidedConversationChain.run/1` para:
   - Leer `system_prompt` y `endpoint_url` desde `Application.get_env/2`
   - Construir el system prompt interpolando el `patient_context` (historial de N mensajes)
   - Mantener `behavior_type: :elicited` en el resultado del chain
 
 ### Worker Oban — Pipeline Clínico Completo
-- [ ] Actualizar `AletheaJobs.ProcessMessageWorker.perform/1`, rama `terms_accepted: true`:
+- [x] Actualizar `AletheaJobs.ProcessMessageWorker.perform/1`, rama `terms_accepted: true`:
   1. `Clinical.save_message(patient, text, dek, "inbound", "spontaneous")` → `{:ok, inbound_msg}`
   2. `Clinical.list_recent_messages(patient.id, limit)` → descifrar con DEK → `patient_context` string
   3. `PhiWorker.process(%{message_id: inbound_msg.id, raw_content: text, patient_context: patient_context})`
@@ -147,13 +147,13 @@ ProcessMessageWorker.perform/1
   6. `WhatsApp.Client.send_message(phone, response)`
 
 ### Plug — Raw Body Preservation (para HMAC)
-- [ ] Crear `lib/alethea_web/plugs/cache_body_reader.ex` con un Plug que guarda el raw body en `conn.assigns.raw_body` antes de que Phoenix lo parsee
-- [ ] Configurar el endpoint (`endpoint.ex`) para usar `CacheBodyReader` solo en la ruta `/webhooks/whatsapp`
+- [x] Crear `lib/alethea_web/plugs/cache_body_reader.ex` con un Plug que guarda el raw body en `conn.assigns.raw_body` antes de que Phoenix lo parsee
+- [x] Configurar el endpoint (`endpoint.ex`) para usar `CacheBodyReader` solo en la ruta `/webhooks/whatsapp`
 
 ### Tests
-- [ ] Actualizar `test/alethea_jobs/process_message_worker_test.exs` con test del pipeline completo:
+- [x] Actualizar `test/alethea_jobs/process_message_worker_test.exs` con test del pipeline completo:
   - `terms_accepted: true` → mockear `PhiWorker` y `WhatsApp.Client.send_message`; verificar que se crean 2 `Message` y 1 `Diagnosis` (Alethea.AI.Diagnosis) en DB
-- [ ] Crear `test/alethea_web/controllers/whatsapp_webhook_controller_test.exs`:
+- [x] Crear `test/alethea_web/controllers/whatsapp_webhook_controller_test.exs`:
   - Firma válida → encola job, devuelve 200
   - Firma inválida → devuelve 403, no encola job
   - Sin header de firma → devuelve 403

@@ -41,7 +41,10 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
       do: action
 
   def call(conn, :fetch_current_professional), do: fetch_current_professional(conn, [])
-  def call(conn, :require_authenticated_professional), do: require_authenticated_professional(conn, [])
+
+  def call(conn, :require_authenticated_professional),
+    do: require_authenticated_professional(conn, [])
+
   def call(conn, :redirect_if_authenticated), do: redirect_if_authenticated(conn, [])
 
   def fetch_current_professional(conn, _opts) do

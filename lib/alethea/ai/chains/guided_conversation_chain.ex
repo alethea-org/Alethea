@@ -13,31 +13,44 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
           map()
   def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
-    llm = ChatOpenAI.new!(Keyword.merge(%{model: "phi-4-mini", stream: false}, llm_config))
 
-    {:ok, chain} =
+    llm =
+      ChatOpenAI.new!(%{
+        model: llm_config[:model] || "phi-4-mini",
+        endpoint: llm_config[:endpoint_url],
+        api_key: llm_config[:api_key],
+        stream: false
+      })
+
+    system_msg = system_prompt(ctx, llm_config[:system_prompt])
+
+    {:ok, _updated_chain, response} =
       %{
         llm: llm,
         verbose: false
       }
       |> LLMChain.new!()
-      |> LLMChain.add_message(Message.new_system!(system_prompt(ctx)))
+      |> LLMChain.add_message(Message.new_system!(system_msg))
       |> LLMChain.add_message(Message.new_user!(content))
       |> LLMChain.run()
 
     %{
-      response: chain.last_message.content,
+      ai_response: response.content,
       source_message_id: msg_id,
       model_version: llm_config[:model] || "phi-4-mini",
-      behavior_type: :elicited
+      behavior_type: "elicited"
     }
   end
 
-  defp system_prompt(context) do
+  defp system_prompt(patient_history, base_prompt) do
     """
-    Eres un asistente clínico de apoyo. Tu rol es escuchar y formular preguntas exploratorias.
-    NO valides ni refutes los pensamientos del paciente sin instrucción explícita del terapeuta.
-    Contexto del paciente: #{context}
+    #{base_prompt}
+
+    A continuación se presenta el historial reciente de la conversación con el paciente
+    (los mensajes más recientes están al final):
+    ---
+    #{patient_history}
+    ---
     """
   end
 end

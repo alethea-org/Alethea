@@ -1,7 +1,3 @@
-defmodule Alethea.WhatsApp.ClientBehaviour do
-  @callback send_message(String.t(), String.t()) :: {:ok, map()} | {:error, any()}
-end
-
 defmodule Alethea.WhatsApp.Client do
   @moduledoc """
   Cliente para interactuar con la API de WhatsApp Business de Meta.
