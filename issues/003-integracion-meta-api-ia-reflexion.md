@@ -67,7 +67,7 @@ Completar el pipeline clínico completo: validar la seguridad del webhook de Met
 |---|---|---|
 | Validación de firma `X-Hub-Signature-256` | Implementar en esta issue en `WhatsappWebhookController` | Es seguridad perimetral; no puede esperar a tener un staging real |
 | Arquitectura del pipeline | Un solo `ProcessMessageWorker` ejecuta todo el flujo secuencialmente | Menor latencia que un segundo job; la IA es suficientemente rápida en el caso de Phi-4 mini |
-| Backend de Phi-4 mini | `ChatOpenAI` con `endpoint_url` configurable vía `OPENAI_BASE_URL` | Dev → Groq/Azure (Phi-4 mini gratuito); Prod → Ollama local. Cero cambios de código entre entornos |
+| Backend de modelo | `Alethea.AI.ChatModels.HuggingFaceChat` usando la API de Hugging Face con `endpoint` y `api_key` configurables | Dev → Hugging Face Inference API o servidor local compatible; Prod → servidor Hugging Face local o privado. Cero cambios de código entre entornos |
 | Contexto de conversación | Últimos N mensajes descifrados del paciente concatenados en el system prompt — N configurable (`app env`), default 10 | Provee continuidad clínica sin enviar el historial completo al LLM |
 | System Prompt | Almacenado en `config/runtime.exs`, leído con `Application.get_env/2` | Patrón ya establecido en `GuidedConversationChain`; ajustable en runtime con restart de la release, sin recompilación |
 | Persistencia en DB | 3 registros por interacción: `Message` inbound (`spontaneous`), `Message` outbound (`elicited`), `Diagnosis` del chain | Trazabilidad completa (Source Anchoring del GEMINI.md); `Diagnosis.message_id` apunta al mensaje inbound |
@@ -124,8 +124,9 @@ ProcessMessageWorker.perform/1
 - [ ] Añadir a `config/runtime.exs`:
   ```elixir
   config :alethea, Alethea.AI.Chains.GuidedConversationChain,
-    endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    api_key: System.get_env("OPENAI_API_KEY", "")
+    endpoint: System.get_env("HUGGINGFACE_API_URL", "https://api-inference.huggingface.co/models"),
+    model: System.get_env("HUGGINGFACE_MODEL", "meta-llama/Llama-2-7b-chat-hf"),
+    api_key: System.get_env("HUGGINGFACE_API_KEY", "")
 
   config :alethea, :whatsapp,
     app_secret: System.get_env("WHATSAPP_APP_SECRET", "")
@@ -177,7 +178,7 @@ ProcessMessageWorker.perform/1
 
 ## Notas
 
-- **`OPENAI_BASE_URL` en dev**: Groq Cloud (`https://api.groq.com/openai/v1`) ofrece `llama-3.3-70b-versatile` o `meta-llama/llama-4-scout` gratis. Para Phi-4 mini específicamente, usar Azure AI Foundry o Together.ai. En prod, Ollama en el mismo servidor con `http://localhost:11434/v1` y `api_key: "ollama"`.
+- **`HUGGINGFACE_API_URL` en dev**: Usa la API de Hugging Face (`https://api-inference.huggingface.co/models`) o un servidor local compatible. El modelo puede configurarse con `HUGGINGFACE_MODEL` y el API key con `HUGGINGFACE_API_KEY`. En prod, usa un endpoint Hugging Face local/autohospedado para mantener la privacidad.
 - **Raw body y HMAC**: Phoenix consume el body al parsearlo. El `CacheBodyReader` debe configurarse **antes** del parser JSON en el endpoint para que el raw body esté disponible. Es un patrón estándar documentado en la guía de seguridad de Phoenix.
 - **`extracted_emotions` en `Diagnosis`**: En esta issue se guarda como `%{}` vacío. El análisis de sentimiento con RoBERTa (Bumblebee) que lo rellena es parte de la issue de monitoreo de crisis o dashboard.
 - **Idempotencia**: el worker debe evitar guardar mensajes duplicados si Oban reintenta. Añadir una clave de unicidad usando el `wamid` (WhatsApp Message ID) del payload de Meta como campo único en `messages`.
