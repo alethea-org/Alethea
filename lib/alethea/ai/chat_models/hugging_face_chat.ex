@@ -36,7 +36,7 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   @primary_key false
   embedded_schema do
     field :endpoint, :string, default: "https://api-inference.huggingface.co/models"
-    field :model, :string, default: "meta-llama/Llama-2-7b-chat-hf"
+    field :model, :string, default: "phi-4-mini"
     field :api_key, :string, redact: true
     field :temperature, :float, default: 0.0
     field :max_tokens, :integer, default: 512
@@ -76,26 +76,16 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
 
     LangChain.Telemetry.span([:langchain, :llm, :call], metadata, fn ->
       try do
-        LangChain.Telemetry.llm_prompt(
-          %{system_time: System.system_time()},
-          %{model: model.model, messages: messages}
-        )
+        LangChain.Telemetry.llm_prompt(%{system_time: System.system_time()}, %{model: model.model, messages: messages})
 
         case do_api_request(model, messages) do
-          {:error, reason} ->
-            {:error, reason}
-
-          parsed when is_binary(parsed) ->
-            LangChain.Telemetry.llm_response(
-              %{system_time: System.system_time()},
-              %{model: model.model, response: parsed}
-            )
-
+          {:error, reason} -> {:error, reason}
+          parsed ->
+            LangChain.Telemetry.llm_response(%{system_time: System.system_time()}, %{model: model.model, response: parsed})
             {:ok, Message.new_assistant!(parsed)}
         end
       rescue
-        err in LangChainError ->
-          {:error, err.message}
+        err in LangChainError -> {:error, err.message}
       end
     end)
   end
@@ -134,19 +124,16 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   end
 
   defp build_url(%__MODULE__{endpoint: endpoint, model: model}) do
-    endpoint
-    |> String.trim_trailing("/")
-    |> Kernel.<>("/")
-    |> Kernel.<>(model)
+    String.trim_trailing(endpoint, "/") <> "/" <> model
   end
 
   defp request_headers(%__MODULE__{api_key: api_key}) do
-    headers = [{"content-type", "application/json"}]
+    base_headers = [{"content-type", "application/json"}]
 
     if api_key in [nil, ""] do
-      headers
+      base_headers
     else
-      headers ++ [{"authorization", "Bearer #{api_key}"}]
+      base_headers ++ [{"authorization", "Bearer #{api_key}"}]
     end
   end
 
@@ -162,7 +149,7 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   defp message_to_input(%Message{role: :assistant, content: content}), do: "Assistant: #{content}"
   defp message_to_input(%Message{content: content}), do: content
 
-  defp parse_response(%{"error" => error}) when is_binary(error), do: raise(LangChainError, error)
+  defp parse_response(%{"error" => error}), do: raise(LangChainError, error)
   defp parse_response(%{"generated_text" => text}) when is_binary(text), do: text
   defp parse_response([%{"generated_text" => text} | _]) when is_binary(text), do: text
   defp parse_response(%{"choices" => [%{"message" => %{"content" => text}} | _]}) when is_binary(text), do: text
@@ -176,11 +163,7 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
 
   @impl ChatModel
   def serialize_config(%__MODULE__{} = model) do
-    Utils.to_serializable_map(
-      model,
-      [:endpoint, :model, :api_key, :temperature, :max_tokens, :stream, :receive_timeout],
-      @current_config_version
-    )
+    Utils.to_serializable_map(model, [:endpoint, :model, :api_key, :temperature, :max_tokens, :stream, :receive_timeout], @current_config_version)
   end
 
   @impl ChatModel

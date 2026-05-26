@@ -13,7 +13,8 @@ defmodule AletheaWeb.WhatsappWebhookController do
       }) do
     # El verify_token debe configurarse en el dashboard de Meta y aquí.
     # Por ahora usamos uno simple o lo sacamos de config.
-    expected_token = Application.get_env(:alethea, :whatsapp)[:verify_token] || "alethea_verify_token"
+    expected_token =
+      Application.get_env(:alethea, :whatsapp)[:verify_token] || "alethea_verify_token"
 
     if token == expected_token do
       send_resp(conn, 200, challenge)
@@ -48,6 +49,7 @@ defmodule AletheaWeb.WhatsappWebhookController do
           send_resp(conn, 200, "OK")
       end
     else
+      Logger.warning("Invalid WhatsApp Signature")
       send_resp(conn, 403, "Forbidden")
     end
   end
@@ -72,8 +74,6 @@ defmodule AletheaWeb.WhatsappWebhookController do
 
   defp secure_compare(left, right) when byte_size(left) == byte_size(right) do
     Plug.Crypto.secure_compare(left, right)
-  rescue
-    _ -> false
   end
 
   defp secure_compare(_, _), do: false

@@ -37,7 +37,8 @@ defmodule AletheaWeb.PatientLive.Index do
   @impl true
   def handle_event("save_patient", %{"patient" => patient_params}, socket) do
     # Añadir el ID del profesional al params
-    patient_params = Map.put(patient_params, "professional_id", socket.assigns.current_professional.id)
+    patient_params =
+      Map.put(patient_params, "professional_id", socket.assigns.current_professional.id)
 
     case Accounts.create_patient(patient_params, socket.assigns.professional_kek) do
       {:ok, patient} ->
@@ -69,10 +70,10 @@ defmodule AletheaWeb.PatientLive.Index do
       rows={@streams.patients}
       row_click={fn {_id, patient} -> JS.navigate(~p"/dashboard?patient_id=#{patient.id}") end}
     >
-      <:col :let={{_id, patient}} label="Alias"><%= patient.alias %></:col>
+      <:col :let={{_id, patient}} label="Alias">{patient.alias}</:col>
       <:col :let={{_id, patient}} label="Estado">
         <.badge color={if patient.status == "active", do: :green, else: :gray}>
-          <%= patient.status %>
+          {patient.status}
         </.badge>
       </:col>
       <:action :let={{_id, patient}}>

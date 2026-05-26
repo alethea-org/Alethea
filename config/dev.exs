@@ -65,7 +65,9 @@ config :alethea, AletheaWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :alethea, dev_routes: true
 
-config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+config :alethea,
+       :phone_hash_secret,
+       "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
 config :alethea, :whatsapp,
   api_token: "mock_token",

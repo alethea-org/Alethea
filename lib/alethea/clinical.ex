@@ -107,7 +107,6 @@ defmodule Alethea.Clinical do
       {:error, reason} -> {:error, reason}
     end
   end
-
   defp decrypt_message_content(%Message{} = message, dek) do
     PatientVault.decrypt(message.encrypted_content, dek)
   end

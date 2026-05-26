@@ -18,19 +18,22 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
     llm_opts =
       provider_config
-      |> Keyword.merge(
+      |> Keyword.merge(%{
         model: llm_config[:model] || "phi-4-mini",
-        stream: Keyword.get(llm_config, :stream, false),
+        endpoint: Keyword.get(llm_config, :endpoint, Keyword.get(provider_config, :endpoint, "https://api-inference.huggingface.co/models")),
+        api_key: Keyword.get(llm_config, :api_key, nil),
         temperature: Keyword.get(llm_config, :temperature, 0.0),
-        max_tokens: Keyword.get(llm_config, :max_tokens, 512)
-      )
+        max_tokens: Keyword.get(llm_config, :max_tokens, 512),
+        stream: Keyword.get(llm_config, :stream, false)
+      })
 
     llm =
       case provider do
-        :local -> HuggingFaceChat.new!(llm_opts)
         :cloud -> ChatOpenAI.new!(llm_opts)
         _ -> HuggingFaceChat.new!(llm_opts)
       end
+
+    system_msg = system_prompt(ctx, llm_config[:system_prompt])
 
     {:ok, chain} =
       %{
@@ -38,7 +41,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
         verbose: false
       }
       |> LLMChain.new!()
-      |> LLMChain.add_message(Message.new_system!(system_prompt(llm_config, ctx)))
+      |> LLMChain.add_message(Message.new_system!(system_msg))
       |> LLMChain.add_message(Message.new_user!(content))
       |> LLMChain.run()
 
@@ -50,19 +53,19 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     }
   end
 
-  defp system_prompt(llm_config, context) do
-    prompt = llm_config[:system_prompt] || default_system_prompt()
+  defp system_prompt(context, nil) do
+    default_system_prompt() <> "\n\nContexto del paciente: #{context}"
+  end
 
-    "#{prompt}\n\nContexto del paciente: #{context}"
+  defp system_prompt(context, custom_prompt) when is_binary(custom_prompt) do
+    "#{custom_prompt}\n\nContexto del paciente: #{context}"
   end
 
   defp default_system_prompt do
     """
-    Eres un asistente clínico de apoyo. Tu única función es escuchar y formular
-    preguntas exploratorias con tono socrático.
-    PROHIBIDO: emitir diagnósticos, validar o refutar pensamientos del paciente,
-    dar consejos médicos directos o sugerir tratamientos.
-    (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa.)
+    Eres un asistente clínico de apoyo. Tu rol es escuchar y formular preguntas exploratorias.
+    NO valides ni refutes los pensamientos del paciente sin instrucción explícita del terapeuta.
+    Evita emitir diagnósticos o consejos médicos directos.
     """
   end
 end

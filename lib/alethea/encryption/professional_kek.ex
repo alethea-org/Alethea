@@ -35,7 +35,9 @@ defmodule Alethea.Encryption.ProfessionalKek do
   """
   def load_kek(professional) do
     case Repo.get_by(EncryptionKey, professional_id: professional.id, type: "professional") do
-      nil -> {:error, :not_found}
+      nil ->
+        {:error, :not_found}
+
       key_record ->
         {:ok, Vault.decrypt!(key_record.encrypted_key)}
     end

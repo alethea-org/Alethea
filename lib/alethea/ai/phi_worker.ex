@@ -4,7 +4,6 @@ defmodule Alethea.AI.PhiWorker do
 
   Este módulo centraliza la sanitización y la invocación de LangChain sin lógica de negocio externa.
   """
-
   @behaviour Alethea.AI.PhiWorkerBehaviour
 
   alias Alethea.AI.Sanitizer

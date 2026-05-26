@@ -84,9 +84,15 @@ defmodule AletheaJobs.ProcessMessageWorker do
           {:ok, inbound_message} ->
             case Clinical.build_patient_context(patient, context_limit) do
               {:ok, patient_context} ->
-                chain_result = @phi_worker.process(%{message_id: inbound_message.id, raw_content: text, patient_context: patient_context})
+                chain_result =
+                  @phi_worker.process(%{
+                    message_id: inbound_message.id,
+                    raw_content: text,
+                    patient_context: patient_context
+                  })
 
-                with {:ok, _outbound_message} <- Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil),
+                with {:ok, _outbound_message} <-
+                       Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil),
                      {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
                   @client.send_message(phone, chain_result.response)
                   :ok
@@ -121,7 +127,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
             with {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, crisis_diagnosis),
                  {:ok, _patient} <- Accounts.update_patient(patient, %{urgent_intervention: true}),
-                 :ok <- Phoenix.PubSub.broadcast(Alethea.PubSub, "crisis:alerts", {:crisis_detected, patient.id, level, triggers}),
+                 :ok <-
+                   Phoenix.PubSub.broadcast(Alethea.PubSub, "crisis:alerts", {:crisis_detected, patient.id, level, triggers}),
                  {:ok, _send_result} <- @client.send_message(phone, crisis_support_message) do
               :ok
             else
