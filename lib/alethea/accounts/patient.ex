@@ -11,6 +11,7 @@ defmodule Alethea.Accounts.Patient do
     field :status, :string, default: "active"
     field :terms_accepted, :boolean, default: false
     field :encryption_version, :integer, default: 1
+    field :urgent_intervention, :boolean, default: false
 
     # Virtual field for the raw number during input
     field :whatsapp_number, :string, virtual: true
@@ -34,6 +35,7 @@ defmodule Alethea.Accounts.Patient do
       :alias,
       :status,
       :terms_accepted,
+      :urgent_intervention,
       :professional_id,
       :encryption_key_id,
       :encryption_version

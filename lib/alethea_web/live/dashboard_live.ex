@@ -4,8 +4,62 @@ defmodule AletheaWeb.DashboardLive do
   alias Alethea.Accounts
 
   def mount(_params, %{"professional_id" => id}, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
+    end
+
     professional = Accounts.get_professional!(id)
-    {:ok, assign(socket, current_professional: professional, page_title: "Centro de Control")}
+
+    socket =
+      socket
+      |> assign(:current_professional, professional)
+      |> assign(:page_title, "Centro de Control")
+      |> assign(:patients, Accounts.list_patients(professional.id))
+      |> assign(:critical_patients, Accounts.list_critical_patients(professional.id))
+
+    {:ok, socket}
+  end
+
+  def handle_info({:crisis_detected, patient_id, level, _triggers}, socket) do
+    professional = socket.assigns.current_professional
+
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        {:noreply, socket}
+
+      patient ->
+        patient = %{patient | urgent_intervention: true}
+
+        socket =
+          socket
+          |> put_flash(
+            :error,
+            "Alerta Critica: El paciente #{patient.alias} ha entrado en crisis (Nivel: #{level})"
+          )
+          |> assign(:critical_patients, upsert_critical_patient(socket.assigns.critical_patients, patient))
+          |> assign(:patients, upsert_dashboard_patient(socket.assigns.patients, patient))
+
+        {:noreply, socket}
+    end
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp upsert_critical_patient(patients, patient) do
+    patients
+    |> reject_patient(patient.id)
+    |> then(&[patient | &1])
+  end
+
+  defp upsert_dashboard_patient(patients, patient) do
+    patients
+    |> reject_patient(patient.id)
+    |> then(&[patient | &1])
+    |> Enum.sort_by(&{not &1.urgent_intervention, String.downcase(&1.alias || "")})
+  end
+
+  defp reject_patient(patients, patient_id) do
+    Enum.reject(patients, &(&1.id == patient_id))
   end
 
   defp format_session_day(nil), do: "-"

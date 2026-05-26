@@ -92,8 +92,8 @@ mood_signal =
                 <div class="min-w-0">
                   <p class="truncate font-medium text-base-content">{patient.alias}</p>
                   <p class="text-xs text-base-content/60">
-                    Sesion: {format_session_day(patient.session_day_of_week)} / {format_session_time(
-                      patient.session_time
+                    Sesion: {format_session_day(Map.get(patient, :session_day_of_week))} / {format_session_time(
+                      Map.get(patient, :session_time)
                     )}
                   </p>
                 </div>
@@ -207,13 +207,13 @@ mood_signal =
                   <div class="flex justify-between gap-3">
                     <dt class="text-base-content/60">Dia</dt>
                     <dd class="font-medium">
-                      {format_session_day(selected_patient.session_day_of_week)}
+                      {format_session_day(Map.get(selected_patient, :session_day_of_week))}
                     </dd>
                   </div>
                   <div class="flex justify-between gap-3">
                     <dt class="text-base-content/60">Hora</dt>
                     <dd class="font-medium">
-                      {format_session_time(selected_patient.session_time)}
+                      {format_session_time(Map.get(selected_patient, :session_time))}
                     </dd>
                   </div>
                 </dl>

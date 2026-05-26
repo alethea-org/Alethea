@@ -56,8 +56,27 @@ defmodule Alethea.Accounts do
 
   def list_patients(professional_id) do
     Patient
-    |> where(professional_id: ^professional_id)
+    |> where([p], p.professional_id == ^professional_id)
+    |> where([p], p.status != "deleted")
+    |> order_by([p], desc: p.urgent_intervention, asc: p.alias)
     |> Repo.all()
+  end
+
+  def list_critical_patients(professional_id) do
+    Patient
+    |> where([p], p.professional_id == ^professional_id)
+    |> where([p], p.status != "deleted")
+    |> where([p], p.urgent_intervention == true)
+    |> order_by([p], asc: p.alias)
+    |> Repo.all()
+  end
+
+  def get_patient_for_professional(professional_id, patient_id) do
+    Patient
+    |> where([p], p.id == ^patient_id)
+    |> where([p], p.professional_id == ^professional_id)
+    |> where([p], p.status != "deleted")
+    |> Repo.one()
   end
 
   def get_patient!(id), do: Repo.get!(Patient, id)
