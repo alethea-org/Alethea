@@ -17,7 +17,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     llm =
       HuggingFaceChat.new!(
         Keyword.merge(
-          %{model: "meta-llama/Llama-2-7b-chat-hf", stream: false, temperature: 0.0, max_tokens: 512},
+          %{model: "phi-4-mini", stream: false, temperature: 0.0, max_tokens: 512},
           llm_config
         )
       )

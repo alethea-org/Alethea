@@ -39,7 +39,7 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
     field :endpoint, :string,
       default: "https://api-inference.huggingface.co/models"
 
-    field :model, :string, default: "meta-llama/Llama-2-7b-chat-hf"
+    field :model, :string, default: "phi-4-mini"
     field :api_key, :string, redact: true
     field :temperature, :float, default: 0.0
     field :max_tokens, :integer, default: 512

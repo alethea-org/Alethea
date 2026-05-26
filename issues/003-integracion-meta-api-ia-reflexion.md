@@ -125,7 +125,7 @@ ProcessMessageWorker.perform/1
   ```elixir
   config :alethea, Alethea.AI.Chains.GuidedConversationChain,
     endpoint: System.get_env("HUGGINGFACE_API_URL", "https://api-inference.huggingface.co/models"),
-    model: System.get_env("HUGGINGFACE_MODEL", "meta-llama/Llama-2-7b-chat-hf"),
+    model: System.get_env("HUGGINGFACE_MODEL", "phi-4-mini"),
     api_key: System.get_env("HUGGINGFACE_API_KEY", "")
 
   config :alethea, :whatsapp,
