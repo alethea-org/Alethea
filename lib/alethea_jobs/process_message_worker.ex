@@ -5,7 +5,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
   """
   use Oban.Worker, queue: :whatsapp, max_attempts: 3
 
-  alias Alethea.Accounts
+  alias Alethea.{Accounts, Clinical}
+  alias Alethea.Clinical.SessionManager
   alias Alethea.WhatsApp.ConsentCache
 
   @client Application.compile_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
@@ -43,9 +44,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
   defp process_patient_message(patient, phone, text) do
     cond do
       patient.terms_accepted ->
-        # TODO: Derivar al pipeline clínico (Issue 003)
-        Logger.info("Paciente #{patient.id} envió mensaje clínico: #{text}")
-        :ok
+        save_message_and_schedule_timeout(patient, phone, text)
 
       String.upcase(String.trim(text)) == "ACEPTO" ->
         case Accounts.update_patient_terms(patient, true) do
@@ -69,6 +68,29 @@ defmodule AletheaJobs.ProcessMessageWorker do
           @client.send_message(phone, @terms_message)
           :ok
         end
+    end
+  end
+
+  defp save_message_and_schedule_timeout(patient, phone, text) do
+    encrypted_content = Alethea.Encryption.Vault.encrypt!(text)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    with {:ok, session} <- SessionManager.current_open_session(patient.id),
+         {:ok, _message} <-
+           Clinical.create_message(%{
+             direction: "inbound",
+             encrypted_content: encrypted_content,
+             timestamp: now,
+             patient_id: patient.id,
+             session_id: session.id
+           }) do
+      AletheaJobs.SessionTimeoutWorker.new(
+        %{session_id: session.id, patient_id: patient.id, phone: phone},
+        scheduled_at: DateTime.add(now, 30, :minute)
+      )
+      |> Oban.insert!(replace: [:scheduled_at])
+
+      :ok
     end
   end
 end

@@ -12,7 +12,10 @@ defmodule Alethea.Clinical.Message do
     field :timestamp, :utc_datetime
 
     belongs_to :patient, Alethea.Accounts.Patient
+    belongs_to :session, Alethea.Clinical.Session
     has_many :ai_diagnoses, Alethea.AI.Diagnosis
+
+    # embedding vector(384) column added manually once pgvector is installed on the PG server
 
     timestamps(type: :utc_datetime)
   end
@@ -25,7 +28,8 @@ defmodule Alethea.Clinical.Message do
       :encryption_version,
       :synced_to_graph,
       :timestamp,
-      :patient_id
+      :patient_id,
+      :session_id
     ])
     |> validate_required([:direction, :encrypted_content, :timestamp, :patient_id])
     |> validate_inclusion(:direction, ["inbound", "outbound"])

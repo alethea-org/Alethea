@@ -30,6 +30,13 @@ config :alethea, :whatsapp,
   phone_number_id: "mock_id"
 
 config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
+config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
+config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
+
+config :alethea, Alethea.AI.RoBERTaWorker,
+  api_url: "http://test.local/roberta",
+  api_key: "test_key",
+  req_options: [plug: {Req.Test, Alethea.AI.RoBERTaWorker}]
 
 config :alethea, Oban, testing: :manual
 
