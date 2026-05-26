@@ -80,7 +80,12 @@ if config_env() == :prod do
 
   config :alethea, :whatsapp,
     api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
-    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
+    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", ""),
+    app_secret: System.get_env("WHATSAPP_APP_SECRET", "")
+
+  config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+    endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+    api_key: System.get_env("OPENAI_API_KEY", "")
 
   # ## SSL Support
   #

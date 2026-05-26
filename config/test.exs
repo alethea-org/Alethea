@@ -23,15 +23,20 @@ config :alethea, AletheaWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
-config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+config :alethea,
+       :phone_hash_secret,
+       "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
 config :alethea, :whatsapp,
   api_token: "mock_token",
   phone_number_id: "mock_id"
 
 config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
+config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 
-config :alethea, Oban, testing: :manual
+config :alethea, Oban,
+  testing: :manual,
+  repo: Alethea.Repo
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime

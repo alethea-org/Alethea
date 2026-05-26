@@ -4,12 +4,14 @@ defmodule Alethea.AI.PhiWorker do
 
   Este módulo centraliza la sanitización y la invocación de LangChain sin lógica de negocio externa.
   """
+  @behaviour Alethea.AI.PhiWorkerBehaviour
 
   alias Alethea.AI.Sanitizer
   alias Alethea.AI.Chains.GuidedConversationChain
 
   @spec process(%{message_id: binary(), raw_content: String.t(), patient_context: String.t()}) ::
           map()
+  @impl true
   def process(%{
         message_id: message_id,
         raw_content: raw_content,
