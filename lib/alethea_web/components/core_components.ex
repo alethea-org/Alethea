@@ -491,4 +491,124 @@ defmodule AletheaWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Renders a simple form.
+
+  ## Examples
+
+      <.simple_form for={@form} phx-change="validate" phx-submit="save">
+        <.input field={@form[:email]} label="Email"/>
+        <.input field={@form[:username]} label="Username" />
+        <:actions>
+          <.button>Save</.button>
+        </:actions>
+      </.simple_form>
+  """
+  attr :for, :any, required: true, doc: "the datastructure for the form"
+  attr :as, :any, default: nil, doc: "the server side parameter to collect all input under"
+
+  attr :rest, :global,
+    include: ~w(autocomplete name rel action enctype method novalidate target multipart),
+    doc: "the arbitrary HTML attributes to apply to the form tag"
+
+  slot :inner_block, required: true
+  slot :actions, doc: "the slot for form actions, such as a submit button"
+
+  def simple_form(assigns) do
+    ~H"""
+    <.form :let={f} for={@for} as={@as} {@rest}>
+      <div class="space-y-8">
+        {render_slot(@inner_block, f)}
+        <div :for={action <- @actions} class="mt-2 flex items-center justify-between gap-6">
+          {render_slot(action, f)}
+        </div>
+      </div>
+    </.form>
+    """
+  end
+
+  @doc """
+  Renders a modal.
+
+  ## Examples
+
+      <.modal id="confirm-modal">
+        This is a modal.
+      </.modal>
+
+  JS commands may be passed to the `:on_cancel` to configure
+  the closing/cancel event, for example:
+
+      <.modal id="confirm" on_cancel={JS.navigate(~p"/posts")}>
+        Is this certainly the case?
+      </.modal>
+  """
+  attr :id, :string, required: true
+  attr :show, :boolean, default: false
+  attr :on_cancel, Phoenix.LiveView.JS, default: %JS{}
+  slot :inner_block, required: true
+
+  def modal(assigns) do
+    ~H"""
+    <dialog
+      id={@id}
+      class="modal"
+      onclose={render_slot(@on_cancel)}
+      phx-mounted={@show && show_modal(@id)}
+      phx-remove={hide_modal(@id)}
+    >
+      <div class="modal-box max-w-2xl">
+        <form method="dialog">
+          <button
+            class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+            phx-click={JS.exec(@on_cancel, "phx-remove") |> hide_modal(@id)}
+          >
+            ✕
+          </button>
+        </form>
+        {render_slot(@inner_block)}
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button phx-click={JS.exec(@on_cancel, "phx-remove") |> hide_modal(@id)}>close</button>
+      </form>
+    </dialog>
+    """
+  end
+
+  @doc """
+  Renders a badge.
+  """
+  attr :color, :atom, default: :gray, values: [:green, :gray, :red, :yellow, :blue]
+  slot :inner_block, required: true
+
+  def badge(assigns) do
+    colors = %{
+      green: "badge-success",
+      gray: "badge-ghost",
+      red: "badge-error",
+      yellow: "badge-warning",
+      blue: "badge-info"
+    }
+
+    assigns = assign(assigns, :color_class, colors[assigns.color])
+
+    ~H"""
+    <span class={["badge", @color_class]}>
+      {render_slot(@inner_block)}
+    </span>
+    """
+  end
+
+  def show_modal(js \\ %JS{}, id) when is_binary(id) do
+    js
+    |> JS.show(to: "##{id}")
+    |> JS.dispatch("js:show-modal", to: "##{id}")
+  end
+
+  def hide_modal(js \\ %JS{}, id) when is_binary(id) do
+    js
+    |> JS.hide(to: "##{id}")
+    |> JS.dispatch("js:hide-modal", to: "##{id}")
+  end
 end

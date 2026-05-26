@@ -9,7 +9,8 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias LangChain.ChatModels.ChatOpenAI
   alias LangChain.Message
 
-  @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) :: map()
+  @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) ::
+          map()
   def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
     llm = ChatOpenAI.new!(Keyword.merge(%{model: "phi-4-mini", stream: false}, llm_config))
@@ -21,7 +22,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
       }
       |> LLMChain.new!()
       |> LLMChain.add_message(Message.new_system!(system_prompt(ctx)))
-      |> LLMChain.add_message(Message.new_human!(content))
+      |> LLMChain.add_message(Message.new_user!(content))
       |> LLMChain.run()
 
     %{

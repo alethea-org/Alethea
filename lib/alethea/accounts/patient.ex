@@ -9,6 +9,7 @@ defmodule Alethea.Accounts.Patient do
     field :encrypted_whatsapp_number, :binary
     field :alias, :string
     field :status, :string, default: "active"
+    field :terms_accepted, :boolean, default: false
     field :encryption_version, :integer, default: 1
 
     # Virtual field for the raw number during input
@@ -28,14 +29,18 @@ defmodule Alethea.Accounts.Patient do
     patient
     |> cast(attrs, [
       :whatsapp_number,
+      :whatsapp_number_hash,
+      :encrypted_whatsapp_number,
       :alias,
       :status,
+      :terms_accepted,
       :professional_id,
       :encryption_key_id,
       :encryption_version
     ])
-    |> validate_required([:whatsapp_number, :alias, :professional_id])
+    |> validate_required([:alias, :professional_id])
     |> validate_inclusion(:status, ["active", "archived", "deleted"])
+    |> unique_constraint(:whatsapp_number_hash, name: :patients_professional_id_whatsapp_number_hash_index)
 
     # Logic for hashing and encrypting the number would go here or in a context
   end

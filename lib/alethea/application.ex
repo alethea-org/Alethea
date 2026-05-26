@@ -13,6 +13,8 @@ defmodule Alethea.Application do
       {DNSCluster, query: Application.get_env(:alethea, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Alethea.PubSub},
       Alethea.Encryption.Vault,
+      Alethea.WhatsApp.ConsentCache,
+      {Oban, Application.fetch_env!(:alethea, Oban)},
       # Start a worker by calling: Alethea.Worker.start_link(arg)
       # {Alethea.Worker, arg},
       # Start to serve requests, typically the last entry

@@ -17,3 +17,14 @@ document.querySelectorAll("[role=alert][data-flash]").forEach((el) => {
     el.setAttribute("hidden", "");
   });
 });
+
+// Handle modal show/hide
+window.addEventListener("js:show-modal", (e) => {
+  const el = document.getElementById(e.detail.id);
+  if (el && el.showModal) el.showModal();
+});
+
+window.addEventListener("js:hide-modal", (e) => {
+  const el = document.getElementById(e.detail.id);
+  if (el && el.close) el.close();
+});
