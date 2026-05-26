@@ -7,9 +7,9 @@ defmodule Alethea.Alerts.CrisisMonitorTest do
     old_patterns = Application.get_env(:alethea, :crisis_patterns)
 
     patterns = %{
-      immediate: [~r/me voy a matar/i, ~r/voy a suicidarme/i],
-      high: [~r/quiero morir/i, ~r/no quiero (?:vivir|seguir)/i],
-      low: [~r/a veces pienso que ser[ií]a mejor no estar/i]
+      immediate: [~r/me voy a matar/iu, ~r/voy a suicidarme/iu],
+      high: [~r/quiero morir/iu, ~r/no quiero (?:vivir|seguir)/iu],
+      low: [~r/a veces pienso que ser[ií]a mejor no estar/iu]
     }
 
     Application.put_env(:alethea, :crisis_patterns, patterns)

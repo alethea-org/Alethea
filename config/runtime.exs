@@ -25,21 +25,21 @@ config :alethea, AletheaWeb.Endpoint,
 
 config :alethea, :crisis_patterns, %{
   immediate: [
-    ~r/me voy a matar/i,
-    ~r/voy a suicidarme/i,
-    ~r/tengo (?:el|un) plan/i,
-    ~r/ya (?:lo|la) decid[ií]/i
+    ~r/me voy a matar/iu,
+    ~r/voy a suicidarme/iu,
+    ~r/tengo (?:el|un) plan/iu,
+    ~r/ya (?:lo|la) decid[ií]/iu
   ],
   high: [
-    ~r/quiero morir/i,
-    ~r/no quiero (?:vivir|seguir)/i,
-    ~r/pienso en (?:el suicidio|hacerme da[ñn]o)/i,
-    ~r/me quiero hacer da[ñn]o/i
+    ~r/quiero morir/iu,
+    ~r/no quiero (?:vivir|seguir)/iu,
+    ~r/pienso en (?:el suicidio|hacerme da[ñn]o)/iu,
+    ~r/me quiero hacer da[ñn]o/iu
   ],
   low: [
-    ~r/a veces pienso que ser[ií]a mejor no estar/i,
-    ~r/no tiene sentido (?:seguir|vivir)/i,
-    ~r/est[oá]y harto de (?:todo|vivir)/i
+    ~r/a veces pienso que ser[ií]a mejor no estar/iu,
+    ~r/no tiene sentido (?:seguir|vivir)/iu,
+    ~r/est[oá]y harto de (?:todo|vivir)/iu
   ]
 }
 
