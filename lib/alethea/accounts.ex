@@ -79,6 +79,12 @@ defmodule Alethea.Accounts do
     |> Repo.update()
   end
 
+  def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
+    patient
+    |> Patient.changeset(attrs)
+    |> Repo.update()
+  end
+
   @doc """
   Crea un paciente con cifrado de extremo a extremo.
   Genera una DEK única, la envuelve con la KEK del profesional y cifra el número de WhatsApp.

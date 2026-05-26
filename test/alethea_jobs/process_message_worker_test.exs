@@ -6,6 +6,9 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
   alias Alethea.Accounts
   alias Alethea.Accounts.Patient
   alias Alethea.WhatsApp.ConsentCache
+  alias Alethea.Repo
+  alias Alethea.Clinical.Message
+  alias Alethea.AI.Diagnosis
 
   # Make sure mocks are verified when the test ends
   setup :verify_on_exit!
@@ -77,6 +80,71 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
       updated_patient = Accounts.get_patient!(patient.id)
       assert updated_patient.terms_accepted == true
     end
+
+    test "cuando el paciente aceptó términos, ejecuta el pipeline clínico completo" do
+      professional = insert_professional()
+      patient = insert_patient(professional, "+56944444444", "alias")
+
+      phone = "+56944444444"
+      text = "Necesito hablar"
+      message_id = "wamid.123"
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{
+           message_id: _message_id,
+           raw_content: ^text,
+           patient_context: _context
+         } ->
+        %{
+          response: "Gracias por compartir",
+          model_version: "phi-4-mini",
+          source_message_id: message_id,
+          behavior_type: :elicited
+        }
+      end)
+
+      Alethea.WhatsApp.ClientMock
+      |> expect(:send_message, fn ^phone, body ->
+        assert body == "Gracias por compartir"
+        {:ok, %{}}
+      end)
+
+      assert :ok = perform_job(%{"from" => phone, "text" => text, "whatsapp_message_id" => message_id})
+
+      assert Repo.aggregate(Message, :count, :id) == 2
+      assert Repo.aggregate(Diagnosis, :count, :id) == 1
+    end
+
+    test "cuando el texto de paciente indica crisis, usa bypass de crisis y no llama a PhiWorker" do
+      professional = insert_professional()
+      patient = insert_patient(professional, "+56955555555", "alias")
+      phone = "+56955555555"
+      text = "Ya lo decidí, me voy a matar"
+      message_id = "wamid.999"
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, 0, fn _ ->
+        flunk("PhiWorker no debió ser invocado para un bypass de crisis")
+      end)
+
+      Alethea.WhatsApp.ClientMock
+      |> expect(:send_message, fn ^phone, body ->
+        assert body =~ "Entiendo que estás pasando por algo muy difícil"
+        {:ok, %{} }
+      end)
+
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
+
+      assert :ok = perform_job(%{"from" => phone, "text" => text, "whatsapp_message_id" => message_id})
+
+      assert patient.id == Accounts.get_patient!(patient.id).id
+      assert Accounts.get_patient!(patient.id).urgent_intervention == true
+      assert Repo.aggregate(Message, :count, :id) == 1
+      assert Repo.aggregate(Diagnosis, :count, :id) == 1
+
+      assert_receive {:crisis_detected, ^patient.id, :immediate, triggers}
+      assert "me voy a matar" in triggers
+    end
   end
 
   # Helpers
@@ -98,26 +166,17 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
   end
 
   defp insert_patient(professional, phone, alias_name) do
-    # Generamos un hash para el test usando el secreto configurado en test.exs
-    hash =
-      :crypto.mac(
-        :hmac,
-        :sha256,
-        Application.fetch_env!(:alethea, :phone_hash_secret),
-        phone
-      )
-      |> Base.encode64()
+    {:ok, kek_bytes} = Alethea.Encryption.ProfessionalKek.load_kek(professional)
 
     {:ok, patient} =
-      %Patient{}
-      |> Patient.changeset(%{
-        whatsapp_number: phone,
-        alias: alias_name,
-        professional_id: professional.id,
-        whatsapp_number_hash: hash,
-        encrypted_whatsapp_number: "binary_data"
-      })
-      |> Alethea.Repo.insert()
+      Accounts.create_patient(
+        %{
+          whatsapp_number: phone,
+          alias: alias_name,
+          professional_id: professional.id
+        },
+        kek_bytes
+      )
 
     patient
   end

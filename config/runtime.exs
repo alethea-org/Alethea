@@ -23,6 +23,35 @@ end
 config :alethea, AletheaWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+config :alethea, :crisis_patterns, %{
+  immediate: [
+    ~r/me voy a matar/i,
+    ~r/voy a suicidarme/i,
+    ~r/tengo (?:el|un) plan/i,
+    ~r/ya (?:lo|la) decid[ií]/i
+  ],
+  high: [
+    ~r/quiero morir/i,
+    ~r/no quiero (?:vivir|seguir)/i,
+    ~r/pienso en (?:el suicidio|hacerme da[ñn]o)/i,
+    ~r/me quiero hacer da[ñn]o/i
+  ],
+  low: [
+    ~r/a veces pienso que ser[ií]a mejor no estar/i,
+    ~r/no tiene sentido (?:seguir|vivir)/i,
+    ~r/est[oá]y harto de (?:todo|vivir)/i
+  ]
+}
+
+config :alethea, :crisis_support_message,
+  """
+  Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.
+  Por favor, comunícate con tu terapeuta directamente o llama a una línea de crisis:
+  🇨🇱 Salud Responde: 600 360 7777 (24/7)
+  🇨🇱 ACHS: 600 222 4357
+  Si estás en peligro inmediato, llama al 131 (SAMU).
+  """
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
@@ -80,7 +109,27 @@ if config_env() == :prod do
 
   config :alethea, :whatsapp,
     api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
-    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
+    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", ""),
+    app_secret: System.get_env("WHATSAPP_APP_SECRET", "")
+
+  ai_provider =
+    System.get_env("AI_PROVIDER", "local")
+    |> String.downcase()
+    |> case do
+      "cloud" -> :cloud
+      _ -> :local
+    end
+
+  config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+    provider: ai_provider,
+    cloud: [
+      endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+      api_key: System.get_env("OPENAI_API_KEY", "")
+    ],
+    local: [
+      endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1"),
+      api_key: System.get_env("LOCAL_LLM_API_KEY", "ollama")
+    ]
 
   # ## SSL Support
   #

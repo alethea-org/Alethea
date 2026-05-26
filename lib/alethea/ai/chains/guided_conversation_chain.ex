@@ -9,11 +9,17 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias LangChain.ChatModels.ChatOpenAI
   alias LangChain.Message
 
-  @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) ::
-          map()
+  @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) :: map()
   def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
-    llm = ChatOpenAI.new!(Keyword.merge(%{model: "phi-4-mini", stream: false}, llm_config))
+    provider = Keyword.get(llm_config, :provider, :cloud)
+    provider_config = Keyword.get(llm_config, provider, [])
+
+    llm_opts =
+      provider_config
+      |> Keyword.merge(model: llm_config[:model] || "phi-4-mini", stream: false)
+
+    llm = ChatOpenAI.new!(llm_opts)
 
     {:ok, chain} =
       %{
@@ -21,7 +27,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
         verbose: false
       }
       |> LLMChain.new!()
-      |> LLMChain.add_message(Message.new_system!(system_prompt(ctx)))
+      |> LLMChain.add_message(Message.new_system!(system_prompt(llm_config, ctx)))
       |> LLMChain.add_message(Message.new_user!(content))
       |> LLMChain.run()
 
@@ -33,11 +39,19 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     }
   end
 
-  defp system_prompt(context) do
+  defp system_prompt(llm_config, context) do
+    prompt = llm_config[:system_prompt] || default_system_prompt()
+
+    "#{prompt}\n\nContexto del paciente: #{context}"
+  end
+
+  defp default_system_prompt do
     """
-    Eres un asistente clínico de apoyo. Tu rol es escuchar y formular preguntas exploratorias.
-    NO valides ni refutes los pensamientos del paciente sin instrucción explícita del terapeuta.
-    Contexto del paciente: #{context}
+    Eres un asistente clínico de apoyo. Tu única función es escuchar y formular
+    preguntas exploratorias con tono socrático.
+    PROHIBIDO: emitir diagnósticos, validar o refutar pensamientos del paciente,
+    dar consejos médicos directos o sugerir tratamientos.
+    (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa.)
     """
   end
 end
