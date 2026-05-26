@@ -1,0 +1,251 @@
+<% patients = assigns[:patients] || []
+critical_patients = assigns[:critical_patients] || []
+selected_patient = assigns[:selected_patient]
+weekly_summary = assigns[:weekly_summary]
+session_summaries = assigns[:session_summaries] || []
+emotion_rows = assigns[:emotion_rows] || []
+
+mood_signal =
+  assigns[:mood_signal] ||
+    %{
+      label: "Sin datos",
+      dot_class: "bg-base-300",
+      ring_class: "ring-base-300",
+      badge_class: "badge-ghost"
+    } %>
+<Layouts.app flash={@flash}>
+  <div class="relative left-1/2 w-[min(1280px,calc(100vw-2rem))] -translate-x-1/2 space-y-6">
+    <header class="flex flex-col gap-3 border-b border-base-300 pb-5 lg:flex-row lg:items-end lg:justify-between">
+      <div>
+        <p class="text-sm font-medium text-base-content/60">Alethea</p>
+        <h1 class="text-3xl font-semibold tracking-normal text-base-content">
+          Centro de Control
+        </h1>
+        <p class="mt-1 text-sm text-base-content/70">
+          {(@current_professional && @current_professional.full_name) || "Profesional clinico"}
+        </p>
+      </div>
+
+      <div class="stats stats-horizontal border border-base-300 bg-base-100 shadow-none">
+        <div class="stat px-5 py-3">
+          <div class="stat-title text-xs">Pacientes</div>
+          <div class="stat-value text-2xl">{length(patients)}</div>
+        </div>
+        <div class="stat px-5 py-3">
+          <div class="stat-title text-xs">Alertas</div>
+          <div class="stat-value text-2xl text-error">{length(critical_patients)}</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="grid gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
+      <aside class="space-y-4">
+        <section class="rounded-lg border border-error/30 bg-error/5">
+          <div class="flex items-center gap-2 border-b border-error/20 px-4 py-3">
+            <.icon name="hero-exclamation-triangle" class="size-5 text-error" />
+            <h2 class="text-sm font-semibold text-error">Alertas criticas</h2>
+          </div>
+
+          <div id="critical-patient-list" class="divide-y divide-error/10">
+            <div :if={critical_patients == []} class="px-4 py-5 text-sm text-base-content/60">
+              Sin alertas activas.
+            </div>
+
+            <.link
+              :for={patient <- critical_patients}
+              patch={~p"/dashboard"}
+              id={"critical-patient-#{patient.id}"}
+              class="block px-4 py-3 transition hover:bg-error/10"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="font-medium text-base-content">{patient.alias}</p>
+                  <p class="text-xs text-base-content/60">Intervencion prioritaria</p>
+                </div>
+                <span class="badge badge-error badge-sm">Riesgo</span>
+              </div>
+            </.link>
+          </div>
+        </section>
+
+        <section class="rounded-lg border border-base-300 bg-base-100">
+          <div class="flex items-center gap-2 border-b border-base-300 px-4 py-3">
+            <.icon name="hero-users" class="size-5 text-base-content/70" />
+            <h2 class="text-sm font-semibold">Pacientes</h2>
+          </div>
+
+          <nav id="dashboard-patient-list" class="divide-y divide-base-300">
+            <div :if={patients == []} class="px-4 py-5 text-sm text-base-content/60">
+              No hay pacientes para mostrar.
+            </div>
+
+            <.link
+              :for={patient <- patients}
+              patch={~p"/dashboard"}
+              id={"dashboard-patient-#{patient.id}"}
+              class={[
+                "block px-4 py-3 transition hover:bg-base-200",
+                selected_patient && selected_patient.id == patient.id && "bg-base-200"
+              ]}
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="truncate font-medium text-base-content">{patient.alias}</p>
+                  <p class="text-xs text-base-content/60">
+                    Sesion: {format_session_day(patient.session_day_of_week)} / {format_session_time(
+                      patient.session_time
+                    )}
+                  </p>
+                </div>
+                <span
+                  :if={patient.urgent_intervention}
+                  class="size-2.5 shrink-0 rounded-full bg-error"
+                />
+              </div>
+            </.link>
+          </nav>
+        </section>
+      </aside>
+
+      <main class="min-w-0 space-y-4">
+        <section
+          :if={selected_patient}
+          id="dashboard-patient-detail"
+          class="rounded-lg border border-base-300 bg-base-100"
+        >
+          <div class="flex flex-col gap-4 border-b border-base-300 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex items-center gap-3">
+              <span class={[
+                "size-4 rounded-full ring-4 motion-safe:animate-pulse",
+                mood_signal.dot_class,
+                mood_signal.ring_class
+              ]} />
+              <div>
+                <h2 class="text-xl font-semibold text-base-content">{selected_patient.alias}</h2>
+                <p class="text-sm text-base-content/60">Detalle clinico activo</p>
+              </div>
+            </div>
+
+            <span class={["badge", mood_signal.badge_class]}>{mood_signal.label}</span>
+          </div>
+
+          <div class="grid gap-4 p-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
+            <div class="space-y-4">
+              <section
+                id="weekly-pre-session-report"
+                class="rounded-lg border border-success/30 bg-success/10 p-4"
+              >
+                <div class="mb-2 flex items-center gap-2">
+                  <.icon name="hero-clipboard-document-check" class="size-5 text-success" />
+                  <h3 class="font-semibold text-base-content">Weekly Pre-Session Report</h3>
+                </div>
+
+                <p :if={weekly_summary} class="text-sm leading-6 text-base-content/80">
+                  {weekly_summary.summary_text}
+                </p>
+                <p :if={!weekly_summary} class="text-sm text-base-content/60">
+                  Sin resumen semanal disponible.
+                </p>
+              </section>
+
+              <section id="emotion-trends" class="rounded-lg border border-base-300 p-4">
+                <div class="mb-4 flex items-center justify-between gap-3">
+                  <h3 class="font-semibold text-base-content">Tendencia emocional</h3>
+                  <span class="text-xs text-base-content/60">Ventana movil de 7 dias</span>
+                </div>
+
+                <div class="space-y-3">
+                  <div :if={emotion_rows == []} class="text-sm text-base-content/60">
+                    Sin tendencias cargadas.
+                  </div>
+
+                  <div :for={emotion <- emotion_rows} id={"emotion-row-#{emotion.key}"}>
+                    <div class="mb-1 flex items-center justify-between gap-3 text-sm">
+                      <span class="font-medium">{emotion.label}</span>
+                      <span class="tabular-nums text-base-content/60">{emotion.percent}%</span>
+                    </div>
+                    <progress
+                      class={["progress w-full", emotion.progress_class]}
+                      value={emotion.percent}
+                      max="100"
+                    >
+                      {emotion.percent}%
+                    </progress>
+                  </div>
+                </div>
+              </section>
+
+              <section id="session-snapshots" class="space-y-2">
+                <h3 class="font-semibold text-base-content">Session Snapshots</h3>
+
+                <div
+                  :if={session_summaries == []}
+                  class="rounded-lg border border-base-300 p-4 text-sm text-base-content/60"
+                >
+                  Sin snapshots de sesion disponibles.
+                </div>
+
+                <details
+                  :for={summary <- session_summaries}
+                  id={"session-summary-#{summary.id}"}
+                  class="collapse collapse-arrow border border-base-300 bg-base-100"
+                >
+                  <summary class="collapse-title text-sm font-medium">
+                    {summary.status_level} - {format_summary_date(summary.period_end)}
+                  </summary>
+                  <div class="collapse-content text-sm leading-6 text-base-content/75">
+                    {summary.summary_text}
+                  </div>
+                </details>
+              </section>
+            </div>
+
+            <aside class="space-y-4">
+              <section class="rounded-lg border border-base-300 p-4">
+                <h3 class="mb-3 font-semibold">Horario de sesion</h3>
+                <dl class="space-y-2 text-sm">
+                  <div class="flex justify-between gap-3">
+                    <dt class="text-base-content/60">Dia</dt>
+                    <dd class="font-medium">
+                      {format_session_day(selected_patient.session_day_of_week)}
+                    </dd>
+                  </div>
+                  <div class="flex justify-between gap-3">
+                    <dt class="text-base-content/60">Hora</dt>
+                    <dd class="font-medium">
+                      {format_session_time(selected_patient.session_time)}
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section class="rounded-lg border border-base-300 p-4">
+                <h3 class="mb-3 font-semibold">Historial clinico</h3>
+                <button
+                  id="decrypt-chat-button"
+                  type="button"
+                  class="btn btn-primary w-full"
+                  disabled
+                >
+                  <.icon name="hero-lock-open" class="size-5" /> Descifrar chat
+                </button>
+              </section>
+            </aside>
+          </div>
+        </section>
+
+        <section
+          :if={!selected_patient}
+          id="dashboard-empty-state"
+          class="rounded-lg border border-dashed border-base-300 bg-base-100 p-10 text-center"
+        >
+          <.icon name="hero-user-circle" class="mx-auto size-10 text-base-content/40" />
+          <h2 class="mt-3 text-lg font-semibold">Selecciona un paciente</h2>
+          <p class="mt-1 text-sm text-base-content/60">
+            El detalle clinico aparecera en este panel.
+          </p>
+        </section>
+      </main>
+    </div>
+  </div>
+</Layouts.app>
