@@ -15,7 +15,7 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   @primary_key false
   embedded_schema do
     field :model, :string, default: "meta-llama/Llama-2-7b-chat-hf"
-    field :api_key, :string
+    field :api_key, :string, redact: true
     field :endpoint_url, :string, default: "https://api-inference.huggingface.co/models/"
     field :temperature, :float, default: 0.7
     field :max_tokens, :integer, default: 512

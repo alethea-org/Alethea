@@ -36,8 +36,11 @@ defmodule AletheaWeb.WhatsappWebhookController do
     if valid_whatsapp_signature?(conn) do
       case parse_message(params) do
         {:ok, phone, text, message_id} ->
+          # Encolar el worker de Oban para procesamiento asíncrono
           %{from: phone, text: text, whatsapp_message_id: message_id}
-          |> AletheaJobs.ProcessMessageWorker.new(unique: [fields: [:whatsapp_message_id]])
+          |> AletheaJobs.ProcessMessageWorker.new(
+            unique: [period: 60, keys: [:whatsapp_message_id]]
+          )
           |> Oban.insert()
 
           send_resp(conn, 200, "OK")
@@ -55,11 +58,12 @@ defmodule AletheaWeb.WhatsappWebhookController do
   end
 
   defp valid_whatsapp_signature?(conn) do
-    secret = Application.get_env(:alethea, :whatsapp)[:app_secret] || ""
+    secret = Application.get_env(:alethea, :whatsapp)[:app_secret]
     signature_header = List.first(get_req_header(conn, "x-hub-signature-256"))
     raw_body = conn.assigns[:raw_body] || ""
 
-    with true <- signature_header not in [nil, ""],
+    with true <- is_binary(secret) and secret != "",
+         true <- is_binary(signature_header) and signature_header != "",
          true <- raw_body != "",
          computed <- :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode16(case: :lower),
          expected <- strip_signature_prefix(signature_header) do

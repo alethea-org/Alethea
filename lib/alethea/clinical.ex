@@ -56,25 +56,26 @@ defmodule Alethea.Clinical do
   end
 
   @spec build_patient_context(Alethea.Accounts.Patient.t(), non_neg_integer()) :: {:ok, String.t()} | {:error, term()}
-def build_patient_context(patient, limit) do
-  with {:ok, dek} <- patient_dek(patient) do
-    patient.id
-    |> list_recent_messages(limit)
-    |> Enum.reverse()
-    |> Enum.map(&decrypt_message_content(&1, dek))
-    |> Enum.reduce_while({:ok, []}, fn
-      {:ok, decrypted}, {:ok, acc} -> {:cont, {:ok, [decrypted | acc]}}
-      {:error, reason}, _ -> {:halt, {:error, reason}}
-    end)
-    |> case do
-      {:ok, decrypted_messages} ->
-        {:ok, decrypted_messages |> Enum.reverse() |> Enum.join("\n")}
+  def build_patient_context(patient, limit) do
+    with {:ok, dek} <- patient_dek(patient) do
+      patient.id
+      |> list_recent_messages(limit)
+      |> Enum.reverse()
+      |> Enum.map(&decrypt_message_content(&1, dek))
+      |> Enum.reduce_while({:ok, []}, fn
+        {:ok, decrypted}, {:ok, acc} -> {:cont, {:ok, [decrypted | acc]}}
+        {:error, reason}, _ -> {:halt, {:error, reason}}
+      end)
+      |> case do
+        {:ok, decrypted_messages} ->
+          # El upstream corrigió el doble reverse usando Enum.reverse() |> Enum.join("\n")
+          # pero como ya veníamos con Enum.reverse() al principio, simplemente unimos.
+          {:ok, decrypted_messages |> Enum.reverse() |> Enum.join("\n")}
 
-      error ->
-        error
+        error ->
+          error
+      end
     end
-  end
-end
   end
 
   @spec save_ai_diagnosis(binary(), map()) :: {:ok, Diagnosis.t()} | {:error, term()}

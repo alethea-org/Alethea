@@ -96,8 +96,11 @@ defmodule Alethea.Accounts do
   end
 
   def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
+    # Solo permitir actualizar campos de estado internos para evitar mass-assignment
+    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status])
+
     patient
-    |> Patient.changeset(attrs)
+    |> Ecto.Changeset.change(allowed_attrs)
     |> Repo.update()
   end
 

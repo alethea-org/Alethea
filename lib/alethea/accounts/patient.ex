@@ -35,7 +35,6 @@ defmodule Alethea.Accounts.Patient do
       :alias,
       :status,
       :terms_accepted,
-      :urgent_intervention,
       :professional_id,
       :encryption_key_id,
       :encryption_version

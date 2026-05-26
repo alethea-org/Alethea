@@ -71,6 +71,7 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
     test "cuando el paciente ya aceptó términos, ejecuta el pipeline clínico completo" do
       professional = insert_professional()
       patient = insert_patient(professional, "+56944444444", "alias")
+      {:ok, _} = Accounts.update_patient_terms(patient, true)
 
       phone = "+56944444444"
       text = "Necesito hablar"

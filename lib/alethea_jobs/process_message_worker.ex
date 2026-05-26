@@ -128,7 +128,15 @@ defmodule AletheaJobs.ProcessMessageWorker do
             with {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, crisis_diagnosis),
                  {:ok, _patient} <- Accounts.update_patient(patient, %{urgent_intervention: true}),
                  :ok <-
-                   Phoenix.PubSub.broadcast(Alethea.PubSub, "crisis:alerts", {:crisis_detected, patient.id, level, triggers}),
+                   Phoenix.PubSub.broadcast(Alethea.PubSub, "psychologist:alerts", {
+                     :crisis_detected,
+                     %{
+                       patient_id: patient.id,
+                       level: level,
+                       triggers: triggers,
+                       detected_at: DateTime.utc_now()
+                     }
+                   }),
                  {:ok, _send_result} <- @client.send_message(phone, crisis_support_message) do
               :ok
             else
