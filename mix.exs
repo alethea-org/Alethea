@@ -63,7 +63,8 @@ defmodule Alethea.MixProject do
       {:exla, "~> 0.9"},
       {:pbkdf2_elixir, "~> 2.2"},
       {:req, "~> 0.5"},
-      {:mox, "~> 1.0", only: :test}
+      {:mox, "~> 1.0", only: :test},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 
