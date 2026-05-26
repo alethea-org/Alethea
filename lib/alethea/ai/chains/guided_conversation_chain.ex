@@ -7,6 +7,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
   alias LangChain.Chains.LLMChain
   alias LangChain.ChatModels.ChatOpenAI
+  alias Alethea.AI.ChatModels.HuggingFaceChat
   alias LangChain.Message
 
   @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) ::
@@ -15,12 +16,23 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
 
     llm =
-      ChatOpenAI.new!(%{
-        model: llm_config[:model] || "phi-4-mini",
-        endpoint: llm_config[:endpoint_url],
-        api_key: llm_config[:api_key],
-        stream: false
-      })
+      case llm_config[:adapter] do
+        :hugging_face ->
+          HuggingFaceChat.new!(%{
+            model: llm_config[:model] || "phi-4-mini",
+            endpoint: llm_config[:endpoint_url] || "https://api-inference.huggingface.co/models",
+            api_key: llm_config[:api_key],
+            stream: false
+          })
+
+        _ ->
+          ChatOpenAI.new!(%{
+            model: llm_config[:model] || "phi-4-mini",
+            endpoint: llm_config[:endpoint_url],
+            api_key: llm_config[:api_key],
+            stream: false
+          })
+      end
 
     system_msg = system_prompt(ctx, llm_config[:system_prompt])
 
