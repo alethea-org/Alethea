@@ -27,8 +27,6 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   @create_fields [:model, :api_key, :endpoint_url, :temperature, :max_tokens, :stream, :receive_timeout, :callbacks]
   @required_fields [:model, :api_key]
 
-  @receive_timeout 60_000
-
   @spec new(map()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def new(attrs \\ %{}) when is_map(attrs) do
     %__MODULE__{}
@@ -108,6 +106,19 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
       {:error, reason} ->
         raise LangChainError, "Hugging Face API request failed: #{inspect(reason)}"
     end
+  end
+
+  @impl ChatModel
+  def restore_from_map(attrs) do
+    case new(attrs) do
+      {:ok, model} -> model
+      {:error, _changeset} -> :error
+    end
+  end
+
+  @impl ChatModel
+  def serialize_config(%__MODULE__{} = model) do
+    Map.from_struct(model)
   end
 
   defp messages_to_input(messages) do
