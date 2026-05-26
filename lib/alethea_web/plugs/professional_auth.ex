@@ -4,6 +4,34 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
 
   alias Alethea.Accounts
 
+  def on_mount(:mount_current_professional, _params, session, socket) do
+    case session["professional_id"] do
+      nil ->
+        {:cont, Phoenix.Component.assign(socket, :current_professional, nil)}
+
+      professional_id ->
+        professional = Accounts.get_professional!(professional_id)
+
+        # Cargar la KEK en memoria (solo para el proceso LiveView)
+        {:ok, kek} = Accounts.load_professional_kek(professional)
+
+        {:cont,
+         socket
+         |> Phoenix.Component.assign(:current_professional, professional)
+         |> Phoenix.Component.assign(:professional_kek, kek)}
+    end
+  rescue
+    _ -> {:cont, Phoenix.Component.assign(socket, :current_professional, nil)}
+  end
+
+  def on_mount(:require_authenticated_professional, _params, _session, socket) do
+    if socket.assigns.current_professional do
+      {:cont, socket}
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: "/login")}
+    end
+  end
+
   def init(action)
       when action in [
              :fetch_current_professional,

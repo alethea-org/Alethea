@@ -23,6 +23,7 @@ defmodule AletheaWeb.SessionController do
 
   def delete(conn, _params) do
     conn
+    |> delete_session(:professional_id)
     |> configure_session(drop: true)
     |> redirect(to: "/login")
   end

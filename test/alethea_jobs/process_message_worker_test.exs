@@ -26,7 +26,7 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
 
     test "cuando el paciente no ha aceptado términos, envía mensaje de consentimiento" do
       professional = insert_professional()
-      patient = insert_patient(professional, "+56911111111", "alias")
+      _patient = insert_patient(professional, "+56911111111", "alias")
 
       phone = "+56911111111"
       text = "Hola"

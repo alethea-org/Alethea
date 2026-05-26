@@ -11,6 +11,10 @@ defmodule AletheaWeb.Router do
     plug AletheaWeb.Plugs.ProfessionalAuth, :fetch_current_professional
   end
 
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+
   pipeline :require_auth do
     plug AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional
   end
@@ -48,6 +52,14 @@ defmodule AletheaWeb.Router do
   scope "/", AletheaWeb do
     pipe_through [:browser, :require_auth]
 
-    live "/dashboard", DashboardLive, :index
+    live_session :require_authenticated_professional,
+      on_mount: [
+        {AletheaWeb.Plugs.ProfessionalAuth, :mount_current_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional}
+      ] do
+      live "/dashboard", DashboardLive, :index
+      live "/patients", PatientLive.Index, :index
+      live "/patients/new", PatientLive.Index, :new
+    end
   end
 end
