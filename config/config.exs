@@ -41,8 +41,14 @@ config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1Pr
 
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   provider: :local,
-  model: "phi-4-mini",
+  model: System.get_env("HUGGINGFACE_MODEL", "phi-4-mini"),
   stream: false,
+  temperature: 0.0,
+  max_tokens: 512,
+  local: [
+    endpoint: System.get_env("HUGGINGFACE_API_URL", "https://api-inference.huggingface.co/models"),
+    api_key: System.get_env("HUGGINGFACE_API_KEY", "")
+  ],
   system_prompt: """
   Eres un asistente clínico de apoyo. Tu única función es escuchar y formular
   preguntas exploratorias con tono socrático.

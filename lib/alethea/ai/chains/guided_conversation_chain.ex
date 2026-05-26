@@ -5,6 +5,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   El contenido ya debe haber sido sanitizado por `Alethea.AI.Sanitizer`.
   """
 
+  alias Alethea.AI.ChatModels.HuggingFaceChat
   alias LangChain.Chains.LLMChain
   alias LangChain.ChatModels.ChatOpenAI
   alias LangChain.Message
@@ -12,14 +13,24 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) :: map()
   def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
-    provider = Keyword.get(llm_config, :provider, :cloud)
+    provider = Keyword.get(llm_config, :provider, :local)
     provider_config = Keyword.get(llm_config, provider, [])
 
     llm_opts =
       provider_config
-      |> Keyword.merge(model: llm_config[:model] || "phi-4-mini", stream: false)
+      |> Keyword.merge(
+        model: llm_config[:model] || "phi-4-mini",
+        stream: Keyword.get(llm_config, :stream, false),
+        temperature: Keyword.get(llm_config, :temperature, 0.0),
+        max_tokens: Keyword.get(llm_config, :max_tokens, 512)
+      )
 
-    llm = ChatOpenAI.new!(llm_opts)
+    llm =
+      case provider do
+        :local -> HuggingFaceChat.new!(llm_opts)
+        :cloud -> ChatOpenAI.new!(llm_opts)
+        _ -> HuggingFaceChat.new!(llm_opts)
+      end
 
     {:ok, chain} =
       %{

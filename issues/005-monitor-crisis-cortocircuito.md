@@ -45,7 +45,7 @@ Implementar una capa de seguridad crítica que detecte riesgo clínico en el tex
 
 | Decisión | Elección | Justificación |
 |---|---|---|
-| Punto de ejecución | Dentro de `ProcessMessageWorker`, antes de llamar a `PhiWorker` | Separa la lógica clínica de la capa web; el controlador solo recibe y encola |
+| Punto de ejecución | Dentro de `ProcessMessageWorker`, antes de llamar al pipeline de Hugging Face (`meta-llama/Llama-2-7b-chat-hf`) de la issue 003 | Separa la lógica clínica de la capa web; el controlador solo recibe y encola |
 | Patrones de riesgo | Lista de regex por nivel en `config/runtime.exs`, leída con `Application.get_env/2` | Ajustable sin recompilación (evaluado en runtime al iniciar la release); evita hardcodear terminología clínica en el código |
 | Niveles de crisis | 3 niveles: `:low` (ideación pasiva), `:high` (ideación activa/plan), `:immediate` (emergencia inminente) | Granularidad clínica; cada nivel tiene su propio conjunto de patrones |
 | Respuesta al paciente | Un solo mensaje de soporte predefinido para todos los niveles | El nivel se usa solo para la alerta al profesional; el paciente siempre recibe el mismo mensaje de contención |
@@ -117,7 +117,7 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
 - [ ] Actualizar `AletheaJobs.ProcessMessageWorker` para insertar la detección de crisis:
   - En la rama `terms_accepted: true`, antes del paso de guardar el mensaje, llamar a `CrisisMonitor.detect(texto)` sobre el texto en claro (antes de cifrarlo)
   - Si `:safe`: continuar con el pipeline normal
-  - Si `{:crisis, level, triggers}`: ejecutar el flujo del Cortocircuito (ver diagrama) y retornar `:ok` sin llamar a `PhiWorker`
+  - Si `{:crisis, level, triggers}`: ejecutar el flujo del Cortocircuito (ver diagrama) y retornar `:ok` sin llamar al pipeline de Hugging Face (`meta-llama/Llama-2-7b-chat-hf`)
 - [ ] Añadir `Accounts.update_patient/2` al contexto `Alethea.Accounts` si no existe
 
 ### Tests
