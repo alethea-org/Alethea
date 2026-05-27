@@ -15,6 +15,8 @@ defmodule Alethea.Accounts.Patient do
 
     # Virtual field for the raw number during input
     field :whatsapp_number, :string, virtual: true
+    field :session_day_of_week, :integer
+    field :session_time, :time
 
     belongs_to :professional, Alethea.Accounts.Professional
     belongs_to :encryption_key, Alethea.Accounts.EncryptionKey
@@ -22,6 +24,7 @@ defmodule Alethea.Accounts.Patient do
     has_many :messages, Alethea.Clinical.Message
     has_many :summaries, Alethea.Clinical.Summary
     has_many :trends, Alethea.Clinical.Trend
+    has_many :sessions, Alethea.Clinical.Session
 
     timestamps(type: :utc_datetime)
   end

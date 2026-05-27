@@ -58,13 +58,16 @@ defmodule Alethea.MixProject do
       {:cloak_ecto, "~> 1.3"},
       {:langchain, "~> 0.3.0"},
       {:pgvector, "~> 0.3.0"},
-      {:bumblebee, "~> 0.6.0"},
-      {:nx, "~> 0.9"},
-      {:exla, "~> 0.9"},
       {:pbkdf2_elixir, "~> 2.2"},
       {:req, "~> 0.5"},
       {:mox, "~> 1.0", only: :test},
-      {:lazy_html, ">= 0.1.0", only: :test}
+      {:lazy_html, ">= 0.1.0", only: :test},
+
+      # IA local con Bumblebee
+      {:bumblebee, "~> 0.6.0"},
+      {:nx, "~> 0.9"},
+      {:exla, "~> 0.9"},
+      {:tokenizers, "~> 0.5"}
     ]
   end
 

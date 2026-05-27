@@ -33,7 +33,19 @@ config :alethea, :whatsapp,
   app_secret: "test_secret"
 
 config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
+config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
+config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
+config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
+
+config :alethea, Alethea.AI.RoBERTaWorker,
+  api_url: "http://test.local/roberta",
+  api_key: "test_key",
+  req_options: [plug: {Req.Test, Alethea.AI.RoBERTaWorker}]
+
+config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+  api_key: "test_key",
+  endpoint_url: "http://test.local/ai"
 
 config :alethea, Oban,
   testing: :manual,
@@ -41,6 +53,8 @@ config :alethea, Oban,
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
+
+config :alethea, :start_ai, false
 
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,

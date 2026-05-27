@@ -9,6 +9,7 @@ defmodule Alethea.Clinical.Summary do
     field :period_end, :utc_datetime
     field :summary_text, :string
     field :status_level, :string
+    field :type, :string, default: "session"
 
     belongs_to :patient, Alethea.Accounts.Patient
 
@@ -17,7 +18,8 @@ defmodule Alethea.Clinical.Summary do
 
   def changeset(summary, attrs) do
     summary
-    |> cast(attrs, [:period_start, :period_end, :summary_text, :status_level, :patient_id])
-    |> validate_required([:period_start, :period_end, :summary_text, :status_level, :patient_id])
+    |> cast(attrs, [:period_start, :period_end, :summary_text, :status_level, :type, :patient_id])
+    |> validate_required([:period_start, :period_end, :summary_text, :status_level, :type, :patient_id])
+    |> validate_inclusion(:type, ["session", "weekly"])
   end
 end

@@ -1,13 +1,14 @@
 defmodule AletheaJobs.ProcessMessageWorker do
   @moduledoc """
   Worker principal para procesar mensajes entrantes de WhatsApp.
-  Maneja el onboarding (consentimiento) y deriva al pipeline clínico.
+  Maneja el onboarding (consentimiento), detección de crisis, orquestación de IA (Phi-4)
+  y gestión de ciclo de vida de sesiones.
   """
   use Oban.Worker, queue: :whatsapp, max_attempts: 3
 
-  alias Alethea.Accounts
+  alias Alethea.{Accounts, Clinical}
+  alias Alethea.Clinical.SessionManager
   alias Alethea.Alerts.CrisisMonitor
-  alias Alethea.Clinical
   alias Alethea.WhatsApp.ConsentCache
 
   @client Application.compile_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
@@ -78,10 +79,19 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
     context_limit = Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10
 
+    # 1. Obtener/Abrir sesión
+    {:ok, session} = SessionManager.current_open_session(patient.id)
+
+    # 2. Detectar crisis
     case CrisisMonitor.detect(text) do
       :safe ->
-        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id) do
+        # 3. Guardar mensaje con cifrado por paciente y asociado a sesión
+        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id, session.id) do
           {:ok, inbound_message} ->
+            # 4. Agendar/Renovar timeout de sesión
+            schedule_session_timeout(session, patient, phone)
+
+            # 5. Pipeline de IA
             case Clinical.build_patient_context(patient, context_limit) do
               {:ok, patient_context} ->
                 chain_result =
@@ -92,7 +102,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
                   })
 
                 with {:ok, _outbound_message} <-
-                       Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil),
+                       Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil, session.id),
                      {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
                   @client.send_message(phone, chain_result.response)
                   :ok
@@ -117,8 +127,11 @@ defmodule AletheaJobs.ProcessMessageWorker do
         end
 
       {:crisis, level, triggers} ->
-        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id) do
+        # En caso de crisis, también guardamos el mensaje y disparamos el bypass
+        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id, session.id) do
           {:ok, inbound_message} ->
+            schedule_session_timeout(session, patient, phone)
+
             crisis_diagnosis = %{
               response: crisis_support_message,
               model_version: "crisis-bypass",
@@ -143,14 +156,9 @@ defmodule AletheaJobs.ProcessMessageWorker do
               {:error, reason} ->
                 Logger.error("Error en bypass de crisis: #{inspect(reason)}")
                 {:error, reason}
-
-              other ->
-                Logger.error("Error en bypass de crisis: #{inspect(other)}")
-                {:error, other}
             end
 
           {:error, :duplicate, _inbound_message} ->
-            Logger.info("Mensaje duplicado de WhatsApp ya procesado: #{whatsapp_message_id}")
             :ok
 
           {:error, reason} ->
@@ -158,6 +166,16 @@ defmodule AletheaJobs.ProcessMessageWorker do
             {:error, reason}
         end
     end
+  end
+
+  defp schedule_session_timeout(session, patient, phone) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    AletheaJobs.SessionTimeoutWorker.new(
+      %{session_id: session.id, patient_id: patient.id, phone: phone},
+      scheduled_at: DateTime.add(now, 30, :minute)
+    )
+    |> Oban.insert!(replace: [:scheduled_at])
   end
 
   defp default_crisis_support_message do

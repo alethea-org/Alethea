@@ -1,20 +1,21 @@
 defmodule Alethea.Clinical do
   @moduledoc """
   Contexto clínico para guardar mensajes, leer el historial reciente y persistir resultados de IA.
+  Gestiona también el ciclo de vida de sesiones y tendencias emocionales.
   """
 
   import Ecto.Query, warn: false
 
   alias Alethea.Repo
-  alias Alethea.Clinical.Message
+  alias Alethea.Clinical.{Message, Summary, Trend}
   alias Alethea.AI.Diagnosis
   alias Alethea.Accounts.EncryptionKey
   alias Alethea.Encryption.PatientVault
   alias Alethea.Encryption.ProfessionalKek
 
-  @spec save_message(Alethea.Accounts.Patient.t(), String.t(), binary() | nil, String.t(), String.t(), String.t() | nil) ::
+  @spec save_message(Alethea.Accounts.Patient.t(), String.t(), binary() | nil, String.t(), String.t(), String.t() | nil, binary() | nil) ::
           {:ok, Message.t()} | {:error, term()} | {:error, :duplicate, Message.t()}
-  def save_message(patient, text, dek, direction, behavior_type, whatsapp_message_id \\ nil) do
+  def save_message(patient, text, dek, direction, behavior_type, whatsapp_message_id \\ nil, session_id \\ nil) do
     with {:ok, dek} <- get_dek(patient, dek),
          {:ok, encrypted_content} <- PatientVault.encrypt(text, dek) do
       attrs = %{
@@ -22,7 +23,8 @@ defmodule Alethea.Clinical do
         direction: direction,
         behavior_type: behavior_type,
         encrypted_content: encrypted_content,
-        timestamp: DateTime.utc_now()
+        timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
+        session_id: session_id
       }
       attrs = if whatsapp_message_id, do: Map.put(attrs, :whatsapp_message_id, whatsapp_message_id), else: attrs
 
@@ -55,6 +57,13 @@ defmodule Alethea.Clinical do
     |> Repo.all()
   end
 
+  def list_session_messages(session_id) do
+    Repo.all(
+      from m in Message,
+      where: m.session_id == ^session_id and m.direction == "inbound"
+    )
+  end
+
   @spec build_patient_context(Alethea.Accounts.Patient.t(), non_neg_integer()) :: {:ok, String.t()} | {:error, term()}
   def build_patient_context(patient, limit) do
     with {:ok, dek} <- patient_dek(patient) do
@@ -68,8 +77,6 @@ defmodule Alethea.Clinical do
       end)
       |> case do
         {:ok, decrypted_messages} ->
-          # El upstream corrigió el doble reverse usando Enum.reverse() |> Enum.join("\n")
-          # pero como ya veníamos con Enum.reverse() al principio, simplemente unimos.
           {:ok, decrypted_messages |> Enum.reverse() |> Enum.join("\n")}
 
         error ->
@@ -93,10 +100,69 @@ defmodule Alethea.Clinical do
     |> Repo.insert()
   end
 
-  defp get_dek(_patient, dek) when is_binary(dek) and byte_size(dek) == 32, do: {:ok, dek}
-  defp get_dek(patient, _), do: patient_dek(patient)
+  def save_trends(patient, emotion_scores, _session) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-  defp patient_dek(patient) do
+    Enum.each(emotion_scores, fn %{label: label, score: score} ->
+      last_trend =
+        Repo.one(
+          from t in Trend,
+          where: t.patient_id == ^patient.id and t.indicator_name == ^label,
+          order_by: [desc: t.recorded_at],
+          limit: 1
+        )
+
+      delta = if last_trend, do: score - last_trend.score, else: 0.0
+
+      %Trend{}
+      |> Trend.changeset(%{
+        indicator_name: label,
+        score: score,
+        delta: delta,
+        recorded_at: now,
+        patient_id: patient.id
+      })
+      |> Repo.insert!()
+    end)
+
+    :ok
+  end
+
+  def save_summary(attrs) do
+    %Summary{}
+    |> Summary.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def list_session_summaries(patient_id, since) do
+    Repo.all(
+      from s in Summary,
+      where:
+        s.patient_id == ^patient_id and
+          s.type == "session" and
+          s.period_start >= ^since
+    )
+  end
+
+  def aggregate_trends(patient_id, since) do
+    Repo.all(
+      from t in Trend,
+      where: t.patient_id == ^patient_id and t.recorded_at >= ^since,
+      group_by: t.indicator_name,
+      select: {t.indicator_name, avg(t.score)}
+    )
+    |> Enum.map(fn {name, avg_score} -> %{label: name, score: avg_score} end)
+  end
+
+  def decrypt_message_content(%Message{} = message, dek) do
+    PatientVault.decrypt(message.encrypted_content, dek)
+  end
+
+  def get_dek(patient, dek \\ nil)
+  def get_dek(_patient, dek) when is_binary(dek) and byte_size(dek) == 32, do: {:ok, dek}
+  def get_dek(patient, _), do: patient_dek(patient)
+
+  def patient_dek(patient) do
     patient = Repo.preload(patient, :professional)
 
     with %Alethea.Accounts.Professional{} = professional <- patient.professional,
@@ -108,8 +174,5 @@ defmodule Alethea.Clinical do
       nil -> {:error, :missing_encryption_key}
       {:error, reason} -> {:error, reason}
     end
-  end
-  defp decrypt_message_content(%Message{} = message, dek) do
-    PatientVault.decrypt(message.encrypted_content, dek)
   end
 end

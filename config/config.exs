@@ -33,8 +33,14 @@ config :phoenix, :json_library, Jason
 # Configure Oban
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10, whatsapp: 20],
-  repo: Alethea.Repo
+  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5],
+  repo: Alethea.Repo,
+  plugins: [
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 0 * * *", AletheaJobs.DailySchedulerWorker}
+     ]}
+  ]
 
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   model: "phi-4-mini",
@@ -69,6 +75,17 @@ config :alethea, Alethea.AI.Chains.GuidedConversationChain,
 
 config :alethea, Alethea.Clinical,
   recent_message_limit: 10
+
+config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+  model: System.get_env("LLM_MODEL", "phi-4-mini"),
+  stream: false,
+  api_key: System.get_env("LLM_API_KEY"),
+  endpoint: System.get_env("LLM_ENDPOINT_URL")
+
+config :alethea, Alethea.AI.RoBERTaWorker,
+  api_url:
+    "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
+  api_key: System.get_env("HUGGINGFACE_API_KEY")
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
