@@ -22,7 +22,8 @@ defmodule Alethea.Accounts do
 
   def create_professional(attrs \\ %{}) do
     Repo.transaction(fn ->
-      with {:ok, professional} <- %Professional{} |> Professional.changeset(attrs) |> Repo.insert(),
+      with {:ok, professional} <-
+             %Professional{} |> Professional.changeset(attrs) |> Repo.insert(),
            kek_bytes = ProfessionalKek.generate_kek(),
            {:ok, _key} <- ProfessionalKek.store_kek(professional, kek_bytes) do
         professional
@@ -52,6 +53,16 @@ defmodule Alethea.Accounts do
     ProfessionalKek.load_kek(professional)
   end
 
+  def load_patient_dek(patient, professional_kek) when is_binary(professional_kek) do
+    case Repo.get_by(EncryptionKey, patient_id: patient.id, type: "patient") do
+      nil ->
+        {:error, :not_found}
+
+      key_record ->
+        PatientVault.decrypt(key_record.encrypted_key, professional_kek)
+    end
+  end
+
   # Patients
 
   def list_patients(professional_id) do
@@ -64,7 +75,12 @@ defmodule Alethea.Accounts do
 
   def lookup_patient_by_phone(phone_e164) do
     hash =
-      :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone_e164)
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        Application.fetch_env!(:alethea, :phone_hash_secret),
+        phone_e164
+      )
       |> Base.encode64()
 
     case Repo.get_by(Patient, whatsapp_number_hash: hash) do
@@ -76,6 +92,15 @@ defmodule Alethea.Accounts do
   def update_patient_terms(%Patient{} = patient, accepted?) do
     patient
     |> Patient.changeset(%{terms_accepted: accepted?})
+    |> Repo.update()
+  end
+
+  def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
+    # Solo permitir actualizar campos de estado internos para evitar mass-assignment
+    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status])
+
+    patient
+    |> Ecto.Changeset.change(allowed_attrs)
     |> Repo.update()
   end
 
@@ -99,14 +124,22 @@ defmodule Alethea.Accounts do
 
     # 4. Calcular hash determinista
     phone_hash =
-      :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), whatsapp_number)
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        Application.fetch_env!(:alethea, :phone_hash_secret),
+        whatsapp_number
+      )
       |> Base.encode64()
 
     Ecto.Multi.new()
-    |> Ecto.Multi.insert(:encryption_key, EncryptionKey.changeset(%EncryptionKey{}, %{
-      "encrypted_key" => wrapped_dek,
-      "type" => "patient"
-    }))
+    |> Ecto.Multi.insert(
+      :encryption_key,
+      EncryptionKey.changeset(%EncryptionKey{}, %{
+        "encrypted_key" => wrapped_dek,
+        "type" => "patient"
+      })
+    )
     |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
       attrs_with_security =
         attrs

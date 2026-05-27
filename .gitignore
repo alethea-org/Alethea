@@ -28,4 +28,5 @@ alethea-*.tar
 # Claude Code local settings
 .claude/settings.local.json
 
+# Environment variables
 .env

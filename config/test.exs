@@ -23,22 +23,27 @@ config :alethea, AletheaWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
-config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+config :alethea,
+       :phone_hash_secret,
+       "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
 config :alethea, :whatsapp,
   api_token: "mock_token",
-  phone_number_id: "mock_id"
+  phone_number_id: "mock_id",
+  app_secret: "test_secret"
 
 config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
 config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
-config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
+config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 
 config :alethea, Alethea.AI.RoBERTaWorker,
   api_url: "http://test.local/roberta",
   api_key: "test_key",
   req_options: [plug: {Req.Test, Alethea.AI.RoBERTaWorker}]
 
-config :alethea, Oban, testing: :manual
+config :alethea, Oban,
+  testing: :manual,
+  repo: Alethea.Repo
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime

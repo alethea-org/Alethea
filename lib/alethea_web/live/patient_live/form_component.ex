@@ -8,7 +8,7 @@ defmodule AletheaWeb.PatientLive.FormComponent do
     ~H"""
     <div>
       <.header>
-        <%= @title %>
+        {@title}
       </.header>
 
       <.simple_form
@@ -60,7 +60,8 @@ defmodule AletheaWeb.PatientLive.FormComponent do
 
   defp save_patient(socket, :new, patient_params) do
     # Añadimos el professional_id
-    patient_params = Map.put(patient_params, "professional_id", socket.assigns.current_professional.id)
+    patient_params =
+      Map.put(patient_params, "professional_id", socket.assigns.current_professional.id)
 
     case Accounts.create_patient(patient_params, socket.assigns.professional_kek) do
       {:ok, _patient} ->

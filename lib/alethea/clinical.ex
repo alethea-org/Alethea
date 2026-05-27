@@ -1,12 +1,60 @@
 defmodule Alethea.Clinical do
-  import Ecto.Query
-  alias Alethea.Repo
-  alias Alethea.Clinical.{Message, Summary, Trend}
+  @moduledoc """
+  Contexto clínico para guardar mensajes, leer el historial reciente y persistir resultados de IA.
+  Gestiona también el ciclo de vida de sesiones y tendencias emocionales.
+  """
 
-  def create_message(attrs) do
-    %Message{}
-    |> Message.changeset(attrs)
-    |> Repo.insert()
+  import Ecto.Query, warn: false
+
+  alias Alethea.Repo
+  alias Alethea.Clinical.{Message, Summary, Trend, Session}
+  alias Alethea.AI.Diagnosis
+  alias Alethea.Accounts.EncryptionKey
+  alias Alethea.Encryption.PatientVault
+  alias Alethea.Encryption.ProfessionalKek
+
+  @spec save_message(Alethea.Accounts.Patient.t(), String.t(), binary() | nil, String.t(), String.t(), String.t() | nil, binary() | nil) ::
+          {:ok, Message.t()} | {:error, term()} | {:error, :duplicate, Message.t()}
+  def save_message(patient, text, dek, direction, behavior_type, whatsapp_message_id \\ nil, session_id \\ nil) do
+    with {:ok, dek} <- get_dek(patient, dek),
+         {:ok, encrypted_content} <- PatientVault.encrypt(text, dek) do
+      attrs = %{
+        patient_id: patient.id,
+        direction: direction,
+        behavior_type: behavior_type,
+        encrypted_content: encrypted_content,
+        timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
+        session_id: session_id
+      }
+      attrs = if whatsapp_message_id, do: Map.put(attrs, :whatsapp_message_id, whatsapp_message_id), else: attrs
+
+      %Message{}
+      |> Message.changeset(attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, message} ->
+          {:ok, message}
+
+        {:error, changeset} ->
+          if Keyword.has_key?(changeset.errors, :whatsapp_message_id) && whatsapp_message_id do
+            case Repo.get_by(Message, whatsapp_message_id: whatsapp_message_id) do
+              nil -> {:error, changeset}
+              existing_message -> {:error, :duplicate, existing_message}
+            end
+          else
+            {:error, changeset}
+          end
+      end
+    end
+  end
+
+  @spec list_recent_messages(binary(), non_neg_integer()) :: [Message.t()]
+  def list_recent_messages(patient_id, limit) when is_integer(limit) and limit > 0 do
+    Message
+    |> where(patient_id: ^patient_id)
+    |> order_by(desc: :timestamp)
+    |> limit(^limit)
+    |> Repo.all()
   end
 
   def list_session_messages(session_id) do
@@ -14,6 +62,42 @@ defmodule Alethea.Clinical do
       from m in Message,
       where: m.session_id == ^session_id and m.direction == "inbound"
     )
+  end
+
+  @spec build_patient_context(Alethea.Accounts.Patient.t(), non_neg_integer()) :: {:ok, String.t()} | {:error, term()}
+  def build_patient_context(patient, limit) do
+    with {:ok, dek} <- patient_dek(patient) do
+      patient.id
+      |> list_recent_messages(limit)
+      |> Enum.reverse()
+      |> Enum.map(&decrypt_message_content(&1, dek))
+      |> Enum.reduce_while({:ok, []}, fn
+        {:ok, decrypted}, {:ok, acc} -> {:cont, {:ok, [decrypted | acc]}}
+        {:error, reason}, _ -> {:halt, {:error, reason}}
+      end)
+      |> case do
+        {:ok, decrypted_messages} ->
+          {:ok, decrypted_messages |> Enum.reverse() |> Enum.join("\n")}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  @spec save_ai_diagnosis(binary(), map()) :: {:ok, Diagnosis.t()} | {:error, term()}
+  def save_ai_diagnosis(message_id, chain_result) do
+    attrs = %{
+      message_id: message_id,
+      model_version: Map.get(chain_result, :model_version) || Map.get(chain_result, "model_version"),
+      extracted_emotions:
+        Map.get(chain_result, :extracted_emotions) || Map.get(chain_result, "extracted_emotions") || %{},
+      ai_response: Map.get(chain_result, :response) || Map.get(chain_result, "response")
+    }
+
+    %Diagnosis{}
+    |> Diagnosis.changeset(attrs)
+    |> Repo.insert()
   end
 
   def save_trends(patient, emotion_scores, _session) do
@@ -70,7 +154,25 @@ defmodule Alethea.Clinical do
     |> Enum.map(fn {name, avg_score} -> %{label: name, score: avg_score} end)
   end
 
-  def decrypt_content(encrypted_content) do
-    Alethea.Encryption.Vault.decrypt!(encrypted_content)
+  def decrypt_message_content(%Message{} = message, dek) do
+    PatientVault.decrypt(message.encrypted_content, dek)
+  end
+
+  def get_dek(patient, dek \\ nil)
+  def get_dek(_patient, dek) when is_binary(dek) and byte_size(dek) == 32, do: {:ok, dek}
+  def get_dek(patient, _), do: patient_dek(patient)
+
+  def patient_dek(patient) do
+    patient = Repo.preload(patient, :professional)
+
+    with %Alethea.Accounts.Professional{} = professional <- patient.professional,
+         {:ok, kek} <- ProfessionalKek.load_kek(professional),
+         %EncryptionKey{} = key <- Repo.get(EncryptionKey, patient.encryption_key_id),
+         {:ok, dek} <- PatientVault.decrypt(key.encrypted_key, kek) do
+      {:ok, dek}
+    else
+      nil -> {:error, :missing_encryption_key}
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

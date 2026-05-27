@@ -10,6 +10,7 @@ defmodule Alethea.Accounts.Patient do
     field :alias, :string
     field :status, :string, default: "active"
     field :terms_accepted, :boolean, default: false
+    field :urgent_intervention, :boolean, default: false
     field :encryption_version, :integer, default: 1
 
     # Virtual field for the raw number during input
@@ -43,7 +44,9 @@ defmodule Alethea.Accounts.Patient do
     ])
     |> validate_required([:alias, :professional_id])
     |> validate_inclusion(:status, ["active", "archived", "deleted"])
-    |> unique_constraint(:whatsapp_number_hash, name: :patients_professional_id_whatsapp_number_hash_index)
+    |> unique_constraint(:whatsapp_number_hash,
+      name: :patients_professional_id_whatsapp_number_hash_index
+    )
 
     # Logic for hashing and encrypting the number would go here or in a context
   end

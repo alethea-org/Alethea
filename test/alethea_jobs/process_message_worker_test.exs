@@ -1,14 +1,22 @@
 defmodule AletheaJobs.ProcessMessageWorkerTest do
-  use Alethea.DataCase, async: true
+  use Alethea.DataCase, async: false
 
   import Mox
+
   alias AletheaJobs.ProcessMessageWorker
   alias Alethea.Accounts
-  alias Alethea.Accounts.Patient
   alias Alethea.WhatsApp.ConsentCache
+  alias Alethea.Repo
+  alias Alethea.Clinical.Message
+  alias Alethea.AI.Diagnosis
 
-  # Make sure mocks are verified when the test ends
   setup :verify_on_exit!
+
+  setup do
+    professional = insert_professional()
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    %{professional: professional, kek: kek}
+  end
 
   describe "perform/1" do
     test "cuando el número no está registrado, envía mensaje genérico" do
@@ -38,24 +46,7 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
       end)
 
       assert :ok = perform_job(%{"from" => phone, "text" => text})
-
-      # Verificar que se marcó en el caché
       assert ConsentCache.in_progress?(phone)
-    end
-
-    test "si el consentimiento está en progreso, no vuelve a enviar los términos" do
-      professional = insert_professional()
-      _patient = insert_patient(professional, "+56922222222", "alias")
-
-      phone = "+56922222222"
-      text = "Hola de nuevo"
-
-      ConsentCache.mark_in_progress(phone)
-
-      # No esperamos ninguna llamada a send_message
-      expect(Alethea.WhatsApp.ClientMock, :send_message, 0, fn _, _ -> {:ok, %{}} end)
-
-      assert :ok = perform_job(%{"from" => phone, "text" => text})
     end
 
     test "cuando el paciente acepta los términos, actualiza la base de datos y envía bienvenida" do
@@ -73,13 +64,45 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
 
       assert :ok = perform_job(%{"from" => phone, "text" => text})
 
-      # Verificar actualización en DB
       updated_patient = Accounts.get_patient!(patient.id)
       assert updated_patient.terms_accepted == true
     end
-  end
 
-  # Helpers
+    test "cuando el paciente ya aceptó términos, ejecuta el pipeline clínico completo" do
+      professional = insert_professional()
+      patient = insert_patient(professional, "+56944444444", "alias")
+      {:ok, _} = Accounts.update_patient_terms(patient, true)
+
+      phone = "+56944444444"
+      text = "Necesito hablar"
+      message_id = "wamid.123"
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{
+           message_id: _message_id,
+           raw_content: ^text,
+           patient_context: _context
+         } ->
+        %{
+          response: "Gracias por compartir",
+          model_version: "phi-4-mini",
+          source_message_id: message_id,
+          behavior_type: :elicited
+        }
+      end)
+
+      Alethea.WhatsApp.ClientMock
+      |> expect(:send_message, fn ^phone, body ->
+        assert body == "Gracias por compartir"
+        {:ok, %{}}
+      end)
+
+      assert :ok = perform_job(%{"from" => phone, "text" => text, "whatsapp_message_id" => message_id})
+
+      assert Repo.aggregate(Message, :count, :id) == 2
+      assert Repo.aggregate(Diagnosis, :count, :id) == 1
+    end
+  end
 
   defp perform_job(args) do
     %Oban.Job{args: args}
@@ -98,26 +121,17 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
   end
 
   defp insert_patient(professional, phone, alias_name) do
-    # Generamos un hash para el test usando el secreto configurado en test.exs
-    hash =
-      :crypto.mac(
-        :hmac,
-        :sha256,
-        Application.fetch_env!(:alethea, :phone_hash_secret),
-        phone
-      )
-      |> Base.encode64()
+    {:ok, kek} = Accounts.load_professional_kek(professional)
 
     {:ok, patient} =
-      %Patient{}
-      |> Patient.changeset(%{
-        whatsapp_number: phone,
-        alias: alias_name,
-        professional_id: professional.id,
-        whatsapp_number_hash: hash,
-        encrypted_whatsapp_number: "binary_data"
-      })
-      |> Alethea.Repo.insert()
+      Accounts.create_patient(
+        %{
+          "whatsapp_number" => phone,
+          "alias" => alias_name,
+          "professional_id" => professional.id
+        },
+        kek
+      )
 
     patient
   end

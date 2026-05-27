@@ -76,7 +76,10 @@ defmodule Alethea.AccountsTest do
       # Query pura para ver los bytes sin descifrado automático
       # Postgrex espera UUIDs en binario si se pasa como parámetro para una columna uuid
       binary_id = Ecto.UUID.dump!(patient.id)
-      result = Repo.query!("SELECT encrypted_whatsapp_number FROM patients WHERE id = $1", [binary_id])
+
+      result =
+        Repo.query!("SELECT encrypted_whatsapp_number FROM patients WHERE id = $1", [binary_id])
+
       [[encrypted_bin]] = result.rows
 
       assert is_binary(encrypted_bin)
@@ -90,7 +93,12 @@ defmodule Alethea.AccountsTest do
 
     test "borrado criptográfico hace los datos irrecuperables", %{professional: prof, kek: kek} do
       whatsapp_number = "+56999999999"
-      attrs = %{whatsapp_number: whatsapp_number, alias: "Paciente Efímero", professional_id: prof.id}
+
+      attrs = %{
+        whatsapp_number: whatsapp_number,
+        alias: "Paciente Efímero",
+        professional_id: prof.id
+      }
 
       {:ok, patient} = Accounts.create_patient(attrs, kek)
 
@@ -105,9 +113,13 @@ defmodule Alethea.AccountsTest do
 
       # Los bytes en la tabla 'patients' siguen ahí pero son basura sin la llave
       binary_id = Ecto.UUID.dump!(patient.id)
-      [[binary_garbage]] = Repo.query!("SELECT encrypted_whatsapp_number FROM patients WHERE id = $1", [binary_id]).rows
+
+      [[binary_garbage]] =
+        Repo.query!("SELECT encrypted_whatsapp_number FROM patients WHERE id = $1", [binary_id]).rows
+
       # No hay forma de obtener la DEK para llamar a PatientVault.decrypt
-      assert {:error, :decryption_failed} = PatientVault.decrypt(binary_garbage, :crypto.strong_rand_bytes(32))
+      assert {:error, :decryption_failed} =
+               PatientVault.decrypt(binary_garbage, :crypto.strong_rand_bytes(32))
     end
 
     test "unicidad global por número de WhatsApp", %{professional: prof, kek: kek} do
