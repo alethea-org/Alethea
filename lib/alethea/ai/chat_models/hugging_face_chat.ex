@@ -1,52 +1,31 @@
 defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   @moduledoc """
-  Wrapper de chat para usar la API de Hugging Face con LangChain.
-
-  Este modelo envía la conversación formateada a un endpoint de Hugging Face
-  y convierte la respuesta en un `LangChain.Message` compatible.
+  Custom LangChain ChatModel for Hugging Face Inference API.
   """
-
   use Ecto.Schema
-  require Logger
   import Ecto.Changeset
-
   alias LangChain.ChatModels.ChatModel
-  alias LangChain.LangChainError
   alias LangChain.Message
-  alias LangChain.Utils
+  alias LangChain.LangChainError
 
   @behaviour ChatModel
-  @current_config_version 1
-  @receive_timeout 60_000
 
   @type t :: %__MODULE__{}
 
-  @create_fields [
-    :endpoint,
-    :model,
-    :api_key,
-    :temperature,
-    :max_tokens,
-    :stream,
-    :receive_timeout,
-    :callbacks
-  ]
-
-  @required_fields [:endpoint, :model]
-
   @primary_key false
   embedded_schema do
-    field :endpoint, :string,
-      default: "https://api-inference.huggingface.co/models"
-
-    field :model, :string, default: "phi-4-mini"
+    field :model, :string, default: "meta-llama/Llama-2-7b-chat-hf"
     field :api_key, :string, redact: true
-    field :temperature, :float, default: 0.0
+    field :endpoint_url, :string, default: "https://api-inference.huggingface.co/models/"
+    field :temperature, :float, default: 0.7
     field :max_tokens, :integer, default: 512
     field :stream, :boolean, default: false
-    field :receive_timeout, :integer, default: @receive_timeout
+    field :receive_timeout, :integer, default: 60_000
     field :callbacks, {:array, :map}, default: []
   end
+
+  @create_fields [:model, :api_key, :endpoint_url, :temperature, :max_tokens, :stream, :receive_timeout, :callbacks]
+  @required_fields [:model, :api_key]
 
   @spec new(map()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def new(attrs \\ %{}) when is_map(attrs) do
@@ -93,7 +72,7 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
     end)
   end
 
-  defp do_api_request(%__MODULE__{stream: true} = _model, _messages) do
+  defp do_api_request(%__MODULE__{stream: true}, _messages) do
     raise LangChainError, "Streaming is not supported for HuggingFaceChat"
   end
 
@@ -102,77 +81,53 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
       inputs: messages_to_input(messages),
       parameters: %{
         temperature: model.temperature,
-        max_new_tokens: model.max_tokens
+        max_new_tokens: model.max_tokens,
+        return_full_text: false
       }
     }
 
-    req =
-      Req.new(
-        url: build_url(model),
-        headers: request_headers(model),
-        json: payload,
-        receive_timeout: model.receive_timeout,
-        retry: :transient,
-        max_retries: 3,
-        inet6: true,
-        retry_delay: fn attempt -> 300 * attempt end
-      )
-
-    case Req.post(req) do
-      {:ok, %Req.Response{body: body}} -> parse_response(body)
-      {:error, %Req.TransportError{reason: :timeout}} -> {:error, "Request timed out"}
-      {:error, %Req.TransportError{reason: :closed}} -> {:error, "Connection closed"}
-      {:error, reason} -> {:error, inspect(reason)}
-    end
-  end
-
-  defp build_url(%__MODULE__{endpoint: endpoint, model: model}) do
-    String.trim_trailing(endpoint, "/") <> "/" <> model
-  end
-
-  defp request_headers(%__MODULE__{api_key: api_key}) do
-    base_headers = [
-      {"content-type", "application/json"}
+    headers = [
+      {"Authorization", "Bearer #{model.api_key}"},
+      {"Content-Type", "application/json"}
     ]
 
-    if api_key in [nil, ""] do
-      base_headers
-    else
-      base_headers ++ [{"authorization", "Bearer #{api_key}"}]
+    url = model.endpoint_url <> model.model
+
+    case Req.post(url, json: payload, headers: headers, receive_timeout: model.receive_timeout) do
+      {:ok, %Req.Response{status: 200, body: [%{"generated_text" => text} | _]}} ->
+        text
+
+      {:ok, %Req.Response{status: 200, body: %{"generated_text" => text}}} ->
+        text
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        raise LangChainError, "Hugging Face API error (#{status}): #{inspect(body)}"
+
+      {:error, reason} ->
+        raise LangChainError, "Hugging Face API request failed: #{inspect(reason)}"
     end
   end
 
-  defp messages_to_input(messages) do
-    messages
-    |> Enum.filter(&(&1.content != nil))
-    |> Enum.map(&message_to_input/1)
-    |> Enum.join("\n\n")
-  end
-
-  defp message_to_input(%Message{role: :system, content: content}), do: "System: #{content}"
-  defp message_to_input(%Message{role: :user, content: content}), do: "User: #{content}"
-  defp message_to_input(%Message{role: :assistant, content: content}), do: "Assistant: #{content}"
-  defp message_to_input(%Message{content: content}), do: content
-
-  defp parse_response(%{"error" => error}), do: raise(LangChainError, error)
-  defp parse_response(%{"generated_text" => text}) when is_binary(text), do: text
-  defp parse_response([%{"generated_text" => text} | _]) when is_binary(text), do: text
-  defp parse_response(%{"choices" => [%{"message" => %{"content" => text}} | _]}) when is_binary(text), do: text
-  defp parse_response(%{"choices" => [%{"generated_text" => text} | _]}) when is_binary(text), do: text
-  defp parse_response(body) when is_binary(body), do: body
-
-  defp parse_response(body) do
-    raise LangChainError,
-      "Could not parse Hugging Face response: #{inspect(body)}"
+  @impl ChatModel
+  def restore_from_map(attrs) do
+    case new(attrs) do
+      {:ok, model} -> model
+      {:error, _changeset} -> :error
+    end
   end
 
   @impl ChatModel
   def serialize_config(%__MODULE__{} = model) do
-    Utils.to_serializable_map(model, [:endpoint, :model, :api_key, :temperature, :max_tokens, :stream, :receive_timeout], @current_config_version)
+    Map.from_struct(model)
   end
 
-  @impl ChatModel
-  def restore_from_map(%{"version" => 1} = data) do
-    new(data)
+  defp messages_to_input(messages) do
+    messages
+    |> Enum.map(fn msg ->
+      role = Map.get(msg, :role)
+      content = Map.get(msg, :content)
+      "[#{role}]: #{content}"
+    end)
+    |> Enum.join("\n")
   end
 end

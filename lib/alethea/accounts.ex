@@ -95,6 +95,15 @@ defmodule Alethea.Accounts do
     |> Repo.update()
   end
 
+  def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
+    # Solo permitir actualizar campos de estado internos para evitar mass-assignment
+    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status])
+
+    patient
+    |> Ecto.Changeset.change(allowed_attrs)
+    |> Repo.update()
+  end
+
   @doc """
   Crea un paciente con cifrado de extremo a extremo.
   Genera una DEK única, la envuelve con la KEK del profesional y cifra el número de WhatsApp.

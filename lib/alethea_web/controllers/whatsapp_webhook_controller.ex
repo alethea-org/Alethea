@@ -31,10 +31,9 @@ defmodule AletheaWeb.WhatsappWebhookController do
   Recepción de mensajes de WhatsApp (POST).
   """
   def receive(conn, params) do
-    if valid_signature?(conn) do
-      Logger.debug("WhatsApp Webhook Received: #{inspect(params)}")
+    Logger.debug("WhatsApp Webhook Received")
 
-      # Extraer el número y el texto del mensaje
+    if valid_whatsapp_signature?(conn) do
       case parse_message(params) do
         {:ok, phone, text, message_id} ->
           # Encolar el worker de Oban para procesamiento asíncrono
@@ -58,32 +57,32 @@ defmodule AletheaWeb.WhatsappWebhookController do
     end
   end
 
-  defp valid_signature?(conn) do
-    # Obtener el secreto de la app
-    app_secret = Application.get_env(:alethea, :whatsapp)[:app_secret]
+  defp valid_whatsapp_signature?(conn) do
+    secret = Application.get_env(:alethea, :whatsapp)[:app_secret]
+    signature_header = List.first(get_req_header(conn, "x-hub-signature-256"))
+    raw_body = conn.assigns[:raw_body] || ""
 
-    # Si no hay secreto configurado (ej. dev), permitimos para no bloquear
-    if is_nil(app_secret) || app_secret == "" do
-      true
+    with true <- is_binary(secret) and secret != "",
+         true <- is_binary(signature_header) and signature_header != "",
+         true <- raw_body != "",
+         computed <- :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode16(case: :lower),
+         expected <- strip_signature_prefix(signature_header) do
+      secure_compare(computed, expected)
     else
-      [signature_header] = get_req_header(conn, "x-hub-signature-256")
-      # El formato es sha256={hash}
-      ["sha256", signature_hash] = String.split(signature_header, "=")
-
-      # Calcular HMAC del raw_body (guardado por CacheBodyReader)
-      expected_hash =
-        :crypto.mac(:hmac, :sha256, app_secret, conn.assigns.raw_body)
-        |> Base.encode16(case: :lower)
-
-      Plug.Crypto.secure_compare(signature_hash, expected_hash)
+      _ -> false
     end
-  rescue
-    _ -> false
   end
 
-  defp parse_message(%{
-         "entry" => [%{"changes" => [%{"value" => %{"messages" => [msg | _]}} | _]} | _]
-       }) do
+  defp strip_signature_prefix("sha256=" <> rest), do: rest
+  defp strip_signature_prefix(signature), do: signature
+
+  defp secure_compare(left, right) when byte_size(left) == byte_size(right) do
+    Plug.Crypto.secure_compare(left, right)
+  end
+
+  defp secure_compare(_, _), do: false
+
+  defp parse_message(%{"entry" => [%{"changes" => [%{"value" => %{"messages" => [msg | _]}} | _]} | _]}) do
     phone = msg["from"]
     text = get_in(msg, ["text", "body"])
     message_id = msg["id"]

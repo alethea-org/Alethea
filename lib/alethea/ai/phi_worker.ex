@@ -9,9 +9,8 @@ defmodule Alethea.AI.PhiWorker do
   alias Alethea.AI.Sanitizer
   alias Alethea.AI.Chains.GuidedConversationChain
 
-  @spec process(%{message_id: binary(), raw_content: String.t(), patient_context: String.t()}) ::
-          map()
   @impl true
+  @spec process(%{message_id: binary(), raw_content: String.t(), patient_context: String.t()}) :: map()
   def process(%{
         message_id: message_id,
         raw_content: raw_content,

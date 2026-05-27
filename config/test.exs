@@ -29,7 +29,8 @@ config :alethea,
 
 config :alethea, :whatsapp,
   api_token: "mock_token",
-  phone_number_id: "mock_id"
+  phone_number_id: "mock_id",
+  app_secret: "test_secret"
 
 config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock

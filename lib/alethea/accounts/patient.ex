@@ -10,6 +10,7 @@ defmodule Alethea.Accounts.Patient do
     field :alias, :string
     field :status, :string, default: "active"
     field :terms_accepted, :boolean, default: false
+    field :urgent_intervention, :boolean, default: false
     field :encryption_version, :integer, default: 1
 
     # Virtual field for the raw number during input

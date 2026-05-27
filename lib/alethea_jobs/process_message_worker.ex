@@ -5,9 +5,13 @@ defmodule AletheaJobs.ProcessMessageWorker do
   """
   use Oban.Worker, queue: :whatsapp, max_attempts: 3
 
-  alias Alethea.{Accounts, Clinical}
+  alias Alethea.Accounts
+  alias Alethea.Alerts.CrisisMonitor
+  alias Alethea.Clinical
   alias Alethea.WhatsApp.ConsentCache
-  alias Alethea.Encryption.PatientVault
+
+  @client Application.compile_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+  @phi_worker Application.compile_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
 
   require Logger
 
@@ -28,15 +32,14 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"from" => phone, "text" => text} = args}) do
-    whatsapp_message_id = args["whatsapp_message_id"]
+    whatsapp_message_id = Map.get(args, "whatsapp_message_id")
 
     case Accounts.lookup_patient_by_phone(phone) do
       {:ok, patient} ->
         process_patient_message(patient, phone, text, whatsapp_message_id)
 
       {:error, :not_found} ->
-        # No registramos nada, solo informamos
-        whatsapp_client().send_message(phone, @unregistered_message)
+        @client.send_message(phone, @unregistered_message)
         :ok
     end
   end
@@ -44,12 +47,12 @@ defmodule AletheaJobs.ProcessMessageWorker do
   defp process_patient_message(patient, phone, text, whatsapp_message_id) do
     cond do
       patient.terms_accepted ->
-        execute_clinical_pipeline(patient, phone, text, whatsapp_message_id)
+        process_clinical_message(patient, phone, text, whatsapp_message_id)
 
       String.upcase(String.trim(text)) == "ACEPTO" ->
         case Accounts.update_patient_terms(patient, true) do
           {:ok, _updated_patient} ->
-            whatsapp_client().send_message(phone, @welcome_message)
+            @client.send_message(phone, @welcome_message)
             :ok
 
           {:error, changeset} ->
@@ -58,67 +61,106 @@ defmodule AletheaJobs.ProcessMessageWorker do
         end
 
       true ->
-        # El paciente no ha aceptado y no dijo "ACEPTO"
         if ConsentCache.in_progress?(phone) do
           Logger.debug("Consentimiento ya en progreso para #{phone}, ignorando mensaje.")
           :ok
         else
           ConsentCache.mark_in_progress(phone)
-          whatsapp_client().send_message(phone, @terms_message)
+          @client.send_message(phone, @terms_message)
           :ok
         end
     end
   end
 
-  defp execute_clinical_pipeline(patient, phone, text, whatsapp_message_id) do
-    # 1. Obtener llaves
-    professional = Accounts.get_professional!(patient.professional_id)
-    {:ok, kek} = Accounts.load_professional_kek(professional)
-    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+  defp process_clinical_message(patient, phone, text, whatsapp_message_id) do
+    crisis_support_message =
+      Application.get_env(:alethea, :crisis_support_message, default_crisis_support_message())
 
-    # 2. Guardar mensaje inbound (spontaneous)
-    {:ok, inbound_msg} =
-      Clinical.save_message(patient, text, dek, "inbound", "spontaneous", whatsapp_message_id)
+    context_limit = Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10
 
-    # 3. Construir contexto (historial de mensajes)
-    patient_context = build_conversation_context(patient.id, dek)
+    case CrisisMonitor.detect(text) do
+      :safe ->
+        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id) do
+          {:ok, inbound_message} ->
+            case Clinical.build_patient_context(patient, context_limit) do
+              {:ok, patient_context} ->
+                chain_result =
+                  @phi_worker.process(%{
+                    message_id: inbound_message.id,
+                    raw_content: text,
+                    patient_context: patient_context
+                  })
 
-    # 4. Inferencia IA
-    chain_result =
-      phi_worker().process(%{
-        message_id: inbound_msg.id,
-        raw_content: text,
-        patient_context: patient_context
-      })
+                with {:ok, _outbound_message} <-
+                       Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil),
+                     {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
+                  @client.send_message(phone, chain_result.response)
+                  :ok
+                else
+                  {:error, reason} ->
+                    Logger.error("Error guardando resultado de IA: #{inspect(reason)}")
+                    {:error, reason}
+                end
 
-    # 5. Guardar respuesta IA (elicited)
-    ai_response = chain_result.ai_response
+              {:error, reason} ->
+                Logger.error("Error construyendo contexto del paciente: #{inspect(reason)}")
+                {:error, reason}
+            end
 
-    {:ok, _outbound_msg} =
-      Clinical.save_message(patient, ai_response, dek, "outbound", "elicited")
+          {:error, :duplicate, _inbound_message} ->
+            Logger.info("Mensaje duplicado de WhatsApp ya procesado: #{whatsapp_message_id}")
+            :ok
 
-    # 6. Guardar diagnóstico/análisis
-    {:ok, _diagnosis} = Clinical.save_ai_diagnosis(inbound_msg.id, chain_result)
+          {:error, reason} ->
+            Logger.error("Error guardando mensaje clínico: #{inspect(reason)}")
+            {:error, reason}
+        end
 
-    # 7. Enviar por WhatsApp
-    whatsapp_client().send_message(phone, ai_response)
-    :ok
+      {:crisis, level, triggers} ->
+        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id) do
+          {:ok, inbound_message} ->
+            crisis_diagnosis = %{
+              response: crisis_support_message,
+              model_version: "crisis-bypass",
+              extracted_emotions: %{crisis: true, level: level, triggers: triggers}
+            }
+
+            with {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, crisis_diagnosis),
+                 {:ok, _patient} <- Accounts.update_patient(patient, %{urgent_intervention: true}),
+                 :ok <-
+                   Phoenix.PubSub.broadcast(Alethea.PubSub, "psychologist:alerts", {
+                     :crisis_detected,
+                     %{
+                       patient_id: patient.id,
+                       level: level,
+                       triggers: triggers,
+                       detected_at: DateTime.utc_now()
+                     }
+                   }),
+                 {:ok, _send_result} <- @client.send_message(phone, crisis_support_message) do
+              :ok
+            else
+              {:error, reason} ->
+                Logger.error("Error en bypass de crisis: #{inspect(reason)}")
+                {:error, reason}
+
+              other ->
+                Logger.error("Error en bypass de crisis: #{inspect(other)}")
+                {:error, other}
+            end
+
+          {:error, :duplicate, _inbound_message} ->
+            Logger.info("Mensaje duplicado de WhatsApp ya procesado: #{whatsapp_message_id}")
+            :ok
+
+          {:error, reason} ->
+            Logger.error("Error guardando mensaje inbound en crisis: #{inspect(reason)}")
+            {:error, reason}
+        end
+    end
   end
 
-  defp build_conversation_context(patient_id, dek) do
-    Clinical.list_recent_messages(patient_id, 10)
-    |> Enum.map_join("\n", fn msg ->
-      {:ok, text} = PatientVault.decrypt(msg.encrypted_content, dek)
-      label = if msg.direction == "inbound", do: "Paciente", else: "Alethea"
-      "#{label}: #{text}"
-    end)
-  end
-
-  defp whatsapp_client do
-    Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-  end
-
-  defp phi_worker do
-    Application.get_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
+  defp default_crisis_support_message do
+    "Entiendo que estás pasando por algo muy difícil. Lo que sientes importa."
   end
 end

@@ -3,17 +3,11 @@ defmodule Alethea.Repo.Migrations.AddBehaviorTypeToMessages do
 
   def change do
     alter table(:messages) do
-      # spontaneous (iniciado por paciente), elicited (provocado por la IA)
       add :behavior_type, :string, null: false, default: "spontaneous"
-      # Idempotencia: guardamos el ID que manda Meta
       add :whatsapp_message_id, :string
     end
 
-    create unique_index(:messages, [:whatsapp_message_id])
-
-    # Check constraint para behavior_type
-    create constraint(:messages, :behavior_type_check,
-             check: "behavior_type IN ('spontaneous', 'elicited')"
-           )
+    create constraint(:messages, :behavior_type_must_be_valid, check: "behavior_type IN ('spontaneous', 'elicited')")
+    create unique_index(:messages, [:whatsapp_message_id], where: "whatsapp_message_id IS NOT NULL")
   end
 end
