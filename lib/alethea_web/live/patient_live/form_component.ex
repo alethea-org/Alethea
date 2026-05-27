@@ -9,6 +9,7 @@ defmodule AletheaWeb.PatientLive.FormComponent do
     <div>
       <.header>
         {@title}
+        <:subtitle>Ingresa los datos básicos para crear la boveda cifrada.</:subtitle>
       </.header>
 
       <.simple_form
@@ -17,17 +18,38 @@ defmodule AletheaWeb.PatientLive.FormComponent do
         phx-target={@myself}
         phx-change="validate"
         phx-submit="save"
+        class="mt-8"
       >
-        <.input field={@form[:alias]} type="text" label="Alias" placeholder="Ej. Juan P." />
-        <.input
-          field={@form[:whatsapp_number]}
-          type="text"
-          label="Número de WhatsApp (E.164)"
-          placeholder="Ej. +56912345678"
-        />
+        <div class="card bg-base-200 p-4 border border-base-300 mb-6">
+          <div class="flex items-start gap-3">
+            <.icon name="hero-shield-check" class="size-6 text-primary shrink-0 mt-1" />
+            <div>
+              <p class="text-sm font-bold">Privacidad de grado clínico</p>
+              <p class="text-xs text-base-content/60">
+                El número de WhatsApp se cifrará con una DEK única y nunca será visible en texto plano en la base de datos.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <.input field={@form[:alias]} type="text" label="Alias del paciente" placeholder="Ej. Juan P." />
+
+        <div class="space-y-1">
+          <.input
+            field={@form[:whatsapp_number]}
+            type="text"
+            label="Número de WhatsApp"
+            placeholder="Ej. +56 9 1234 5678"
+          />
+          <p class="text-[10px] uppercase tracking-widest font-bold text-base-content/40 px-1">
+            Formato internacional recomendado (E.164)
+          </p>
+        </div>
 
         <:actions>
-          <.button phx-disable-with="Guardando...">Registrar Paciente</.button>
+          <.button phx-disable-with="Cifrando y guardando..." class="btn btn-primary w-full mt-4">
+            <.icon name="hero-lock-closed" class="mr-2" /> Registrar Paciente
+          </.button>
         </:actions>
       </.simple_form>
     </div>

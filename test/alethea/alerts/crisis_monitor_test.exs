@@ -1,62 +1,56 @@
 defmodule Alethea.Alerts.CrisisMonitorTest do
   use ExUnit.Case, async: true
-
   alias Alethea.Alerts.CrisisMonitor
 
-  setup do
-    old_patterns = Application.get_env(:alethea, :crisis_patterns)
-
-    patterns = %{
-      immediate: [~r/me voy a matar/iu, ~r/voy a suicidarme/iu],
-      high: [~r/quiero morir/iu, ~r/no quiero (?:vivir|seguir)/iu],
-      low: [~r/a veces pienso que ser[ií]a mejor no estar/iu]
-    }
-
-    Application.put_env(:alethea, :crisis_patterns, patterns)
-
-    on_exit(fn ->
-      if old_patterns == nil do
-        Application.delete_env(:alethea, :crisis_patterns)
-      else
-        Application.put_env(:alethea, :crisis_patterns, old_patterns)
-      end
-    end)
-
-    :ok
-  end
-
   describe "detect/1" do
-    test "detecta crisis inmediata y prioriza inmediata sobre otras severidades" do
-      assert {:crisis, :immediate, triggers} = CrisisMonitor.detect("Ya lo decidí, me voy a matar")
+    test "retorna :safe para conversaciones cotidianas" do
+      assert CrisisMonitor.detect("Hola, ¿cómo estás?") == :safe
+      assert CrisisMonitor.detect("Hoy tuve un buen día en el trabajo.") == :safe
+      assert CrisisMonitor.detect("Me siento un poco cansado, pero bien.") == :safe
+    end
+
+    test "retorna :safe para texto vacío o nil" do
+      assert CrisisMonitor.detect("") == :safe
+      assert CrisisMonitor.detect(nil) == :safe
+      assert CrisisMonitor.detect("   ") == :safe
+    end
+
+    test "detecta nivel :immediate (emergencia inminente)" do
+      assert {:crisis, :immediate, triggers} = CrisisMonitor.detect("Me voy a matar hoy mismo.")
       assert "me voy a matar" in triggers
+
+      assert {:crisis, :immediate, triggers} = CrisisMonitor.detect("Ya lo decidí, voy a suicidarme.")
+      assert "voy a suicidarme" in triggers
+      assert "ya (?:lo|la) decid[ií]" in triggers
     end
 
-    test "detecta crisis de nivel high" do
-      assert {:crisis, :high, triggers} = CrisisMonitor.detect("No quiero seguir viviendo")
+    test "detecta nivel :high (ideación activa o plan)" do
+      assert {:crisis, :high, triggers} = CrisisMonitor.detect("No quiero vivir más, ya no aguanto.")
       assert "no quiero (?:vivir|seguir)" in triggers
+
+      assert {:crisis, :high, triggers} = CrisisMonitor.detect("Pienso en el suicidio todo el tiempo.")
+      assert "pienso en (?:el suicidio|hacerme da[ñn]o)" in triggers
     end
 
-    test "detecta crisis de nivel low" do
-      assert {:crisis, :low, triggers} = CrisisMonitor.detect("A veces pienso que sería mejor no estar")
+    test "detecta nivel :low (ideación pasiva)" do
+      assert {:crisis, :low, triggers} = CrisisMonitor.detect("A veces pienso que sería mejor no estar.")
       assert "a veces pienso que ser[ií]a mejor no estar" in triggers
+
+      assert {:crisis, :low, triggers} = CrisisMonitor.detect("Estoy harto de todo.")
+      assert "est[oá]y harto de (?:todo|vivir)" in triggers
     end
 
-    test "detecta múltiples triggers del mismo nivel" do
-      assert {:crisis, :high, triggers} = CrisisMonitor.detect("Quiero morir y no quiero seguir")
+    test "prioriza la mayor severidad cuando hay múltiples matches" do
+      # Contiene patrones de :low ("harto de vivir") y :high ("quiero morir")
+      # Debe retornar :high
+      assert {:crisis, :high, triggers} = CrisisMonitor.detect("Estoy harto de vivir, quiero morir.")
       assert "quiero morir" in triggers
-      assert "no quiero (?:vivir|seguir)" in triggers
     end
 
-    test "texto cotidiano devuelve safe" do
-      assert :safe = CrisisMonitor.detect("Hoy fui al supermercado y compré pan")
-    end
-
-    test "texto vacío devuelve safe" do
-      assert :safe = CrisisMonitor.detect("")
-    end
-
-    test "emociones intensas sin riesgo devuelve safe" do
-      assert :safe = CrisisMonitor.detect("Estoy muy triste y cansado")
+    test "es case-insensitive y maneja tildes (gracias a flag /u)" do
+      assert {:crisis, :immediate, _} = CrisisMonitor.detect("ME VOY A MATAR")
+      assert {:crisis, :immediate, _} = CrisisMonitor.detect("Ya lo decidi")
+      assert {:crisis, :immediate, _} = CrisisMonitor.detect("Ya lo decidió")
     end
   end
 end

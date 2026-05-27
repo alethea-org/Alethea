@@ -42,50 +42,37 @@ config :alethea, Oban,
      ]}
   ]
 
-config :alethea, Alethea.AI.Chains.GuidedConversationChain,
-  model: "phi-4-mini",
-  system_prompt: """
-  Eres un asistente clínico de apoyo. Tu única función es escuchar y formular
-  preguntas exploratorias con tono socrático.
-  PROHIBIDO: emitir diagnósticos, validar o refutar pensamientos del paciente,
-  dar consejos médicos directos o sugerir tratamientos.
-  (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa, utilizando el mensaje configurado en `:crisis_support_message`.)
-  """
-
-# Configure Cloak
-config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
-
-config :alethea, Alethea.AI.Chains.GuidedConversationChain,
-  provider: :local,
-  model: System.get_env("HUGGINGFACE_MODEL", "phi-4-mini"),
-  stream: false,
-  temperature: 0.0,
-  max_tokens: 512,
-  local: [
-    endpoint: System.get_env("HUGGINGFACE_API_URL", "https://api-inference.huggingface.co/models"),
-    api_key: System.get_env("HUGGINGFACE_API_KEY", "")
-  ],
-  system_prompt: """
-  Eres un asistente clínico de apoyo. Tu única función es escuchar y formular
-  preguntas exploratorias con tono socrático.
-  PROHIBIDO: emitir diagnósticos, validar o refutar pensamientos del paciente,
-  dar consejos médicos directos o sugerir tratamientos.
-  (Nota: El control de crisis y el envío del mensaje de soporte ante riesgo de daño propio/terceros se realiza en una capa perimetral/bypass previa, utilizando el mensaje configurado en `:crisis_support_message`.)
-  """
+# --- AI & Clinical Configuration ---
 
 config :alethea, Alethea.Clinical,
   recent_message_limit: 10
 
+# Global configuration for LangChain chains
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+  provider: :local,
   model: System.get_env("LLM_MODEL", "phi-4-mini"),
   stream: false,
-  api_key: System.get_env("LLM_API_KEY"),
-  endpoint: System.get_env("LLM_ENDPOINT_URL")
+  temperature: 0.0,
+  max_tokens: 512,
+  system_prompt: """
+  Eres Alethea, un asistente clínico de apoyo socrático.
+  TU ROL: Escuchar activamente y formular preguntas breves que inviten a la reflexión.
+  REGLAS DE ORO (INNEGOCIABLES):
+  1. PROHIBIDO emitir diagnósticos o etiquetas clínicas.
+  2. PROHIBIDO dar consejos médicos, sugerir medicación o tratamientos.
+  3. NO valides ni refutes pensamientos distorsionados; en su lugar, pregunta "¿Qué evidencia tienes para pensar eso?" o "¿Hay otra forma de ver esto?".
+  4. Mantén un tono empático pero profesional y neutral.
+  5. Si detectas riesgo inminente, el sistema perimetral ya actuó, tú continúa con el proceso reflexivo calmado.
+  """
 
 config :alethea, Alethea.AI.RoBERTaWorker,
-  api_url:
-    "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
+  api_url: "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
   api_key: System.get_env("HUGGINGFACE_API_KEY")
+
+# --- Security & Encryption ---
+
+# Configure Cloak
+config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

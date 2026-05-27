@@ -9,13 +9,9 @@ defmodule AletheaJobs.WeeklyReportWorker do
 
   require Logger
 
-  @weekly_summary_chain Application.compile_env(
-                          :alethea,
-                          :weekly_summary_chain,
-                          Alethea.AI.Chains.WeeklySummaryChain
-                        )
+  defp weekly_summary_chain, do: Application.get_env(:alethea, :weekly_summary_chain, Alethea.AI.Chains.WeeklySummaryChain)
 
-  @impl Oban.Worker
+  require Logger
   def perform(%Oban.Job{args: %{"patient_id" => patient_id}}) do
     patient = Accounts.get_patient!(patient_id)
     seven_days_ago = DateTime.add(DateTime.utc_now(), -7 * 24 * 3600, :second)
@@ -29,7 +25,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
         %{summary | summary_text: Sanitizer.sanitize(summary.summary_text)}
       end)
 
-    with {:ok, report_text} <- @weekly_summary_chain.run(sanitized_summaries, aggregated_trends),
+    with {:ok, report_text} <- weekly_summary_chain().run(sanitized_summaries, aggregated_trends),
          {:ok, _summary} <-
            Clinical.save_summary(%{
              period_start: seven_days_ago,

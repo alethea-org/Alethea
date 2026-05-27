@@ -11,8 +11,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.WhatsApp.ConsentCache
 
-  @client Application.compile_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-  @phi_worker Application.compile_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
+  defp whatsapp_client, do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+  defp phi_worker, do: Application.get_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
 
   require Logger
 
@@ -40,7 +40,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
         process_patient_message(patient, phone, text, whatsapp_message_id)
 
       {:error, :not_found} ->
-        @client.send_message(phone, @unregistered_message)
+        whatsapp_client().send_message(phone, @unregistered_message)
         :ok
     end
   end
@@ -53,7 +53,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
       String.upcase(String.trim(text)) == "ACEPTO" ->
         case Accounts.update_patient_terms(patient, true) do
           {:ok, _updated_patient} ->
-            @client.send_message(phone, @welcome_message)
+            Logger.info("Paciente #{patient.alias} [#{patient.id}] aceptó los términos legales.")
+            whatsapp_client().send_message(phone, @welcome_message)
             :ok
 
           {:error, changeset} ->
@@ -67,7 +68,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
           :ok
         else
           ConsentCache.mark_in_progress(phone)
-          @client.send_message(phone, @terms_message)
+          whatsapp_client().send_message(phone, @terms_message)
           :ok
         end
     end
@@ -95,7 +96,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
             case Clinical.build_patient_context(patient, context_limit) do
               {:ok, patient_context} ->
                 chain_result =
-                  @phi_worker.process(%{
+                  phi_worker().process(%{
                     message_id: inbound_message.id,
                     raw_content: text,
                     patient_context: patient_context
@@ -104,7 +105,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
                 with {:ok, _outbound_message} <-
                        Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil, session.id),
                      {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
-                  @client.send_message(phone, chain_result.response)
+                  whatsapp_client().send_message(phone, chain_result.response)
                   :ok
                 else
                   {:error, reason} ->
@@ -150,7 +151,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
                        detected_at: DateTime.utc_now()
                      }
                    }),
-                 {:ok, _send_result} <- @client.send_message(phone, crisis_support_message) do
+                 {:ok, _send_result} <- whatsapp_client().send_message(phone, crisis_support_message) do
               :ok
             else
               {:error, reason} ->

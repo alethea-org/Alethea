@@ -5,79 +5,72 @@ defmodule AletheaWeb.Layouts do
   """
   use AletheaWeb, :html
 
-  # Embed all files in layouts/* within this module.
-  # The default root.html.heex file contains the HTML
-  # skeleton of your application, namely HTML headers
-  # and other static content.
   embed_templates "layouts/*"
 
   @doc """
   Renders your app layout.
-
-  This function is typically invoked from every template,
-  and it often contains your application menu, sidebar,
-  or similar.
-
-  ## Examples
-
-      <Layouts.app flash={@flash}>
-        <h1>Content</h1>
-      </Layouts.app>
-
   """
-  attr :flash, :map, required: true, doc: "the map of flash messages"
-
-  attr :current_scope, :map,
-    default: nil,
-    doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
-
+  attr :current_professional, :any, default: nil
+  attr :flash, :map, required: true
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </header>
+    <div class="min-h-screen bg-base-200">
+      <header class="navbar bg-base-100 shadow-sm px-4 sm:px-6 lg:px-8 sticky top-0 z-40">
+        <div class="flex-1">
+          <.link navigate={~p"/"} class="flex items-center gap-2 font-bold text-xl tracking-tighter">
+            <img src={~p"/images/logo.svg"} width="32" class="rounded-lg" /> Alethea
+          </.link>
+        </div>
+        <div class="flex-none gap-2">
+          <ul :if={!@current_professional} class="menu menu-horizontal px-1 gap-2">
+            <li><.link navigate={~p"/login"} class="btn btn-ghost btn-sm">Ingresar</.link></li>
+            <li><.link navigate={~p"/register"} class="btn btn-primary btn-sm">Registrarse</.link></li>
+          </ul>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
-        {render_slot(@inner_block)}
-      </div>
-    </main>
+          <div :if={@current_professional} class="dropdown dropdown-end">
+            <div tabindex="0" role="button" class="btn btn-ghost btn-circle avatar placeholder">
+              <div class="bg-primary text-primary-content rounded-full w-10">
+                <span class="text-xs">{String.at(@current_professional.full_name, 0)}</span>
+              </div>
+            </div>
+            <ul
+              tabindex="0"
+              class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52"
+            >
+              <li class="menu-title text-xs opacity-50 px-4 py-2">
+                {@current_professional.full_name}
+              </li>
+              <li><.link navigate={~p"/dashboard"}>Dashboard</.link></li>
+              <li><.link navigate={~p"/patients"}>Mis Pacientes</.link></li>
+              <div class="divider my-0"></div>
+              <li>
+                <.link href={~p"/logout"} method="delete" class="text-error">
+                  Cerrar sesión
+                </.link>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </header>
 
-    <.flash_group flash={@flash} />
+      <main class="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <div class="mx-auto max-w-4xl">
+          {@inner_content}
+        </div>
+      </main>
+
+      <.flash_group flash={@flash} />
+    </div>
     """
   end
 
   @doc """
   Shows the flash group with standard titles and content.
-
-  ## Examples
-
-      <.flash_group flash={@flash} />
   """
-  attr :flash, :map, required: true, doc: "the map of flash messages"
-  attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
+  attr :flash, :map, required: true
+  attr :id, :string, default: "flash-group"
 
   def flash_group(assigns) do
     ~H"""

@@ -111,7 +111,15 @@ defmodule Alethea.Accounts do
   def create_patient(attrs, kek_bytes) when is_binary(kek_bytes) do
     # Normalizar attrs a string keys para evitar mixed keys
     attrs = for {k, v} <- attrs, into: %{}, do: {to_string(k), v}
-    whatsapp_number = attrs["whatsapp_number"]
+
+    # Normalizar número de teléfono a E.164
+    whatsapp_number =
+      attrs["whatsapp_number"]
+      |> String.replace(~r/[^\d+]/, "")
+      |> then(fn
+        "+" <> _ = phone -> phone
+        phone -> "+" <> phone
+      end)
 
     # 1. Generar DEK
     dek_bytes = :crypto.strong_rand_bytes(32)

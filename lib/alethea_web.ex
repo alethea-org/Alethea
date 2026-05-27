@@ -38,7 +38,9 @@ defmodule AletheaWeb do
 
   def controller do
     quote do
-      use Phoenix.Controller, formats: [:html, :json]
+      use Phoenix.Controller,
+        formats: [:html, :json],
+        layouts: [html: AletheaWeb.Layouts]
 
       import Plug.Conn
 
@@ -48,7 +50,8 @@ defmodule AletheaWeb do
 
   def live_view do
     quote do
-      use Phoenix.LiveView
+      use Phoenix.LiveView,
+        layout: {AletheaWeb.Layouts, :app}
 
       unquote(html_helpers())
     end

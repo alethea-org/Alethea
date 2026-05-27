@@ -39,7 +39,12 @@ defmodule AletheaWeb.Router do
   scope "/", AletheaWeb do
     pipe_through [:browser, :redirect_if_auth]
 
-    live "/login", LoginLive, :new
+    live_session :redirect_if_authenticated,
+      on_mount: [{AletheaWeb.Plugs.ProfessionalAuth, :mount_current_professional}] do
+      live "/register", ProfessionalRegistrationLive, :new
+      live "/login", LoginLive, :new
+    end
+
     post "/login", SessionController, :create
   end
 

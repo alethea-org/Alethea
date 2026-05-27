@@ -81,64 +81,28 @@ Vault global (AES-256-GCM, key del config)
 ## Tasks
 
 ### Migración
-- [ ] Generar migración `add_security_fields_to_patients_and_keys` con:
-  - `alter table(:encryption_keys)`: añadir `professional_id` como FK a `professionals` (nullable, `on_delete: :nilify_all`, tipo `:binary_id`) — resuelve la jerarquía de llaves para el tipo `'professional'`
-  - `alter table(:patients)`: añadir `urgent_intervention` (`:boolean`, default: `false`, null: `false`)
+- [x] Generar migración `add_security_fields_to_patients_and_keys`
 
 ### Dominio — Cifrado por Paciente
-- [ ] Crear `lib/alethea/encryption/patient_vault.ex` con:
-  - `encrypt_for_patient(plaintext, dek_bytes)` → `{:ok, ciphertext}` usando `:crypto.crypto_one_time_aead/6` (AES-256-GCM) con IV de 12 bytes aleatorios prefijados al ciphertext binario
-  - `decrypt_for_patient(ciphertext, dek_bytes)` → `{:ok, plaintext}` extrayendo el IV del prefijo
-- [ ] Crear `lib/alethea/encryption/professional_kek.ex` con:
-  - `generate_kek()` → genera 32 bytes aleatorios con `:crypto.strong_rand_bytes(32)`
-  - `store_kek(professional, kek_bytes)` → cifra la KEK con `Vault.encrypt!/1` y guarda en `encryption_keys` (type: `'professional'`, `professional_id` = professional.id)
-  - `load_kek(professional)` → busca el registro `type: 'professional'` del profesional, descifra con `Vault.decrypt!/1` y retorna los bytes
+- [x] Crear `lib/alethea/encryption/patient_vault.ex`
+- [x] Crear `lib/alethea/encryption/professional_kek.ex`
+- [x] Crear `lib/alethea/accounts.ex` (Añadir `create_patient/2` con Envelope Encryption)
 
 ### Dominio — Contexto `Alethea.Accounts`
-- [ ] Añadir `load_professional_kek(professional)` que llama a `ProfessionalKek.load_kek/1` — usado por el LiveView de login para obtener la KEK en memoria tras autenticación
-- [ ] Reemplazar `create_patient/1` por `create_patient(attrs, kek_bytes)` implementado con `Ecto.Multi`:
-  1. Generar DEK: `:crypto.strong_rand_bytes(32)`
-  2. Cifrar/wrap de la DEK con la KEK del profesional: `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` (usando la KEK pasada como argumento, **no** el Vault global — ver nota abajo*)
-  3. Insertar `EncryptionKey` (type: `'patient'`, patient_id aún nil)
-  4. Cifrar número: `PatientVault.encrypt_for_patient(whatsapp_number, dek_bytes)`
-  5. Calcular hash determinista global: `:crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), whatsapp_number)` → Base64 (configurar `:phone_hash_secret` explícitamente en `config/runtime.exs`)
-  6. Insertar `Patient` con `encrypted_whatsapp_number`, `whatsapp_number_hash`, `encryption_key_id`
-  7. Actualizar `EncryptionKey` con el `patient_id` resultante del paso 6
+- [x] Añadir `load_professional_kek(professional)`
+- [x] Reemplazar `create_patient/1` por `create_patient(attrs, kek_bytes)` con E.164 normalization y Ecto.Multi.
 
 ### Configuración — Entornos y `config/runtime.exs`
-- [ ] Configurar `:phone_hash_secret` de manera segura en todos los entornos para evitar crashes al compilar o correr tests:
-  - En `config/dev.exs` y `config/test.exs`:
-    ```elixir
-    config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
-    ```
-  - En `config/runtime.exs` (solo para producción):
-    ```elixir
-    if config_env() == :prod do
-      phone_hash_secret =
-        System.get_env("PHONE_HASH_SECRET") ||
-          raise """
-          environment variable PHONE_HASH_SECRET is missing.
-          """
-      config :alethea, :phone_hash_secret, phone_hash_secret
-    end
-    ```
-
-> *Nota: el paso 2 requiere realizar el wrapping de la DEK del paciente usando la KEK del profesional (usando `PatientVault.encrypt_for_patient(dek_bytes, kek_bytes)` para este propósito). La KEK del profesional se almacena cifrada por el Vault global en la base de datos (segundo nivel), y la DEK cifrada del paciente se almacena en `encryption_keys.encrypted_key` (type: `'patient'`). Así, no se mezcla el cifrado global del Vault con las claves individuales de cada paciente.
+- [x] Configurar `:phone_hash_secret` en todos los entornos.
 
 ### Web — LiveView
-- [ ] Crear `lib/alethea_web/live/patient_live/index.ex` (`PatientLive.Index`):
-  - Listado de pacientes del profesional autenticado (usando streams)
-  - Modal de registro con campos `alias` y `whatsapp_number`
-  - `handle_event("save_patient", params, socket)` que llama a `Accounts.create_patient(attrs, socket.assigns.professional_kek)`
-  - Flash de éxito/error; cierre del modal al guardar
-- [ ] Añadir ruta en `router.ex`: `live "/patients", PatientLive.Index, :index` dentro del `live_session :require_authenticated_professional`
-- [ ] Actualizar el flujo de login en `ProfessionalAuthLive`/`SessionController` para llamar a `Accounts.load_professional_kek(professional)` y asignar la KEK descifrada al socket como `professional_kek` (assign en memoria, no persiste en sesión)
+- [x] Crear `lib/alethea_web/live/patient_live/index.ex` (UI DaisyUI + Empty State)
+- [x] Añadir ruta en `router.ex`
+- [x] Actualizar el flujo de login para asignar KEK al socket.
 
 ### Tests
-- [ ] Crear `test/alethea/accounts_test.exs` con 3 tests de integración:
-  1. **Ilegibilidad SQL directa**: tras `create_patient/2`, query directa a `patients` via `Repo.query!("SELECT encrypted_whatsapp_number FROM patients WHERE id = $1", [id])` confirma que el resultado es binario y distinto del número original
-  2. **Borrado criptográfico**: eliminar/nilificar el registro `EncryptionKey` del paciente y verificar que `decrypt_for_patient(ciphertext, nil)` falla o que el DEK ya no puede reconstituirse
-  3. **Constraint de unicidad**: registrar el mismo número de WhatsApp dos veces lanza `{:error, changeset}` con error en `whatsapp_number_hash` (unicidad global asegurada por índice único)
+- [x] Crear `test/alethea/accounts_test.exs` con 4 tests: Ilegibilidad SQL, Borrado criptográfico, Unicidad global y Normalización E.164.
+- [x] Ejecutar `mix test` y verificar que todo pase.
 
 ## Archivos Involucrados
 
