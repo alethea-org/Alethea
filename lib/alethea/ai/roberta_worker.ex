@@ -1,7 +1,9 @@
 defmodule Alethea.AI.RoBERTaWorker do
   @moduledoc """
-  Worker local que utiliza Bumblebee para el análisis de emociones.
-  Carga el modelo pysentimiento/robertuito-emotion-analysis y expone un Nx.Serving.
+  Worker híbrido para el análisis de emociones.
+  Soporta dos proveedores:
+  - :local -> Utiliza Bumblebee y EXLA para inferencia en la propia máquina.
+  - :huggingface -> Utiliza la API de Inferencia de Hugging Face (ideal para dev).
   """
   use GenServer
   @behaviour Alethea.AI.RoBERTaWorkerBehavior
@@ -37,7 +39,11 @@ defmodule Alethea.AI.RoBERTaWorker do
 
   @impl true
   def handle_continue(:load_model, state) do
-    if Application.get_env(:alethea, :start_ai, true) do
+    config = Application.get_env(:alethea, __MODULE__, [])
+    provider = Keyword.get(config, :provider, :local)
+
+    # Solo cargamos el modelo local si el proveedor es :local
+    if provider == :local and Application.get_env(:alethea, :start_ai, true) do
       {:ok, model_info} = Bumblebee.load_model({:hf, @model_name})
       {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, @model_name})
 
@@ -58,18 +64,49 @@ defmodule Alethea.AI.RoBERTaWorker do
   def analyze_batch([]), do: empty_result()
 
   def analyze_batch(texts) when is_list(texts) do
-    # Permitir inyectar un runner para tests
-    runner = Application.get_env(:alethea, :roberta_runner, &Nx.Serving.run(@serving_name, &1))
-    results = runner.(texts)
+    config = Application.get_env(:alethea, __MODULE__, [])
+    provider = Keyword.get(config, :provider, :local)
+
+    results =
+      case provider do
+        :huggingface ->
+          run_huggingface(texts, config[:huggingface])
+
+        _local ->
+          runner = Application.get_env(:alethea, :roberta_runner, &Nx.Serving.run(@serving_name, &1))
+          runner.(texts)
+      end
 
     results
     |> normalize_results()
     |> average_scores(length(texts))
   end
 
-  defp normalize_results(results) do
+  defp run_huggingface(texts, hf_config) do
+    api_url = hf_config[:api_url]
+    api_key = hf_config[:api_key]
+
+    response =
+      Req.post!(api_url,
+        json: %{inputs: texts},
+        headers: [{"Authorization", "Bearer #{api_key}"}],
+        receive_timeout: 30_000
+      )
+
+    response.body
+  end
+
+  defp normalize_results(results) when is_list(results) do
     Enum.map(results, fn
+      # Formato Bumblebee (top_k: 1)
       %{predictions: [%{label: label, score: score}]} ->
+        canonical = Map.get(@label_map, String.downcase(label))
+        if canonical, do: %{canonical => score}, else: %{}
+
+      # Formato Hugging Face API (lista de listas de dicts)
+      # El API suele devolver [[{"label": "...", "score": ...}, ...], ...]
+      # Si enviamos batch, devuelve una lista de listas.
+      [%{"label" => label, "score" => score} | _] ->
         canonical = Map.get(@label_map, String.downcase(label))
         if canonical, do: %{canonical => score}, else: %{}
 
@@ -78,15 +115,12 @@ defmodule Alethea.AI.RoBERTaWorker do
         canonical = Map.get(@label_map, String.downcase(label))
         if canonical, do: %{canonical => score}, else: %{}
 
-      # Soporte para lista de predicciones (si no se usa top_k: 1)
-      [%{label: label, score: score} | _] ->
-        canonical = Map.get(@label_map, String.downcase(label))
-        if canonical, do: %{canonical => score}, else: %{}
-
       _ ->
         %{}
     end)
   end
+
+  defp normalize_results(_), do: []
 
   defp average_scores(normalized_list, count) do
     base = Map.new(@canonical_labels, fn l -> {l, 0.0} end)

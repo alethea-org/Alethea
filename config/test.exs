@@ -36,6 +36,7 @@ config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
 config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
+config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
 
 config :alethea, Alethea.AI.RoBERTaWorker,
   api_url: "http://test.local/roberta",
