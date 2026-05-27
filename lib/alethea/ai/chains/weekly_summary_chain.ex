@@ -1,9 +1,12 @@
 defmodule Alethea.AI.Chains.WeeklySummaryChain do
+  @behaviour Alethea.AI.WeeklySummaryChainBehavior
+
   alias LangChain.Chains.LLMChain
   alias LangChain.ChatModels.ChatOpenAI
   alias Alethea.AI.ChatModels.HuggingFaceChat
   alias LangChain.Message
 
+  @impl true
   def run(summaries, aggregated_trends) do
     llm_config = Application.get_env(:alethea, Alethea.AI.Chains.GuidedConversationChain, [])
     provider = Keyword.get(llm_config, :provider, :local)
