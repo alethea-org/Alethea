@@ -7,7 +7,7 @@ defmodule Alethea.Clinical do
   import Ecto.Query, warn: false
 
   alias Alethea.Repo
-  alias Alethea.Clinical.{Message, Summary, Trend, Session}
+  alias Alethea.Clinical.{Message, Summary, Trend}
   alias Alethea.AI.Diagnosis
   alias Alethea.Accounts.EncryptionKey
   alias Alethea.Encryption.PatientVault

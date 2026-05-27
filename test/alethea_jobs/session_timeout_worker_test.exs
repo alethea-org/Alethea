@@ -1,5 +1,5 @@
 defmodule AletheaJobs.SessionTimeoutWorkerTest do
-  use ExUnit.Case, async: false
+  use Alethea.DataCase, async: false
   use Oban.Testing, repo: Alethea.Repo
 
   import Mox
@@ -13,9 +13,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   setup :verify_on_exit!
 
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Repo, {:shared, self()})
-
     {:ok, professional} =
       Accounts.create_professional(%{
         email: "timeout_test@example.com",
@@ -23,27 +20,35 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         full_name: "Timeout Tester"
       })
 
-    patient =
-      Repo.insert!(%Alethea.Accounts.Patient{
-        alias: "Test Patient",
-        professional_id: professional.id,
-        whatsapp_number_hash: Ecto.UUID.generate(),
-        encrypted_whatsapp_number: Alethea.Encryption.Vault.encrypt!("+541100000000"),
-        terms_accepted: true,
-        status: "active"
-      })
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+
+    # Crear paciente usando la lógica real para que tenga llaves y cifrado correcto
+    {:ok, patient} =
+      Accounts.create_patient(
+        %{
+          "whatsapp_number" => "+541100000000",
+          "alias" => "Test Patient",
+          "professional_id" => professional.id
+        },
+        kek
+      )
+
+    {:ok, _} = Accounts.update_patient_terms(patient, true)
+    patient = Accounts.get_patient!(patient.id)
 
     {:ok, session} = SessionManager.open_session(patient)
 
-    encrypted = Alethea.Encryption.Vault.encrypt!("Me siento bien hoy")
-
-    Repo.insert!(%Alethea.Clinical.Message{
-      direction: "inbound",
-      encrypted_content: encrypted,
-      timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
-      patient_id: patient.id,
-      session_id: session.id
-    })
+    # Guardar mensaje usando Clinical.save_message para usar el cifrado correcto
+    {:ok, _message} =
+      Alethea.Clinical.save_message(
+        patient,
+        "Me siento bien hoy",
+        nil,
+        "inbound",
+        "spontaneous",
+        nil,
+        session.id
+      )
 
     %{patient: patient, session: session}
   end
@@ -64,10 +69,15 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     |> expect(:analyze_batch, fn _texts -> emotion_scores end)
 
     Alethea.AI.SessionSummaryChainMock
-    |> expect(:run, fn _texts, _scores -> {:ok, "Estado: alegre\nTemas: trabajo\nCambios: mejora\nEstable"} end)
+    |> expect(:run, fn _texts, _scores ->
+      {:ok, "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"}
+    end)
 
     Alethea.WhatsApp.ClientMock
-    |> expect(:send_message, fn _phone, _msg -> :ok end)
+    |> expect(:send_message, fn _phone, body ->
+      assert body =~ "Tu sesión de hoy ha concluido"
+      {:ok, %{}}
+    end)
 
     assert :ok =
              perform_job(SessionTimeoutWorker, %{

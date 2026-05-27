@@ -3,12 +3,39 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
 
   alias LangChain.Chains.LLMChain
   alias LangChain.ChatModels.ChatOpenAI
+  alias Alethea.AI.ChatModels.HuggingFaceChat
   alias LangChain.Message
 
   @impl true
   def run(message_texts, emotion_scores) do
     llm_config = Application.get_env(:alethea, Alethea.AI.Chains.GuidedConversationChain, [])
-    llm = ChatOpenAI.new!(Keyword.merge([model: "phi-4-mini", stream: false], llm_config))
+    provider = Keyword.get(llm_config, :provider, :local)
+    provider_config = Keyword.get(llm_config, provider, [])
+
+    endpoint_url =
+      Keyword.get(llm_config, :endpoint_url) ||
+        Keyword.get(llm_config, :endpoint) ||
+        Keyword.get(provider_config, :endpoint_url) ||
+        Keyword.get(provider_config, :endpoint) ||
+        "https://api-inference.huggingface.co/models/"
+
+    api_key = Keyword.get(llm_config, :api_key) || Keyword.get(provider_config, :api_key)
+
+    llm_opts = %{
+      model: Keyword.get(llm_config, :model, "phi-4-mini"),
+      api_key: api_key,
+      endpoint_url: endpoint_url,
+      endpoint: endpoint_url,
+      temperature: 0.0,
+      max_tokens: 512,
+      stream: false
+    }
+
+    llm =
+      case provider do
+        :cloud -> ChatOpenAI.new!(llm_opts)
+        _ -> HuggingFaceChat.new!(llm_opts)
+      end
 
     content = build_prompt(message_texts, emotion_scores)
 

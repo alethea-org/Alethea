@@ -3,26 +3,16 @@ defmodule Alethea.AI.RoBERTaWorkerTest do
 
   alias Alethea.AI.RoBERTaWorker
 
-  @hf_response [
-    [
-      %{"label" => "joy", "score" => 0.70},
-      %{"label" => "sadness", "score" => 0.10},
-      %{"label" => "anger", "score" => 0.05},
-      %{"label" => "fear", "score" => 0.05},
-      %{"label" => "neutral", "score" => 0.10}
-    ],
-    [
-      %{"label" => "joy", "score" => 0.30},
-      %{"label" => "sadness", "score" => 0.50},
-      %{"label" => "anger", "score" => 0.05},
-      %{"label" => "fear", "score" => 0.05},
-      %{"label" => "neutral", "score" => 0.10}
-    ]
+  @mock_response [
+    %{predictions: [%{label: "joy", score: 0.70}]},
+    %{predictions: [%{label: "sadness", score: 0.50}]}
   ]
 
   setup do
-    Req.Test.stub(Alethea.AI.RoBERTaWorker, fn conn ->
-      Req.Test.json(conn, @hf_response)
+    Application.put_env(:alethea, :roberta_runner, fn _texts -> @mock_response end)
+
+    on_exit(fn ->
+      Application.delete_env(:alethea, :roberta_runner)
     end)
 
     :ok
@@ -36,10 +26,10 @@ defmodule Alethea.AI.RoBERTaWorkerTest do
     assert Enum.sort(labels) == Enum.sort(~w(joy sadness anger fear neutral))
 
     joy = Enum.find(result, &(&1.label == "joy"))
-    assert_in_delta joy.score, 0.50, 0.01
+    assert_in_delta joy.score, 0.35, 0.01
 
     sadness = Enum.find(result, &(&1.label == "sadness"))
-    assert_in_delta sadness.score, 0.30, 0.01
+    assert_in_delta sadness.score, 0.25, 0.01
   end
 
   test "analyze_batch/1 returns zero scores for empty input" do
@@ -49,20 +39,21 @@ defmodule Alethea.AI.RoBERTaWorkerTest do
   end
 
   test "analyze_batch/1 normalizes spanish and alternative labels to canonical keys" do
-    Req.Test.stub(Alethea.AI.RoBERTaWorker, fn conn ->
-      Req.Test.json(conn, [
-        [
-          %{"label" => "alegría", "score" => 0.80},
-          %{"label" => "others", "score" => 0.20}
-        ]
-      ])
+    Application.put_env(:alethea, :roberta_runner, fn _texts ->
+      [
+        %{predictions: [%{label: "alegría", score: 0.80}]},
+        %{predictions: [%{label: "others", score: 0.20}]}
+      ]
     end)
 
-    result = RoBERTaWorker.analyze_batch(["Qué alegría!"])
+    result = RoBERTaWorker.analyze_batch(["Qué alegría!", "Algo más"])
+
     joy = Enum.find(result, &(&1.label == "joy"))
     neutral = Enum.find(result, &(&1.label == "neutral"))
 
-    assert joy.score == 0.80
-    assert neutral.score == 0.20
+    # (0.8 + 0) / 2 = 0.4
+    assert joy.score == 0.40
+    # (0 + 0.2) / 2 = 0.1
+    assert neutral.score == 0.10
   end
 end

@@ -4,7 +4,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
     max_attempts: 3,
     unique: [fields: [:args], period: 40 * 60]
 
-  alias Alethea.{Accounts, Clinical}
+  alias Alethea.{Accounts, Clinical, AI.Sanitizer}
   alias Alethea.Clinical.{Session, SessionManager}
 
   require Logger
@@ -40,10 +40,11 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
     with {:ok, closed_session} <- SessionManager.close_session(session),
          messages <- Clinical.list_session_messages(closed_session.id),
-         texts <- decrypt_messages(messages),
-         emotion_scores <- @roberta_worker.analyze_batch(texts),
+         {:ok, texts} <- decrypt_messages(patient, messages),
+         sanitized_texts = Enum.map(texts, &Sanitizer.sanitize/1),
+         emotion_scores <- @roberta_worker.analyze_batch(sanitized_texts),
          :ok <- Clinical.save_trends(patient, emotion_scores, closed_session),
-         {:ok, summary_text} <- @session_summary_chain.run(texts, emotion_scores),
+         {:ok, summary_text} <- @session_summary_chain.run(sanitized_texts, emotion_scores),
          {:ok, _summary} <-
            Clinical.save_summary(%{
              period_start: closed_session.started_at,
@@ -62,10 +63,20 @@ defmodule AletheaJobs.SessionTimeoutWorker do
     end
   end
 
-  defp decrypt_messages(messages) do
-    Enum.map(messages, fn msg ->
-      Clinical.decrypt_content(msg.encrypted_content)
-    end)
+  defp decrypt_messages(patient, messages) do
+    case Clinical.patient_dek(patient) do
+      {:ok, dek} ->
+        texts =
+          Enum.map(messages, fn msg ->
+            {:ok, text} = Clinical.decrypt_message_content(msg, dek)
+            text
+          end)
+
+        {:ok, texts}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp extract_status_level(text) do
