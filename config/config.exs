@@ -33,16 +33,46 @@ config :phoenix, :json_library, Jason
 # Configure Oban
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10, whatsapp: 20],
-  repo: Alethea.Repo
+  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5],
+  repo: Alethea.Repo,
+  plugins: [
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 0 * * *", AletheaJobs.DailySchedulerWorker}
+     ]}
+  ]
 
-# Configure Cloak
-config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
+# --- AI & Clinical Configuration ---
 
-config :alethea, Alethea.AI.PhiWorker,
-  model: "phi-4-mini",
+config :alethea, Alethea.Clinical, recent_message_limit: 10
+
+# Global configuration for LangChain chains
+config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+  provider: :local,
+  model: System.get_env("LLM_MODEL", "phi-4-mini"),
   stream: false,
-  api_key: System.get_env("PHI_API_KEY")
+  temperature: 0.0,
+  max_tokens: 512,
+  system_prompt: """
+  Eres Alethea, un asistente clínico de apoyo socrático.
+  TU ROL: Escuchar activamente y formular preguntas breves que inviten a la reflexión.
+  REGLAS DE ORO (INNEGOCIABLES):
+  1. PROHIBIDO emitir diagnósticos o etiquetas clínicas.
+  2. PROHIBIDO dar consejos médicos, sugerir medicación o tratamientos.
+  3. NO valides ni refutes pensamientos distorsionados; en su lugar, pregunta "¿Qué evidencia tienes para pensar eso?" o "¿Hay otra forma de ver esto?".
+  4. Mantén un tono empático pero profesional y neutral.
+  5. Si detectas riesgo inminente, el sistema perimetral ya actuó, tú continúa con el proceso reflexivo calmado.
+  """
+
+config :alethea, Alethea.AI.RoBERTaWorker,
+  api_url:
+    "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
+  api_key: System.get_env("HUGGINGFACE_API_KEY")
+
+# --- Security & Encryption ---
+
+# Vault aes_key is loaded from the CLOAK_AES_KEY environment variable in runtime.exs.
+# Dev/test fallbacks are defined in dev.exs and test.exs respectively.
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

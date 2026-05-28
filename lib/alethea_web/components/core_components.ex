@@ -294,8 +294,12 @@ defmodule AletheaWeb.CoreComponents do
     """
   end
 
-  # Helper used by inputs to generate form errors
-  defp error(assigns) do
+  @doc """
+  Renders a simple error message.
+  """
+  slot :inner_block, required: true
+
+  def error(assigns) do
     ~H"""
     <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
       <.icon name="hero-exclamation-circle" class="size-5" />
@@ -311,9 +315,19 @@ defmodule AletheaWeb.CoreComponents do
   slot :subtitle
   slot :actions
 
+  attr :class, :any, default: nil
+  attr :rest, :global
+
   def header(assigns) do
     ~H"""
-    <header class={[@actions != [] && "flex items-center justify-between gap-6", "pb-4"]}>
+    <header
+      class={[
+        @actions != [] && "flex items-center justify-between gap-6",
+        "pb-4",
+        @class
+      ]}
+      {@rest}
+    >
       <div>
         <h1 class="text-lg font-semibold leading-8">
           {render_slot(@inner_block)}

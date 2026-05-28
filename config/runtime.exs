@@ -23,6 +23,34 @@ end
 config :alethea, AletheaWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+config :alethea, :crisis_patterns, %{
+  immediate: [
+    ~r/me voy a matar/iu,
+    ~r/voy a suicidarme/iu,
+    ~r/tengo (?:el|un) plan/iu,
+    ~r/ya (?:lo|la) decid[ií]/iu
+  ],
+  high: [
+    ~r/quiero morir/iu,
+    ~r/no quiero (?:vivir|seguir)/iu,
+    ~r/pienso en (?:el suicidio|hacerme da[ñn]o)/iu,
+    ~r/me quiero hacer da[ñn]o/iu
+  ],
+  low: [
+    ~r/a veces pienso que ser[ií]a mejor no estar/iu,
+    ~r/no tiene sentido (?:seguir|vivir)/iu,
+    ~r/est[oá]y harto de (?:todo|vivir)/iu
+  ]
+}
+
+config :alethea, :crisis_support_message, """
+Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.
+Por favor, comunícate con tu terapeuta directamente o llama a una línea de crisis:
+🇨🇱 Salud Responde: 600 360 7777 (24/7)
+🇨🇱 ACHS: 600 222 4357
+Si estás en peligro inmediato, llama al 131 (SAMU).
+"""
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
@@ -70,17 +98,64 @@ if config_env() == :prod do
 
   phone_hash_secret =
     System.get_env("PHONE_HASH_SECRET") ||
-      if config_env() == :prod do
-        raise "environment variable PHONE_HASH_SECRET is missing."
-      else
-        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
-      end
+      raise "environment variable PHONE_HASH_SECRET is missing."
 
   config :alethea, :phone_hash_secret, phone_hash_secret
 
+  cloak_aes_key =
+    System.get_env("CLOAK_AES_KEY") ||
+      raise """
+      environment variable CLOAK_AES_KEY is missing.
+      Generate one with: mix run -e 'IO.puts(Base.encode64(:crypto.strong_rand_bytes(32)))'
+      """
+
+  config :alethea, Alethea.Encryption.Vault, aes_key: cloak_aes_key
+
   config :alethea, :whatsapp,
     api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
-    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
+    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", ""),
+    app_secret: System.get_env("WHATSAPP_APP_SECRET", "")
+
+  ai_provider =
+    System.get_env("AI_PROVIDER", "local")
+    |> String.downcase()
+    |> case do
+      "cloud" -> :cloud
+      _ -> :local
+    end
+
+  # Configuración compartida para chains de LangChain
+  config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+    provider: ai_provider,
+    cloud: [
+      endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+      api_key: System.get_env("OPENAI_API_KEY", "")
+    ],
+    local: [
+      endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1"),
+      api_key: System.get_env("LOCAL_LLM_API_KEY", "ollama")
+    ]
+
+  # Configuración para RoBERTa (Análisis de Emociones)
+  roberta_provider =
+    System.get_env("ROBERTA_PROVIDER", "local")
+    |> String.downcase()
+    |> case do
+      "huggingface" -> :huggingface
+      "hf" -> :huggingface
+      _ -> :local
+    end
+
+  config :alethea, Alethea.AI.RoBERTaWorker,
+    provider: roberta_provider,
+    huggingface: [
+      api_url:
+        System.get_env(
+          "ROBERTA_HF_API_URL",
+          "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis"
+        ),
+      api_key: System.get_env("ROBERTA_HF_API_KEY", "")
+    ]
 
   # ## SSL Support
   #

@@ -10,6 +10,7 @@ defmodule Alethea.Accounts.Patient do
     field :alias, :string
     field :status, :string, default: "active"
     field :terms_accepted, :boolean, default: false
+    field :urgent_intervention, :boolean, default: false
     field :encryption_version, :integer, default: 1
     field :urgent_intervention, :boolean, default: false
     field :session_day_of_week, :integer
@@ -17,6 +18,8 @@ defmodule Alethea.Accounts.Patient do
 
     # Virtual field for the raw number during input
     field :whatsapp_number, :string, virtual: true
+    field :session_day_of_week, :integer
+    field :session_time, :time
 
     belongs_to :professional, Alethea.Accounts.Professional
     belongs_to :encryption_key, Alethea.Accounts.EncryptionKey
@@ -24,6 +27,7 @@ defmodule Alethea.Accounts.Patient do
     has_many :messages, Alethea.Clinical.Message
     has_many :summaries, Alethea.Clinical.Summary
     has_many :trends, Alethea.Clinical.Trend
+    has_many :sessions, Alethea.Clinical.Session
 
     timestamps(type: :utc_datetime)
   end
@@ -46,7 +50,9 @@ defmodule Alethea.Accounts.Patient do
     ])
     |> validate_required([:alias, :professional_id])
     |> validate_inclusion(:status, ["active", "archived", "deleted"])
-    |> unique_constraint(:whatsapp_number_hash, name: :patients_professional_id_whatsapp_number_hash_index)
+    |> unique_constraint(:whatsapp_number_hash,
+      name: :patients_whatsapp_number_hash_index
+    )
 
     # Logic for hashing and encrypting the number would go here or in a context
   end

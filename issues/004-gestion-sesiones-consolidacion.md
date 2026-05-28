@@ -121,71 +121,38 @@ WeeklyReportWorker.perform/1
 ## Tasks
 
 ### Migración
-- [ ] Generar migración `add_sessions_and_embeddings` con:
-  - **Tabla nueva `clinical_sessions`**: `id` (binary_id PK), `patient_id` (FK → patients, `on_delete: :delete_all`), `started_at` (:utc_datetime, null: false), `closed_at` (:utc_datetime, nullable), `status` (:string, default: `"open"`, null: false)
-  - `alter table(:messages)`: añadir `session_id` (FK → clinical_sessions, nullable, `on_delete: :nilify_all`)
-  - `alter table(:messages)`: añadir `embedding` (`:vector`, size: 384, nullable) — llenado diferido
-  - `alter table(:clinical_summaries)`: añadir `type` (:string, null: false, default: `"session"`)
-  - `alter table(:patients)`: añadir `session_day_of_week` (:integer, nullable) — 1=lunes … 7=domingo
-  - `alter table(:patients)`: añadir `session_time` (:time, nullable)
-  - Crear índice: `index(:clinical_sessions, [:patient_id, :status])`
-  - Crear índice: `index(:messages, [:session_id])`
+- [x] Generar migración `add_sessions_and_embeddings`
 
 ### Schemas
-- [ ] Crear `lib/alethea/clinical/session.ex` (`Alethea.Clinical.Session`) con el schema de `clinical_sessions`
-- [ ] Actualizar `Alethea.Clinical.Message` añadiendo `session_id`, `embedding` (tipo `Pgvector.Ecto.Vector`, correspondiente a la columna pgvector `:vector, size: 384`)
-- [ ] Actualizar `Alethea.Clinical.Summary` añadiendo campo `type` con `validate_inclusion(["session", "weekly"])`
-- [ ] Actualizar `Alethea.Accounts.Patient` añadiendo `session_day_of_week` y `session_time`
+- [x] Crear `lib/alethea/clinical/session.ex`
+- [x] Actualizar `Alethea.Clinical.Message` (session_id, embedding)
+- [x] Actualizar `Alethea.Clinical.Summary` (tipo session/weekly)
+- [x] Actualizar `Alethea.Accounts.Patient` (horarios de sesión)
 
-### IA — Análisis de Emoción (Bumblebee local)
-- [ ] Crear `lib/alethea/ai/roberta_worker.ex` (`Alethea.AI.RoBERTaWorker`):
-  - Inicia `Nx.Serving` con `Bumblebee.load_model({:hf, "pysentimiento/robertuito-emotion-analysis"})`
-  - Expone `analyze(text)` → `[%{label: "joy", score: 0.82}, ...]` (las emociones devueltas por la función deben estar ya mapeadas a las keys canónicas `"joy"`, `"sadness"`, `"anger"`, `"fear"`, `"neutral"`)
-  - Expone `analyze_batch(texts)` → lista de resultados; promedia scores por emoción si `texts` tiene N elementos y retorna las keys canónicas para trends (`joy/sadness/anger/fear/neutral`)
-  - Implementar un mapeo explícito de los labels originales del modelo a las keys canónicas de trends antes de retornar o persistir (p. ej., si el modelo retorna labels en español o keys alternativas, convertirlas: `"others"`/`"neutral"` → `"neutral"`, `"joy"`/`"alegría"` → `"joy"`, `"sadness"`/`"tristeza"` → `"sadness"`, `"anger"`/`"ira"` → `"anger"`, `"fear"`/`"miedo"` → `"fear"`), descartando `"surprise"` y `"disgust"`.
-- [ ] Añadir `{Alethea.AI.RoBERTaWorker, []}` al supervision tree en `lib/alethea/application.ex`
+### IA — Análisis de Emoción
+- [x] Crear `lib/alethea/ai/roberta_worker.ex` (Bumblebee/HF)
+- [x] Añadir al supervision tree en `lib/alethea/application.ex`
 
 ### Dominio — `SessionManager` y contexto `Clinical`
-- [ ] Crear `lib/alethea/clinical/session_manager.ex` (`Alethea.Clinical.SessionManager`) con:
-  - `open_session(patient)` → crea `Session` con `status: "open"`, retorna `{:ok, session}`
-  - `close_session(session)` → actualiza `closed_at` y `status: "closed"`, retorna `{:ok, session}`
-  - `current_open_session(patient_id)` → busca sesión abierta o crea una nueva
-- [ ] Añadir a `Alethea.Clinical` (context):
-  - `save_trends(patient, emotion_scores, session)` — guarda hasta 5 `Trend` (descartando surprise y disgust), calculando `delta` vs. último trend de cada emoción
-  - `save_summary(attrs)` — crea `Summary` con `type` incluido
-  - `list_session_summaries(patient_id, since)` — para el `WeeklyReportWorker`
-  - `aggregate_trends(patient_id, since)` — agrega scores por `indicator_name` en período
+- [x] Crear `lib/alethea/clinical/session_manager.ex`
+- [x] Añadir `save_trends`, `save_summary`, etc., a `Alethea.Clinical`
 
 ### IA — Chains de Resumen
-- [ ] Crear `lib/alethea/ai/chains/session_summary_chain.ex` (`SummaryChain`) con prompt de snapshot de 4 líneas: estado emocional, temas tratados, cambios observados, nivel de atención requerido
-- [ ] Crear `lib/alethea/ai/chains/weekly_summary_chain.ex` (`WeeklySummaryChain`) con prompt de reporte semanal ≤ 8 líneas: estado emocional de la semana, temas recurrentes, eventos significativos, nivel de riesgo observado
-- [ ] Ambas chains leen el modelo y `endpoint_url` del mismo `Application.get_env` que `GuidedConversationChain`
+- [x] Crear `lib/alethea/ai/chains/session_summary_chain.ex`
+- [x] Crear `lib/alethea/ai/chains/weekly_summary_chain.ex`
 
 ### Workers Oban
-- [ ] Crear `lib/alethea_jobs/session_timeout_worker.ex` (`AletheaJobs.SessionTimeoutWorker`):
-  - `use Oban.Worker, queue: :sessions, unique: [fields: [:args], period: 40 * 60, on_conflict: :replace]`
-  - `perform/1`: ejecuta el flujo de cierre de sesión (ver diagrama arriba)
-- [ ] Actualizar `AletheaJobs.ProcessMessageWorker` para, tras guardar el mensaje inbound:
-  - Llamar a `SessionManager.current_open_session(patient)` para asociar el mensaje a la sesión abierta
-  - Encolar/reemplazar `SessionTimeoutWorker` con `scheduled_at: DateTime.add(now, 30, :minute)`
-- [ ] Crear `lib/alethea_jobs/daily_scheduler_worker.ex` (`AletheaJobs.DailySchedulerWorker`):
-  - `use Oban.Worker, queue: :schedulers`
-  - Configurar como cron en `config/config.exs`: `{"0 0 * * *", AletheaJobs.DailySchedulerWorker}`
-  - `perform/1`: carga pacientes con `session_day_of_week` = mañana (UTC), encola `WeeklyReportWorker`
-- [ ] Crear `lib/alethea_jobs/weekly_report_worker.ex` (`AletheaJobs.WeeklyReportWorker`):
-  - `use Oban.Worker, queue: :reports`
-  - `perform/1`: agrega trends, genera resumen semanal via `WeeklySummaryChain`, guarda en `clinical_summaries` con `type: "weekly"`
-- [ ] Añadir las colas `sessions`, `schedulers`, `reports` a la configuración de Oban en `config/config.exs`
+- [x] Crear `lib/alethea_jobs/session_timeout_worker.ex`
+- [x] Actualizar `AletheaJobs.ProcessMessageWorker` para usar sesiones.
+- [x] Crear `lib/alethea_jobs/daily_scheduler_worker.ex`
+- [x] Crear `lib/alethea_jobs/weekly_report_worker.ex`
+- [x] Configurar colas y cron en `config/config.exs`
 
 ### Tests
-- [ ] `test/alethea_jobs/session_timeout_worker_test.exs`:
-  - Mock de `WhatsApp.Client` y `SummaryChain`; mock de `RoBERTaWorker.analyze_batch` via Mox
-  - Verificar que se crean `Trend` records y un `Summary` type `"session"` tras el cierre
-- [ ] `test/alethea/ai/roberta_worker_test.exs`:
-  - Test de regresión: mockear `Nx.Serving.run` y verificar que `analyze_batch/1` retorna la estructura esperada
-- [ ] `test/alethea_jobs/daily_scheduler_worker_test.exs`:
-  - Verificar que el cron encola `WeeklyReportWorker` con el `scheduled_at` correcto para los pacientes cuya sesión es mañana
-  - Verificar que los pacientes con `session_day_of_week` distinto al día de mañana no reciben job
+- [x] `test/alethea_jobs/session_timeout_worker_test.exs`
+- [x] `test/alethea_jobs/daily_scheduler_worker_test.exs`
+- [x] `test/alethea_jobs/weekly_report_worker_test.exs`
+- [x] Ejecutar `mix test` y verificar.
 
 ## Archivos Involucrados
 

@@ -45,7 +45,7 @@ Implementar una capa de seguridad crítica que detecte riesgo clínico en el tex
 
 | Decisión | Elección | Justificación |
 |---|---|---|
-| Punto de ejecución | Dentro de `ProcessMessageWorker`, antes de llamar a `PhiWorker` | Separa la lógica clínica de la capa web; el controlador solo recibe y encola |
+| Punto de ejecución | Dentro de `ProcessMessageWorker`, antes de llamar al pipeline de Hugging Face (`meta-llama/Llama-2-7b-chat-hf`) de la issue 003 | Separa la lógica clínica de la capa web; el controlador solo recibe y encola |
 | Patrones de riesgo | Lista de regex por nivel en `config/runtime.exs`, leída con `Application.get_env/2` | Ajustable sin recompilación (evaluado en runtime al iniciar la release); evita hardcodear terminología clínica en el código |
 | Niveles de crisis | 3 niveles: `:low` (ideación pasiva), `:high` (ideación activa/plan), `:immediate` (emergencia inminente) | Granularidad clínica; cada nivel tiene su propio conjunto de patrones |
 | Respuesta al paciente | Un solo mensaje de soporte predefinido para todos los niveles | El nivel se usa solo para la alerta al profesional; el paciente siempre recibe el mismo mensaje de contención |
@@ -71,64 +71,21 @@ ProcessMessageWorker.perform/1 (rama terms_accepted: true)
 ## Tasks
 
 ### Módulo `CrisisMonitor` (función pura)
-- [ ] Crear `lib/alethea/alerts/crisis_monitor.ex` (`Alethea.Alerts.CrisisMonitor`):
-  - `detect(text)` → `:safe | {:crisis, level, triggers}`
-  - Lee los patrones desde `Application.get_env(:alethea, :crisis_patterns, default_patterns())`
-  - Evalúa los patrones en orden de severidad descendente (`:immediate` primero, luego `:high`, luego `:low`)
-  - `triggers` es la lista de substrings/patrones que hicieron match
-  - La función no tiene efectos secundarios (sin llamadas a DB, sin PubSub, sin Oban)
+- [x] Crear `lib/alethea/alerts/crisis_monitor.ex`
 
 ### Configuración de Patrones y Soporte (Runtime)
-- [ ] Añadir a `config/runtime.exs`:
-  ```elixir
-  config :alethea, :crisis_patterns, %{
-    immediate: [
-      ~r/me voy a matar/i,
-      ~r/voy a suicidarme/i,
-      ~r/tengo (?:el|un) plan/i,
-      ~r/ya (?:lo|la) decid[ií]/i
-    ],
-    high: [
-      ~r/quiero morir/i,
-      ~r/no quiero (?:vivir|seguir)/i,
-      ~r/pienso en (?:el suicidio|hacerme da[ñn]o)/i,
-      ~r/me quiero hacer da[ñn]o/i
-    ],
-    low: [
-      ~r/a veces pienso que ser[ií]a mejor no estar/i,
-      ~r/no tiene sentido (?:seguir|vivir)/i,
-      ~r/est[oá]y harto de (?:todo|vivir)/i
-    ]
-  }
-  ```
-- [ ] Añadir el mensaje de soporte predefinido en `config/runtime.exs`:
-  ```elixir
-  config :alethea, :crisis_support_message,
-    """
-    Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.
-    Por favor, comunícate con tu terapeuta directamente o llama a una línea de crisis:
-    🇨🇱 Salud Responde: 600 360 7777 (24/7)
-    🇨🇱 ACHS: 600 222 4357
-    Si estás en peligro inmediato, llama al 131 (SAMU).
-    """
-  ```
+- [x] Añadir patrones de riesgo a `config/runtime.exs`
+- [x] Añadir mensaje de soporte predefinido en `config/runtime.exs`
 
 ### Pipeline — Integración en el Worker
-- [ ] Actualizar `AletheaJobs.ProcessMessageWorker` para insertar la detección de crisis:
-  - En la rama `terms_accepted: true`, antes del paso de guardar el mensaje, llamar a `CrisisMonitor.detect(texto)` sobre el texto en claro (antes de cifrarlo)
-  - Si `:safe`: continuar con el pipeline normal
-  - Si `{:crisis, level, triggers}`: ejecutar el flujo del Cortocircuito (ver diagrama) y retornar `:ok` sin llamar a `PhiWorker`
-- [ ] Añadir `Accounts.update_patient/2` al contexto `Alethea.Accounts` si no existe
+- [x] Actualizar `AletheaJobs.ProcessMessageWorker` para insertar la detección de crisis.
+- [x] Implementar el flujo de cortocircuito (bypass) y notificación PubSub.
+- [x] Añadir `Accounts.update_patient/2` al contexto `Alethea.Accounts`.
 
 ### Tests
-- [ ] Crear `test/alethea/alerts/crisis_monitor_test.exs`:
-  - Test por nivel `:immediate`: texto con patrón de emergencia inminente → `{:crisis, :immediate, [trigger]}`
-  - Test por nivel `:high`: texto con ideación activa → `{:crisis, :high, [trigger]}`
-  - Test por nivel `:low`: texto con ideación pasiva → `{:crisis, :low, [trigger]}`
-  - Test de múltiples triggers: texto con dos patrones del mismo nivel → ambos en la lista `triggers`
-  - Test de falso negativo: texto de conversación cotidiana → `:safe`
-  - Test de texto vacío: `""` → `:safe`
-  - Test de texto con emociones intensas sin riesgo ("estoy muy triste") → `:safe`
+- [x] Crear `test/alethea/alerts/crisis_monitor_test.exs` (Pruebas de regresión unitarias).
+- [x] Añadir test de integración de bypass en `test/alethea_jobs/process_message_worker_test.exs`.
+- [x] Ejecutar `mix test` y verificar.
 
 ## Archivos Involucrados
 

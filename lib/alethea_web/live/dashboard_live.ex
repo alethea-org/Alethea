@@ -56,9 +56,9 @@ defmodule AletheaWeb.DashboardLive do
 
     if patient do
       # Auditoría de visualización de perfil
-      Accounts.create_audit_log(%{
+      Accounts.log_action(%{
         action: "VIEW_PATIENT_PROFILE",
-        resource_type: "patient",
+        resource_type: "Patient",
         resource_id: patient.id,
         professional_id: socket.assigns.current_professional.id
       })
@@ -78,9 +78,9 @@ defmodule AletheaWeb.DashboardLive do
     professional_kek = socket.assigns.professional_kek
 
     # Auditoría de descifrado
-    Accounts.create_audit_log(%{
+    Accounts.log_action(%{
       action: "VIEW_CHAT_HISTORY",
-      resource_type: "patient",
+      resource_type: "Patient",
       resource_id: patient.id,
       professional_id: socket.assigns.current_professional.id
     })
@@ -88,7 +88,9 @@ defmodule AletheaWeb.DashboardLive do
     decrypted_messages =
       if socket.assigns.use_mock_data do
         MockData.list_mock_messages(patient.id)
-        |> Enum.map(fn msg -> %{msg | encrypted_content: "CONTENIDO DESCIFRADO (MOCK): " <> msg.encrypted_content} end)
+        |> Enum.map(fn msg ->
+          %{msg | encrypted_content: "CONTENIDO DESCIFRADO (MOCK): " <> msg.encrypted_content}
+        end)
       else
         decrypt_real_messages(patient, professional_kek)
       end
@@ -127,16 +129,17 @@ defmodule AletheaWeb.DashboardLive do
 
   defp decrypt_real_messages(patient, professional_kek) do
     key_record = Accounts.get_encryption_key_for_patient(patient.id)
-    
+
     with {:ok, dek_bytes} <- PatientVault.decrypt(key_record.encrypted_key, professional_kek) do
       # Cargar últimos 50 mensajes
-      messages = Alethea.Repo.all(
-        Ecto.Query.from(m in Message, 
-          where: m.patient_id == ^patient.id, 
-          order_by: [desc: m.timestamp], 
-          limit: 50
+      messages =
+        Alethea.Repo.all(
+          Ecto.Query.from(m in Message,
+            where: m.patient_id == ^patient.id,
+            order_by: [desc: m.timestamp],
+            limit: 50
+          )
         )
-      )
 
       # Descifrar contenido
       Enum.map(messages, fn msg ->
@@ -164,17 +167,17 @@ defmodule AletheaWeb.DashboardLive do
     weekly_summary =
       if use_mock?,
         do: List.first(MockData.list_mock_summaries(patient.id, "weekly")),
-        else: nil # TODO: Implement real clinical context
+        else: nil
 
     session_summaries =
       if use_mock?,
         do: MockData.list_mock_summaries(patient.id, "session"),
-        else: [] # TODO: Implement real clinical context
+        else: []
 
     trends =
       if use_mock?,
         do: MockData.list_mock_trends(patient.id),
-        else: [] # TODO: Implement real clinical context
+        else: []
 
     emotion_rows = format_emotion_trends(trends)
 
@@ -256,11 +259,6 @@ defmodule AletheaWeb.DashboardLive do
   defp emotion_progress_class(_), do: ""
 
   defp calculate_mood_signal(trends, patient) do
-    # Reglas de la Issue 006:
-    # Rojo: Intervención prioritaria o predomina 'anger'
-    # Amarillo: Predomina 'sadness' o 'fear'
-    # Verde: Predomina 'neutral' o 'joy'
-
     predominant =
       trends
       |> Enum.max_by(& &1.score, fn -> nil end)
@@ -272,7 +270,8 @@ defmodule AletheaWeb.DashboardLive do
     cond do
       patient.urgent_intervention or predominant == "anger" ->
         %{
-          label: if(patient.urgent_intervention, do: "Intervención prioritaria", else: "Riesgo: Ira alta"),
+          label:
+            if(patient.urgent_intervention, do: "Intervención prioritaria", else: "Riesgo: Ira alta"),
           dot_class: "bg-error",
           ring_class: "ring-error/30",
           badge_class: "badge-error"

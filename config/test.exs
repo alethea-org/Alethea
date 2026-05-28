@@ -23,18 +23,38 @@ config :alethea, AletheaWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
-config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
+config :alethea,
+       :phone_hash_secret,
+       "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
 config :alethea, :whatsapp,
   api_token: "mock_token",
-  phone_number_id: "mock_id"
+  phone_number_id: "mock_id",
+  app_secret: "test_secret"
 
 config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
+config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
+config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
+config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
+config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
 
-config :alethea, Oban, testing: :manual
+config :alethea, Alethea.AI.RoBERTaWorker,
+  api_url: "http://test.local/roberta",
+  api_key: "test_key",
+  req_options: [plug: {Req.Test, Alethea.AI.RoBERTaWorker}]
+
+config :alethea, Alethea.AI.Chains.GuidedConversationChain,
+  api_key: "test_key",
+  endpoint_url: "http://test.local/ai"
+
+config :alethea, Oban,
+  testing: :manual,
+  repo: Alethea.Repo
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
+
+config :alethea, :start_ai, false
 
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
@@ -43,3 +63,7 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Test-only Vault encryption key — fixed value for deterministic test runs.
+# NEVER use this value in production.
+config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="

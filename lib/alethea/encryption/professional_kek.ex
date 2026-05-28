@@ -35,9 +35,22 @@ defmodule Alethea.Encryption.ProfessionalKek do
   """
   def load_kek(professional) do
     case Repo.get_by(EncryptionKey, professional_id: professional.id, type: "professional") do
-      nil -> {:error, :not_found}
+      nil ->
+        {:error, :not_found}
+
       key_record ->
-        {:ok, Vault.decrypt!(key_record.encrypted_key)}
+        kek = Vault.decrypt!(key_record.encrypted_key)
+
+        # Auditoría: Carga de llave maestra del profesional
+        Alethea.Accounts.log_action(%{
+          professional_id: professional.id,
+          action: "KEK_LOAD",
+          resource_type: "EncryptionKey",
+          resource_id: key_record.id,
+          details: %{reason: "session_auth_or_job_processing"}
+        })
+
+        {:ok, kek}
     end
   end
 end

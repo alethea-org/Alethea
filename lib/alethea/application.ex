@@ -15,11 +15,15 @@ defmodule Alethea.Application do
       Alethea.Encryption.Vault,
       Alethea.WhatsApp.ConsentCache,
       {Oban, Application.fetch_env!(:alethea, Oban)},
-      # Start a worker by calling: Alethea.Worker.start_link(arg)
-      # {Alethea.Worker, arg},
-      # Start to serve requests, typically the last entry
       AletheaWeb.Endpoint
     ]
+
+    children =
+      if Application.get_env(:alethea, :start_ai, true) do
+        children ++ [Alethea.AI.RoBERTaWorker]
+      else
+        children
+      end
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options

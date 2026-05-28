@@ -22,7 +22,8 @@ defmodule Alethea.Accounts do
 
   def create_professional(attrs \\ %{}) do
     Repo.transaction(fn ->
-      with {:ok, professional} <- %Professional{} |> Professional.changeset(attrs) |> Repo.insert(),
+      with {:ok, professional} <-
+             %Professional{} |> Professional.changeset(attrs) |> Repo.insert(),
            kek_bytes = ProfessionalKek.generate_kek(),
            {:ok, _key} <- ProfessionalKek.store_kek(professional, kek_bytes) do
         professional
@@ -30,6 +31,15 @@ defmodule Alethea.Accounts do
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
+  end
+
+  @doc """
+  Registra una acción en el log de auditoría.
+  """
+  def log_action(attrs) do
+    %Alethea.Accounts.AuditLog{}
+    |> Alethea.Accounts.AuditLog.changeset(attrs)
+    |> Repo.insert()
   end
 
   def authenticate_professional(email, password)
@@ -50,6 +60,16 @@ defmodule Alethea.Accounts do
 
   def load_professional_kek(professional) do
     ProfessionalKek.load_kek(professional)
+  end
+
+  def load_patient_dek(patient, professional_kek) when is_binary(professional_kek) do
+    case Repo.get_by(EncryptionKey, patient_id: patient.id, type: "patient") do
+      nil ->
+        {:error, :not_found}
+
+      key_record ->
+        PatientVault.decrypt(key_record.encrypted_key, professional_kek)
+    end
   end
 
   # Patients
@@ -81,9 +101,16 @@ defmodule Alethea.Accounts do
 
   def get_patient!(id), do: Repo.get!(Patient, id)
 
-  def lookup_patient_by_phone(phone_e164) do
+  def lookup_patient_by_phone(phone) do
+    normalized = normalize_phone(phone)
+
     hash =
-      :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone_e164)
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        Application.fetch_env!(:alethea, :phone_hash_secret),
+        normalized
+      )
       |> Base.encode64()
 
     case Repo.get_by(Patient, whatsapp_number_hash: hash) do
@@ -104,10 +131,13 @@ defmodule Alethea.Accounts do
     |> Repo.update()
   end
 
-  def create_audit_log(attrs \\ %{}) do
-    %Alethea.Accounts.AuditLog{}
-    |> Alethea.Accounts.AuditLog.changeset(attrs)
-    |> Repo.insert()
+  def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
+    # Solo permitir actualizar campos de estado internos para evitar mass-assignment
+    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status, :session_day_of_week, :session_time])
+
+    patient
+    |> Patient.changeset(allowed_attrs)
+    |> Repo.update()
   end
 
   def get_encryption_key_for_patient(patient_id) do
@@ -123,43 +153,77 @@ defmodule Alethea.Accounts do
   def create_patient(attrs, kek_bytes) when is_binary(kek_bytes) do
     # Normalizar attrs a string keys para evitar mixed keys
     attrs = for {k, v} <- attrs, into: %{}, do: {to_string(k), v}
+
     whatsapp_number = attrs["whatsapp_number"]
 
-    # 1. Generar DEK
-    dek_bytes = :crypto.strong_rand_bytes(32)
+    cond do
+      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or String.trim(whatsapp_number) == "" ->
+        changeset =
+          %Patient{}
+          |> Patient.changeset(attrs)
+          |> Ecto.Changeset.add_error(:whatsapp_number, "can't be blank")
 
-    # 2. Cifrar DEK con KEK
-    {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, kek_bytes)
+        {:error, %{changeset | action: :insert}}
 
-    # 3. Cifrar número con DEK
-    {:ok, encrypted_number} = PatientVault.encrypt(whatsapp_number, dek_bytes)
+      true ->
+        # Normalizar número de teléfono a E.164
+        normalized_number = normalize_phone(whatsapp_number)
 
-    # 4. Calcular hash determinista
-    phone_hash =
-      :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), whatsapp_number)
-      |> Base.encode64()
+        # 1. Generar DEK
+        dek_bytes = :crypto.strong_rand_bytes(32)
 
-    Ecto.Multi.new()
-    |> Ecto.Multi.insert(:encryption_key, EncryptionKey.changeset(%EncryptionKey{}, %{
-      "encrypted_key" => wrapped_dek,
-      "type" => "patient"
-    }))
-    |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
-      attrs_with_security =
-        attrs
-        |> Map.put("encrypted_whatsapp_number", encrypted_number)
-        |> Map.put("whatsapp_number_hash", phone_hash)
-        |> Map.put("encryption_key_id", key.id)
+        # 2. Cifrar DEK con KEK
+        {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, kek_bytes)
 
-      %Patient{} |> Patient.changeset(attrs_with_security)
-    end)
-    |> Ecto.Multi.update(:finalize_key, fn %{patient: patient, encryption_key: key} ->
-      EncryptionKey.changeset(key, %{patient_id: patient.id})
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{patient: patient}} -> {:ok, patient}
-      {:error, _name, error, _changes} -> {:error, error}
+        # 3. Cifrar número con DEK
+        {:ok, encrypted_number} = PatientVault.encrypt(normalized_number, dek_bytes)
+
+        # 4. Calcular hash determinista
+        phone_hash =
+          :crypto.mac(
+            :hmac,
+            :sha256,
+            Application.fetch_env!(:alethea, :phone_hash_secret),
+            normalized_number
+          )
+          |> Base.encode64()
+
+        Ecto.Multi.new()
+        |> Ecto.Multi.insert(
+          :encryption_key,
+          EncryptionKey.changeset(%EncryptionKey{}, %{
+            "encrypted_key" => wrapped_dek,
+            "type" => "patient"
+          })
+        )
+        |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
+          attrs_with_security =
+            attrs
+            |> Map.put("encrypted_whatsapp_number", encrypted_number)
+            |> Map.put("whatsapp_number_hash", phone_hash)
+            |> Map.put("encryption_key_id", key.id)
+
+          %Patient{} |> Patient.changeset(attrs_with_security)
+        end)
+        |> Ecto.Multi.update(:finalize_key, fn %{patient: patient, encryption_key: key} ->
+          EncryptionKey.changeset(key, %{patient_id: patient.id})
+        end)
+        |> Repo.transaction()
+        |> case do
+          {:ok, %{patient: patient}} ->
+            log_action(%{
+              professional_id: patient.professional_id,
+              action: "CREATE_PATIENT",
+              resource_type: "Patient",
+              resource_id: patient.id,
+              details: %{alias: patient.alias}
+            })
+
+            {:ok, patient}
+
+          {:error, _name, error, _changes} ->
+            {:error, error}
+        end
     end
   end
 
@@ -168,5 +232,14 @@ defmodule Alethea.Accounts do
     %Patient{}
     |> Patient.changeset(attrs)
     |> Repo.insert()
+  end
+
+  defp normalize_phone(phone) when is_binary(phone) do
+    phone
+    |> String.replace(~r/[^\d+]/, "")
+    |> then(fn
+      "+" <> _ = phone -> phone
+      phone -> "+" <> phone
+    end)
   end
 end
