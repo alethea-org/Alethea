@@ -73,7 +73,8 @@ defmodule Alethea.AI.RoBERTaWorker do
           run_huggingface(texts, config[:huggingface])
 
         _local ->
-          runner = Application.get_env(:alethea, :roberta_runner, &Nx.Serving.run(@serving_name, &1))
+          default_runner = fn text -> Nx.Serving.batched_run(@serving_name, text) end
+          runner = Application.get_env(:alethea, :roberta_runner, default_runner)
           runner.(texts)
       end
 

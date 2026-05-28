@@ -43,14 +43,13 @@ config :alethea, :crisis_patterns, %{
   ]
 }
 
-config :alethea, :crisis_support_message,
-  """
-  Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.
-  Por favor, comunícate con tu terapeuta directamente o llama a una línea de crisis:
-  🇨🇱 Salud Responde: 600 360 7777 (24/7)
-  🇨🇱 ACHS: 600 222 4357
-  Si estás en peligro inmediato, llama al 131 (SAMU).
-  """
+config :alethea, :crisis_support_message, """
+Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.
+Por favor, comunícate con tu terapeuta directamente o llama a una línea de crisis:
+🇨🇱 Salud Responde: 600 360 7777 (24/7)
+🇨🇱 ACHS: 600 222 4357
+Si estás en peligro inmediato, llama al 131 (SAMU).
+"""
 
 if config_env() == :prod do
   database_url =
@@ -99,13 +98,18 @@ if config_env() == :prod do
 
   phone_hash_secret =
     System.get_env("PHONE_HASH_SECRET") ||
-      if config_env() == :prod do
-        raise "environment variable PHONE_HASH_SECRET is missing."
-      else
-        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
-      end
+      raise "environment variable PHONE_HASH_SECRET is missing."
 
   config :alethea, :phone_hash_secret, phone_hash_secret
+
+  cloak_aes_key =
+    System.get_env("CLOAK_AES_KEY") ||
+      raise """
+      environment variable CLOAK_AES_KEY is missing.
+      Generate one with: mix run -e 'IO.puts(Base.encode64(:crypto.strong_rand_bytes(32)))'
+      """
+
+  config :alethea, Alethea.Encryption.Vault, aes_key: cloak_aes_key
 
   config :alethea, :whatsapp,
     api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
@@ -145,7 +149,11 @@ if config_env() == :prod do
   config :alethea, Alethea.AI.RoBERTaWorker,
     provider: roberta_provider,
     huggingface: [
-      api_url: System.get_env("ROBERTA_HF_API_URL", "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis"),
+      api_url:
+        System.get_env(
+          "ROBERTA_HF_API_URL",
+          "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis"
+        ),
       api_key: System.get_env("ROBERTA_HF_API_KEY", "")
     ]
 

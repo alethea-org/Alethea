@@ -6,9 +6,14 @@ defmodule AletheaWeb.PatientLive.Index do
 
   @impl true
   def mount(_params, _session, socket) do
-    # Usamos streams para el listado de pacientes
     patients = Accounts.list_patients(socket.assigns.current_professional.id)
-    {:ok, stream(socket, :patients, patients)}
+
+    socket =
+      socket
+      |> assign(:patients_empty?, Enum.empty?(patients))
+      |> stream(:patients, patients)
+
+    {:ok, socket}
   end
 
   @impl true
@@ -45,6 +50,7 @@ defmodule AletheaWeb.PatientLive.Index do
         {:noreply,
          socket
          |> put_flash(:info, "Paciente registrado exitosamente.")
+         |> assign(:patients_empty?, false)
          |> stream_insert(:patients, patient)
          |> push_patch(to: ~p"/patients")}
 
@@ -59,7 +65,7 @@ defmodule AletheaWeb.PatientLive.Index do
     <div class="space-y-6">
       <.header>
         Mis Pacientes
-        <:subtitle>Gestión de bovedas y llaves de cifrado.</:subtitle>
+        <:subtitle>Gestión de bóvedas y llaves de cifrado.</:subtitle>
         <:actions>
           <.button phx-click={JS.patch(~p"/patients/new")} class="btn btn-primary">
             <.icon name="hero-user-plus" class="mr-2" /> Nuevo Paciente
@@ -67,7 +73,10 @@ defmodule AletheaWeb.PatientLive.Index do
         </:actions>
       </.header>
 
-      <div :if={Enum.empty?(@streams.patients.inserts)} class="hero bg-base-100 rounded-box border border-dashed border-base-300 py-12">
+      <div
+        :if={@patients_empty?}
+        class="hero bg-base-100 rounded-box border border-dashed border-base-300 py-12"
+      >
         <div class="hero-content text-center">
           <div class="max-w-md">
             <div class="bg-base-200 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-base-content/30">
@@ -84,7 +93,10 @@ defmodule AletheaWeb.PatientLive.Index do
         </div>
       </div>
 
-      <div :if={!Enum.empty?(@streams.patients.inserts)} class="card bg-base-100 shadow-sm border border-base-300 overflow-hidden">
+      <div
+        :if={!@patients_empty?}
+        class="card bg-base-100 shadow-sm border border-base-300 overflow-hidden"
+      >
         <.table
           id="patients"
           rows={@streams.patients}
@@ -92,7 +104,9 @@ defmodule AletheaWeb.PatientLive.Index do
         >
           <:col :let={{_id, patient}} label="Alias">
             <div class="font-bold">{patient.alias}</div>
-            <div class="text-xs opacity-50 uppercase tracking-tighter">ID: {String.slice(patient.id, 0, 8)}</div>
+            <div class="text-xs opacity-50 uppercase tracking-tighter">
+              ID: {String.slice(patient.id, 0, 8)}
+            </div>
           </:col>
           <:col :let={{_id, patient}} label="Estado">
             <.badge color={if patient.status == "active", do: :green, else: :gray}>
@@ -101,7 +115,8 @@ defmodule AletheaWeb.PatientLive.Index do
           </:col>
           <:col :let={{_id, patient}} label="Alertas">
             <div :if={patient.urgent_intervention} class="badge badge-error gap-2 text-xs font-bold">
-              <div class="w-2 h-2 rounded-full bg-error-content animate-pulse"></div> URGENTE
+              <div class="w-2 h-2 rounded-full bg-error-content animate-pulse"></div>
+              URGENTE
             </div>
             <span :if={!patient.urgent_intervention} class="opacity-30">-</span>
           </:col>
@@ -110,7 +125,10 @@ defmodule AletheaWeb.PatientLive.Index do
               <div tabindex="0" role="button" class="btn btn-ghost btn-xs">
                 <.icon name="hero-ellipsis-horizontal" />
               </div>
-              <ul tabindex="0" class="dropdown-content menu p-2 shadow bg-base-100 rounded-box w-52 z-10">
+              <ul
+                tabindex="0"
+                class="dropdown-content menu p-2 shadow bg-base-100 rounded-box w-52 z-10"
+              >
                 <li>
                   <.link navigate={~p"/dashboard?patient_id=#{patient.id}"}>
                     <.icon name="hero-presentation-chart-line" /> Ver Dashboard

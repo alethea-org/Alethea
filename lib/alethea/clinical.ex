@@ -13,9 +13,25 @@ defmodule Alethea.Clinical do
   alias Alethea.Encryption.PatientVault
   alias Alethea.Encryption.ProfessionalKek
 
-  @spec save_message(Alethea.Accounts.Patient.t(), String.t(), binary() | nil, String.t(), String.t(), String.t() | nil, binary() | nil) ::
+  @spec save_message(
+          Alethea.Accounts.Patient.t(),
+          String.t(),
+          binary() | nil,
+          String.t(),
+          String.t(),
+          String.t() | nil,
+          binary() | nil
+        ) ::
           {:ok, Message.t()} | {:error, term()} | {:error, :duplicate, Message.t()}
-  def save_message(patient, text, dek, direction, behavior_type, whatsapp_message_id \\ nil, session_id \\ nil) do
+  def save_message(
+        patient,
+        text,
+        dek,
+        direction,
+        behavior_type,
+        whatsapp_message_id \\ nil,
+        session_id \\ nil
+      ) do
     with {:ok, dek} <- get_dek(patient, dek),
          {:ok, encrypted_content} <- PatientVault.encrypt(text, dek) do
       attrs = %{
@@ -26,7 +42,11 @@ defmodule Alethea.Clinical do
         timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
         session_id: session_id
       }
-      attrs = if whatsapp_message_id, do: Map.put(attrs, :whatsapp_message_id, whatsapp_message_id), else: attrs
+
+      attrs =
+        if whatsapp_message_id,
+          do: Map.put(attrs, :whatsapp_message_id, whatsapp_message_id),
+          else: attrs
 
       %Message{}
       |> Message.changeset(attrs)
@@ -60,11 +80,12 @@ defmodule Alethea.Clinical do
   def list_session_messages(session_id) do
     Repo.all(
       from m in Message,
-      where: m.session_id == ^session_id and m.direction == "inbound"
+        where: m.session_id == ^session_id and m.direction == "inbound"
     )
   end
 
-  @spec build_patient_context(Alethea.Accounts.Patient.t(), non_neg_integer()) :: {:ok, String.t()} | {:error, term()}
+  @spec build_patient_context(Alethea.Accounts.Patient.t(), non_neg_integer()) ::
+          {:ok, String.t()} | {:error, term()}
   def build_patient_context(patient, limit) do
     with {:ok, dek} <- patient_dek(patient) do
       patient.id
@@ -89,9 +110,11 @@ defmodule Alethea.Clinical do
   def save_ai_diagnosis(message_id, chain_result) do
     attrs = %{
       message_id: message_id,
-      model_version: Map.get(chain_result, :model_version) || Map.get(chain_result, "model_version"),
+      model_version:
+        Map.get(chain_result, :model_version) || Map.get(chain_result, "model_version"),
       extracted_emotions:
-        Map.get(chain_result, :extracted_emotions) || Map.get(chain_result, "extracted_emotions") || %{},
+        Map.get(chain_result, :extracted_emotions) || Map.get(chain_result, "extracted_emotions") ||
+          %{},
       ai_response: Map.get(chain_result, :response) || Map.get(chain_result, "response")
     }
 
@@ -107,9 +130,9 @@ defmodule Alethea.Clinical do
       last_trend =
         Repo.one(
           from t in Trend,
-          where: t.patient_id == ^patient.id and t.indicator_name == ^label,
-          order_by: [desc: t.recorded_at],
-          limit: 1
+            where: t.patient_id == ^patient.id and t.indicator_name == ^label,
+            order_by: [desc: t.recorded_at],
+            limit: 1
         )
 
       delta = if last_trend, do: score - last_trend.score, else: 0.0
@@ -137,19 +160,19 @@ defmodule Alethea.Clinical do
   def list_session_summaries(patient_id, since) do
     Repo.all(
       from s in Summary,
-      where:
-        s.patient_id == ^patient_id and
-          s.type == "session" and
-          s.period_start >= ^since
+        where:
+          s.patient_id == ^patient_id and
+            s.type == "session" and
+            s.period_start >= ^since
     )
   end
 
   def aggregate_trends(patient_id, since) do
     Repo.all(
       from t in Trend,
-      where: t.patient_id == ^patient_id and t.recorded_at >= ^since,
-      group_by: t.indicator_name,
-      select: {t.indicator_name, avg(t.score)}
+        where: t.patient_id == ^patient_id and t.recorded_at >= ^since,
+        group_by: t.indicator_name,
+        select: {t.indicator_name, avg(t.score)}
     )
     |> Enum.map(fn {name, avg_score} -> %{label: name, score: avg_score} end)
   end

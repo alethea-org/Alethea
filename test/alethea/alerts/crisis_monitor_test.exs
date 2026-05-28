@@ -19,21 +19,29 @@ defmodule Alethea.Alerts.CrisisMonitorTest do
       assert {:crisis, :immediate, triggers} = CrisisMonitor.detect("Me voy a matar hoy mismo.")
       assert "me voy a matar" in triggers
 
-      assert {:crisis, :immediate, triggers} = CrisisMonitor.detect("Ya lo decidí, voy a suicidarme.")
+      assert {:crisis, :immediate, triggers} =
+               CrisisMonitor.detect("Ya lo decidí, voy a suicidarme.")
+
       assert "voy a suicidarme" in triggers
       assert "ya (?:lo|la) decid[ií]" in triggers
     end
 
     test "detecta nivel :high (ideación activa o plan)" do
-      assert {:crisis, :high, triggers} = CrisisMonitor.detect("No quiero vivir más, ya no aguanto.")
+      assert {:crisis, :high, triggers} =
+               CrisisMonitor.detect("No quiero vivir más, ya no aguanto.")
+
       assert "no quiero (?:vivir|seguir)" in triggers
 
-      assert {:crisis, :high, triggers} = CrisisMonitor.detect("Pienso en el suicidio todo el tiempo.")
+      assert {:crisis, :high, triggers} =
+               CrisisMonitor.detect("Pienso en el suicidio todo el tiempo.")
+
       assert "pienso en (?:el suicidio|hacerme da[ñn]o)" in triggers
     end
 
     test "detecta nivel :low (ideación pasiva)" do
-      assert {:crisis, :low, triggers} = CrisisMonitor.detect("A veces pienso que sería mejor no estar.")
+      assert {:crisis, :low, triggers} =
+               CrisisMonitor.detect("A veces pienso que sería mejor no estar.")
+
       assert "a veces pienso que ser[ií]a mejor no estar" in triggers
 
       assert {:crisis, :low, triggers} = CrisisMonitor.detect("Estoy harto de todo.")
@@ -43,7 +51,9 @@ defmodule Alethea.Alerts.CrisisMonitorTest do
     test "prioriza la mayor severidad cuando hay múltiples matches" do
       # Contiene patrones de :low ("harto de vivir") y :high ("quiero morir")
       # Debe retornar :high
-      assert {:crisis, :high, triggers} = CrisisMonitor.detect("Estoy harto de vivir, quiero morir.")
+      assert {:crisis, :high, triggers} =
+               CrisisMonitor.detect("Estoy harto de vivir, quiero morir.")
+
       assert "quiero morir" in triggers
     end
 

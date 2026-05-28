@@ -11,7 +11,9 @@ defmodule AletheaJobs.ProcessMessageWorker do
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.WhatsApp.ConsentCache
 
-  defp whatsapp_client, do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+  defp whatsapp_client,
+    do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+
   defp phi_worker, do: Application.get_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
 
   require Logger
@@ -53,7 +55,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
       String.upcase(String.trim(text)) == "ACEPTO" ->
         case Accounts.update_patient_terms(patient, true) do
           {:ok, _updated_patient} ->
-            Logger.info("Paciente #{patient.alias} [#{patient.id}] aceptó los términos legales.")
+            Logger.info("Patient terms accepted.")
             whatsapp_client().send_message(phone, @welcome_message)
             :ok
 
@@ -64,7 +66,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
       true ->
         if ConsentCache.in_progress?(phone) do
-          Logger.debug("Consentimiento ya en progreso para #{phone}, ignorando mensaje.")
+          Logger.debug("Consentimiento ya en progreso para este número, ignorando mensaje.")
           :ok
         else
           ConsentCache.mark_in_progress(phone)
@@ -78,7 +80,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
     crisis_support_message =
       Application.get_env(:alethea, :crisis_support_message, default_crisis_support_message())
 
-    context_limit = Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10
+    context_limit =
+      Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10
 
     # 1. Obtener/Abrir sesión
     {:ok, session} = SessionManager.current_open_session(patient.id)
@@ -87,7 +90,15 @@ defmodule AletheaJobs.ProcessMessageWorker do
     case CrisisMonitor.detect(text) do
       :safe ->
         # 3. Guardar mensaje con cifrado por paciente y asociado a sesión
-        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id, session.id) do
+        case Clinical.save_message(
+               patient,
+               text,
+               nil,
+               "inbound",
+               "spontaneous",
+               whatsapp_message_id,
+               session.id
+             ) do
           {:ok, inbound_message} ->
             # 4. Agendar/Renovar timeout de sesión
             schedule_session_timeout(session, patient, phone)
@@ -103,8 +114,17 @@ defmodule AletheaJobs.ProcessMessageWorker do
                   })
 
                 with {:ok, _outbound_message} <-
-                       Clinical.save_message(patient, chain_result.response, nil, "outbound", "elicited", nil, session.id),
-                     {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
+                       Clinical.save_message(
+                         patient,
+                         chain_result.response,
+                         nil,
+                         "outbound",
+                         "elicited",
+                         nil,
+                         session.id
+                       ),
+                     {:ok, _diagnosis} <-
+                       Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
                   whatsapp_client().send_message(phone, chain_result.response)
                   :ok
                 else
@@ -129,7 +149,15 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
       {:crisis, level, triggers} ->
         # En caso de crisis, también guardamos el mensaje y disparamos el bypass
-        case Clinical.save_message(patient, text, nil, "inbound", "spontaneous", whatsapp_message_id, session.id) do
+        case Clinical.save_message(
+               patient,
+               text,
+               nil,
+               "inbound",
+               "spontaneous",
+               whatsapp_message_id,
+               session.id
+             ) do
           {:ok, inbound_message} ->
             schedule_session_timeout(session, patient, phone)
 
@@ -139,7 +167,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
               extracted_emotions: %{crisis: true, level: level, triggers: triggers}
             }
 
-            with {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(inbound_message.id, crisis_diagnosis),
+            with {:ok, _diagnosis} <-
+                   Clinical.save_ai_diagnosis(inbound_message.id, crisis_diagnosis),
                  {:ok, _patient} <- Accounts.update_patient(patient, %{urgent_intervention: true}),
                  :ok <-
                    Phoenix.PubSub.broadcast(Alethea.PubSub, "psychologist:alerts", {
@@ -151,7 +180,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
                        detected_at: DateTime.utc_now()
                      }
                    }),
-                 {:ok, _send_result} <- whatsapp_client().send_message(phone, crisis_support_message) do
+                 {:ok, _send_result} <-
+                   whatsapp_client().send_message(phone, crisis_support_message) do
               :ok
             else
               {:error, reason} ->

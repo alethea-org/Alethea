@@ -42,7 +42,9 @@ defmodule AletheaWeb.DashboardLive do
       <div class="card bg-base-100 shadow-sm border border-base-300">
         <div class="card-body">
           <h2 class="card-title">Resumen de Actividad</h2>
-          <p class="text-base-content/60 italic">Próximamente: Visualización de grafos de conducta y tendencias clínicas.</p>
+          <p class="text-base-content/60 italic">
+            Próximamente: Visualización de grafos de conducta y tendencias clínicas.
+          </p>
           <div class="card-actions justify-end">
             <.button navigate={~p"/patients"} class="btn btn-sm">Ver Pacientes</.button>
           </div>

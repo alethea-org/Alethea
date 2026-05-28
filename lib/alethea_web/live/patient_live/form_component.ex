@@ -9,7 +9,7 @@ defmodule AletheaWeb.PatientLive.FormComponent do
     <div>
       <.header>
         {@title}
-        <:subtitle>Ingresa los datos básicos para crear la boveda cifrada.</:subtitle>
+        <:subtitle>Ingresa los datos básicos para crear la bóveda cifrada.</:subtitle>
       </.header>
 
       <.simple_form
@@ -32,7 +32,12 @@ defmodule AletheaWeb.PatientLive.FormComponent do
           </div>
         </div>
 
-        <.input field={@form[:alias]} type="text" label="Alias del paciente" placeholder="Ej. Juan P." />
+        <.input
+          field={@form[:alias]}
+          type="text"
+          label="Alias del paciente"
+          placeholder="Ej. Juan P."
+        />
 
         <div class="space-y-1">
           <.input

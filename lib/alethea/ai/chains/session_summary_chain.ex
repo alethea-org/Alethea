@@ -69,7 +69,9 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
 
   defp format_emotions(scores) do
     scores
-    |> Enum.map(fn %{label: label, score: score} -> "#{label}: #{Float.round(score * 1.0, 2)}" end)
+    |> Enum.map(fn %{label: label, score: score} ->
+      "#{label}: #{Float.round(score * 1.0, 2)}"
+    end)
     |> Enum.join(", ")
   end
 end

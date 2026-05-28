@@ -78,10 +78,10 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
 
       Alethea.AI.PhiWorkerMock
       |> expect(:process, fn %{
-           message_id: _message_id,
-           raw_content: ^text,
-           patient_context: _context
-         } ->
+                               message_id: _message_id,
+                               raw_content: ^text,
+                               patient_context: _context
+                             } ->
         %{
           response: "¿Qué sientes exactamente?",
           model_version: "phi-4-mini",
@@ -96,7 +96,12 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
         {:ok, %{}}
       end)
 
-      assert :ok = perform_job(%{"from" => phone, "text" => text, "whatsapp_message_id" => message_id})
+      assert :ok =
+               perform_job(%{
+                 "from" => phone,
+                 "text" => text,
+                 "whatsapp_message_id" => message_id
+               })
 
       # Verificamos persistencia de mensajes
       messages = Repo.all(Message) |> Repo.preload(:ai_diagnoses)
@@ -137,17 +142,24 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
         {:ok, %{}}
       end)
 
-      assert :ok = perform_job(%{"from" => phone, "text" => crisis_text, "whatsapp_message_id" => message_id})
+      assert :ok =
+               perform_job(%{
+                 "from" => phone,
+                 "text" => crisis_text,
+                 "whatsapp_message_id" => message_id
+               })
 
       # 1. Verificar que el paciente fue marcado para intervención urgente
       updated_patient = Accounts.get_patient!(patient.id)
       assert updated_patient.urgent_intervention == true
 
       # 2. Verificar persistencia (Mensaje + Diagnosis con metadata de crisis)
-      inbound = Repo.get_by(Message, whatsapp_message_id: message_id) |> Repo.preload(:ai_diagnoses)
+      inbound =
+        Repo.get_by(Message, whatsapp_message_id: message_id) |> Repo.preload(:ai_diagnoses)
+
       assert inbound
       assert inbound.behavior_type == "spontaneous"
-      
+
       assert length(inbound.ai_diagnoses) == 1
       diagnosis = List.first(inbound.ai_diagnoses)
       assert diagnosis.model_version == "crisis-bypass"

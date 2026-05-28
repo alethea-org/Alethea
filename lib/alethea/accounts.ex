@@ -112,58 +112,71 @@ defmodule Alethea.Accounts do
     # Normalizar attrs a string keys para evitar mixed keys
     attrs = for {k, v} <- attrs, into: %{}, do: {to_string(k), v}
 
-    # Normalizar número de teléfono a E.164
-    whatsapp_number =
-      attrs["whatsapp_number"]
-      |> String.replace(~r/[^\d+]/, "")
-      |> then(fn
-        "+" <> _ = phone -> phone
-        phone -> "+" <> phone
-      end)
+    whatsapp_number = attrs["whatsapp_number"]
 
-    # 1. Generar DEK
-    dek_bytes = :crypto.strong_rand_bytes(32)
+    cond do
+      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or String.trim(whatsapp_number) == "" ->
+        changeset =
+          %Patient{}
+          |> Patient.changeset(attrs)
+          |> Ecto.Changeset.add_error(:whatsapp_number, "can't be blank")
 
-    # 2. Cifrar DEK con KEK
-    {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, kek_bytes)
+        {:error, %{changeset | action: :insert}}
 
-    # 3. Cifrar número con DEK
-    {:ok, encrypted_number} = PatientVault.encrypt(whatsapp_number, dek_bytes)
+      true ->
+        # Normalizar número de teléfono a E.164
+        normalized_number =
+          whatsapp_number
+          |> String.replace(~r/[^\d+]/, "")
+          |> then(fn
+            "+" <> _ = phone -> phone
+            phone -> "+" <> phone
+          end)
 
-    # 4. Calcular hash determinista
-    phone_hash =
-      :crypto.mac(
-        :hmac,
-        :sha256,
-        Application.fetch_env!(:alethea, :phone_hash_secret),
-        whatsapp_number
-      )
-      |> Base.encode64()
+        # 1. Generar DEK
+        dek_bytes = :crypto.strong_rand_bytes(32)
 
-    Ecto.Multi.new()
-    |> Ecto.Multi.insert(
-      :encryption_key,
-      EncryptionKey.changeset(%EncryptionKey{}, %{
-        "encrypted_key" => wrapped_dek,
-        "type" => "patient"
-      })
-    )
-    |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
-      attrs_with_security =
-        attrs
-        |> Map.put("encrypted_whatsapp_number", encrypted_number)
-        |> Map.put("whatsapp_number_hash", phone_hash)
-        |> Map.put("encryption_key_id", key.id)
+        # 2. Cifrar DEK con KEK
+        {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, kek_bytes)
 
-      %Patient{} |> Patient.changeset(attrs_with_security)
-    end)
-    |> Ecto.Multi.update(:finalize_key, fn %{patient: patient, encryption_key: key} ->
-      EncryptionKey.changeset(key, %{patient_id: patient.id})
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{patient: patient}} -> {:ok, patient}
-      {:error, _name, error, _changes} -> {:error, error}
+        # 3. Cifrar número con DEK
+        {:ok, encrypted_number} = PatientVault.encrypt(normalized_number, dek_bytes)
+
+        # 4. Calcular hash determinista
+        phone_hash =
+          :crypto.mac(
+            :hmac,
+            :sha256,
+            Application.fetch_env!(:alethea, :phone_hash_secret),
+            normalized_number
+          )
+          |> Base.encode64()
+
+        Ecto.Multi.new()
+        |> Ecto.Multi.insert(
+          :encryption_key,
+          EncryptionKey.changeset(%EncryptionKey{}, %{
+            "encrypted_key" => wrapped_dek,
+            "type" => "patient"
+          })
+        )
+        |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
+          attrs_with_security =
+            attrs
+            |> Map.put("encrypted_whatsapp_number", encrypted_number)
+            |> Map.put("whatsapp_number_hash", phone_hash)
+            |> Map.put("encryption_key_id", key.id)
+
+          %Patient{} |> Patient.changeset(attrs_with_security)
+        end)
+        |> Ecto.Multi.update(:finalize_key, fn %{patient: patient, encryption_key: key} ->
+          EncryptionKey.changeset(key, %{patient_id: patient.id})
+        end)
+        |> Repo.transaction()
+        |> case do
+          {:ok, %{patient: patient}} -> {:ok, patient}
+          {:error, _name, error, _changes} -> {:error, error}
+        end
     end
   end
 

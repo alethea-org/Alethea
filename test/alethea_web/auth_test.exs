@@ -8,7 +8,7 @@ defmodule AletheaWeb.AuthTest do
   setup do
     {:ok, professional} =
       Accounts.create_professional(%{
-        email: "test@alethea.com",
+        email: "test-#{System.unique_integer()}@alethea.com",
         full_name: "Test User",
         password: @password
       })
@@ -70,7 +70,7 @@ defmodule AletheaWeb.AuthTest do
 
   describe "Registro" do
     test "crea un nuevo profesional y redirige a login", %{conn: conn} do
-      email = "new@alethea.com"
+      email = "new-#{System.unique_integer()}@alethea.com"
 
       # Entramos a la página de registro
       conn = get(conn, ~p"/register")

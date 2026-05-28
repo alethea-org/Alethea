@@ -82,7 +82,9 @@ defmodule AletheaWeb.WhatsappWebhookController do
 
   defp secure_compare(_, _), do: false
 
-  defp parse_message(%{"entry" => [%{"changes" => [%{"value" => %{"messages" => [msg | _]}} | _]} | _]}) do
+  defp parse_message(%{
+         "entry" => [%{"changes" => [%{"value" => %{"messages" => [msg | _]}} | _]} | _]
+       }) do
     phone = msg["from"]
     text = get_in(msg, ["text", "body"])
     message_id = msg["id"]

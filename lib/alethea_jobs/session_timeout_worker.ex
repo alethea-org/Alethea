@@ -8,11 +8,17 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   alias Alethea.Clinical.{Session, SessionManager}
 
   require Logger
-defp whatsapp_client, do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-defp roberta_worker, do: Application.get_env(:alethea, :roberta_worker, Alethea.AI.RoBERTaWorker)
-defp session_summary_chain, do: Application.get_env(:alethea, :session_summary_chain, Alethea.AI.Chains.SessionSummaryChain)
 
-require Logger
+  defp whatsapp_client,
+    do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+
+  defp roberta_worker,
+    do: Application.get_env(:alethea, :roberta_worker, Alethea.AI.RoBERTaWorker)
+
+  defp session_summary_chain,
+    do:
+      Application.get_env(:alethea, :session_summary_chain, Alethea.AI.Chains.SessionSummaryChain)
+
   @goodbye_message """
   Tu sesión de hoy ha concluido. Tu terapeuta podrá revisar el resumen en el próximo encuentro.
   Hasta pronto.
@@ -39,7 +45,7 @@ require Logger
          {:ok, texts} <- decrypt_messages(patient, messages),
          sanitized_texts = Enum.map(texts, &Sanitizer.sanitize/1),
          emotion_scores <- roberta_worker().analyze_batch(sanitized_texts),
-         :ok <- Clinical.save_trends(patient, emotion_scores, session),
+         :ok <- Clinical.save_trends(patient, emotion_scores, closed_session),
          {:ok, summary_text} <- session_summary_chain().run(sanitized_texts, emotion_scores),
          {:ok, _summary} <-
            Clinical.save_summary(%{

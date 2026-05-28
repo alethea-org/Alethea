@@ -9,9 +9,10 @@ defmodule AletheaJobs.WeeklyReportWorker do
 
   require Logger
 
-  defp weekly_summary_chain, do: Application.get_env(:alethea, :weekly_summary_chain, Alethea.AI.Chains.WeeklySummaryChain)
+  defp weekly_summary_chain,
+    do: Application.get_env(:alethea, :weekly_summary_chain, Alethea.AI.Chains.WeeklySummaryChain)
 
-  require Logger
+  @impl Oban.Worker
   def perform(%Oban.Job{args: %{"patient_id" => patient_id}}) do
     patient = Accounts.get_patient!(patient_id)
     seven_days_ago = DateTime.add(DateTime.utc_now(), -7 * 24 * 3600, :second)
@@ -38,9 +39,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
       :ok
     else
       {:error, reason} ->
-        Logger.error(
-          "WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}"
-        )
+        Logger.error("WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}")
 
         {:error, reason}
     end

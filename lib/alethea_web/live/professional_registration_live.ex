@@ -13,7 +13,7 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
       |> assign(check_errors: false)
       |> assign_form(changeset)
 
-    {:ok, socket, temporary_assigns: [form: nil]}
+    {:ok, socket}
   end
 
   def render(assigns) do

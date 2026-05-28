@@ -44,8 +44,7 @@ config :alethea, Oban,
 
 # --- AI & Clinical Configuration ---
 
-config :alethea, Alethea.Clinical,
-  recent_message_limit: 10
+config :alethea, Alethea.Clinical, recent_message_limit: 10
 
 # Global configuration for LangChain chains
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
@@ -66,13 +65,14 @@ config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   """
 
 config :alethea, Alethea.AI.RoBERTaWorker,
-  api_url: "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
+  api_url:
+    "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
   api_key: System.get_env("HUGGINGFACE_API_KEY")
 
 # --- Security & Encryption ---
 
-# Configure Cloak
-config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
+# Vault aes_key is loaded from the CLOAK_AES_KEY environment variable in runtime.exs.
+# Dev/test fallbacks are defined in dev.exs and test.exs respectively.
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

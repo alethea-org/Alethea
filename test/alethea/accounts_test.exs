@@ -3,7 +3,7 @@ defmodule Alethea.AccountsTest do
 
   alias Alethea.Accounts
   alias Alethea.Encryption.PatientVault
-  alias Alethea.Accounts.{Professional, EncryptionKey}
+  alias Alethea.Accounts.EncryptionKey
 
   @password "password12345"
 
@@ -122,6 +122,37 @@ defmodule Alethea.AccountsTest do
 
       {:ok, dek} = Accounts.load_patient_dek(patient, kek)
       assert {:ok, "+56912345678"} == PatientVault.decrypt(patient.encrypted_whatsapp_number, dek)
+    end
+
+    test "validación: whatsapp_number es obligatorio y no puede ser nulo o vacío", %{
+      professional: pro,
+      kek: kek
+    } do
+      # 1. Caso nil
+      assert {:error, changeset} =
+               Accounts.create_patient(
+                 %{
+                   "alias" => "Juan P.",
+                   "whatsapp_number" => nil,
+                   "professional_id" => pro.id
+                 },
+                 kek
+               )
+
+      assert "can't be blank" in errors_on(changeset).whatsapp_number
+
+      # 2. Caso vacío
+      assert {:error, changeset} =
+               Accounts.create_patient(
+                 %{
+                   "alias" => "Juan P.",
+                   "whatsapp_number" => "   ",
+                   "professional_id" => pro.id
+                 },
+                 kek
+               )
+
+      assert "can't be blank" in errors_on(changeset).whatsapp_number
     end
   end
 end
