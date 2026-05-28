@@ -72,6 +72,12 @@ defmodule Alethea.Accounts do
     end
   end
 
+  def update_professional(%Professional{} = professional, attrs) do
+    professional
+    |> Professional.changeset(attrs)
+    |> Repo.update()
+  end
+
   # Patients
 
   def list_patients(professional_id) do
@@ -80,6 +86,13 @@ defmodule Alethea.Accounts do
     |> where([p], p.status != "deleted")
     |> order_by([p], desc: p.urgent_intervention, asc: p.alias)
     |> Repo.all()
+  end
+
+  def get_patient_with_professional(patient_id) do
+    Patient
+    |> where([p], p.id == ^patient_id)
+    |> preload([:professional])
+    |> Repo.one()
   end
 
   def list_critical_patients(professional_id) do

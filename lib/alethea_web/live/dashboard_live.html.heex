@@ -267,6 +267,31 @@ mood_signal =
               </section>
 
               <section class="rounded-lg border border-base-300 p-4">
+                <h3 class="mb-3 font-semibold">Configuración de Crisis</h3>
+                <p class="mb-3 text-[10px] text-base-content/60 leading-tight">
+                  Este mensaje se enviará automáticamente si la IA detecta riesgo inminente.
+                </p>
+                
+                <.form
+                  for={%{}}
+                  phx-submit="save_crisis_message"
+                  class="space-y-3"
+                >
+                  <div class="form-control">
+                    <textarea 
+                      name="crisis_message" 
+                      class="textarea textarea-bordered textarea-sm w-full leading-snug" 
+                      placeholder="Ej: Entiendo que estás pasando por un momento difícil. Por favor, llama al 911 o a tu servicio de emergencia local..."
+                    >{@current_professional.crisis_message}</textarea>
+                  </div>
+
+                  <button type="submit" class="btn btn-ghost btn-sm btn-block border-base-300">
+                    Actualizar mensaje
+                  </button>
+                </.form>
+              </section>
+
+              <section class="rounded-lg border border-base-300 p-4">
                 <h3 class="mb-3 font-semibold">Historial clinico</h3>
                 <button
                   id="decrypt-chat-button"
