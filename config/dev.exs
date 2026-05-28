@@ -86,7 +86,8 @@ config :phoenix, :plug_init_mode, :runtime
 config :alethea, Alethea.AI.RoBERTaWorker,
   provider: :huggingface,
   huggingface: [
-    api_url: "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
+    api_url:
+      "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
     api_key: System.get_env("ROBERTA_HF_API_KEY", "")
   ]
 
@@ -104,3 +105,9 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# Dev-only fallback for the Vault encryption key.
+# This key is NOT secret — it exists solely to allow `mix phx.server` without env vars.
+# NEVER use this value in production.
+config :alethea, Alethea.Encryption.Vault,
+  aes_key: System.get_env("CLOAK_AES_KEY", "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc=")

@@ -9,11 +9,8 @@ defmodule AletheaJobs.WeeklyReportWorker do
 
   require Logger
 
-  @weekly_summary_chain Application.compile_env(
-                          :alethea,
-                          :weekly_summary_chain,
-                          Alethea.AI.Chains.WeeklySummaryChain
-                        )
+  defp weekly_summary_chain,
+    do: Application.get_env(:alethea, :weekly_summary_chain, Alethea.AI.Chains.WeeklySummaryChain)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"patient_id" => patient_id}}) do
@@ -29,7 +26,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
         %{summary | summary_text: Sanitizer.sanitize(summary.summary_text)}
       end)
 
-    with {:ok, report_text} <- @weekly_summary_chain.run(sanitized_summaries, aggregated_trends),
+    with {:ok, report_text} <- weekly_summary_chain().run(sanitized_summaries, aggregated_trends),
          {:ok, _summary} <-
            Clinical.save_summary(%{
              period_start: seven_days_ago,
@@ -42,9 +39,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
       :ok
     else
       {:error, reason} ->
-        Logger.error(
-          "WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}"
-        )
+        Logger.error("WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}")
 
         {:error, reason}
     end

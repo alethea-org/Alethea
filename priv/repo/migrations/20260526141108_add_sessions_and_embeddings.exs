@@ -10,7 +10,10 @@ defmodule Alethea.Repo.Migrations.AddSessionsAndEmbeddings do
 
     create table(:clinical_sessions, primary_key: false) do
       add :id, :binary_id, primary_key: true
-      add :patient_id, references(:patients, type: :binary_id, on_delete: :delete_all), null: false
+
+      add :patient_id, references(:patients, type: :binary_id, on_delete: :delete_all),
+        null: false
+
       add :started_at, :utc_datetime, null: false
       add :closed_at, :utc_datetime
       add :status, :string, null: false, default: "open"

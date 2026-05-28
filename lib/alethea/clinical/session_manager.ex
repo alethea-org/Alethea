@@ -25,8 +25,8 @@ defmodule Alethea.Clinical.SessionManager do
   def current_open_session(patient_id) do
     case Repo.one(
            from s in Session,
-           where: s.patient_id == ^patient_id and s.status == "open",
-           limit: 1
+             where: s.patient_id == ^patient_id and s.status == "open",
+             limit: 1
          ) do
       nil -> create_open_session(patient_id)
       session -> {:ok, session}

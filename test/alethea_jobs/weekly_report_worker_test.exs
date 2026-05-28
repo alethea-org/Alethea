@@ -41,14 +41,15 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
     yesterday = DateTime.add(now, -1, :day)
 
     # Insertar un resumen de sesión con datos sensibles (email)
-    {:ok, _s1} = Clinical.save_summary(%{
-      period_start: DateTime.add(yesterday, -1, :hour),
-      period_end: yesterday,
-      summary_text: "Sesión sobre ansiedad. Contactar a juan@example.com.",
-      status_level: "Alerta",
-      type: "session",
-      patient_id: patient.id
-    })
+    {:ok, _s1} =
+      Clinical.save_summary(%{
+        period_start: DateTime.add(yesterday, -1, :hour),
+        period_end: yesterday,
+        summary_text: "Sesión sobre ansiedad. Contactar a juan@example.com.",
+        status_level: "Alerta",
+        type: "session",
+        patient_id: patient.id
+      })
 
     # Insertar algunos trends
     Repo.insert!(%Trend{
@@ -66,7 +67,7 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
       assert hd(summaries).summary_text =~ "[REDACTED_EMAIL]"
       # Verificar que se recibieron los trends agregados
       assert Enum.any?(trends, fn t -> t.label == "joy" end)
-      
+
       {:ok, "Reporte: El paciente está estable pero con picos de alegría."}
     end)
 
@@ -74,7 +75,9 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
     assert :ok = perform_job(WeeklyReportWorker, %{"patient_id" => patient.id})
 
     # 4. Validar Resultado
-    weekly_summaries = Repo.all(from s in Summary, where: s.patient_id == ^patient.id and s.type == "weekly")
+    weekly_summaries =
+      Repo.all(from s in Summary, where: s.patient_id == ^patient.id and s.type == "weekly")
+
     assert length(weekly_summaries) == 1
     [summary] = weekly_summaries
     assert summary.summary_text =~ "está estable"

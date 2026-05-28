@@ -9,13 +9,15 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
   require Logger
 
-  @client Application.compile_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-  @roberta_worker Application.compile_env(:alethea, :roberta_worker, Alethea.AI.RoBERTaWorker)
-  @session_summary_chain Application.compile_env(
-                           :alethea,
-                           :session_summary_chain,
-                           Alethea.AI.Chains.SessionSummaryChain
-                         )
+  defp whatsapp_client,
+    do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+
+  defp roberta_worker,
+    do: Application.get_env(:alethea, :roberta_worker, Alethea.AI.RoBERTaWorker)
+
+  defp session_summary_chain,
+    do:
+      Application.get_env(:alethea, :session_summary_chain, Alethea.AI.Chains.SessionSummaryChain)
 
   @goodbye_message """
   Tu sesión de hoy ha concluido. Tu terapeuta podrá revisar el resumen en el próximo encuentro.
@@ -42,9 +44,9 @@ defmodule AletheaJobs.SessionTimeoutWorker do
          messages <- Clinical.list_session_messages(closed_session.id),
          {:ok, texts} <- decrypt_messages(patient, messages),
          sanitized_texts = Enum.map(texts, &Sanitizer.sanitize/1),
-         emotion_scores <- @roberta_worker.analyze_batch(sanitized_texts),
+         emotion_scores <- roberta_worker().analyze_batch(sanitized_texts),
          :ok <- Clinical.save_trends(patient, emotion_scores, closed_session),
-         {:ok, summary_text} <- @session_summary_chain.run(sanitized_texts, emotion_scores),
+         {:ok, summary_text} <- session_summary_chain().run(sanitized_texts, emotion_scores),
          {:ok, _summary} <-
            Clinical.save_summary(%{
              period_start: closed_session.started_at,
@@ -54,7 +56,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
              type: "session",
              patient_id: patient.id
            }) do
-      @client.send_message(phone, @goodbye_message)
+      whatsapp_client().send_message(phone, @goodbye_message)
       :ok
     else
       {:error, reason} ->

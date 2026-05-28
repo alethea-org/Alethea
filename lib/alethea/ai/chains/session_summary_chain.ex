@@ -51,12 +51,13 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
 
   defp system_prompt do
     """
-    Eres un asistente clínico. Genera un snapshot de sesión en exactamente 4 líneas numeradas:
-    1. Estado emocional predominante de la sesión
-    2. Temas principales tratados
-    3. Cambios observados respecto a sesiones anteriores
-    4. Nivel de atención requerido (exactamente uno de: Estable / Alerta / Intervención Requerida)
-    Responde en español. Sin introducción ni cierre.
+    Eres Alethea, un asistente clínico experto en síntesis terapéutica.
+    Genera un snapshot de la sesión para el terapeuta en exactamente 4 líneas numeradas:
+    1. ESTADO EMOCIONAL: Resume el tono predominante y su intensidad.
+    2. TEMAS TRATADOS: Lista los tópicos clave discutidos.
+    3. EVOLUCIÓN: Cambios observados respecto a la sesión anterior (si aplica) o progresión durante el día.
+    4. NIVEL DE ATENCIÓN: Elige exactamente uno: Estable / Alerta / Intervención Requerida.
+    Responde en español, tono profesional y sin preámbulos.
     """
   end
 
@@ -68,7 +69,9 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
 
   defp format_emotions(scores) do
     scores
-    |> Enum.map(fn %{label: label, score: score} -> "#{label}: #{Float.round(score * 1.0, 2)}" end)
+    |> Enum.map(fn %{label: label, score: score} ->
+      "#{label}: #{Float.round(score * 1.0, 2)}"
+    end)
     |> Enum.join(", ")
   end
 end

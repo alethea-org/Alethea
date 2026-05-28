@@ -10,30 +10,31 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias LangChain.ChatModels.ChatOpenAI
   alias LangChain.Message
 
-  @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) :: map()
+  @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) ::
+          map()
   def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
     provider = Keyword.get(llm_config, :provider, :local)
     provider_config = Keyword.get(llm_config, provider, [])
 
-endpoint_url =
-  Keyword.get(llm_config, :endpoint_url) ||
-    Keyword.get(llm_config, :endpoint) ||
-    Keyword.get(provider_config, :endpoint_url) ||
-    Keyword.get(provider_config, :endpoint) ||
-    "https://api-inference.huggingface.co/models/"
+    endpoint_url =
+      Keyword.get(llm_config, :endpoint_url) ||
+        Keyword.get(llm_config, :endpoint) ||
+        Keyword.get(provider_config, :endpoint_url) ||
+        Keyword.get(provider_config, :endpoint) ||
+        "https://api-inference.huggingface.co/models/"
 
-api_key = Keyword.get(llm_config, :api_key) || Keyword.get(provider_config, :api_key)
+    api_key = Keyword.get(llm_config, :api_key) || Keyword.get(provider_config, :api_key)
 
-llm_opts = %{
-  model: Keyword.get(llm_config, :model, "phi-4-mini"),
-  api_key: api_key,
-  endpoint_url: endpoint_url,
-  endpoint: endpoint_url,
-  temperature: Keyword.get(llm_config, :temperature, 0.0),
-  max_tokens: Keyword.get(llm_config, :max_tokens, 512),
-  stream: Keyword.get(llm_config, :stream, false)
-}
+    llm_opts = %{
+      model: Keyword.get(llm_config, :model, "phi-4-mini"),
+      api_key: api_key,
+      endpoint_url: endpoint_url,
+      endpoint: endpoint_url,
+      temperature: Keyword.get(llm_config, :temperature, 0.0),
+      max_tokens: Keyword.get(llm_config, :max_tokens, 512),
+      stream: Keyword.get(llm_config, :stream, false)
+    }
 
     llm =
       case provider do

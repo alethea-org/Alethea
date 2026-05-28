@@ -87,78 +87,29 @@ POST /webhooks/whatsapp
 ## Tasks
 
 ### Migración
-- [ ] Generar migración `add_terms_accepted_to_patients` con:
-  - `alter table(:patients)`: añadir `terms_accepted` (`:boolean`, default: `false`, null: `false`)
+- [x] Generar migración `add_terms_accepted_to_patients`
 
 ### Schema y Contexto
-- [ ] Añadir `terms_accepted` al schema de `Alethea.Accounts.Patient` y al changeset
-- [ ] Añadir `update_patient_terms/2` a `Alethea.Accounts` que actualiza `terms_accepted: true`
-- [ ] Añadir `lookup_patient_by_phone(phone_e164)` a `Alethea.Accounts`:
-  - Calcula el hash: `hash = :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone_e164) |> Base.encode64()`
-  - Consulta O(1): `Repo.get_by(Patient, whatsapp_number_hash: hash)`
-  - Retorna `{:ok, patient}` o `{:error, :not_found}`
-  - Configurar `:phone_hash_secret` de manera segura en todos los entornos para evitar crashes al compilar o correr tests:
-    - En `config/dev.exs` y `config/test.exs`:
-      ```elixir
-      config :alethea, :phone_hash_secret, "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
-      ```
-    - En `config/runtime.exs` (solo para producción):
-      ```elixir
-      if config_env() == :prod do
-        phone_hash_secret =
-          System.get_env("PHONE_HASH_SECRET") ||
-            raise """
-            environment variable PHONE_HASH_SECRET is missing.
-            """
-        config :alethea, :phone_hash_secret, phone_hash_secret
-      end
-      ```
+- [x] Añadir `terms_accepted` al schema de `Alethea.Accounts.Patient`
+- [x] Añadir `update_patient_terms/2` a `Alethea.Accounts`
+- [x] Añadir `lookup_patient_by_phone(phone_e164)` a `Alethea.Accounts`
 
 ### Cliente WhatsApp
-- [ ] Crear `lib/alethea/whatsapp/consent_cache.ex`:
-  - Implementar un proceso `GenServer` simple que use `Map` o `ETS` para registrar `phone_e164` con un TTL de 60 segundos.
-  - Funciones: `mark_in_progress(phone)`, `in_progress?(phone)`.
-- [ ] Crear `lib/alethea/whatsapp/client.ex` con `send_message(to_number, body_text)`:
-  - Usa `Req.post/2` hacia `https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages`
-  - Cabecera `Authorization: Bearer {WHATSAPP_API_TOKEN}`
-  - Payload: `%{messaging_product: "whatsapp", to: to_number, type: "text", text: %{body: body_text}}`
-  - Credenciales leídas de `Application.get_env(:alethea, :whatsapp)` (configurado en `config/runtime.exs`)
-- [ ] Añadir configuración placeholder en `config/runtime.exs`:
-  ```elixir
-  config :alethea, :whatsapp,
-    api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
-    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
-  ```
+- [x] Crear `lib/alethea/whatsapp/consent_cache.ex`
+- [x] Crear `lib/alethea/whatsapp/client.ex`
+- [x] Añadir configuración placeholder en `config/runtime.exs`
 
 ### Web — Webhook Controller
-- [ ] Crear `lib/alethea_web/controllers/whatsapp_webhook_controller.ex`:
-  - `verify/2` (`GET /webhooks/whatsapp`): responde al challenge de Meta (`hub.challenge`)
-  - `receive/2` (`POST /webhooks/whatsapp`): extrae número y texto del payload JSON, encola `ProcessMessageWorker` y devuelve `json(conn, %{})` con HTTP 200
-- [ ] Añadir rutas en `router.ex` bajo el pipeline `:api`:
-  ```elixir
-  scope "/webhooks", AletheaWeb do
-    pipe_through :api
-    get "/whatsapp", WhatsappWebhookController, :verify
-    post "/whatsapp", WhatsappWebhookController, :receive
-  end
-  ```
+- [x] Crear `lib/alethea_web/controllers/whatsapp_webhook_controller.ex`
+- [x] Añadir rutas en `router.ex`
 
 ### Worker Oban
-- [ ] Crear `lib/alethea_jobs/process_message_worker.ex` (`AletheaJobs.ProcessMessageWorker`):
-  - `use Oban.Worker, queue: :whatsapp, max_attempts: 3`
-  - `perform(%Oban.Job{args: %{"from" => phone, "text" => text}})`:
-    1. `Accounts.lookup_patient_by_phone(phone)` — ver flujo arriba
-    2. Rama `:not_found`: `WhatsApp.Client.send_message(phone, mensaje_no_registrado)` → `:ok`
-    3. Rama `terms_accepted: false`, texto != "acepto": `WhatsApp.Client.send_message(phone, texto_términos)` → `:ok`
-    4. Rama `terms_accepted: false`, texto == "acepto" (case-insensitive + trim): `Accounts.update_patient_terms(patient, true)` + `WhatsApp.Client.send_message(phone, bienvenida)` → `:ok`
-    5. Rama `terms_accepted: true`: no-op por ahora (issue 003 añade el pipeline clínico)
+- [x] Crear `lib/alethea_jobs/process_message_worker.ex` (Logic cleanup & Warnings fix)
 
 ### Tests
-- [ ] Crear `test/alethea_jobs/process_message_worker_test.exs` con 4 tests usando `Mox`:
-  1. **Número desconocido**: `lookup_patient_by_phone` retorna `:not_found` → worker llama a `send_message` con mensaje genérico
-  2. **Primer mensaje sin consentimiento**: paciente con `terms_accepted: false`, texto = "hola" → worker descarta, re-envía términos
-  3. **Aceptación de términos**: paciente con `terms_accepted: false`, texto = "Acepto" → worker actualiza DB y envía bienvenida
-  4. **Paciente con consentimiento activo**: paciente con `terms_accepted: true` → worker termina sin llamar a `send_message`
+- [x] Crear `test/alethea_jobs/process_message_worker_test.exs`
+- [x] Crear `test/alethea_web/controllers/whatsapp_webhook_controller_test.exs` (Integration)
+- [x] Ejecutar `mix test` y verificar.
 
 ## Archivos Involucrados
 

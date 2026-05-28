@@ -8,17 +8,17 @@ defmodule AletheaWeb.LoginLive do
 
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
-      <div class="mx-auto max-w-sm">
-        <h1 class="text-2xl font-bold mb-6">Iniciar sesión</h1>
+    <div class="mx-auto max-w-sm">
+      <h1 class="text-3xl font-bold mb-6 text-center">Iniciar sesión</h1>
 
-        <.form for={@form} action={~p"/login"} method="post">
-          <.input field={@form[:email]} type="email" label="Correo electrónico" required />
-          <.input field={@form[:password]} type="password" label="Contraseña" required />
+      <.simple_form for={@form} action={~p"/login"} method="post">
+        <.input field={@form[:email]} type="email" label="Correo electrónico" required />
+        <.input field={@form[:password]} type="password" label="Contraseña" required />
+        <:actions>
           <.button type="submit" class="w-full mt-4">Ingresar</.button>
-        </.form>
-      </div>
-    </Layouts.app>
+        </:actions>
+      </.simple_form>
+    </div>
     """
   end
 end

@@ -59,7 +59,7 @@ defmodule AletheaJobs.DailySchedulerWorkerTest do
     jobs =
       Repo.all(
         from j in Oban.Job,
-        where: j.worker == "AletheaJobs.WeeklyReportWorker"
+          where: j.worker == "AletheaJobs.WeeklyReportWorker"
       )
 
     assert length(jobs) == 1

@@ -12,10 +12,10 @@ defmodule AletheaJobs.DailySchedulerWorker do
     patients =
       Repo.all(
         from p in Patient,
-        where:
-          p.session_day_of_week == ^tomorrow_dow and
-            not is_nil(p.session_time) and
-            p.status == "active"
+          where:
+            p.session_day_of_week == ^tomorrow_dow and
+              not is_nil(p.session_time) and
+              p.status == "active"
       )
 
     Enum.each(patients, fn patient ->

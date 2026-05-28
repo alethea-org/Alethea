@@ -24,7 +24,16 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
     field :callbacks, {:array, :map}, default: []
   end
 
-  @create_fields [:model, :api_key, :endpoint_url, :temperature, :max_tokens, :stream, :receive_timeout, :callbacks]
+  @create_fields [
+    :model,
+    :api_key,
+    :endpoint_url,
+    :temperature,
+    :max_tokens,
+    :stream,
+    :receive_timeout,
+    :callbacks
+  ]
   @required_fields [:model, :api_key]
 
   @spec new(map()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
@@ -58,12 +67,21 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
 
     LangChain.Telemetry.span([:langchain, :llm, :call], metadata, fn ->
       try do
-        LangChain.Telemetry.llm_prompt(%{system_time: System.system_time()}, %{model: model.model, messages: messages})
+        LangChain.Telemetry.llm_prompt(%{system_time: System.system_time()}, %{
+          model: model.model,
+          messages: messages
+        })
 
         case do_api_request(model, messages) do
-          {:error, reason} -> {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+
           parsed ->
-            LangChain.Telemetry.llm_response(%{system_time: System.system_time()}, %{model: model.model, response: parsed})
+            LangChain.Telemetry.llm_response(%{system_time: System.system_time()}, %{
+              model: model.model,
+              response: parsed
+            })
+
             {:ok, Message.new_assistant!(parsed)}
         end
       rescue
