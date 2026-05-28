@@ -98,6 +98,24 @@ defmodule Alethea.Accounts do
     |> Repo.update()
   end
 
+  def update_patient_session_schedule(%Patient{} = patient, day, time) do
+    patient
+    |> Patient.changeset(%{session_day_of_week: day, session_time: time})
+    |> Repo.update()
+  end
+
+  def create_audit_log(attrs \\ %{}) do
+    %Alethea.Accounts.AuditLog{}
+    |> Alethea.Accounts.AuditLog.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def get_encryption_key_for_patient(patient_id) do
+    EncryptionKey
+    |> where([k], k.patient_id == ^patient_id and k.type == "patient")
+    |> Repo.one()
+  end
+
   @doc """
   Crea un paciente con cifrado de extremo a extremo.
   Genera una DEK única, la envuelve con la KEK del profesional y cifra el número de WhatsApp.

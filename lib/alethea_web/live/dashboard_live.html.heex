@@ -53,7 +53,7 @@ mood_signal =
 
             <.link
               :for={patient <- critical_patients}
-              patch={~p"/dashboard"}
+              patch={~p"/dashboard/patients/#{patient.id}"}
               id={"critical-patient-#{patient.id}"}
               class="block px-4 py-3 transition hover:bg-error/10"
             >
@@ -81,7 +81,7 @@ mood_signal =
 
             <.link
               :for={patient <- patients}
-              patch={~p"/dashboard"}
+              patch={~p"/dashboard/patients/#{patient.id}"}
               id={"dashboard-patient-#{patient.id}"}
               class={[
                 "block px-4 py-3 transition hover:bg-base-200",
@@ -133,39 +133,46 @@ mood_signal =
             <div class="space-y-4">
               <section
                 id="weekly-pre-session-report"
-                class="rounded-lg border border-success/30 bg-success/10 p-4"
+                class="rounded-lg border border-success/20 bg-success/5 p-5"
               >
-                <div class="mb-2 flex items-center gap-2">
-                  <.icon name="hero-clipboard-document-check" class="size-5 text-success" />
-                  <h3 class="font-semibold text-base-content">Weekly Pre-Session Report</h3>
+                <div class="mb-3 flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <.icon name="hero-clipboard-document-check" class="size-5 text-success" />
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-success">
+                      Weekly Pre-Session Report
+                    </h3>
+                  </div>
+                  <span :if={weekly_summary} class="text-xs text-base-content/50">
+                    Finalizado el {format_summary_date(weekly_summary.period_end)}
+                  </span>
                 </div>
 
-                <p :if={weekly_summary} class="text-sm leading-6 text-base-content/80">
+                <div :if={weekly_summary} class="prose prose-sm max-w-none text-base-content/80">
                   {weekly_summary.summary_text}
-                </p>
-                <p :if={!weekly_summary} class="text-sm text-base-content/60">
-                  Sin resumen semanal disponible.
+                </div>
+                <p :if={!weekly_summary} class="text-sm italic text-base-content/50">
+                  No hay reportes semanales generados para este paciente.
                 </p>
               </section>
 
-              <section id="emotion-trends" class="rounded-lg border border-base-300 p-4">
-                <div class="mb-4 flex items-center justify-between gap-3">
-                  <h3 class="font-semibold text-base-content">Tendencia emocional</h3>
-                  <span class="text-xs text-base-content/60">Ventana movil de 7 dias</span>
+              <section id="emotion-trends" class="rounded-lg border border-base-300 p-5">
+                <div class="mb-5 flex items-center justify-between gap-3">
+                  <h3 class="font-bold text-base-content">Tendencias del Estado de Ánimo</h3>
+                  <div class="badge badge-ghost badge-sm font-normal">Últimos 7 días</div>
                 </div>
 
-                <div class="space-y-3">
-                  <div :if={emotion_rows == []} class="text-sm text-base-content/60">
-                    Sin tendencias cargadas.
+                <div class="grid gap-x-8 gap-y-4 sm:grid-cols-2">
+                  <div :if={emotion_rows == []} class="col-span-full py-4 text-center text-sm text-base-content/50">
+                    Esperando datos de la próxima sincronización...
                   </div>
 
-                  <div :for={emotion <- emotion_rows} id={"emotion-row-#{emotion.key}"}>
-                    <div class="mb-1 flex items-center justify-between gap-3 text-sm">
-                      <span class="font-medium">{emotion.label}</span>
-                      <span class="tabular-nums text-base-content/60">{emotion.percent}%</span>
+                  <div :for={emotion <- emotion_rows} id={"emotion-row-#{emotion.key}"} class="space-y-1.5">
+                    <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-tight">
+                      <span class="text-base-content/70">{emotion.label}</span>
+                      <span class="tabular-nums text-base-content">{emotion.percent}%</span>
                     </div>
                     <progress
-                      class={["progress w-full", emotion.progress_class]}
+                      class={["progress h-2 w-full", emotion.progress_class]}
                       value={emotion.percent}
                       max="100"
                     >
@@ -175,48 +182,88 @@ mood_signal =
                 </div>
               </section>
 
-              <section id="session-snapshots" class="space-y-2">
-                <h3 class="font-semibold text-base-content">Session Snapshots</h3>
+              <section id="session-snapshots" class="space-y-3">
+                <div class="flex items-center gap-2">
+                  <.icon name="hero-clock" class="size-5 text-base-content/60" />
+                  <h3 class="font-bold text-base-content">Session Snapshots Históricos</h3>
+                </div>
 
                 <div
                   :if={session_summaries == []}
-                  class="rounded-lg border border-base-300 p-4 text-sm text-base-content/60"
+                  class="rounded-lg border border-dashed border-base-300 p-8 text-center text-sm text-base-content/50"
                 >
-                  Sin snapshots de sesion disponibles.
+                  Aún no se han completado sesiones con seguimiento clínico.
                 </div>
 
-                <details
-                  :for={summary <- session_summaries}
-                  id={"session-summary-#{summary.id}"}
-                  class="collapse collapse-arrow border border-base-300 bg-base-100"
-                >
-                  <summary class="collapse-title text-sm font-medium">
-                    {summary.status_level} - {format_summary_date(summary.period_end)}
-                  </summary>
-                  <div class="collapse-content text-sm leading-6 text-base-content/75">
-                    {summary.summary_text}
-                  </div>
-                </details>
+                <div class="space-y-2">
+                  <details
+                    :for={summary <- session_summaries}
+                    id={"session-summary-#{summary.id}"}
+                    class="group collapse collapse-arrow border border-base-300 bg-base-100 transition-all hover:border-base-content/20"
+                  >
+                    <summary class="collapse-title min-h-0 py-3 text-sm font-medium">
+                      <div class="flex items-center gap-3">
+                        <span class={[
+                          "badge badge-sm uppercase font-bold",
+                          summary.status_level == "Estable" && "badge-success",
+                          summary.status_level == "Alerta" && "badge-warning",
+                          summary.status_level == "Crítico" && "badge-error"
+                        ]}>
+                          {summary.status_level}
+                        </span>
+                        <span class="text-base-content/60">
+                          Sesión del {format_summary_date(summary.period_end)}
+                        </span>
+                      </div>
+                    </summary>
+                    <div class="collapse-content border-t border-base-300 pt-3 text-sm leading-relaxed text-base-content/75">
+                      {summary.summary_text}
+                    </div>
+                  </details>
+                </div>
               </section>
             </div>
 
             <aside class="space-y-4">
               <section class="rounded-lg border border-base-300 p-4">
                 <h3 class="mb-3 font-semibold">Horario de sesion</h3>
-                <dl class="space-y-2 text-sm">
-                  <div class="flex justify-between gap-3">
-                    <dt class="text-base-content/60">Dia</dt>
-                    <dd class="font-medium">
-                      {format_session_day(Map.get(selected_patient, :session_day_of_week))}
-                    </dd>
+                
+                <.form
+                  for={%{}}
+                  phx-submit="save_session_schedule"
+                  class="space-y-3"
+                >
+                  <div class="form-control">
+                    <label class="label py-1">
+                      <span class="label-text-alt font-medium">Dia de semana</span>
+                    </label>
+                    <select name="day" class="select select-bordered select-sm w-full">
+                      <option value="1" selected={selected_patient.session_day_of_week == 1}>Lunes</option>
+                      <option value="2" selected={selected_patient.session_day_of_week == 2}>Martes</option>
+                      <option value="3" selected={selected_patient.session_day_of_week == 3}>Miercoles</option>
+                      <option value="4" selected={selected_patient.session_day_of_week == 4}>Jueves</option>
+                      <option value="5" selected={selected_patient.session_day_of_week == 5}>Viernes</option>
+                      <option value="6" selected={selected_patient.session_day_of_week == 6}>Sabado</option>
+                      <option value="7" selected={selected_patient.session_day_of_week == 7}>Domingo</option>
+                    </select>
                   </div>
-                  <div class="flex justify-between gap-3">
-                    <dt class="text-base-content/60">Hora</dt>
-                    <dd class="font-medium">
-                      {format_session_time(Map.get(selected_patient, :session_time))}
-                    </dd>
+
+                  <div class="form-control">
+                    <label class="label py-1">
+                      <span class="label-text-alt font-medium">Hora</span>
+                    </label>
+                    <input 
+                      type="time" 
+                      name="time" 
+                      value={format_session_time(selected_patient.session_time)} 
+                      class="input input-bordered input-sm w-full" 
+                    />
                   </div>
-                </dl>
+
+                  <button type="submit" class="btn btn-ghost btn-sm btn-block border-base-300">
+                    Guardar cambios
+                  </button>
+                </.form>
               </section>
 
               <section class="rounded-lg border border-base-300 p-4">
@@ -224,11 +271,31 @@ mood_signal =
                 <button
                   id="decrypt-chat-button"
                   type="button"
+                  phx-click="decrypt_chat"
                   class="btn btn-primary w-full"
-                  disabled
                 >
                   <.icon name="hero-lock-open" class="size-5" /> Descifrar chat
                 </button>
+
+                <div 
+                  :if={@decrypted_messages != []}
+                  id="chat-history-modal"
+                  class="mt-4 max-h-[400px] overflow-y-auto rounded-md border border-base-300 bg-base-200/50 p-3"
+                  phx-update="append"
+                >
+                  <div 
+                    :for={msg <- @decrypted_messages} 
+                    id={"msg-#{msg.id}"}
+                    class={["chat", msg.direction == "inbound" && "chat-start", msg.direction == "outbound" && "chat-end"]}
+                  >
+                    <div class="chat-header opacity-50 text-[10px]">
+                      {Calendar.strftime(msg.timestamp, "%H:%M")}
+                    </div>
+                    <div class={["chat-bubble text-xs", msg.direction == "outbound" && "chat-bubble-primary"]}>
+                      {msg.encrypted_content}
+                    </div>
+                  </div>
+                </div>
               </section>
             </aside>
           </div>

@@ -58,6 +58,7 @@ defmodule AletheaWeb.Router do
         {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional}
       ] do
       live "/dashboard", DashboardLive, :index
+      live "/dashboard/patients/:id", DashboardLive, :show
       live "/patients", PatientLive.Index, :index
       live "/patients/new", PatientLive.Index, :new
     end
