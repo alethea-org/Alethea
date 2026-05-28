@@ -192,6 +192,15 @@ defmodule Alethea.Clinical do
          {:ok, kek} <- ProfessionalKek.load_kek(professional),
          %EncryptionKey{} = key <- Repo.get(EncryptionKey, patient.encryption_key_id),
          {:ok, dek} <- PatientVault.decrypt(key.encrypted_key, kek) do
+      # Registrar acceso a datos sensibles (Auditoría)
+      Alethea.Accounts.log_action(%{
+        professional_id: professional.id,
+        action: "PII_DECRYPT",
+        resource_type: "Patient",
+        resource_id: patient.id,
+        details: %{reason: "clinical_context_loading"}
+      })
+
       {:ok, dek}
     else
       nil -> {:error, :missing_encryption_key}

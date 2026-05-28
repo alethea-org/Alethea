@@ -31,6 +31,25 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
       assert :ok = perform_job(%{"from" => phone, "text" => text})
     end
 
+    test "maneja números de entrada sin el prefijo '+' correctamente (normalización)" do
+      professional = insert_professional()
+      # Paciente guardado con +
+      _patient = insert_patient(professional, "+5491112345678", "alias")
+
+      # Llega de WhatsApp SIN el +
+      phone_without_plus = "5491112345678"
+      text = "Hola"
+
+      Alethea.WhatsApp.ClientMock
+      |> expect(:send_message, fn ^phone_without_plus, body ->
+        assert body =~ "términos de uso"
+        {:ok, %{}}
+      end)
+
+      # No debería retornar :not_found (unregistered_message)
+      assert :ok = perform_job(%{"from" => phone_without_plus, "text" => text})
+    end
+
     test "cuando el paciente no ha aceptado términos, envía mensaje de consentimiento" do
       professional = insert_professional()
       _patient = insert_patient(professional, "+56911111111", "alias")
@@ -82,12 +101,13 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
                                raw_content: ^text,
                                patient_context: _context
                              } ->
-        %{
-          response: "¿Qué sientes exactamente?",
-          model_version: "phi-4-mini",
-          source_message_id: message_id,
-          behavior_type: :elicited
-        }
+        {:ok,
+         %{
+           response: "¿Qué sientes exactamente?",
+           model_version: "phi-4-mini",
+           source_message_id: message_id,
+           behavior_type: :elicited
+         }}
       end)
 
       Alethea.WhatsApp.ClientMock

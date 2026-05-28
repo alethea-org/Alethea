@@ -33,6 +33,15 @@ defmodule Alethea.Accounts do
     end)
   end
 
+  @doc """
+  Registra una acción en el log de auditoría.
+  """
+  def log_action(attrs) do
+    %Alethea.Accounts.AuditLog{}
+    |> Alethea.Accounts.AuditLog.changeset(attrs)
+    |> Repo.insert()
+  end
+
   def authenticate_professional(email, password)
       when is_binary(email) and is_binary(password) do
     case get_professional_by_email(email) do
@@ -73,13 +82,15 @@ defmodule Alethea.Accounts do
 
   def get_patient!(id), do: Repo.get!(Patient, id)
 
-  def lookup_patient_by_phone(phone_e164) do
+  def lookup_patient_by_phone(phone) do
+    normalized = normalize_phone(phone)
+
     hash =
       :crypto.mac(
         :hmac,
         :sha256,
         Application.fetch_env!(:alethea, :phone_hash_secret),
-        phone_e164
+        normalized
       )
       |> Base.encode64()
 
@@ -125,13 +136,7 @@ defmodule Alethea.Accounts do
 
       true ->
         # Normalizar número de teléfono a E.164
-        normalized_number =
-          whatsapp_number
-          |> String.replace(~r/[^\d+]/, "")
-          |> then(fn
-            "+" <> _ = phone -> phone
-            phone -> "+" <> phone
-          end)
+        normalized_number = normalize_phone(whatsapp_number)
 
         # 1. Generar DEK
         dek_bytes = :crypto.strong_rand_bytes(32)
@@ -174,8 +179,19 @@ defmodule Alethea.Accounts do
         end)
         |> Repo.transaction()
         |> case do
-          {:ok, %{patient: patient}} -> {:ok, patient}
-          {:error, _name, error, _changes} -> {:error, error}
+          {:ok, %{patient: patient}} ->
+            log_action(%{
+              professional_id: patient.professional_id,
+              action: "CREATE_PATIENT",
+              resource_type: "Patient",
+              resource_id: patient.id,
+              details: %{alias: patient.alias}
+            })
+
+            {:ok, patient}
+
+          {:error, _name, error, _changes} ->
+            {:error, error}
         end
     end
   end
@@ -185,5 +201,14 @@ defmodule Alethea.Accounts do
     %Patient{}
     |> Patient.changeset(attrs)
     |> Repo.insert()
+  end
+
+  defp normalize_phone(phone) when is_binary(phone) do
+    phone
+    |> String.replace(~r/[^\d+]/, "")
+    |> then(fn
+      "+" <> _ = phone -> phone
+      phone -> "+" <> phone
+    end)
   end
 end

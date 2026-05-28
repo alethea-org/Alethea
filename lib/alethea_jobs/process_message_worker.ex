@@ -106,30 +106,35 @@ defmodule AletheaJobs.ProcessMessageWorker do
             # 5. Pipeline de IA
             case Clinical.build_patient_context(patient, context_limit) do
               {:ok, patient_context} ->
-                chain_result =
-                  phi_worker().process(%{
-                    message_id: inbound_message.id,
-                    raw_content: text,
-                    patient_context: patient_context
-                  })
+                case phi_worker().process(%{
+                       message_id: inbound_message.id,
+                       raw_content: text,
+                       patient_context: patient_context
+                     }) do
+                  {:ok, chain_result} ->
+                    with {:ok, _outbound_message} <-
+                           Clinical.save_message(
+                             patient,
+                             chain_result.response,
+                             nil,
+                             "outbound",
+                             "elicited",
+                             nil,
+                             session.id
+                           ),
+                         {:ok, _diagnosis} <-
+                           Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
+                      whatsapp_client().send_message(phone, chain_result.response)
+                      :ok
+                    else
+                      {:error, reason} ->
+                        Logger.error("Error guardando resultado de IA: #{inspect(reason)}")
+                        {:error, reason}
+                    end
 
-                with {:ok, _outbound_message} <-
-                       Clinical.save_message(
-                         patient,
-                         chain_result.response,
-                         nil,
-                         "outbound",
-                         "elicited",
-                         nil,
-                         session.id
-                       ),
-                     {:ok, _diagnosis} <-
-                       Clinical.save_ai_diagnosis(inbound_message.id, chain_result) do
-                  whatsapp_client().send_message(phone, chain_result.response)
-                  :ok
-                else
                   {:error, reason} ->
-                    Logger.error("Error guardando resultado de IA: #{inspect(reason)}")
+                    Logger.error("Error en procesamiento de IA (Phi): #{inspect(reason)}")
+                    # Aquí podríamos enviar un mensaje de error genérico al paciente si quisiéramos
                     {:error, reason}
                 end
 

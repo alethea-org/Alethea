@@ -75,31 +75,42 @@ defmodule Alethea.AccountsTest do
       assert {:error, :not_found} == Accounts.load_patient_dek(patient, kek)
     end
 
-    test "unicidad global: no permite registrar el mismo número dos veces (vía hash)", %{
-      professional: pro,
-      kek: kek
+    test "unicidad global: no permite registrar el mismo número para diferentes profesionales (vía hash)", %{
+      professional: pro1,
+      kek: kek1
     } do
       phone = "+56912345678"
 
-      {:ok, _patient} =
+      # 1. Profesional 1 registra al paciente
+      {:ok, _patient1} =
         Accounts.create_patient(
           %{
-            "alias" => "Juan P.",
+            "alias" => "Paciente en Pro 1",
             "whatsapp_number" => phone,
-            "professional_id" => pro.id
+            "professional_id" => pro1.id
           },
-          kek
+          kek1
         )
 
-      # Intentamos registrar el mismo número (aunque con formato sucio)
+      # 2. Crear un segundo profesional
+      {:ok, pro2} =
+        Accounts.create_professional(%{
+          email: "pro2@alethea.com",
+          full_name: "Segundo Profesional",
+          password: @password
+        })
+
+      {:ok, kek2} = Accounts.load_professional_kek(pro2)
+
+      # 3. Intentamos registrar el mismo número para el Profesional 2
       result =
         Accounts.create_patient(
           %{
-            "alias" => "Juan P. Bis",
-            "whatsapp_number" => " +56 9-1234 5678 ",
-            "professional_id" => pro.id
+            "alias" => "Mismo Paciente en Pro 2",
+            "whatsapp_number" => phone,
+            "professional_id" => pro2.id
           },
-          kek
+          kek2
         )
 
       assert {:error, changeset} = result
@@ -153,6 +164,55 @@ defmodule Alethea.AccountsTest do
                )
 
       assert "can't be blank" in errors_on(changeset).whatsapp_number
+    end
+
+    test "auditoría: registra un log cuando se crea un paciente", %{professional: pro, kek: kek} do
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{
+            "alias" => "Auditable",
+            "whatsapp_number" => "+56911111111",
+            "professional_id" => pro.id
+          },
+          kek
+        )
+
+      # Verificar que existe el log
+      log = Repo.get_by(Alethea.Accounts.AuditLog, action: "CREATE_PATIENT", resource_id: patient.id)
+      assert log
+      assert log.professional_id == pro.id
+      assert log.details["alias"] == "Auditable"
+    end
+  end
+
+  describe "lookup_patient_by_phone/1" do
+    test "encuentra un paciente normalizando el número de entrada", %{professional: pro, kek: kek} do
+      phone = "+5491112345678"
+
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{
+            "alias" => "Test Patient",
+            "whatsapp_number" => phone,
+            "professional_id" => pro.id
+          },
+          kek
+        )
+
+      # 1. Búsqueda con formato idéntico
+      assert {:ok, found} = Accounts.lookup_patient_by_phone(phone)
+      assert found.id == patient.id
+
+      # 2. Búsqueda con formato de WhatsApp (sin +)
+      assert {:ok, found} = Accounts.lookup_patient_by_phone("5491112345678")
+      assert found.id == patient.id
+
+      # 3. Búsqueda con formato sucio (espacios, guiones)
+      assert {:ok, found} = Accounts.lookup_patient_by_phone(" (54) 9 11-1234 5678 ")
+      assert found.id == patient.id
+
+      # 4. Caso no encontrado
+      assert {:error, :not_found} == Accounts.lookup_patient_by_phone("+1234567890")
     end
   end
 end

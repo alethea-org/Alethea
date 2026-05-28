@@ -45,7 +45,7 @@ defmodule Alethea.Accounts.Patient do
     |> validate_required([:alias, :professional_id])
     |> validate_inclusion(:status, ["active", "archived", "deleted"])
     |> unique_constraint(:whatsapp_number_hash,
-      name: :patients_professional_id_whatsapp_number_hash_index
+      name: :patients_whatsapp_number_hash_index
     )
 
     # Logic for hashing and encrypting the number would go here or in a context

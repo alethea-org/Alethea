@@ -6,6 +6,10 @@ defmodule AletheaWeb.PatientLive.Index do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+    end
+
     patients = Accounts.list_patients(socket.assigns.current_professional.id)
 
     socket =
@@ -14,6 +18,18 @@ defmodule AletheaWeb.PatientLive.Index do
       |> stream(:patients, patients)
 
     {:ok, socket}
+  end
+
+  @impl true
+  def handle_info({:crisis_detected, %{patient_id: patient_id}}, socket) do
+    patient = Accounts.get_patient!(patient_id)
+
+    # Solo actualizar si el paciente pertenece a este profesional
+    if patient.professional_id == socket.assigns.current_professional.id do
+      {:noreply, stream_insert(socket, :patients, patient)}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
