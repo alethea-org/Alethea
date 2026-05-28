@@ -12,14 +12,11 @@ defmodule Alethea.Accounts.Patient do
     field :terms_accepted, :boolean, default: false
     field :urgent_intervention, :boolean, default: false
     field :encryption_version, :integer, default: 1
-    field :urgent_intervention, :boolean, default: false
     field :session_day_of_week, :integer
     field :session_time, :time
 
     # Virtual field for the raw number during input
     field :whatsapp_number, :string, virtual: true
-    field :session_day_of_week, :integer
-    field :session_time, :time
 
     belongs_to :professional, Alethea.Accounts.Professional
     belongs_to :encryption_key, Alethea.Accounts.EncryptionKey
@@ -53,7 +50,5 @@ defmodule Alethea.Accounts.Patient do
     |> unique_constraint(:whatsapp_number_hash,
       name: :patients_whatsapp_number_hash_index
     )
-
-    # Logic for hashing and encrypting the number would go here or in a context
   end
 end
