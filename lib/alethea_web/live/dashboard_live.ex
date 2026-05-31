@@ -7,7 +7,7 @@ defmodule AletheaWeb.DashboardLive do
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
     end
 
     professional = Accounts.get_professional!(id)
@@ -57,13 +57,15 @@ defmodule AletheaWeb.DashboardLive do
     patient = find_patient(socket, id)
 
     if patient do
-      # Auditoría de visualización de perfil
-      Accounts.log_action(%{
-        action: "VIEW_PATIENT_PROFILE",
-        resource_type: "Patient",
-        resource_id: patient.id,
-        professional_id: socket.assigns.current_professional.id
-      })
+      # Auditoría de visualización de perfil (solo en modo real, IDs de mock no son UUIDs válidos)
+      if is_valid_uuid?(id) do
+        Accounts.log_action(%{
+          action: "VIEW_PATIENT_PROFILE",
+          resource_type: "Patient",
+          resource_id: patient.id,
+          professional_id: socket.assigns.current_professional.id
+        })
+      end
 
       socket
       |> assign(:chat_decrypted, false)
@@ -80,13 +82,15 @@ defmodule AletheaWeb.DashboardLive do
     patient = socket.assigns.selected_patient
     professional_kek = socket.assigns.professional_kek
 
-    # Auditoría de descifrado
-    Accounts.log_action(%{
-      action: "VIEW_CHAT_HISTORY",
-      resource_type: "Patient",
-      resource_id: patient.id,
-      professional_id: socket.assigns.current_professional.id
-    })
+    # Auditoría de descifrado (solo en modo real, IDs de mock no son UUIDs válidos)
+    if is_valid_uuid?(patient.id) do
+      Accounts.log_action(%{
+        action: "VIEW_CHAT_HISTORY",
+        resource_type: "Patient",
+        resource_id: patient.id,
+        professional_id: socket.assigns.current_professional.id
+      })
+    end
 
     decrypted_messages =
       if socket.assigns.use_mock_data do
@@ -111,27 +115,37 @@ defmodule AletheaWeb.DashboardLive do
     day = String.to_integer(day)
     time = Time.from_iso8601!(time <> ":00")
 
-    case Accounts.update_patient_session_schedule(patient, day, time) do
-      {:ok, updated_patient} ->
-        # Actualizar la lista de pacientes en el sidebar si no estamos en mocks
-        patients =
-          if socket.assigns.use_mock_data do
-            socket.assigns.patients
-            |> Enum.map(fn p -> if p.id == patient.id, do: updated_patient, else: p end)
-          else
-            Accounts.list_patients(socket.assigns.current_professional.id)
-          end
+    if socket.assigns.use_mock_data do
+      # En modo mock actualizamos solo en memoria (el id no es un UUID válido)
+      updated_patient = %{patient | session_day_of_week: day, session_time: time}
 
-        socket =
-          socket
-          |> put_flash(:info, "Horario de sesión actualizado correctamente.")
-          |> assign(:selected_patient, updated_patient)
-          |> assign(:patients, patients)
+      patients =
+        socket.assigns.patients
+        |> Enum.map(fn p -> if p.id == patient.id, do: updated_patient, else: p end)
 
-        {:noreply, socket}
+      socket =
+        socket
+        |> put_flash(:info, "Horario de sesión actualizado correctamente.")
+        |> assign(:selected_patient, updated_patient)
+        |> assign(:patients, patients)
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar el horario.")}
+      {:noreply, socket}
+    else
+      case Accounts.update_patient_session_schedule(patient, day, time) do
+        {:ok, updated_patient} ->
+          patients = Accounts.list_patients(socket.assigns.current_professional.id)
+
+          socket =
+            socket
+            |> put_flash(:info, "Horario de sesión actualizado correctamente.")
+            |> assign(:selected_patient, updated_patient)
+            |> assign(:patients, patients)
+
+          {:noreply, socket}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar el horario.")}
+      end
     end
   end
 
@@ -217,7 +231,15 @@ defmodule AletheaWeb.DashboardLive do
   def handle_info({:crisis_detected, %{patient_id: patient_id, level: level}}, socket) do
     professional = socket.assigns.current_professional
 
-    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+    patient =
+      if is_valid_uuid?(patient_id) do
+        Accounts.get_patient_for_professional(professional.id, patient_id)
+      else
+        # Modo mock: buscar el paciente en memoria
+        Enum.find(socket.assigns.patients, &(&1.id == patient_id))
+      end
+
+    case patient do
       nil ->
         {:noreply, socket}
 
@@ -340,9 +362,7 @@ defmodule AletheaWeb.DashboardLive do
   defp format_session_day(_day), do: "-"
 
   defp format_session_time(%Time{} = time) do
-    time
-    |> Time.truncate(:minute)
-    |> Time.to_string()
+    Calendar.strftime(time, "%H:%M")
   end
 
   defp format_session_time(_), do: "-"
@@ -352,4 +372,8 @@ defmodule AletheaWeb.DashboardLive do
   end
 
   defp format_summary_date(_), do: "-"
+
+  defp is_valid_uuid?(id) do
+    match?({:ok, _}, Ecto.UUID.cast(id))
+  end
 end
