@@ -54,7 +54,6 @@ Diseñar e implementar el pipeline de orquestación de IA híbrida que:
 {:langchain, "~> 0.3.0"},        # Orquestación de LLMs
 {:bumblebee, "~> 0.6.0"},        # Inferencia local (RoBERTa)
 {:nx, "~> 0.9"},                 # Tensores numéricos
-{:exla, "~> 0.9"},               # Backend de aceleración
 {:oban, "~> 2.19"},              # Jobs asíncronos
 {:cloak_ecto, "~> 1.3"},         # Cifrado en base de datos
 ```
