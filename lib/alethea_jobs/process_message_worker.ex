@@ -39,6 +39,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
     case Accounts.lookup_patient_by_phone(phone) do
       {:ok, patient} ->
+        # Preload professional for crisis message
+        patient = Accounts.get_patient_with_professional(patient.id)
         process_patient_message(patient, phone, text, whatsapp_message_id)
 
       {:error, :not_found} ->
@@ -78,7 +80,8 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
   defp process_clinical_message(patient, phone, text, whatsapp_message_id) do
     crisis_support_message =
-      Application.get_env(:alethea, :crisis_support_message, default_crisis_support_message())
+      patient.professional.crisis_message ||
+        Application.get_env(:alethea, :crisis_support_message, default_crisis_support_message())
 
     context_limit =
       Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10

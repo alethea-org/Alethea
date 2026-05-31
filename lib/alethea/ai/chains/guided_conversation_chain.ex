@@ -11,7 +11,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias LangChain.Message
 
   @spec run(%{sanitized_content: String.t(), patient_context: String.t(), message_id: binary()}) ::
-          map()
+          {:ok, map()} | {:error, term()}
   def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
     llm_config = Application.get_env(:alethea, __MODULE__, [])
     provider = Keyword.get(llm_config, :provider, :local)
@@ -44,22 +44,26 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
     system_msg = system_prompt(ctx, llm_config[:system_prompt])
 
-    {:ok, chain} =
-      %{
-        llm: llm,
-        verbose: false
-      }
-      |> LLMChain.new!()
-      |> LLMChain.add_message(Message.new_system!(system_msg))
-      |> LLMChain.add_message(Message.new_user!(content))
-      |> LLMChain.run()
+    case %{
+           llm: llm,
+           verbose: false
+         }
+         |> LLMChain.new!()
+         |> LLMChain.add_message(Message.new_system!(system_msg))
+         |> LLMChain.add_message(Message.new_user!(content))
+         |> LLMChain.run() do
+      {:ok, chain} ->
+        {:ok,
+         %{
+           response: chain.last_message.content,
+           source_message_id: msg_id,
+           model_version: llm_config[:model] || "phi-4-mini",
+           behavior_type: :elicited
+         }}
 
-    %{
-      response: chain.last_message.content,
-      source_message_id: msg_id,
-      model_version: llm_config[:model] || "phi-4-mini",
-      behavior_type: :elicited
-    }
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp system_prompt(context, nil) do

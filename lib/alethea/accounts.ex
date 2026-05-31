@@ -72,12 +72,44 @@ defmodule Alethea.Accounts do
     end
   end
 
+  def update_professional(%Professional{} = professional, attrs) do
+    professional
+    |> Professional.changeset(attrs)
+    |> Repo.update()
+  end
+
   # Patients
 
   def list_patients(professional_id) do
     Patient
-    |> where(professional_id: ^professional_id)
+    |> where([p], p.professional_id == ^professional_id)
+    |> where([p], p.status != "deleted")
+    |> order_by([p], desc: p.urgent_intervention, asc: p.alias)
     |> Repo.all()
+  end
+
+  def get_patient_with_professional(patient_id) do
+    Patient
+    |> where([p], p.id == ^patient_id)
+    |> preload([:professional])
+    |> Repo.one()
+  end
+
+  def list_critical_patients(professional_id) do
+    Patient
+    |> where([p], p.professional_id == ^professional_id)
+    |> where([p], p.status != "deleted")
+    |> where([p], p.urgent_intervention == true)
+    |> order_by([p], asc: p.alias)
+    |> Repo.all()
+  end
+
+  def get_patient_for_professional(professional_id, patient_id) do
+    Patient
+    |> where([p], p.id == ^patient_id)
+    |> where([p], p.professional_id == ^professional_id)
+    |> where([p], p.status != "deleted")
+    |> Repo.one()
   end
 
   def get_patient!(id), do: Repo.get!(Patient, id)
@@ -106,13 +138,25 @@ defmodule Alethea.Accounts do
     |> Repo.update()
   end
 
+  def update_patient_session_schedule(%Patient{} = patient, day, time) do
+    patient
+    |> Patient.changeset(%{session_day_of_week: day, session_time: time})
+    |> Repo.update()
+  end
+
   def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
     # Solo permitir actualizar campos de estado internos para evitar mass-assignment
-    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status])
+    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status, :session_day_of_week, :session_time])
 
     patient
-    |> Ecto.Changeset.change(allowed_attrs)
+    |> Patient.changeset(allowed_attrs)
     |> Repo.update()
+  end
+
+  def get_encryption_key_for_patient(patient_id) do
+    EncryptionKey
+    |> where([k], k.patient_id == ^patient_id and k.type == "patient")
+    |> Repo.one()
   end
 
   @doc """

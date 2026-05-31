@@ -66,7 +66,6 @@ defmodule Alethea.MixProject do
       # IA local con Bumblebee
       {:bumblebee, "~> 0.6.0"},
       {:nx, "~> 0.9"},
-      {:exla, "~> 0.9"},
       {:tokenizers, "~> 0.5"}
     ]
   end

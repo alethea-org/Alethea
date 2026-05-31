@@ -2,7 +2,7 @@ defmodule Alethea.AI.RoBERTaWorker do
   @moduledoc """
   Worker híbrido para el análisis de emociones.
   Soporta dos proveedores:
-  - :local -> Utiliza Bumblebee y EXLA para inferencia en la propia máquina.
+  - :local -> Utiliza Bumblebee para inferencia en la propia máquina.
   - :huggingface -> Utiliza la API de Inferencia de Hugging Face (ideal para dev).
   """
   use GenServer
@@ -50,8 +50,7 @@ defmodule Alethea.AI.RoBERTaWorker do
       serving =
         Bumblebee.Text.text_classification(model_info, tokenizer,
           top_k: 1,
-          compile: [batch_size: 10, sequence_length: 128],
-          defn_options: [compiler: EXLA]
+          compile: [batch_size: 10, sequence_length: 128]
         )
 
       {:ok, _} = Nx.Serving.start_link(name: @serving_name, serving: serving)
