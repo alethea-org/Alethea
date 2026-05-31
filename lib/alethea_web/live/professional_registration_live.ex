@@ -35,9 +35,6 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
         id="registration_form"
         phx-submit="save"
         phx-change="validate"
-        phx-trigger-action={@trigger_submit}
-        action={~p"/login?_action=registered"}
-        method="post"
       >
         <.error :if={@check_errors}>
           Oops, algo salió mal! Por favor revisá los errores abajo.
@@ -51,7 +48,9 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
         </p>
 
         <:actions>
-          <.button phx-disable-with="Creando cuenta..." class="w-full">Crear cuenta</.button>
+          <.button variant="primary" phx-disable-with="Creando cuenta..." class="w-full">
+            Crear cuenta
+          </.button>
         </:actions>
       </.simple_form>
     </div>
@@ -69,7 +68,7 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
         {:noreply,
          socket
          |> put_flash(:info, "Cuenta creada con éxito. Ahora podés iniciar sesión.")
-         |> assign(trigger_submit: true)}
+         |> push_navigate(to: ~p"/login")}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, socket |> assign_form(changeset) |> assign(check_errors: true)}

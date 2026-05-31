@@ -12,7 +12,8 @@ defmodule AletheaWeb.Layouts do
   """
   attr :current_professional, :any, default: nil
   attr :flash, :map, required: true
-  slot :inner_block, required: true
+  attr :container_class, :string, default: "mx-auto max-w-4xl"
+  slot :inner_block # No longer required as we might use @inner_content
 
   def app(assigns) do
     ~H"""
@@ -58,8 +59,8 @@ defmodule AletheaWeb.Layouts do
       </header>
 
       <main class="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        <div class="mx-auto max-w-4xl">
-          {@inner_content}
+        <div class={assigns[:container_class] || "mx-auto max-w-4xl"}>
+          {render_slot(@inner_block) || @inner_content}
         </div>
       </main>
 

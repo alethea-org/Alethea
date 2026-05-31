@@ -14,8 +14,11 @@ defmodule AletheaWeb.LoginLive do
       <.simple_form for={@form} action={~p"/login"} method="post">
         <.input field={@form[:email]} type="email" label="Correo electrónico" required />
         <.input field={@form[:password]} type="password" label="Contraseña" required />
+
         <:actions>
-          <.button type="submit" class="w-full mt-4">Ingresar</.button>
+          <.button variant="primary" type="submit" class="w-full mt-4">
+            Ingresar
+          </.button>
         </:actions>
       </.simple_form>
     </div>

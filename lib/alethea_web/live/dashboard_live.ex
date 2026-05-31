@@ -1,14 +1,13 @@
 defmodule AletheaWeb.DashboardLive do
   use AletheaWeb, :live_view
   import Ecto.Query
-
   alias Alethea.Accounts
   alias Alethea.Clinical.{MockData, Message}
   alias Alethea.Encryption.PatientVault
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
     end
 
     professional = Accounts.get_professional!(id)
@@ -36,9 +35,11 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:session_summaries, [])
       |> assign(:emotion_rows, [])
       |> assign(:mood_signal, default_mood_signal())
-      |> assign(:decrypted_messages, [])
+      |> assign(:container_class, "mx-auto max-w-7xl")
+      |> assign(:chat_decrypted, false)
+      |> stream(:decrypted_messages, [])
 
-    {:ok, socket, temporary_assigns: [decrypted_messages: []]}
+    {:ok, socket}
   end
 
   def handle_params(params, _url, socket) do
@@ -48,7 +49,8 @@ defmodule AletheaWeb.DashboardLive do
   defp apply_action(socket, :index, _params) do
     socket
     |> assign(:selected_patient, nil)
-    |> assign(:decrypted_messages, [])
+    |> assign(:chat_decrypted, false)
+    |> stream(:decrypted_messages, [], reset: true)
   end
 
   defp apply_action(socket, :show, %{"id" => id}) do
@@ -64,7 +66,8 @@ defmodule AletheaWeb.DashboardLive do
       })
 
       socket
-      |> assign(:decrypted_messages, [])
+      |> assign(:chat_decrypted, false)
+      |> stream(:decrypted_messages, [], reset: true)
       |> load_patient_details(patient)
     else
       socket
@@ -95,7 +98,12 @@ defmodule AletheaWeb.DashboardLive do
         decrypt_real_messages(patient, professional_kek)
       end
 
-    {:noreply, assign(socket, :decrypted_messages, decrypted_messages)}
+    socket =
+      socket
+      |> assign(:chat_decrypted, true)
+      |> stream(:decrypted_messages, decrypted_messages, reset: true)
+
+    {:noreply, socket}
   end
 
   def handle_event("save_session_schedule", %{"day" => day, "time" => time}, socket) do
@@ -151,7 +159,7 @@ defmodule AletheaWeb.DashboardLive do
       # Cargar últimos 50 mensajes
       messages =
         Alethea.Repo.all(
-          Ecto.Query.from(m in Message,
+          from(m in Message,
             where: m.patient_id == ^patient.id,
             order_by: [desc: m.timestamp],
             limit: 50
@@ -206,7 +214,7 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
   end
 
-  def handle_info({:crisis_detected, patient_id, level, _triggers}, socket) do
+  def handle_info({:crisis_detected, %{patient_id: patient_id, level: level}}, socket) do
     professional = socket.assigns.current_professional
 
     case Accounts.get_patient_for_professional(professional.id, patient_id) do
@@ -331,17 +339,17 @@ defmodule AletheaWeb.DashboardLive do
   defp format_session_day(7), do: "Domingo"
   defp format_session_day(_day), do: "-"
 
-  defp format_session_time(nil), do: "-"
-
   defp format_session_time(%Time{} = time) do
     time
     |> Time.truncate(:minute)
     |> Time.to_string()
   end
 
-  defp format_summary_date(nil), do: "-"
+  defp format_session_time(_), do: "-"
 
   defp format_summary_date(%DateTime{} = date_time) do
     Calendar.strftime(date_time, "%d/%m/%Y")
   end
+
+  defp format_summary_date(_), do: "-"
 end
