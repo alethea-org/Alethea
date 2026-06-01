@@ -5,17 +5,18 @@ defmodule Alethea.Clinical.Message do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "messages" do
-    field :direction, :string
-    field :behavior_type, :string, default: "spontaneous"
-    field :whatsapp_message_id, :string
-    field :encrypted_content, :binary
-    field :encryption_version, :integer, default: 1
-    field :synced_to_graph, :boolean, default: false
-    field :timestamp, :utc_datetime
+    field(:direction, :string)
+    field(:behavior_type, :string, default: "spontaneous")
+    field(:whatsapp_message_id, :string)
+    field(:encrypted_content, :binary)
+    field(:encryption_version, :integer, default: 1)
+    field(:synced_to_graph, :boolean, default: false)
+    field(:timestamp, :utc_datetime)
 
-    belongs_to :patient, Alethea.Accounts.Patient
-    belongs_to :session, Alethea.Clinical.Session
-    has_many :ai_diagnoses, Alethea.AI.Diagnosis
+    belongs_to(:patient, Alethea.Accounts.Patient)
+    belongs_to(:session, Alethea.Clinical.Session)
+    has_many(:ai_diagnoses, Alethea.AI.Diagnosis)
+    has_one(:emotion_analysis, Alethea.Clinical.EmotionAnalysis)
 
     # embedding vector(384) column added manually once pgvector is installed on the PG server
 

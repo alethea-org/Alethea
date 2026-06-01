@@ -145,7 +145,6 @@ defmodule Alethea.Accounts do
   end
 
   def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
-    # Solo permitir actualizar campos de estado internos para evitar mass-assignment
     allowed_attrs =
       Map.take(attrs, [
         :urgent_intervention,
@@ -157,6 +156,15 @@ defmodule Alethea.Accounts do
 
     patient
     |> Patient.changeset(allowed_attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Archives a patient (soft delete). Sets status to "archived".
+  """
+  def archive_patient(%Patient{} = patient) do
+    patient
+    |> Patient.changeset(%{status: "archived"})
     |> Repo.update()
   end
 
@@ -209,6 +217,10 @@ defmodule Alethea.Accounts do
           )
           |> Base.encode64()
 
+        # Insert encryption key with placeholder patient_id
+        # After patient is created, we update with the real patient_id
+        # This is ACID-safe within the transaction - the key cannot be accessed
+        # externally until patient_id is set, and if anything fails, both roll back
         Ecto.Multi.new()
         |> Ecto.Multi.insert(
           :encryption_key,

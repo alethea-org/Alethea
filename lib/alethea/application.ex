@@ -14,6 +14,7 @@ defmodule Alethea.Application do
       {Phoenix.PubSub, name: Alethea.PubSub},
       Alethea.Encryption.Vault,
       Alethea.WhatsApp.ConsentCache,
+      Alethea.RateLimiter,
       {Oban, Application.fetch_env!(:alethea, Oban)},
       AletheaWeb.Endpoint
     ]

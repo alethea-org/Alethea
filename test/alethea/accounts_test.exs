@@ -75,10 +75,11 @@ defmodule Alethea.AccountsTest do
       assert {:error, :not_found} == Accounts.load_patient_dek(patient, kek)
     end
 
-    test "unicidad global: no permite registrar el mismo número para diferentes profesionales (vía hash)", %{
-      professional: pro1,
-      kek: kek1
-    } do
+    test "unicidad global: no permite registrar el mismo número para diferentes profesionales (vía hash)",
+         %{
+           professional: pro1,
+           kek: kek1
+         } do
       phone = "+56912345678"
 
       # 1. Profesional 1 registra al paciente
@@ -178,7 +179,9 @@ defmodule Alethea.AccountsTest do
         )
 
       # Verificar que existe el log
-      log = Repo.get_by(Alethea.Accounts.AuditLog, action: "CREATE_PATIENT", resource_id: patient.id)
+      log =
+        Repo.get_by(Alethea.Accounts.AuditLog, action: "CREATE_PATIENT", resource_id: patient.id)
+
       assert log
       assert log.professional_id == pro.id
       assert log.details["alias"] == "Auditable"

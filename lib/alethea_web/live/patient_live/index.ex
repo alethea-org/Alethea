@@ -119,12 +119,20 @@ defmodule AletheaWeb.PatientLive.Index do
       </div>
 
       <%!-- Stats --%>
-      <div class="stats" style="border:1px solid #e2e8f0; border-radius:16px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.04); display:inline-flex;">
+      <div
+        class="stats"
+        style="border:1px solid #e2e8f0; border-radius:16px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.04); display:inline-flex;"
+      >
         <div class="stat" style="padding:16px 24px;">
           <div class="stat-figure" style="color:#6366f1;">
             <.icon name="hero-users" style="width:28px; height:28px;" />
           </div>
-          <div class="stat-title" style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;">Pacientes</div>
+          <div
+            class="stat-title"
+            style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;"
+          >
+            Pacientes
+          </div>
           <div class="stat-value" style="font-size:22px; font-weight:800;">{length(@patients)}</div>
           <div class="stat-desc" style="font-size:11px; color:#94a3b8;">En seguimiento</div>
         </div>
@@ -132,7 +140,12 @@ defmodule AletheaWeb.PatientLive.Index do
           <div class="stat-figure" style="color:#6366f1;">
             <.icon name="hero-lock-closed" style="width:28px; height:28px;" />
           </div>
-          <div class="stat-title" style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;">Bóvedas</div>
+          <div
+            class="stat-title"
+            style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;"
+          >
+            Bóvedas
+          </div>
           <div class="stat-value" style="font-size:22px; font-weight:800;">{length(@patients)}</div>
           <div class="stat-desc" style="font-size:11px; color:#94a3b8;">Cifradas E2E</div>
         </div>
@@ -141,7 +154,6 @@ defmodule AletheaWeb.PatientLive.Index do
 
     <%!-- Two-column layout --%>
     <div style="display:grid; grid-template-columns:320px 1fr; gap:20px; min-height:400px;">
-
       <%!-- ──── LEFT: Patient list ──── --%>
       <div style="border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; background:#fff; align-self:start;">
         <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #f1f5f9; background:#fafbfc;">
@@ -151,7 +163,11 @@ defmodule AletheaWeb.PatientLive.Index do
               Pacientes
             </span>
           </div>
-          <.button phx-click={JS.patch(~p"/patients/new")} class="btn btn-primary btn-sm" style="height:28px; font-size:11px;">
+          <.button
+            phx-click={JS.patch(~p"/patients/new")}
+            class="btn btn-primary btn-sm"
+            style="height:28px; font-size:11px;"
+          >
             <.icon name="hero-plus" class="mr-1" style="width:12px; height:12px;" /> Nuevo
           </.button>
         </div>
@@ -159,7 +175,10 @@ defmodule AletheaWeb.PatientLive.Index do
         <nav id="patients-list">
           <%= if @patients == [] do %>
             <div style="padding:40px 16px; text-align:center;">
-              <.icon name="hero-user-plus" style="width:28px; height:28px; color:#cbd5e1; margin:0 auto 8px; display:block;" />
+              <.icon
+                name="hero-user-plus"
+                style="width:28px; height:28px; color:#cbd5e1; margin:0 auto 8px; display:block;"
+              />
               <p style="font-size:12px; color:#94a3b8; margin-bottom:12px;">No hay pacientes aún</p>
               <.button phx-click={JS.patch(~p"/patients/new")} class="btn btn-primary btn-sm">
                 Registrar paciente
@@ -195,14 +214,22 @@ defmodule AletheaWeb.PatientLive.Index do
               </div>
 
               <div style="min-width:0; flex:1;">
-                <div style="font-size:13px; font-weight:600; color:#1e293b;" class="truncate">{patient.alias}</div>
+                <div style="font-size:13px; font-weight:600; color:#1e293b;" class="truncate">
+                  {patient.alias}
+                </div>
                 <div style="font-size:10px; color:#94a3b8;">
-                  {format_session_day(patient.session_day_of_week)} · {format_session_time(patient.session_time)}
+                  {format_session_day(patient.session_day_of_week)} · {format_session_time(
+                    patient.session_time
+                  )}
                 </div>
               </div>
 
               <%= if patient.urgent_intervention do %>
-                <span style="width:8px; height:8px; border-radius:50%; background:#ef4444; flex-shrink:0;" class="animate-pulse"></span>
+                <span
+                  style="width:8px; height:8px; border-radius:50%; background:#ef4444; flex-shrink:0;"
+                  class="animate-pulse"
+                >
+                </span>
               <% end %>
             </.link>
           <% end %>
@@ -231,9 +258,14 @@ defmodule AletheaWeb.PatientLive.Index do
                 phx-submit="save"
               >
                 <div style="border:1px solid rgba(34,197,94,.2); border-radius:12px; background:rgba(34,197,94,.04); padding:12px 14px; margin-bottom:20px; display:flex; align-items:start; gap:10px;">
-                  <.icon name="hero-shield-check" style="width:18px; height:18px; color:#22c55e; flex-shrink:0; margin-top:2px;" />
+                  <.icon
+                    name="hero-shield-check"
+                    style="width:18px; height:18px; color:#22c55e; flex-shrink:0; margin-top:2px;"
+                  />
                   <div>
-                    <p style="font-size:12px; font-weight:700; color:#166534; margin-bottom:2px;">Privacidad de grado clínico</p>
+                    <p style="font-size:12px; font-weight:700; color:#166534; margin-bottom:2px;">
+                      Privacidad de grado clínico
+                    </p>
                     <p style="font-size:11px; color:#15803d;">
                       El número de WhatsApp se cifrará con una DEK única y nunca será visible en texto plano.
                     </p>
@@ -267,17 +299,29 @@ defmodule AletheaWeb.PatientLive.Index do
                     placeholder="+56 9 1234 5678"
                     style="width:100%; padding:10px 14px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px; background:#fff; color:#334155;"
                   />
-                  <p style="font-size:10px; color:#94a3b8; margin-top:4px; text-transform:uppercase; letter-spacing:0.03em;">Formato E.164</p>
+                  <p style="font-size:10px; color:#94a3b8; margin-top:4px; text-transform:uppercase; letter-spacing:0.03em;">
+                    Formato E.164
+                  </p>
                   <%= for error <- Keyword.get_values(@form[:whatsapp_number].errors, :message) do %>
                     <p style="font-size:11px; color:#ef4444; margin-top:4px;">{error}</p>
                   <% end %>
                 </div>
 
                 <div style="display:flex; gap:10px;">
-                  <button type="submit" class="btn btn-primary" style="flex:1; height:44px; border-radius:10px; font-weight:600;">
-                    <.icon name="hero-lock-closed" class="mr-2" style="width:14px; height:14px;" /> Registrar Paciente
+                  <button
+                    type="submit"
+                    class="btn btn-primary"
+                    style="flex:1; height:44px; border-radius:10px; font-weight:600;"
+                  >
+                    <.icon name="hero-lock-closed" class="mr-2" style="width:14px; height:14px;" />
+                    Registrar Paciente
                   </button>
-                  <.button type="button" phx-click={JS.patch(~p"/patients")} class="btn btn-ghost" style="height:44px; border-radius:10px;">
+                  <.button
+                    type="button"
+                    phx-click={JS.patch(~p"/patients")}
+                    class="btn btn-ghost"
+                    style="height:44px; border-radius:10px;"
+                  >
                     Cancelar
                   </.button>
                 </div>
@@ -291,10 +335,15 @@ defmodule AletheaWeb.PatientLive.Index do
               <div style="width:56px; height:56px; border-radius:16px; background:#eef2ff; display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <.icon name="hero-user-circle" style="width:28px; height:28px; color:#818cf8;" />
               </div>
-              <h2 style="font-size:15px; font-weight:700; color:#64748b; margin-bottom:4px;">Gestión de Pacientes</h2>
-              <p style="font-size:13px; color:#94a3b8; margin-bottom:16px;">Seleccioná un paciente para ver su detalle en el dashboard.</p>
+              <h2 style="font-size:15px; font-weight:700; color:#64748b; margin-bottom:4px;">
+                Gestión de Pacientes
+              </h2>
+              <p style="font-size:13px; color:#94a3b8; margin-bottom:16px;">
+                Seleccioná un paciente para ver su detalle en el dashboard.
+              </p>
               <.button phx-click={JS.patch(~p"/patients/new")} class="btn btn-primary">
-                <.icon name="hero-plus" class="mr-2" style="width:14px; height:14px;" /> Registrar Paciente
+                <.icon name="hero-plus" class="mr-2" style="width:14px; height:14px;" />
+                Registrar Paciente
               </.button>
             </div>
           </div>

@@ -9,6 +9,7 @@ defmodule Alethea.Clinical do
   alias Alethea.Repo
   alias Alethea.Clinical.{Message, Summary, Trend}
   alias Alethea.AI.Diagnosis
+  alias Alethea.Clinical.EmotionAnalysis
   alias Alethea.Accounts.EncryptionKey
   alias Alethea.Encryption.PatientVault
   alias Alethea.Encryption.ProfessionalKek
@@ -77,10 +78,27 @@ defmodule Alethea.Clinical do
     |> Repo.all()
   end
 
+  @spec get_message(binary()) :: {:ok, Message.t()} | {:error, :not_found}
+  def get_message(message_id) do
+    case Repo.get(Message, message_id) do
+      nil -> {:error, :not_found}
+      message -> {:ok, message}
+    end
+  end
+
+  @spec get_message_emotions(binary()) :: {:ok, EmotionAnalysis.t()} | {:error, :not_found}
+  def get_message_emotions(message_id) do
+    case Repo.get_by(EmotionAnalysis, message_id: message_id) do
+      nil -> {:error, :not_found}
+      emotion -> {:ok, emotion}
+    end
+  end
+
   def list_session_messages(session_id) do
     Repo.all(
-      from m in Message,
+      from(m in Message,
         where: m.session_id == ^session_id and m.direction == "inbound"
+      )
     )
   end
 
@@ -129,10 +147,11 @@ defmodule Alethea.Clinical do
     Enum.each(emotion_scores, fn %{label: label, score: score} ->
       last_trend =
         Repo.one(
-          from t in Trend,
+          from(t in Trend,
             where: t.patient_id == ^patient.id and t.indicator_name == ^label,
             order_by: [desc: t.recorded_at],
             limit: 1
+          )
         )
 
       delta = if last_trend, do: score - last_trend.score, else: 0.0
@@ -151,6 +170,21 @@ defmodule Alethea.Clinical do
     :ok
   end
 
+  @spec save_trends_from_analysis(EmotionAnalysis.t(), binary()) :: :ok
+  def save_trends_from_analysis(%EmotionAnalysis{} = analysis, patient_id) do
+    emotion_scores = [
+      %{label: "joy", score: analysis.joy_score || 0.0},
+      %{label: "sadness", score: analysis.sadness_score || 0.0},
+      %{label: "anger", score: analysis.anger_score || 0.0},
+      %{label: "fear", score: analysis.fear_score || 0.0},
+      %{label: "neutral", score: analysis.neutral_score || 0.0}
+    ]
+
+    # save_trends espera un patient struct,，所以我们用虚拟结构
+    fake_patient = %Alethea.Accounts.Patient{id: patient_id}
+    save_trends(fake_patient, emotion_scores, nil)
+  end
+
   def save_summary(attrs) do
     %Summary{}
     |> Summary.changeset(attrs)
@@ -159,20 +193,22 @@ defmodule Alethea.Clinical do
 
   def list_session_summaries(patient_id, since) do
     Repo.all(
-      from s in Summary,
+      from(s in Summary,
         where:
           s.patient_id == ^patient_id and
             s.type == "session" and
             s.period_start >= ^since
+      )
     )
   end
 
   def aggregate_trends(patient_id, since) do
     Repo.all(
-      from t in Trend,
+      from(t in Trend,
         where: t.patient_id == ^patient_id and t.recorded_at >= ^since,
         group_by: t.indicator_name,
         select: {t.indicator_name, avg(t.score)}
+      )
     )
     |> Enum.map(fn {name, avg_score} -> %{label: name, score: avg_score} end)
   end

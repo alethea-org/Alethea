@@ -57,7 +57,12 @@ defmodule AletheaWeb.Layouts do
               <div class="app-sidebar__user-name">{name(assigns)}</div>
               <div class="app-sidebar__user-role">Psicólogo Clínico</div>
             </div>
-            <.link href={~p"/logout"} method="delete" class="app-sidebar__logout" title="Cerrar sesión">
+            <.link
+              href={~p"/logout"}
+              method="delete"
+              class="app-sidebar__logout"
+              title="Cerrar sesión"
+            >
               <.icon name="hero-arrow-left-on-rectangle" class="size-4" />
             </.link>
           </div>
@@ -69,7 +74,8 @@ defmodule AletheaWeb.Layouts do
         id="sidebar-overlay"
         class="sidebar-overlay"
         phx-click={JS.remove_class("app-shell--sidebar-open", to: "#app-shell")}
-      ></div>
+      >
+      </div>
 
       <%!-- ═══ MAIN ═══ --%>
       <div class="app-main">
@@ -91,8 +97,10 @@ defmodule AletheaWeb.Layouts do
             <summary class="app-topbar__avatar" style="list-style:none;">
               {initials(assigns)}
             </summary>
-            <ul class="dropdown-content menu z-50 rounded-xl border bg-white p-2 shadow-xl"
-                style="width:220px; margin-top:8px;">
+            <ul
+              class="dropdown-content menu z-50 rounded-xl border bg-white p-2 shadow-xl"
+              style="width:220px; margin-top:8px;"
+            >
               <li style="padding:8px 12px; border-bottom:1px solid #f1f5f9; margin-bottom:4px;">
                 <div style="font-size:12px; font-weight:700; color:#1e293b;">{name(assigns)}</div>
                 <div style="font-size:10px; color:#94a3b8;">
@@ -100,17 +108,27 @@ defmodule AletheaWeb.Layouts do
                 </div>
               </li>
               <li>
-                <.link navigate={~p"/dashboard"} style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#334155;">
+                <.link
+                  navigate={~p"/dashboard"}
+                  style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#334155;"
+                >
                   <.icon name="hero-presentation-chart-line" class="size-4" /> Dashboard
                 </.link>
               </li>
               <li>
-                <.link navigate={~p"/patients"} style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#334155;">
+                <.link
+                  navigate={~p"/patients"}
+                  style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#334155;"
+                >
                   <.icon name="hero-users" class="size-4" /> Mis Pacientes
                 </.link>
               </li>
               <li style="border-top:1px solid #f1f5f9; margin-top:4px; padding-top:4px;">
-                <.link href={~p"/logout"} method="delete" style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#ef4444; font-weight:600;">
+                <.link
+                  href={~p"/logout"}
+                  method="delete"
+                  style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#ef4444; font-weight:600;"
+                >
                   <.icon name="hero-arrow-left-on-rectangle" class="size-4" /> Cerrar sesión
                 </.link>
               </li>
@@ -147,10 +165,20 @@ defmodule AletheaWeb.Layouts do
 
   defp nav_items do
     [
-      %{id: "dashboard", label: "Dashboard", path: ~p"/dashboard",
-        icon: "hero-presentation-chart-line", view: AletheaWeb.DashboardLive},
-      %{id: "patients", label: "Mis Pacientes", path: ~p"/patients",
-        icon: "hero-users", view: AletheaWeb.PatientLive.Index}
+      %{
+        id: "dashboard",
+        label: "Dashboard",
+        path: ~p"/dashboard",
+        icon: "hero-presentation-chart-line",
+        view: AletheaWeb.DashboardLive
+      },
+      %{
+        id: "patients",
+        label: "Mis Pacientes",
+        path: ~p"/patients",
+        icon: "hero-users",
+        view: AletheaWeb.PatientLive.Index
+      }
     ]
   end
 

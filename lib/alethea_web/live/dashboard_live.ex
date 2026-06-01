@@ -86,25 +86,29 @@ defmodule AletheaWeb.DashboardLive do
     patient = socket.assigns.selected_patient
     professional_kek = socket.assigns.professional_kek
 
-    # Auditoría de descifrado (solo en modo real, IDs de mock no son UUIDs válidos)
-    if is_valid_uuid?(patient.id) do
-      Accounts.log_action(%{
-        action: "VIEW_CHAT_HISTORY",
-        resource_type: "Patient",
-        resource_id: patient.id,
-        professional_id: socket.assigns.current_professional.id
-      })
-    end
-
-    decrypted_messages =
+    {decrypted_messages, audit_result, message_count} =
       if socket.assigns.use_mock_data do
-        MockData.list_mock_messages(patient.id)
-        |> Enum.map(fn msg ->
-          %{msg | encrypted_content: "CONTENIDO DESCIFRADO (MOCK): " <> msg.encrypted_content}
-        end)
+        # Mock mode - no real decryption
+        messages =
+          MockData.list_mock_messages(patient.id)
+          |> Enum.map(fn msg ->
+            %{msg | encrypted_content: "CONTENIDO DESCIFRADO (MOCK): " <> msg.encrypted_content}
+          end)
+
+        {messages, :mock_success, length(messages)}
       else
-        decrypt_real_messages(patient, professional_kek)
+        # Real decryption attempt
+        case decrypt_real_messages(patient, professional_kek) do
+          {:ok, messages} ->
+            {messages, :success, length(messages)}
+
+          {:error, reason} ->
+            {[], {:error, reason}, 0}
+        end
       end
+
+    # Log audit (for both mock and real mode)
+    log_decrypt_audit(socket, patient, audit_result, message_count)
 
     socket =
       socket
@@ -185,14 +189,15 @@ defmodule AletheaWeb.DashboardLive do
         )
 
       # Descifrar contenido
-      Enum.map(messages, fn msg ->
-        case PatientVault.decrypt(msg.encrypted_content, dek_bytes) do
-          {:ok, plain_text} -> %{msg | encrypted_content: plain_text}
-          _ -> %{msg | encrypted_content: "[Error al descifrar]"}
-        end
-      end)
-    else
-      _ -> []
+      decrypted =
+        Enum.map(messages, fn msg ->
+          case PatientVault.decrypt(msg.encrypted_content, dek_bytes) do
+            {:ok, plain_text} -> %{msg | encrypted_content: plain_text}
+            _ -> %{msg | encrypted_content: "[Error al descifrar]"}
+          end
+        end)
+
+      {:ok, decrypted}
     end
   end
 
@@ -417,6 +422,24 @@ defmodule AletheaWeb.DashboardLive do
   end
 
   defp format_summary_date(_), do: "-"
+
+  # Registra auditoría cuando el profesional descifra el historial de chat.
+  defp log_decrypt_audit(socket, patient, result, message_count) do
+    try do
+      Accounts.log_action(%{
+        action: "CHAT_DECRYPT",
+        professional_id: socket.assigns.current_professional.id,
+        resource_type: "Patient",
+        resource_id: patient.id,
+        details: %{
+          result: result,
+          message_count: message_count
+        }
+      })
+    rescue
+      _ -> :ok
+    end
+  end
 
   defp is_valid_uuid?(id) do
     match?({:ok, _}, Ecto.UUID.cast(id))

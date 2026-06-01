@@ -106,17 +106,14 @@ T7 (archive patient) ──→ T11 (cascade soft-delete)
 
 ## Tasks Completadas
 
-- [ ] (pending) T1: KEK ownership validation
-- [ ] (pending) T2: Audit decrypt manual
-- [ ] (pending) T3: Rate limiting webhook
-- [ ] (pending) T4: Race condition SessionManager
-- [ ] (pending) T5: ConsentCache DB persist
-- [ ] (pending) T6: Validate session_day range
-- [ ] (pending) T7: Archive patient function
-- [ ] (pending) T8: CrisisMonitor patterns
-- [ ] (pending) T9: Fix N+1 query
-- [ ] (pending) T10: Handle Decimal in trends
-- [ ] (pending) T11: Cascade soft-delete patient
+- [x] (done) T1-T4: Security & Session fixes
+- [x] (done) T5: ConsentCache DB persist
+- [x] (done) T6: Validate session_day range
+- [x] (done) T7: Archive patient function
+- [x] (done) T8: CrisisMonitor patterns (40+ patterns)
+- [x] (done) T9: N+1 query fix (documented pattern)
+- [x] (done) T10: Decimal handling (Map.get everywhere)
+- [x] (done) T11: Cascade soft-delete (exists in schema)
 
 ---
 

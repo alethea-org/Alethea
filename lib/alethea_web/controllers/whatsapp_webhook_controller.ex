@@ -3,6 +3,8 @@ defmodule AletheaWeb.WhatsappWebhookController do
 
   require Logger
 
+  alias Alethea.RateLimiter
+
   @doc """
   Verificación del webhook por parte de Meta (GET).
   """
@@ -11,8 +13,6 @@ defmodule AletheaWeb.WhatsappWebhookController do
         "hub.verify_token" => token,
         "hub.challenge" => challenge
       }) do
-    # El verify_token debe configurarse en el dashboard de Meta y aquí.
-    # Por ahora usamos uno simple o lo sacamos de config.
     expected_token =
       Application.get_env(:alethea, :whatsapp)[:verify_token] || "alethea_verify_token"
 
@@ -33,10 +33,31 @@ defmodule AletheaWeb.WhatsappWebhookController do
   def receive(conn, params) do
     Logger.debug("WhatsApp Webhook Received")
 
+    # Check rate limit first
+    case extract_phone_hash(params) do
+      {:ok, phone_hash} ->
+        case RateLimiter.check(phone_hash) do
+          :ok ->
+            process_validated_request(conn, params)
+
+          {:error, :rate_limited} ->
+            Logger.warning("Rate limit exceeded for phone hash")
+
+            conn
+            |> put_status(429)
+            |> put_resp_content_type("application/json")
+            |> send_resp(429, Jason.encode!(%{error: "Too many requests"}))
+        end
+
+      :skip_rate_limit ->
+        process_validated_request(conn, params)
+    end
+  end
+
+  defp process_validated_request(conn, params) do
     if valid_whatsapp_signature?(conn) do
       case parse_message(params) do
         {:ok, phone, text, message_id} ->
-          # Encolar el worker de Oban para procesamiento asíncrono
           %{from: phone, text: text, whatsapp_message_id: message_id}
           |> AletheaJobs.ProcessMessageWorker.new(
             unique: [period: 60, keys: [:whatsapp_message_id]]
@@ -54,6 +75,22 @@ defmodule AletheaWeb.WhatsappWebhookController do
     else
       Logger.warning("Invalid WhatsApp Signature")
       send_resp(conn, 403, "Forbidden")
+    end
+  end
+
+  # Extract phone hash from params for rate limiting
+  defp extract_phone_hash(params) do
+    entry = params["entry"]
+
+    with [%{"changes" => [%{"value" => %{"messages" => [msg | _]}}]} | _] <- entry,
+         phone when is_binary(phone) <- msg["from"] do
+      phone_hash =
+        :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone)
+        |> Base.encode64()
+
+      {:ok, phone_hash}
+    else
+      _ -> :skip_rate_limit
     end
   end
 

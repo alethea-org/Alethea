@@ -14,14 +14,14 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
 
   @primary_key false
   embedded_schema do
-    field :model, :string, default: "meta-llama/Llama-2-7b-chat-hf"
-    field :api_key, :string, redact: true
-    field :endpoint_url, :string, default: "https://api-inference.huggingface.co/models/"
-    field :temperature, :float, default: 0.7
-    field :max_tokens, :integer, default: 512
-    field :stream, :boolean, default: false
-    field :receive_timeout, :integer, default: 60_000
-    field :callbacks, {:array, :map}, default: []
+    field(:model, :string, default: "meta-llama/Llama-2-7b-chat-hf")
+    field(:api_key, :string, redact: true)
+    field(:endpoint_url, :string, default: "https://api-inference.huggingface.co/models/")
+    field(:temperature, :float, default: 0.7)
+    field(:max_tokens, :integer, default: 512)
+    field(:stream, :boolean, default: false)
+    field(:receive_timeout, :integer, default: 60_000)
+    field(:callbacks, {:array, :map}, default: [])
   end
 
   @create_fields [
@@ -112,11 +112,34 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
     url = model.endpoint_url <> model.model
 
     case Req.post(url, json: payload, headers: headers, receive_timeout: model.receive_timeout) do
-      {:ok, %Req.Response{status: 200, body: [%{"generated_text" => text} | _]}} ->
+      {:ok, %Req.Response{status: 200, body: nil}} ->
+        raise LangChainError, "Hugging Face API returned empty response (nil)"
+
+      {:ok, %Req.Response{status: 200, body: []}} ->
+        raise LangChainError, "Hugging Face API returned empty list"
+
+      {:ok, %Req.Response{status: 200, body: [%{"generated_text" => text} | _]}}
+      when is_binary(text) and byte_size(text) > 0 ->
         text
 
-      {:ok, %Req.Response{status: 200, body: %{"generated_text" => text}}} ->
+      {:ok, %Req.Response{status: 200, body: %{"generated_text" => text}}}
+      when is_binary(text) and byte_size(text) > 0 ->
         text
+
+      {:ok, %Req.Response{status: 200, body: [%{"generated_text" => _text} | _]}} ->
+        raise LangChainError, "Hugging Face API returned empty generated_text"
+
+      {:ok, %Req.Response{status: 200, body: %{"generated_text" => _text}}} ->
+        raise LangChainError, "Hugging Face API returned empty generated_text"
+
+      {:ok, %Req.Response{status: 200, body: %{"error" => error}}} ->
+        raise LangChainError, "Hugging Face API returned error: #{error}"
+
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        raise LangChainError, "Hugging Face API returned unexpected body format: #{inspect(body)}"
+
+      {:ok, %Req.Response{status: 503, body: body}} ->
+        raise LangChainError, "Hugging Face API model is loading (503). Body: #{inspect(body)}"
 
       {:ok, %Req.Response{status: status, body: body}} ->
         raise LangChainError, "Hugging Face API error (#{status}): #{inspect(body)}"
