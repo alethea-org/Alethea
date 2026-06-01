@@ -45,7 +45,7 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert render(view) =~ "Juan Perez"
       assert render(view) =~ "Weekly Pre-Session Report"
-      assert render(view) =~ "Tendencias del Estado de Ánimo"
+      assert render(view) =~ "Tendencias Emocionales"
     end
 
     test "decrypts chat history and logs audit action", %{conn: conn} do

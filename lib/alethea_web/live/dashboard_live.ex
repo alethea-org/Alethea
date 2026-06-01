@@ -35,7 +35,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:session_summaries, [])
       |> assign(:emotion_rows, [])
       |> assign(:mood_signal, default_mood_signal())
-      |> assign(:container_class, "mx-auto max-w-7xl")
+      |> assign(:today_day_of_week, DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week())
       |> assign(:chat_decrypted, false)
       |> stream(:decrypted_messages, [])
 
@@ -319,24 +319,21 @@ defmodule AletheaWeb.DashboardLive do
         %{
           label:
             if(patient.urgent_intervention, do: "Intervención prioritaria", else: "Riesgo: Ira alta"),
-          dot_class: "bg-error",
-          ring_class: "ring-error/30",
+          dot_class: "background:#ef4444;",
           badge_class: "badge-error"
         }
 
       predominant in ["sadness", "fear"] ->
         %{
           label: "Atención: #{format_emotion_label(predominant)}",
-          dot_class: "bg-warning",
-          ring_class: "ring-warning/30",
+          dot_class: "background:#f59e0b;",
           badge_class: "badge-warning"
         }
 
       true ->
         %{
           label: "Estable",
-          dot_class: "bg-success",
-          ring_class: "ring-success/30",
+          dot_class: "background:#22c55e;",
           badge_class: "badge-success"
         }
     end
@@ -345,8 +342,7 @@ defmodule AletheaWeb.DashboardLive do
   defp default_mood_signal do
     %{
       label: "Sin datos",
-      dot_class: "bg-base-300",
-      ring_class: "ring-base-300/30",
+      dot_class: "background:#cbd5e1;",
       badge_class: "badge-ghost"
     }
   end
