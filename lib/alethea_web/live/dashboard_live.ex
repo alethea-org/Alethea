@@ -8,6 +8,7 @@ defmodule AletheaWeb.DashboardLive do
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "patients:#{id}")
     end
 
     professional = Accounts.get_professional!(id)
@@ -35,7 +36,10 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:session_summaries, [])
       |> assign(:emotion_rows, [])
       |> assign(:mood_signal, default_mood_signal())
-      |> assign(:today_day_of_week, DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week())
+      |> assign(
+        :today_day_of_week,
+        DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week()
+      )
       |> assign(:chat_decrypted, false)
       |> stream(:decrypted_messages, [])
 
@@ -203,20 +207,42 @@ defmodule AletheaWeb.DashboardLive do
   defp load_patient_details(socket, patient) do
     use_mock? = socket.assigns.use_mock_data
 
+    # Weekly summary
     weekly_summary =
-      if use_mock?,
-        do: List.first(MockData.list_mock_summaries(patient.id, "weekly")),
-        else: nil
+      if use_mock? do
+        List.first(MockData.list_mock_summaries(patient.id, "weekly"))
+      else
+        Alethea.Clinical
+        |> apply(:list_session_summaries, [
+          patient.id,
+          DateTime.utc_now() |> DateTime.add(-7, :day)
+        ])
+        |> Enum.find(&(&1.type == "weekly"))
+      end
 
+    # Session summaries (last 30 days)
     session_summaries =
-      if use_mock?,
-        do: MockData.list_mock_summaries(patient.id, "session"),
-        else: []
+      if use_mock? do
+        MockData.list_mock_summaries(patient.id, "session")
+      else
+        Alethea.Clinical.list_session_summaries(
+          patient.id,
+          DateTime.utc_now() |> DateTime.add(-30, :day)
+        )
+        |> Enum.filter(&(&1.type == "session"))
+        |> Enum.sort_by(& &1.period_end, {:desc, Date})
+      end
 
+    # Trends (last 7 days)
     trends =
-      if use_mock?,
-        do: MockData.list_mock_trends(patient.id),
-        else: []
+      if use_mock? do
+        MockData.list_mock_trends(patient.id)
+      else
+        now = DateTime.utc_now()
+        seven_days_ago = DateTime.add(now, -7, :day)
+
+        Alethea.Clinical.aggregate_trends(patient.id, seven_days_ago)
+      end
 
     emotion_rows = format_emotion_trends(trends)
 
@@ -235,7 +261,6 @@ defmodule AletheaWeb.DashboardLive do
       if is_valid_uuid?(patient_id) do
         Accounts.get_patient_for_professional(professional.id, patient_id)
       else
-        # Modo mock: buscar el paciente en memoria
         Enum.find(socket.assigns.patients, &(&1.id == patient_id))
       end
 
@@ -252,10 +277,28 @@ defmodule AletheaWeb.DashboardLive do
             :error,
             "Alerta Critica: El paciente #{patient.alias} ha entrado en crisis (Nivel: #{level})"
           )
-          |> assign(:critical_patients, upsert_critical_patient(socket.assigns.critical_patients, patient))
+          |> assign(
+            :critical_patients,
+            upsert_critical_patient(socket.assigns.critical_patients, patient)
+          )
           |> assign(:patients, upsert_dashboard_patient(socket.assigns.patients, patient))
 
         {:noreply, socket}
+    end
+  end
+
+  def handle_info({:patient_created, patient}, socket) do
+    if patient.professional_id == socket.assigns.current_professional.id do
+      patients = Accounts.list_patients(socket.assigns.current_professional.id)
+      critical_patients = Accounts.list_critical_patients(socket.assigns.current_professional.id)
+
+      {:noreply,
+       socket
+       |> assign(:patients, patients)
+       |> assign(:critical_patients, critical_patients)
+       |> put_flash(:info, "Nuevo paciente registrado: #{patient.alias}")}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -281,11 +324,14 @@ defmodule AletheaWeb.DashboardLive do
   defp format_emotion_trends(trends) do
     trends
     |> Enum.map(fn trend ->
+      # Handle both mock format (indicator_name/score) and aggregate format (label/score)
+      key = Map.get(trend, :indicator_name) || Map.get(trend, :label)
+
       %{
-        key: trend.indicator_name,
-        label: format_emotion_label(trend.indicator_name),
-        percent: round(trend.score * 100),
-        progress_class: emotion_progress_class(trend.indicator_name)
+        key: key,
+        label: format_emotion_label(key),
+        percent: round((Map.get(trend, :score) || 0) * 100),
+        progress_class: emotion_progress_class(key)
       }
     end)
     |> Enum.sort_by(& &1.percent, :desc)
@@ -308,17 +354,20 @@ defmodule AletheaWeb.DashboardLive do
   defp calculate_mood_signal(trends, patient) do
     predominant =
       trends
-      |> Enum.max_by(& &1.score, fn -> nil end)
+      |> Enum.max_by(&(&1.score || 0), fn -> nil end)
       |> case do
         nil -> nil
-        trend -> trend.indicator_name
+        trend -> Map.get(trend, :indicator_name) || Map.get(trend, :label)
       end
 
     cond do
       patient.urgent_intervention or predominant == "anger" ->
         %{
           label:
-            if(patient.urgent_intervention, do: "Intervención prioritaria", else: "Riesgo: Ira alta"),
+            if(patient.urgent_intervention,
+              do: "Intervención prioritaria",
+              else: "Riesgo: Ira alta"
+            ),
           dot_class: "background:#ef4444;",
           badge_class: "badge-error"
         }

@@ -34,3 +34,5 @@ alethea-*.tar
 
 # Node dependencies
 /assets/node_modules/
+# Local Pi runtime state
+.atl/

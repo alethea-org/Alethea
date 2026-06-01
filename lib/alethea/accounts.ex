@@ -146,7 +146,14 @@ defmodule Alethea.Accounts do
 
   def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
     # Solo permitir actualizar campos de estado internos para evitar mass-assignment
-    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status, :session_day_of_week, :session_time])
+    allowed_attrs =
+      Map.take(attrs, [
+        :urgent_intervention,
+        :terms_accepted,
+        :status,
+        :session_day_of_week,
+        :session_time
+      ])
 
     patient
     |> Patient.changeset(allowed_attrs)
@@ -170,7 +177,8 @@ defmodule Alethea.Accounts do
     whatsapp_number = attrs["whatsapp_number"]
 
     cond do
-      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or String.trim(whatsapp_number) == "" ->
+      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or
+          String.trim(whatsapp_number) == "" ->
         changeset =
           %Patient{}
           |> Patient.changeset(attrs)
@@ -224,6 +232,13 @@ defmodule Alethea.Accounts do
         |> Repo.transaction()
         |> case do
           {:ok, %{patient: patient}} ->
+            # Notificar a los LiveViews del profesional
+            Phoenix.PubSub.broadcast(
+              Alethea.PubSub,
+              "patients:#{patient.professional_id}",
+              {:patient_created, patient}
+            )
+
             log_action(%{
               professional_id: patient.professional_id,
               action: "CREATE_PATIENT",
