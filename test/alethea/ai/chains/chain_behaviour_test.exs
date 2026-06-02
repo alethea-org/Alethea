@@ -5,9 +5,8 @@ defmodule Alethea.AI.Chains.ChainBehaviourTest do
 
   describe "behaviour contract" do
     test "run callback is required" do
-      assert {:callback, _} =
-               ChainBehaviour.behaviour_info(:callbacks)
-               |> Enum.find(fn {name, _} -> name == :run end)
+      callbacks = ChainBehaviour.behaviour_info(:callbacks)
+      assert {:run, 1} in callbacks
     end
 
     test "run! is optional" do

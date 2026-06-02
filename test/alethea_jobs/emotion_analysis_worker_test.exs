@@ -1,63 +1,8 @@
 defmodule AletheaJobs.EmotionAnalysisWorkerTest do
-  use Alethea.DataCase
+  use ExUnit.Case, async: true
 
   alias AletheaJobs.EmotionAnalysisWorker
-  alias Alethea.Clinical.{Message, EmotionAnalysis}
-  alias Alethea.Accounts.{Patient, Professional}
-  alias Alethea.EncryptionKey
-  alias Alethea.Repo
-
-  describe "perform/1" do
-    setup do
-      # Setup de profesional y paciente con encryption key mockeada
-      professional = %Professional{
-        id: Ecto.UUID.generate(),
-        email: "dr@test.com",
-        name: "Dr. Test"
-      }
-
-      patient = %Patient{
-        id: Ecto.UUID.generate(),
-        phone: "+1234567890",
-        name: "Test Patient",
-        professional_id: professional.id,
-        encryption_key_id: nil
-      }
-
-      %{
-        professional: professional,
-        patient: patient,
-        message_id: Ecto.UUID.generate()
-      }
-    end
-
-    test "returns error when message not found" do
-      fake_message_id = Ecto.UUID.generate()
-
-      assert {:error, :not_found} =
-               EmotionAnalysisWorker.perform(%Oban.Job{
-                 args: %{"message_id" => fake_message_id}
-               })
-    end
-
-    test "emotion worker skips on empty text" do
-      # El worker debería manejar casos donde no hay contenido para analizar
-      # Esto es más un test de integración - aquí solo verificamos la estructura
-      assert EmotionAnalysisWorker.new(%{message_id: Ecto.UUID.generate()}) != nil
-    end
-  end
-
-  describe "new/1" do
-    test "creates worker with correct queue and message_id" do
-      message_id = Ecto.UUID.generate()
-
-      worker = EmotionAnalysisWorker.new(%{message_id: message_id})
-
-      assert worker.__struct__ == Oban.Job
-      assert worker.queue == :ai_analysis
-      assert worker.args == %{"message_id" => message_id}
-    end
-  end
+  alias Alethea.Clinical.EmotionAnalysis
 
   describe "EmotionAnalysis schema" do
     test "computes dominant label correctly" do

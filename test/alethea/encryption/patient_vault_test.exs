@@ -2,6 +2,7 @@ defmodule Alethea.Encryption.PatientVaultTest do
   use ExUnit.Case, async: true
 
   alias Alethea.Encryption.PatientVault
+  import Bitwise
 
   describe "encrypt/2" do
     test "encrypts plaintext and returns ok tuple with ciphertext" do

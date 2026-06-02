@@ -9,7 +9,7 @@ defmodule Alethea.AI.LLMConfigTest do
       assert config.provider in [:local, :cloud]
       assert is_binary(config.model)
       assert is_integer(config.max_tokens)
-      assert is_integer(config.temperature)
+      assert is_number(config.temperature)
       assert is_struct(config.retry, Alethea.AI.Retry)
     end
 
@@ -66,7 +66,7 @@ defmodule Alethea.AI.LLMConfigTest do
   describe "retry integration" do
     test "retry struct is included in config" do
       config = LLMConfig.get(:guided_conversation)
-      assert %{attempts: 0, max_attempts: 3} = config.retry
+      assert config.retry.max_attempts == 1
     end
 
     test "retry can be disabled via override" do

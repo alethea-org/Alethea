@@ -100,7 +100,7 @@ defmodule Alethea.AI.Retry do
 
     result =
       try do
-        {:ok, fun.()}
+        fun.()
       rescue
         err in LangChainError ->
           reason = extract_error_reason(err)
