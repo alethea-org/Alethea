@@ -12,6 +12,12 @@ defmodule Alethea.Encryption.PatientVault do
   Cifra un texto plano utilizando una clave (DEK o KEK).
   Retorna el binario con el IV prefijado: [IV (12 bytes)][Ciphertext][Tag (16 bytes)]
   """
+  def encrypt(_, key) when byte_size(key) != 32,
+    do: {:error, :invalid_key_size}
+
+  def encrypt("", _key),
+    do: {:error, :empty_plaintext}
+
   def encrypt(plaintext, key) when byte_size(key) == 32 do
     iv = :crypto.strong_rand_bytes(@iv_length)
 
@@ -26,6 +32,9 @@ defmodule Alethea.Encryption.PatientVault do
   @doc """
   Descifra un binario cifrado (con IV prefijado) utilizando una clave.
   """
+  def decrypt(_, key) when byte_size(key) != 32,
+    do: {:error, :invalid_key_size}
+
   def decrypt(<<iv::binary-size(@iv_length), rest::binary>>, key) when byte_size(key) == 32 do
     ciphertext_length = byte_size(rest) - @tag_length
     <<ciphertext::binary-size(ciphertext_length), tag::binary-size(@tag_length)>> = rest

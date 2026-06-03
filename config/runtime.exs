@@ -23,25 +23,8 @@ end
 config :alethea, AletheaWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
-config :alethea, :crisis_patterns, %{
-  immediate: [
-    ~r/me voy a matar/iu,
-    ~r/voy a suicidarme/iu,
-    ~r/tengo (?:el|un) plan/iu,
-    ~r/ya (?:lo|la) decid[ií]/iu
-  ],
-  high: [
-    ~r/quiero morir/iu,
-    ~r/no quiero (?:vivir|seguir)/iu,
-    ~r/pienso en (?:el suicidio|hacerme da[ñn]o)/iu,
-    ~r/me quiero hacer da[ñn]o/iu
-  ],
-  low: [
-    ~r/a veces pienso que ser[ií]a mejor no estar/iu,
-    ~r/no tiene sentido (?:seguir|vivir)/iu,
-    ~r/est[oá]y harto de (?:todo|vivir)/iu
-  ]
-}
+# Crisis patterns are configured directly in Alethea.Alerts.CrisisMonitor.default_patterns/0
+# to avoid duplication. Override via app env only if needed for testing.
 
 config :alethea, :crisis_support_message, """
 Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.

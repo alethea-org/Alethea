@@ -12,6 +12,9 @@ defmodule AletheaJobs.ProcessMessageWorkerTest do
   setup :verify_on_exit!
 
   setup do
+    # Reset ConsentCache ETS table before each test for isolation
+    ConsentCache.reset()
+
     professional = insert_professional()
     {:ok, kek} = Accounts.load_professional_kek(professional)
     %{professional: professional, kek: kek}

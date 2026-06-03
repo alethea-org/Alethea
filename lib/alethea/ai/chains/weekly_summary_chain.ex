@@ -16,6 +16,7 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
     end
   end
 
+  @impl true
   def run(summaries, trends), do: run(%{summaries: summaries, trends: trends})
 
   @impl true

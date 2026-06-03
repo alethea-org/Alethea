@@ -17,6 +17,7 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
     end
   end
 
+  @impl true
   def run(texts, scores) when is_list(texts) and is_list(scores) do
     run(%{sanitized_content: texts, emotion_scores: scores})
   end

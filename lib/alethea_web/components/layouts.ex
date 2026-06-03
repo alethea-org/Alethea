@@ -2,21 +2,23 @@ defmodule AletheaWeb.Layouts do
   @moduledoc """
   Application layouts.
 
-  The main `app/1` layout renders a collapsible sidebar + topbar shell.
-  Sidebar toggle uses `Phoenix.LiveView.JS` (no external JS needed).
+  - `root.html.heex` — HTML document shell (fonts, CDN links, body)
+  - `auth.html.heex` — Minimal centered layout for login/register
+  - `app.html.heex` — Sidebar + topbar shell for authenticated pages
+
   All positioning uses CSS classes defined in `app.css`.
   Component styling uses FlyonUI semantic classes from CDN.
   """
   use AletheaWeb, :html
 
-  embed_templates "layouts/*"
+  embed_templates("layouts/*")
 
   # ── App shell ──────────────────────────────────────────────────────
+  # Full sidebar + topbar layout for authenticated pages (dashboard, patients, etc.)
 
-  attr :current_scope, :any, default: nil
-  attr :current_professional, :any, default: nil
-  attr :flash, :map, required: true
-  slot :inner_block
+  attr(:current_professional, :any, default: nil)
+  attr(:flash, :map, required: true)
+  slot(:inner_block)
 
   def app(assigns) do
     ~H"""
@@ -149,8 +151,8 @@ defmodule AletheaWeb.Layouts do
 
   # ── Flash group ────────────────────────────────────────────────────
 
-  attr :flash, :map, required: true
-  attr :id, :string, default: "flash-group"
+  attr(:flash, :map, required: true)
+  attr(:id, :string, default: "flash-group")
 
   def flash_group(assigns) do
     ~H"""

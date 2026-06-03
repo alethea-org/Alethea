@@ -56,10 +56,10 @@ defmodule Alethea.Alerts.CrisisMonitor do
 
     # Immediate crisis - active suicidal intent with plan or decision
     immediate_patterns = [
-      # Direct expressions of suicide
+      # Direct expressions of suicide (requires "me voy a" or similar explicit intent)
       ~r/me voy a matar/iu,
+      ~r/me voy a suicidar/iu,
       ~r/voy a suicidarm[e]/iu,
-      ~r/me suicidar[e]/iu,
       ~r/voy a terminar con mi vida/iu,
       ~r/me voy a quitar la vida/iu,
       # Plan/intention expressions
@@ -72,7 +72,8 @@ defmodule Alethea.Alerts.CrisisMonitor do
     # High crisis - passive suicidal ideation or self-harm thoughts
     high_patterns = [
       # Death/wanting to die
-      ~r/quiero morir/iu,
+      # Match "quiero morir" only when NOT followed by idiomatic phrases
+      ~r/quiero morir(?! (?:de |la |pero ))/iu,
       ~r/me gustar[ií]a estar muerto/iu,
       ~r/ojal[áa] estuviera muerto/iu,
       # Passive suicidal ideation
@@ -80,10 +81,10 @@ defmodule Alethea.Alerts.CrisisMonitor do
       ~r/no tengo ganas de vivir/iu,
       ~r/no me importa seguir vivo/iu,
       # Self-harm thoughts (comprehensive variant coverage)
-      ~r/pienso en (?:el suicidio|hacerme da[ñn]o|hacerme daã±o)/iu,
       ~r/piens[oa] en hacerme da[ñn]o/iu,
       ~r/me quiero hacer da[ñn]o/iu,
       ~r/quiero hacerme da[ñn]o/iu,
+      ~r/hacerme da[ñn]o/iu,
       ~r/piens[oa] en cortarm[e]/iu,
       ~r/piens[oa] en autolesionar/iu,
       # Hopelessness with ideation
@@ -94,18 +95,19 @@ defmodule Alethea.Alerts.CrisisMonitor do
     # Low crisis - existential distress, passive thoughts
     low_patterns = [
       ~r/a veces pienso que ser[ií]a mejor no estar/iu,
-      ~r/qu[e] no tiene sentido (?:seguir|vivir)/iu,
+      ~r/(?:no )?tiene sentido (?:nada|seguir|vivir)/iu,
       ~r/estoy harto de (?:todo|vivir)/iu,
-      ~r/ya no puedo m[áa]s/iu,
+      ~r/ya no puedo (?:m[áa]s|con esto)/iu,
+      ~r/estoy al l[ií]mite/iu,
       ~r/nada tiene sentido/iu,
       ~r/para qu[eé] seguir/iu,
       ~r/mi vida no vale nada/iu,
-      ~r/me siento in[úu]til/iu,
+      # Match "qué pereza vivir" only when NOT followed by "así" or "de"
+      ~r/qu[eé] pereza (?:vivir|esto)(?! (?:as[íi]|de |para ))/iu,
       ~r/ser[ií]a mejor sin m[ií]/iu,
       # Desperation expressions
       ~r/no s[eé] qu[eé] hacer con mi vida/iu,
-      ~r/estoy al limite/iu,
-      ~r/ya no m[ae] llega/iu
+      ~r/ya no me llega/iu
     ]
 
     # Combine all severity levels

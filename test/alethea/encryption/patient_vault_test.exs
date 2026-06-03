@@ -49,13 +49,11 @@ defmodule Alethea.Encryption.PatientVaultTest do
       assert decrypted == plaintext
     end
 
-    test "roundtrip with empty string" do
+    test "roundtrip with empty string returns error" do
       key = :crypto.strong_rand_bytes(32)
 
-      {:ok, ciphertext} = PatientVault.encrypt("", key)
-      {:ok, decrypted} = PatientVault.decrypt(ciphertext, key)
-
-      assert decrypted == ""
+      # Empty plaintext should return an error
+      assert {:error, :empty_plaintext} = PatientVault.encrypt("", key)
     end
 
     test "roundtrip with long text" do

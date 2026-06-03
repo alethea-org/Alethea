@@ -3,6 +3,10 @@ defmodule AletheaWeb.SessionController do
 
   alias Alethea.Accounts
 
+  def new(conn, _params) do
+    render(conn, :new)
+  end
+
   def create(conn, %{"professional" => %{"email" => email, "password" => password}}) do
     case Accounts.authenticate_professional(email, password) do
       {:ok, professional} ->
@@ -26,5 +30,13 @@ defmodule AletheaWeb.SessionController do
     |> delete_session(:professional_id)
     |> configure_session(drop: true)
     |> redirect(to: "/login")
+  end
+
+  # Called from LiveView to set session (LiveView can't set session directly)
+  def set_session(conn, %{"professional_id" => professional_id}) do
+    conn
+    |> configure_session(renew: true)
+    |> put_session(:professional_id, String.to_integer(professional_id))
+    |> redirect(to: "/dashboard")
   end
 end

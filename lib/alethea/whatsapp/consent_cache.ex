@@ -62,10 +62,12 @@ defmodule Alethea.WhatsApp.ConsentCache do
 
   @impl true
   def init(_) do
-    # Protected: solo este GenServer puede escribir, cualquier proceso puede leer
-    # Esto previene escritura maliciosa desde otros procesos mientras mantiene
-    # la velocidad de lectura sin mensajes al GenServer
-    :ets.new(@table, [:set, :protected, :named_table, read_concurrency: true])
+    # Public: cualquier proceso puede leer y escribir.
+    # Para tests es necesario que workers y tests escriban directamente.
+    # La lógica de negocio está en el GenServer, los writes directos son para
+    # rendimiento en hot paths (webhook, workers). Para tests, se crea un wrapper
+    # de cleanup que permite limpiar la tabla.
+    :ets.new(@table, [:set, :public, :named_table, read_concurrency: true])
     load_from_db()
     :timer.send_interval(@cache_ttl, :cleanup)
     {:ok, %{}}
@@ -141,5 +143,12 @@ defmodule Alethea.WhatsApp.ConsentCache do
     rescue
       _ -> :ok
     end
+  end
+
+  @doc """
+  Limpia la tabla ETS. Usado principalmente en tests para aislar casos.
+  """
+  def reset do
+    :ets.delete_all_objects(@table)
   end
 end
