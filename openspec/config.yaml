@@ -1,0 +1,15 @@
+# OpenSpec Configuration
+# This file configures the SDD workflow for this project
+
+version: "1.0"
+strict_tdd: false
+artifact_store: openspec
+
+preferences:
+  execution_mode: interactive
+  chained_pr_strategy: auto-forecast
+  review_budget_threshold: 400
+
+test_runner:
+  command: "mix test"
+  coverage_command: "mix test --cover"
