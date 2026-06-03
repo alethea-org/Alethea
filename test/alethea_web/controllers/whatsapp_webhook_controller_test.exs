@@ -269,20 +269,16 @@ defmodule AletheaWeb.WhatsappWebhookControllerTest do
       {:ok, payload} = text_message()
       body = Jason.encode!(payload)
 
-      # Get the phone hash from the fixture
-      msg = get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "messages", Access.at(0)])
-      phone = msg["from"]
-      phone_hash = :crypto.mac(:hmac, :sha256, Application.fetch_env!(:alethea, :phone_hash_secret), phone) |> Base.encode64()
-
       # Make 12 requests rapidly
       results =
         for i <- 1..12 do
           conn = build_conn()
 
-          resp = conn
-          |> put_req_header("x-hub-signature-256", valid_signature(body))
-          |> put_req_header("content-type", "application/json")
-          |> post("/webhooks/whatsapp", body)
+          resp =
+            conn
+            |> put_req_header("x-hub-signature-256", valid_signature(body))
+            |> put_req_header("content-type", "application/json")
+            |> post("/webhooks/whatsapp", body)
 
           %{index: i, status: resp.status}
         end
@@ -292,7 +288,8 @@ defmodule AletheaWeb.WhatsappWebhookControllerTest do
       count_429 = Enum.count(results, &(&1.status == 429))
 
       # After 10 requests, rate limiting should kick in
-      assert count_429 >= 1, "Expected at least 1 rate-limited response. Got #{count_429} 429s and #{count_200} 200s. Results: #{inspect(results, pretty: true)}"
+      assert count_429 >= 1,
+             "Expected at least 1 rate-limited response. Got #{count_429} 429s and #{count_200} 200s. Results: #{inspect(results, pretty: true)}"
     end
   end
 
@@ -304,7 +301,9 @@ defmodule AletheaWeb.WhatsappWebhookControllerTest do
       assert payload["object"] == "whatsapp_business_account"
       assert get_in(payload, ["entry", Access.at(0), "changes"]) != nil
 
-      messages = get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "messages"])
+      messages =
+        get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "messages"])
+
       assert messages != nil
       assert length(messages) > 0
 
@@ -317,7 +316,9 @@ defmodule AletheaWeb.WhatsappWebhookControllerTest do
     test "image_message fixture tiene estructura válida" do
       {:ok, payload} = image_message()
 
-      messages = get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "messages"])
+      messages =
+        get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "messages"])
+
       first_msg = hd(messages)
       assert first_msg["type"] == "image"
       assert first_msg["image"]["id"] == "IMAGE_ID"
@@ -326,7 +327,9 @@ defmodule AletheaWeb.WhatsappWebhookControllerTest do
     test "status_update fixture tiene estructura válida" do
       {:ok, payload} = status_update()
 
-      statuses = get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "statuses"])
+      statuses =
+        get_in(payload, ["entry", Access.at(0), "changes", Access.at(0), "value", "statuses"])
+
       assert statuses != nil
       assert hd(statuses)["status"] == "delivered"
     end
