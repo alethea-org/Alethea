@@ -35,6 +35,12 @@ defmodule AletheaWeb.Router do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :redirect_if_authenticated)
   end
 
+  # Health check endpoints (no auth required)
+  scope "/health", AletheaWeb do
+    get("/", HealthController, :liveness)
+    get("/ready", HealthController, :readiness)
+  end
+
   scope "/webhooks", AletheaWeb do
     pipe_through(:api)
 
