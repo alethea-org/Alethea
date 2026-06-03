@@ -14,13 +14,14 @@ defmodule Alethea.Application do
       {Phoenix.PubSub, name: Alethea.PubSub},
       Alethea.Encryption.Vault,
       Alethea.WhatsApp.ConsentCache,
+      Alethea.RateLimiter,
       {Oban, Application.fetch_env!(:alethea, Oban)},
       AletheaWeb.Endpoint
     ]
 
     children =
       if Application.get_env(:alethea, :start_ai, true) do
-        children ++ [Alethea.AI.RoBERTaWorker]
+        children ++ [Alethea.AI.RoBERTaWorker, Alethea.AI.ConversationMemory]
       else
         children
       end

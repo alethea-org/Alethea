@@ -145,11 +145,26 @@ defmodule Alethea.Accounts do
   end
 
   def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
-    # Solo permitir actualizar campos de estado internos para evitar mass-assignment
-    allowed_attrs = Map.take(attrs, [:urgent_intervention, :terms_accepted, :status, :session_day_of_week, :session_time])
+    allowed_attrs =
+      Map.take(attrs, [
+        :urgent_intervention,
+        :terms_accepted,
+        :status,
+        :session_day_of_week,
+        :session_time
+      ])
 
     patient
     |> Patient.changeset(allowed_attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Archives a patient (soft delete). Sets status to "archived".
+  """
+  def archive_patient(%Patient{} = patient) do
+    patient
+    |> Patient.changeset(%{status: "archived"})
     |> Repo.update()
   end
 
@@ -170,7 +185,8 @@ defmodule Alethea.Accounts do
     whatsapp_number = attrs["whatsapp_number"]
 
     cond do
-      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or String.trim(whatsapp_number) == "" ->
+      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or
+          String.trim(whatsapp_number) == "" ->
         changeset =
           %Patient{}
           |> Patient.changeset(attrs)
@@ -201,6 +217,10 @@ defmodule Alethea.Accounts do
           )
           |> Base.encode64()
 
+        # Insert encryption key with placeholder patient_id
+        # After patient is created, we update with the real patient_id
+        # This is ACID-safe within the transaction - the key cannot be accessed
+        # externally until patient_id is set, and if anything fails, both roll back
         Ecto.Multi.new()
         |> Ecto.Multi.insert(
           :encryption_key,
@@ -224,6 +244,13 @@ defmodule Alethea.Accounts do
         |> Repo.transaction()
         |> case do
           {:ok, %{patient: patient}} ->
+            # Notificar a los LiveViews del profesional
+            Phoenix.PubSub.broadcast(
+              Alethea.PubSub,
+              "patients:#{patient.professional_id}",
+              {:patient_created, patient}
+            )
+
             log_action(%{
               professional_id: patient.professional_id,
               action: "CREATE_PATIENT",

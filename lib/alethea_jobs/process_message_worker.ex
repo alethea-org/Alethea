@@ -10,6 +10,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
   alias Alethea.Clinical.SessionManager
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.WhatsApp.ConsentCache
+  alias AletheaJobs.EmotionAnalysisWorker
 
   defp whatsapp_client,
     do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
@@ -103,10 +104,16 @@ defmodule AletheaJobs.ProcessMessageWorker do
                session.id
              ) do
           {:ok, inbound_message} ->
-            # 4. Agendar/Renovar timeout de sesión
+            # 4. Encolar análisis de emociones (async, no bloquea)
+            EmotionAnalysisWorker.new(%{
+              message_id: inbound_message.id
+            })
+            |> Oban.insert!()
+
+            # 5. Agendar/Renovar timeout de sesión
             schedule_session_timeout(session, patient, phone)
 
-            # 5. Pipeline de IA
+            # 6. Pipeline de IA
             case Clinical.build_patient_context(patient, context_limit) do
               {:ok, patient_context} ->
                 case phi_worker().process(%{
@@ -137,6 +144,7 @@ defmodule AletheaJobs.ProcessMessageWorker do
 
                   {:error, reason} ->
                     Logger.error("Error en procesamiento de IA (Phi): #{inspect(reason)}")
+
                     # Aquí podríamos enviar un mensaje de error genérico al paciente si quisiéramos
                     {:error, reason}
                 end

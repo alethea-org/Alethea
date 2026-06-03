@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "flyonui": "^2.4.1",
+    "lucide-static": "^1.17.0"
+  }
+}

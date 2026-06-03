@@ -33,7 +33,7 @@ config :phoenix, :json_library, Jason
 # Configure Oban
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5],
+  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5, ai_analysis: 5],
   repo: Alethea.Repo,
   plugins: [
     {Oban.Plugins.Cron,

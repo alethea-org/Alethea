@@ -50,6 +50,28 @@ El proyecto se basa en un **Monolito Modular** bajo **Arquitectura Hexagonal**, 
 
 ---
 
+## 🔐 Estado de Seguridad
+
+### Implementado ✅
+- **Cifrado AES-256-GCM** con envelope encryption (DEK por paciente)
+- **PBKDF2** para passwords
+- **HMAC-SHA256** para hashing de números de teléfono
+- **CSRF Protection** en sesiones
+- **Auditoría** de accesos PII
+- **Rate Limiting** basado en ETS
+- **Sanitización de PII** antes de enviar a LLM
+- **Detección de crisis** con patrones configurables
+- **Consentimiento GDPR** via flujo ACEPTO
+
+### Pendiente (v2) 🔜
+- **MFA/TOTP** para profesionales (schema preparado, flujo pendiente)
+- **Rotación de KEK** (criptográfica)
+- **pgvector** para RAG semántico
+- **Neo4j** para grafo de conducta
+- **Whisper** para transcripción de voz
+
+---
+
 ## 🚀 Roadmap de Desarrollo
 
 1.  **Iteración 1:** Core de mensajería (WhatsApp asíncrono) + Cifrado base (`Cloak.Ecto`).

@@ -15,18 +15,17 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   setup do
     {:ok, professional} =
       Accounts.create_professional(%{
-        email: "timeout_test@example.com",
+        email: "timeout_test_#{:rand.uniform(999_999)}@example.com",
         password: "securepassword123",
         full_name: "Timeout Tester"
       })
 
     {:ok, kek} = Accounts.load_professional_kek(professional)
 
-    # Crear paciente usando la lógica real para que tenga llaves y cifrado correcto
     {:ok, patient} =
       Accounts.create_patient(
         %{
-          "whatsapp_number" => "+541100000000",
+          "whatsapp_number" => "+54110000000#{:rand.uniform(99)}",
           "alias" => "Test Patient",
           "professional_id" => professional.id
         },
@@ -38,7 +37,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
 
     {:ok, session} = SessionManager.open_session(patient)
 
-    # Guardar mensaje usando Clinical.save_message para usar el cifrado correcto
     {:ok, _message} =
       Alethea.Clinical.save_message(
         patient,
@@ -50,12 +48,15 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         session.id
       )
 
-    %{patient: patient, session: session}
+    phone = "+54110000000#{:rand.uniform(99)}"
+
+    %{patient: patient, session: session, phone: phone}
   end
 
   test "creates Trend records and a session Summary after closing", %{
     patient: patient,
-    session: session
+    session: session,
+    phone: phone
   } do
     emotion_scores = [
       %{label: "joy", score: 0.80},
@@ -65,6 +66,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       %{label: "neutral", score: 0.05}
     ]
 
+    # Setup expectations - the mock is already configured via test.exs config
     Alethea.AI.RoBERTaWorkerMock
     |> expect(:analyze_batch, fn _texts -> emotion_scores end)
 
@@ -83,13 +85,13 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
              perform_job(SessionTimeoutWorker, %{
                session_id: session.id,
                patient_id: patient.id,
-               phone: "+541100000000"
+               phone: phone
              })
 
-    trends = Repo.all(from t in Trend, where: t.patient_id == ^patient.id)
+    trends = Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))
     assert length(trends) == 5
 
-    summaries = Repo.all(from s in Summary, where: s.patient_id == ^patient.id)
+    summaries = Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))
     assert length(summaries) == 1
     assert hd(summaries).type == "session"
 
@@ -97,16 +99,20 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     assert closed_session.status == "closed"
   end
 
-  test "is idempotent when session is already closed", %{session: session, patient: patient} do
+  test "is idempotent when session is already closed", %{
+    session: session,
+    patient: patient,
+    phone: phone
+  } do
     {:ok, _} = SessionManager.close_session(session)
 
     assert :ok =
              perform_job(SessionTimeoutWorker, %{
                session_id: session.id,
                patient_id: patient.id,
-               phone: "+541100000000"
+               phone: phone
              })
 
-    assert Repo.all(from t in Trend, where: t.patient_id == ^patient.id) == []
+    assert Repo.all(from(t in Trend, where: t.patient_id == ^patient.id)) == []
   end
 end

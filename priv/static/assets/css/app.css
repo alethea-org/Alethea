@@ -1,1 +1,267 @@
-/* This file is for your main application CSS */
+/* ================================================================
+   Alethea — App Shell CSS
+   No Tailwind compiler. All layout is done here.
+   FlyonUI CDN handles component classes (card, badge, progress…).
+   ================================================================ */
+
+/* === Base === */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: #f8fafc;
+}
+
+/* === App Shell (flex row: sidebar + main) === */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* === Sidebar === */
+.app-sidebar {
+  width: 256px;
+  flex-shrink: 0;
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 30;
+}
+
+.app-sidebar__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid #f1f5f9;
+  flex-shrink: 0;
+}
+
+.app-sidebar__logo {
+  width: 32px; height: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px rgba(99,102,241,.25);
+  flex-shrink: 0;
+}
+.app-sidebar__logo img { filter: brightness(0) invert(1); }
+
+.app-sidebar__brand-name {
+  font-size: 15px; font-weight: 700; color: #1e293b;
+  letter-spacing: -0.02em;
+}
+.app-sidebar__brand-sub {
+  font-size: 9px; color: #94a3b8; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+/* Nav items */
+.app-sidebar__nav { padding: 12px 10px; flex: 1; }
+
+.app-sidebar__section-title {
+  font-size: 9px; color: #cbd5e1; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 0 12px; margin: 0 0 8px;
+}
+
+.app-sidebar__link {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 10px; margin-bottom: 2px;
+  font-size: 13px; font-weight: 500; text-decoration: none;
+  color: #64748b; border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.app-sidebar__link:hover {
+  background: #f1f5f9; color: #334155;
+}
+.app-sidebar__link--active {
+  background: #eef2ff; color: #4f46e5;
+  font-weight: 600; border-color: #e0e7ff;
+}
+
+/* User footer */
+.app-sidebar__footer {
+  padding: 12px; border-top: 1px solid #f1f5f9; flex-shrink: 0;
+}
+.app-sidebar__user {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px; border-radius: 12px;
+  background: #f8fafc; border: 1px solid #f1f5f9;
+}
+.app-sidebar__avatar {
+  width: 34px; height: 34px; border-radius: 9px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; box-shadow: 0 2px 6px rgba(99,102,241,.2);
+  font-size: 11px; font-weight: 700; color: #fff;
+}
+.app-sidebar__user-name {
+  font-size: 12px; font-weight: 700; color: #1e293b;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.app-sidebar__user-role {
+  font-size: 9px; color: #94a3b8; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.app-sidebar__logout {
+  color: #94a3b8; display: flex; text-decoration: none;
+  padding: 4px; border-radius: 6px; flex-shrink: 0;
+  transition: color 0.15s;
+}
+.app-sidebar__logout:hover { color: #ef4444; }
+
+/* Sidebar overlay (mobile only) */
+.sidebar-overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(15,23,42,0.4);
+  backdrop-filter: blur(2px);
+}
+
+/* Hamburger button — hidden on desktop, shown on mobile */
+.sidebar-hamburger {
+  display: none;
+  background: none; border: none; cursor: pointer;
+  color: #64748b; padding: 6px; border-radius: 8px;
+}
+.sidebar-hamburger:hover { background: #f1f5f9; }
+
+/* === Main content area === */
+.app-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+}
+
+.app-topbar {
+  height: 56px; background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex; align-items: center;
+  padding: 0 20px; gap: 12px;
+  position: sticky; top: 0; z-index: 20;
+  flex-shrink: 0;
+}
+.app-topbar__spacer { flex: 1; }
+
+.app-topbar__avatar {
+  width: 34px; height: 34px; border-radius: 9px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #fff;
+  cursor: pointer; border: none;
+  box-shadow: 0 2px 6px rgba(99,102,241,.2);
+}
+
+.app-content {
+  flex: 1; padding: 24px; overflow-x: hidden;
+}
+
+/* ─── MOBILE (< 1024px) ─── */
+@media (max-width: 1023px) {
+  /* Sidebar: off-screen by default */
+  .app-sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 4px 0 24px rgba(15,23,42,.08);
+    height: 100%;
+  }
+
+  /* When sidebar-open is toggled: slide in */
+  .app-shell--sidebar-open .app-sidebar {
+    transform: translateX(0);
+  }
+
+  /* Show overlay when sidebar is open */
+  .app-shell--sidebar-open .sidebar-overlay {
+    display: block;
+  }
+
+  /* Show hamburger on mobile */
+  .sidebar-hamburger {
+    display: flex;
+  }
+}
+
+/* === Dashboard specific === */
+.dashboard-grid {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.dashboard-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 80px;
+}
+
+.dashboard-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dashboard-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 16px;
+}
+
+@media (max-width: 1279px) {
+  .dashboard-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1023px) {
+  .dashboard-grid {
+    flex-direction: column;
+  }
+  .dashboard-sidebar {
+    width: 100%;
+    position: static;
+  }
+}
+
+/* Small helpers */
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.animate-pulse-dot {
+  animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* === Auth layout (login / register) === */
+#auth-layout {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 20px 40px;
+  background: #f1f5f9;
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(99,102,241,.07) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, .05) 0%, transparent 55%),
+    radial-gradient(ellipse at 60% 85%, rgba(99,102,241,.04) 0%, transparent 50%);
+}
+

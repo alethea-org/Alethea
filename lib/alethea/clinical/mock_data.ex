@@ -50,7 +50,8 @@ defmodule Alethea.Clinical.MockData do
         id: Ecto.UUID.generate(),
         patient_id: patient_id,
         type: "weekly",
-        summary_text: "Esta semana el paciente ha mostrado una mejora significativa en su estado de ánimo, aunque persiste cierta ansiedad relacionada con el trabajo.",
+        summary_text:
+          "Esta semana el paciente ha mostrado una mejora significativa en su estado de ánimo, aunque persiste cierta ansiedad relacionada con el trabajo.",
         status_level: "Estable",
         period_start: DateTime.utc_now() |> DateTime.add(-7, :day),
         period_end: DateTime.utc_now()
@@ -64,7 +65,8 @@ defmodule Alethea.Clinical.MockData do
         id: Ecto.UUID.generate(),
         patient_id: patient_id,
         type: "session",
-        summary_text: "Sesión enfocada en técnicas de respiración. El paciente reporta mejor descanso.",
+        summary_text:
+          "Sesión enfocada en técnicas de respiración. El paciente reporta mejor descanso.",
         status_level: "Estable",
         period_start: DateTime.utc_now() |> DateTime.add(-1, :day),
         period_end: DateTime.utc_now() |> DateTime.add(-1, :day)

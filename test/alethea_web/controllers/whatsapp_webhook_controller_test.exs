@@ -8,10 +8,10 @@ defmodule AletheaWeb.WhatsappWebhookControllerTest do
     old_config = Application.get_env(:alethea, :whatsapp, [])
 
     new_config =
-      Keyword.merge(old_config, [
+      Keyword.merge(old_config,
         app_secret: @app_secret,
         verify_token: "test_token"
-      ])
+      )
 
     Application.put_env(:alethea, :whatsapp, new_config)
 

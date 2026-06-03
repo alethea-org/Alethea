@@ -1,56 +1,33 @@
 defmodule Alethea.AI.Chains.WeeklySummaryChain do
-  @behaviour Alethea.AI.WeeklySummaryChainBehavior
+  @moduledoc false
+  @behaviour Alethea.AI.Chains.ChainBehaviour
 
+  alias Alethea.AI.LLMConfig
   alias LangChain.Chains.LLMChain
-  alias LangChain.ChatModels.ChatOpenAI
-  alias Alethea.AI.ChatModels.HuggingFaceChat
   alias LangChain.Message
 
   @impl true
-  def run(summaries, aggregated_trends) do
-    llm_config = Application.get_env(:alethea, Alethea.AI.Chains.GuidedConversationChain, [])
-    provider = Keyword.get(llm_config, :provider, :local)
-    provider_config = Keyword.get(llm_config, provider, [])
+  def run(%{summaries: summaries, trends: trends}) when is_list(summaries) and is_list(trends) do
+    content = build_prompt(summaries, trends)
 
-    endpoint_url =
-      Keyword.get(llm_config, :endpoint_url) ||
-        Keyword.get(llm_config, :endpoint) ||
-        Keyword.get(provider_config, :endpoint_url) ||
-        Keyword.get(provider_config, :endpoint) ||
-        "https://api-inference.huggingface.co/models/"
-
-    api_key = Keyword.get(llm_config, :api_key) || Keyword.get(provider_config, :api_key)
-
-    llm_opts = %{
-      model: Keyword.get(llm_config, :model, "phi-4-mini"),
-      api_key: api_key,
-      endpoint_url: endpoint_url,
-      endpoint: endpoint_url,
-      temperature: 0.0,
-      max_tokens: 512,
-      stream: false
-    }
-
-    llm =
-      case provider do
-        :cloud -> ChatOpenAI.new!(llm_opts)
-        _ -> HuggingFaceChat.new!(llm_opts)
-      end
-
-    content = build_prompt(summaries, aggregated_trends)
-
-    {:ok, chain} =
-      %{llm: llm, verbose: false}
-      |> LLMChain.new!()
-      |> LLMChain.add_message(Message.new_system!(system_prompt()))
-      |> LLMChain.add_message(Message.new_user!(content))
-      |> LLMChain.run()
-
-    {:ok, chain.last_message.content}
+    case LLMConfig.get_and_build(:weekly_summary) do
+      {:ok, _config, llm} -> do_run(llm, content)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  defp system_prompt do
-    """
+  @impl true
+  def run(summaries, trends), do: run(%{summaries: summaries, trends: trends})
+
+  @impl true
+  def run!(params) do
+    {:ok, result} = run(params)
+    result
+  end
+
+  @impl true
+  def suggested_system_prompt,
+    do: """
     Eres Alethea, un asistente clínico experto en análisis de tendencias terapéuticas.
     Genera un reporte semanal consolidado para el terapeuta en 8 líneas o menos:
     1. PANORAMA EMOCIONAL: Resume el estado de ánimo predominante de los últimos 7 días.
@@ -59,21 +36,62 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
     4. NIVEL DE RIESGO: Elige exactamente uno: Estable / Alerta / Intervención Requerida.
     Responde en español, con rigor profesional y sin preámbulos.
     """
+
+  @impl true
+  def suggested_max_tokens, do: 512
+
+  @impl true
+  def supported_providers, do: [:local, :cloud]
+
+  defp do_run(llm, content) do
+    start_time = System.monotonic_time(:millisecond)
+    :telemetry.execute([:alethea, :ai, :chain, :start], %{chain: :weekly_summary}, %{})
+
+    result =
+      %{llm: llm, verbose: false}
+      |> LLMChain.new!()
+      |> LLMChain.add_message(Message.new_system!(suggested_system_prompt()))
+      |> LLMChain.add_message(Message.new_user!(content))
+      |> LLMChain.run()
+
+    duration = System.monotonic_time(:millisecond) - start_time
+
+    metadata =
+      case result do
+        {:ok, chain} ->
+          %{
+            chain: :weekly_summary,
+            duration_ms: duration,
+            response_length: byte_size(chain.last_message.content)
+          }
+
+        {:error, reason} ->
+          %{chain: :weekly_summary, duration_ms: duration, error: inspect(reason)}
+      end
+
+    :telemetry.execute([:alethea, :ai, :chain, :stop], %{}, metadata)
+
+    case result do
+      {:ok, chain} ->
+        {:ok, %{summary: chain.last_message.content, tokens_used: estimate_tokens(content)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp build_prompt(summaries, trends) do
-    summaries_section =
-      summaries
-      |> Enum.map(fn s -> s.summary_text end)
-      |> Enum.join("\n---\n")
+    summaries_text = Enum.map_join(summaries, "\n---\n", &extract_summary_text/1)
 
-    trends_section =
-      trends
-      |> Enum.map(fn %{label: label, score: score} ->
-        "#{label}: #{Float.round(score * 1.0, 2)}"
-      end)
-      |> Enum.join(", ")
+    trends_text =
+      Enum.map_join(trends, ", ", fn %{label: l, score: s} -> "#{l}: #{Float.round(s, 2)}" end)
 
-    "Resúmenes de sesiones de la semana:\n#{summaries_section}\n\nTendencias emocionales: #{trends_section}"
+    "Resúmenes de sesiones de la semana:\n#{summaries_text}\n\nTendencias emocionales: #{trends_text}"
   end
+
+  defp extract_summary_text(%{summary_text: t}), do: t
+  defp extract_summary_text(%{summary: t}), do: t
+  defp extract_summary_text(t) when is_binary(t), do: t
+
+  defp estimate_tokens(text), do: div(String.length(text), 4)
 end
