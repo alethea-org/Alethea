@@ -1,9 +1,11 @@
 defmodule Alethea.AI.Mock.RoBERTa do
   @moduledoc """
   Mock específico para RoBERTaWorker en tests.
+  Implementa el behaviour Alethea.AI.RoBERTaWorkerBehavior.
   """
 
   use GenServer
+  @behaviour Alethea.AI.RoBERTaWorkerBehavior
 
   # Client API
 
