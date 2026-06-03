@@ -1,24 +1,44 @@
 <%!--
-  Minimal auth layout — no sidebar, no topbar, no app shell.
-  Used for login, register, and other unauthenticated pages.
+  Auth root layout — full HTML document for login/register.
+  Includes same fonts and assets as root.html.heex but with a
+  centered auth shell instead of the app sidebar/topbar.
+  Flash is handled by each template directly (no flash_group here).
 --%>
-
-<style>
-  #auth-layout {
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px 20px 40px;
-    background: #f1f5f9;
-    background-image:
-      radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 60%),
-      radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 55%),
-      radial-gradient(ellipse at 60% 80%, rgba(99, 102, 241, 0.05) 0%, transparent 50%);
-  }
-</style>
-
-<div id="auth-layout">
-  <.flash_group flash={@flash} />
-  {@inner_content}
-</div>
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <.live_title default="Alethea" suffix=" · Centro de Control">
+      {assigns[:page_title]}
+    </.live_title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flyonui/dist/full.min.css" />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/default.css"} />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix.js"}>
+    </script>
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix_html.js"}>
+    </script>
+    <script
+      defer
+      phx-track-static
+      type="text/javascript"
+      src={~p"/assets/js/phoenix_live_view.js"}
+    >
+    </script>
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+  </head>
+  <body>
+    <div id="auth-layout">
+      {@inner_content}
+    </div>
+  </body>
+</html>

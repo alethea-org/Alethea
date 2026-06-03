@@ -246,3 +246,22 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* === Auth layout (login / register) === */
+#auth-layout {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 20px 40px;
+  background: #f1f5f9;
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(99,102,241,.07) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, .05) 0%, transparent 55%),
+    radial-gradient(ellipse at 60% 85%, rgba(99,102,241,.04) 0%, transparent 50%);
+}
+
