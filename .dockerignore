@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+_build
+rel
+
+# Dependencies
+deps
+_build
+mix.lock
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Test artifacts
+cover
+htmlcov
+tmp
+
+# Assets (generated during build)
+priv/static/cache
+priv/static/assets
+
+# Development files
+.dockerignore
+Dockerfile*
+docker-compose*
+.docker
+.dockerignore
+
+# Documentation
+*.md
+docs
+
+# Environment files (contain secrets)
+.env
+.env.*
+*.local
+
+# Node (if any)
+node_modules
+
+# OS
+.DS_Store
+Thumbs.db
