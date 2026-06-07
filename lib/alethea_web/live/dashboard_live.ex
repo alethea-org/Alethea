@@ -4,10 +4,12 @@ defmodule AletheaWeb.DashboardLive do
   alias Alethea.Accounts
   alias Alethea.Clinical.{MockData, Message}
   alias Alethea.Encryption.PatientVault
+  alias AletheaWeb.DashboardLive.Components.NotificationCenter
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
       Phoenix.PubSub.subscribe(Alethea.PubSub, "patients:#{id}")
     end
 
@@ -276,6 +278,18 @@ defmodule AletheaWeb.DashboardLive do
       patient ->
         patient = %{patient | urgent_intervention: true}
 
+        notif =
+          NotificationCenter.build_notification(:crisis_detected, %{
+            patient_id: patient_id,
+            patient_alias: patient.alias,
+            level: level
+          })
+
+        Phoenix.LiveView.send_update(NotificationCenter,
+          id: "notification-center",
+          new_notification: notif
+        )
+
         socket =
           socket
           |> put_flash(
@@ -296,6 +310,17 @@ defmodule AletheaWeb.DashboardLive do
     if patient.professional_id == socket.assigns.current_professional.id do
       patients = Accounts.list_patients(socket.assigns.current_professional.id)
       critical_patients = Accounts.list_critical_patients(socket.assigns.current_professional.id)
+
+      notif =
+        NotificationCenter.build_notification(:patient_created, %{
+          patient_id: patient.id,
+          patient_alias: patient.alias
+        })
+
+      Phoenix.LiveView.send_update(NotificationCenter,
+        id: "notification-center",
+        new_notification: notif
+      )
 
       {:noreply,
        socket
