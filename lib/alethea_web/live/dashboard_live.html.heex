@@ -361,6 +361,22 @@
             </div>
           </div>
 
+          <%!-- Emotion SVG bar chart — 7-day daily breakdown --%>
+          <div
+            id="emotion-chart"
+            style="border:1px solid #e2e8f0; border-radius:16px; padding:16px; background:#fff;"
+          >
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <span style="font-size:13px; font-weight:700; color:#1e293b;">
+                Evolución Emocional
+              </span>
+              <span class="badge badge-ghost" style="font-size:9px; font-weight:600;">
+                Últimos 7 días
+              </span>
+            </div>
+            <EmotionChart.emotion_chart daily_data={@emotion_chart_data} />
+          </div>
+
           <%!-- Session Snapshots — accordion --%>
           <div id="session-snapshots">
             <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; padding:0 4px;">
