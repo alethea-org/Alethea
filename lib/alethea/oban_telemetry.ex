@@ -10,8 +10,10 @@ defmodule Alethea.ObanTelemetry do
 
   require Logger
 
-  @error_threshold 0.05  # 5% error rate threshold
-  @slow_job_threshold_ms 5_000  # 5 seconds
+  # 5% error rate threshold
+  @error_threshold 0.05
+  # 5 seconds
+  @slow_job_threshold_ms 5_000
 
   @doc """
   Attaches Oban telemetry handlers. Call this in Application.start/2.

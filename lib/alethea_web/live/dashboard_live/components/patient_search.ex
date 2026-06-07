@@ -253,6 +253,7 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
 
   defp status_label(%{urgent_intervention: true}), do: "Intervención urgente"
   defp status_label(%{status: "archived"}), do: "Archivado"
+
   defp status_label(%{session_day_of_week: d, session_time: t}) when not is_nil(d),
     do: "#{format_day(d)} · #{format_time(t)}"
 
