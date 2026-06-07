@@ -41,6 +41,7 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
         score = to_float(Map.get(entry, key))
         bar_h = if score > 0, do: max(score * chart_h, 2.0), else: 0.0
         gx = @chart_left + day_idx * group_w
+
         %{
           x: Float.round(gx + group_pad + emo_idx * (@bar_w + @bar_gap), 1),
           y: Float.round(@chart_bottom - bar_h, 1),
@@ -93,7 +94,15 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
 
         <%!-- bars --%>
         <%= for bar <- @bars do %>
-          <rect x={bar.x} y={bar.y} width={bar.w} height={bar.h} fill={bar.fill} rx="2" opacity="0.85" />
+          <rect
+            x={bar.x}
+            y={bar.y}
+            width={bar.w}
+            height={bar.h}
+            fill={bar.fill}
+            rx="2"
+            opacity="0.85"
+          />
         <% end %>
 
         <%!-- x-axis day labels --%>
