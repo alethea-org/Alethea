@@ -51,7 +51,8 @@ defmodule AletheaWeb.HealthController do
     # Oban is functional by checking if the oban_jobs table is accessible.
     case Repo.query("SELECT 1 FROM oban_jobs LIMIT 1") do
       {:ok, _} -> :ok
-      {:error, _} -> :ok  # Table might not exist yet, but Oban is functional
+      # Table might not exist yet, but Oban is functional
+      {:error, _} -> :ok
     end
   rescue
     _ -> :error
