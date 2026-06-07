@@ -82,6 +82,7 @@ defmodule AletheaWeb.Router do
       live("/dashboard/patients/:id", DashboardLive, :show)
       live("/patients", PatientLive.Index, :index)
       live("/patients/new", PatientLive.Index, :new)
+      live("/admin/oban-dashboard", ObanDashboardLive, :index)
     end
   end
 end

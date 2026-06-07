@@ -202,6 +202,29 @@ defmodule Alethea.Clinical do
     )
   end
 
+  @spec list_daily_emotion_scores(binary(), DateTime.t()) :: [map()]
+  def list_daily_emotion_scores(patient_id, since) do
+    Repo.all(
+      from ea in EmotionAnalysis,
+        join: m in Message,
+        on: ea.message_id == m.id,
+        where:
+          m.patient_id == ^patient_id and
+            m.timestamp >= ^since and
+            m.direction == "inbound",
+        group_by: fragment("?::date", m.timestamp),
+        order_by: [asc: fragment("?::date", m.timestamp)],
+        select: %{
+          date: fragment("?::date", m.timestamp),
+          joy: avg(ea.joy_score),
+          sadness: avg(ea.sadness_score),
+          anger: avg(ea.anger_score),
+          fear: avg(ea.fear_score),
+          neutral: avg(ea.neutral_score)
+        }
+    )
+  end
+
   def aggregate_trends(patient_id, since) do
     Repo.all(
       from(t in Trend,
