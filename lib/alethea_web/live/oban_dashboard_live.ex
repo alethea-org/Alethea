@@ -69,8 +69,8 @@ defmodule AletheaWeb.ObanDashboardLive do
           </button>
         <% end %>
       </div>
-
-      <!-- Filters -->
+      
+    <!-- Filters -->
       <div class="flex gap-4 mb-6">
         <div>
           <label class="block text-sm font-medium mb-1">Queue</label>
@@ -81,7 +81,7 @@ defmodule AletheaWeb.ObanDashboardLive do
             <option value="all" selected={@selected_queue == "all"}>All Queues</option>
             <%= for queue <- @queues do %>
               <option value={queue} selected={@selected_queue == queue}>
-                <%= queue %>
+                {queue}
               </option>
             <% end %>
           </select>
@@ -96,7 +96,7 @@ defmodule AletheaWeb.ObanDashboardLive do
             <option value="all" selected={@selected_state == "all"}>All States</option>
             <%= for state <- @states do %>
               <option value={state} selected={@selected_state == state}>
-                <%= state %>
+                {state}
               </option>
             <% end %>
           </select>
@@ -112,18 +112,18 @@ defmodule AletheaWeb.ObanDashboardLive do
           </button>
         </div>
       </div>
-
-      <!-- Queue Stats -->
+      
+    <!-- Queue Stats -->
       <div class="grid grid-cols-6 gap-4 mb-6">
         <%= for queue <- @queues do %>
           <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-sm text-gray-500"><%= queue %></div>
-            <div class="text-2xl font-bold"><%= get_queue_count(@queue_stats, queue) %></div>
+            <div class="text-sm text-gray-500">{queue}</div>
+            <div class="text-2xl font-bold">{get_queue_count(@queue_stats, queue)}</div>
           </div>
         <% end %>
       </div>
-
-      <!-- Job List -->
+      
+    <!-- Job List -->
       <div class="bg-white rounded-lg shadow overflow-hidden">
         <table class="w-full">
           <thead class="bg-gray-50">
@@ -133,29 +133,31 @@ defmodule AletheaWeb.ObanDashboardLive do
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Worker</th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">State</th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Args</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attempts</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Attempts
+              </th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
             </tr>
           </thead>
           <tbody id="jobs" phx-update="stream" class="divide-y divide-gray-200">
             <%= for {id, job} <- @streams.jobs do %>
               <tr id={id}>
-                <td class="px-4 py-3 text-sm"><%= job.id %></td>
-                <td class="px-4 py-3 text-sm"><%= job.queue %></td>
-                <td class="px-4 py-3 text-sm"><%= job.worker %></td>
+                <td class="px-4 py-3 text-sm">{job.id}</td>
+                <td class="px-4 py-3 text-sm">{job.queue}</td>
+                <td class="px-4 py-3 text-sm">{job.worker}</td>
                 <td class="px-4 py-3">
                   <span class={[
                     "px-2 py-1 text-xs rounded-full",
                     state_color(job.state)
                   ]}>
-                    <%= job.state %>
+                    {job.state}
                   </span>
                 </td>
                 <td class="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
-                  <%= inspect(job.args) %>
+                  {inspect(job.args)}
                 </td>
                 <td class="px-4 py-3 text-sm">
-                  <%= job.attempt %><%= if job.max_attempts, do: "/#{job.max_attempts}" %>
+                  {job.attempt}{if job.max_attempts, do: "/#{job.max_attempts}"}
                 </td>
                 <td class="px-4 py-3 text-sm">
                   <div class="flex gap-2">
@@ -200,8 +202,8 @@ defmodule AletheaWeb.ObanDashboardLive do
           </div>
         <% end %>
       </div>
-
-      <!-- Job Details Modal -->
+      
+    <!-- Job Details Modal -->
       <%= if @selected_job do %>
         <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div class="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
@@ -209,46 +211,46 @@ defmodule AletheaWeb.ObanDashboardLive do
             <dl class="space-y-3">
               <div class="flex">
                 <dt class="font-medium w-32">ID:</dt>
-                <dd><%= @selected_job.id %></dd>
+                <dd>{@selected_job.id}</dd>
               </div>
               <div class="flex">
                 <dt class="font-medium w-32">Worker:</dt>
-                <dd><%= @selected_job.worker %></dd>
+                <dd>{@selected_job.worker}</dd>
               </div>
               <div class="flex">
                 <dt class="font-medium w-32">Queue:</dt>
-                <dd><%= @selected_job.queue %></dd>
+                <dd>{@selected_job.queue}</dd>
               </div>
               <div class="flex">
                 <dt class="font-medium w-32">State:</dt>
-                <dd><%= @selected_job.state %></dd>
+                <dd>{@selected_job.state}</dd>
               </div>
               <div class="flex">
                 <dt class="font-medium w-32">Attempt:</dt>
-                <dd><%= @selected_job.attempt %>/<%= @selected_job.max_attempts %></dd>
+                <dd>{@selected_job.attempt}/{@selected_job.max_attempts}</dd>
               </div>
               <div class="flex">
                 <dt class="font-medium w-32">Args:</dt>
                 <dd class="bg-gray-100 p-2 rounded text-sm">
-                  <%= inspect(@selected_job.args, pretty: true) %>
+                  {inspect(@selected_job.args, pretty: true)}
                 </dd>
               </div>
               <div class="flex">
                 <dt class="font-medium w-32">Meta:</dt>
                 <dd class="bg-gray-100 p-2 rounded text-sm">
-                  <%= inspect(@selected_job.meta, pretty: true) %>
+                  {inspect(@selected_job.meta, pretty: true)}
                 </dd>
               </div>
               <%= if @selected_job.attempted_by do %>
                 <div class="flex">
                   <dt class="font-medium w-32">Attempted By:</dt>
-                  <dd><%= @selected_job.attempted_by %></dd>
+                  <dd>{@selected_job.attempted_by}</dd>
                 </div>
               <% end %>
               <%= if @selected_job.completed_at do %>
                 <div class="flex">
                   <dt class="font-medium w-32">Completed At:</dt>
-                  <dd><%= @selected_job.completed_at %></dd>
+                  <dd>{@selected_job.completed_at}</dd>
                 </div>
               <% end %>
             </dl>
@@ -339,6 +341,7 @@ defmodule AletheaWeb.ObanDashboardLive do
           |> where(queue: ^q)
           |> where(state: [:available, :scheduled, :executing])
           |> Repo.aggregate(:count)
+
         {q, count}
       end)
       |> Map.new()

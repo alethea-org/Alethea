@@ -203,7 +203,9 @@ defmodule Alethea.Test.ObanHelper do
         :ok
 
       {:error, :timeout} ->
-        flunk("Job #{inspect(worker)} with args #{inspect(args)} did not complete within #{timeout}ms")
+        flunk(
+          "Job #{inspect(worker)} with args #{inspect(args)} did not complete within #{timeout}ms"
+        )
 
       {:error, reason} ->
         flunk("Job #{inspect(worker)} failed: #{inspect(reason)}")
