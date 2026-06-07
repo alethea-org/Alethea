@@ -7,6 +7,9 @@ defmodule Alethea.Application do
 
   @impl true
   def start(_type, _args) do
+    # Attach Oban telemetry handlers
+    Alethea.ObanTelemetry.attach()
+
     children = [
       AletheaWeb.Telemetry,
       Alethea.Repo,
