@@ -83,6 +83,33 @@ defmodule Alethea.Clinical.MockData do
     ]
   end
 
+  def list_mock_daily_emotions(_patient_id) do
+    today = Date.utc_today()
+
+    rows = [
+      {0.4, 0.2, 0.1, 0.15, 0.8},
+      {0.3, 0.4, 0.05, 0.1, 0.6},
+      {0.5, 0.15, 0.2, 0.25, 0.7},
+      {0.2, 0.5, 0.15, 0.3, 0.5},
+      {0.45, 0.2, 0.1, 0.12, 0.75},
+      {0.6, 0.1, 0.05, 0.08, 0.85},
+      {0.35, 0.3, 0.12, 0.18, 0.65}
+    ]
+
+    rows
+    |> Enum.with_index()
+    |> Enum.map(fn {{joy, sadness, anger, fear, neutral}, i} ->
+      %{
+        date: Date.add(today, i - 6),
+        joy: joy,
+        sadness: sadness,
+        anger: anger,
+        fear: fear,
+        neutral: neutral
+      }
+    end)
+  end
+
   def list_mock_messages(patient_id) do
     Enum.map(1..20, fn i ->
       %Message{
