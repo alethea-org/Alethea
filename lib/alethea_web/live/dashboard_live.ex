@@ -3,6 +3,7 @@ defmodule AletheaWeb.DashboardLive do
   import Ecto.Query
   alias Alethea.Accounts
   alias Alethea.Clinical.{MockData, Message}
+  alias AletheaWeb.DashboardLive.Components.EmotionChart
   alias Alethea.Encryption.PatientVault
   alias AletheaWeb.DashboardLive.Components.NotificationCenter
 
@@ -37,6 +38,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:weekly_summary, nil)
       |> assign(:session_summaries, [])
       |> assign(:emotion_rows, [])
+      |> assign(:emotion_chart_data, [])
       |> assign(:mood_signal, default_mood_signal())
       |> assign(
         :today_day_of_week,
@@ -253,11 +255,20 @@ defmodule AletheaWeb.DashboardLive do
 
     emotion_rows = format_emotion_trends(trends)
 
+    emotion_chart_data =
+      if use_mock? do
+        MockData.list_mock_daily_emotions(patient.id)
+      else
+        seven_days_ago = DateTime.utc_now() |> DateTime.add(-7, :day)
+        Alethea.Clinical.list_daily_emotion_scores(patient.id, seven_days_ago)
+      end
+
     socket
     |> assign(:selected_patient, patient)
     |> assign(:weekly_summary, weekly_summary)
     |> assign(:session_summaries, session_summaries)
     |> assign(:emotion_rows, emotion_rows)
+    |> assign(:emotion_chart_data, emotion_chart_data)
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
   end
 

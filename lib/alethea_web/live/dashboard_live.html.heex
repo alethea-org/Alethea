@@ -140,78 +140,13 @@
       <% end %>
     </div>
 
-    <%!-- All patients list --%>
-    <div style="border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; background:#fff;">
-      <div style="display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid #f1f5f9; background:#fafbfc;">
-        <.icon name="hero-users" style="width:14px; height:14px; color:#94a3b8;" />
-        <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#64748b;">
-          Mis Pacientes
-        </span>
-      </div>
-
-      <nav id="dashboard-patient-list">
-        <%= if @patients == [] do %>
-          <div style="padding:32px 16px; text-align:center;">
-            <.icon
-              name="hero-user-plus"
-              style="width:28px; height:28px; color:#cbd5e1; margin:0 auto 8px; display:block;"
-            />
-            <p style="font-size:12px; color:#94a3b8;">No hay pacientes aún</p>
-          </div>
-        <% end %>
-
-        <%= for patient <- @patients do %>
-          <.link
-            patch={~p"/dashboard/patients/#{patient.id}"}
-            id={"dashboard-patient-#{patient.id}"}
-            style={
-              "display:flex; align-items:center; gap:10px; padding:10px 14px; text-decoration:none; transition:background .15s; border-bottom:1px solid #f8fafc;" <>
-              if(@selected_patient && @selected_patient.id == patient.id,
-                do: "background:#eef2ff; border-left:3px solid #6366f1;",
-                else: "border-left:3px solid transparent;")
-            }
-          >
-            <div style={
-              "width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;" <>
-              if(@selected_patient && @selected_patient.id == patient.id,
-                do: "background:rgba(99,102,241,.12);",
-                else: "background:#f1f5f9;")
-            }>
-              <span style={
-                "font-size:10px; font-weight:700;" <>
-                if(@selected_patient && @selected_patient.id == patient.id,
-                  do: "color:#6366f1;",
-                  else: "color:#64748b;")
-              }>
-                {patient.alias
-                |> String.split()
-                |> Enum.map(&String.first/1)
-                |> Enum.take(2)
-                |> Enum.join()
-                |> String.upcase()}
-              </span>
-            </div>
-            <div style="min-width:0; flex:1;">
-              <div style="font-size:13px; font-weight:600; color:#1e293b;" class="truncate">
-                {patient.alias}
-              </div>
-              <div style="font-size:10px; color:#94a3b8;">
-                {format_session_day(patient.session_day_of_week)} · {format_session_time(
-                  patient.session_time
-                )}
-              </div>
-            </div>
-            <%= if patient.urgent_intervention do %>
-              <span
-                style="width:8px; height:8px; border-radius:50%; background:#ef4444; flex-shrink:0;"
-                class="animate-pulse-dot"
-              >
-              </span>
-            <% end %>
-          </.link>
-        <% end %>
-      </nav>
-    </div>
+    <%!-- Patient search + list --%>
+    <.live_component
+      module={AletheaWeb.DashboardLive.Components.PatientSearch}
+      id="patient-search"
+      patients={@patients}
+      selected_patient_id={@selected_patient && @selected_patient.id}
+    />
   </div>
 
   <%!-- ──── RIGHT: Detail panel ──── --%>
@@ -366,6 +301,22 @@
                 </div>
               <% end %>
             </div>
+          </div>
+
+          <%!-- Emotion SVG bar chart — 7-day daily breakdown --%>
+          <div
+            id="emotion-chart"
+            style="border:1px solid #e2e8f0; border-radius:16px; padding:16px; background:#fff;"
+          >
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <span style="font-size:13px; font-weight:700; color:#1e293b;">
+                Evolución Emocional
+              </span>
+              <span class="badge badge-ghost" style="font-size:9px; font-weight:600;">
+                Últimos 7 días
+              </span>
+            </div>
+            <EmotionChart.emotion_chart daily_data={@emotion_chart_data} />
           </div>
 
           <%!-- Session Snapshots — accordion --%>
