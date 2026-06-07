@@ -1,111 +1,212 @@
 defmodule Alethea.Test.ObanHelper do
   @moduledoc """
-  Helper utilities for testing Oban workers reliably.
+  Test utilities for Oban workers.
 
-  Provides functions to drain jobs, wait for completion, and
-  assert on worker execution without flaky sleeps.
+  Provides helpers for running and asserting on Oban jobs in tests.
 
   ## Usage
 
-      defmodule MyWorkerTest do
-        use ExUnit.Case, async: false
-        import Alethea.Test.ObanHelper
+      use ExUnit.Case
+      import Alethea.Test.ObanHelper
 
-        test "processes job correctly" do
-          MyWorker.new(%{data: "value"})
-          |> Oban.insert!()
+      test "my worker" do
+        # Inline execution (preferred for unit tests)
+        :ok = run_job(MyWorker, %{"arg" => "value"})
 
-          drain_all_jobs()
-        end
+        # Assert job was enqueued with specific args
+        assert_job_enqueued(MyWorker, %{"patient_id" => 123})
+
+        # Wait for job completion with timeout
+        :ok = wait_for_job_completion(MyWorker, %{"id" => 1}, 5_000)
       end
 
   """
 
-  import Ecto.Query
-  alias Oban.Job
+  import ExUnit.Assertions
+  import Ecto.Query, only: [from: 2]
+
+  @default_timeout 5_000
 
   @doc """
-  Drains all pending and available jobs across all queues.
+  Executes a job inline without going through Oban's queue.
+
+  This is the preferred method for unit testing workers as it:
+  - Runs synchronously (no async issues)
+  - Returns the result directly
+  - Does not require Oban to be running
+
+  ## Examples
+
+      run_job(MyWorker, %{"arg" => "value"})
+      # => :ok or {:ok, result}
+
   """
-  @spec drain_all_jobs() :: :ok
-  def drain_all_jobs do
-    Oban.drain_queue(queue: :default)
-    Oban.drain_queue(queue: :whatsapp)
-    Oban.drain_queue(queue: :ai_analysis)
-    :ok
+  @spec run_job(module(), map()) :: :ok | {:ok, any()} | {:error, any()}
+  def run_job(worker, args) when is_map(args) do
+    %Oban.Job{args: args}
+    |> worker.perform()
   end
 
   @doc """
-  Drains jobs from a specific queue.
+  Executes a job inline with the given opts.
+
+  Supports additional Oban.Job fields like `:schedule_at`, `:max_attempts`, etc.
   """
-  @spec drain_queue(Keyword.t()) :: :ok
-  def drain_queue(opts) do
-    queue = Keyword.fetch!(opts, :queue)
-    Oban.drain_queue(queue: queue)
-    :ok
+  @spec run_job(module(), map(), keyword()) :: :ok | {:ok, any()} | {:error, any()}
+  def run_job(worker, args, opts) when is_map(args) and is_list(opts) do
+    job_opts = Keyword.take(opts, [:schedule_at, :max_attempts, :priority, :tags])
+
+    %Oban.Job{args: args}
+    |> Map.merge(Map.new(job_opts))
+    |> worker.perform()
   end
 
   @doc """
-  Retrieves all jobs with matching args.
-  """
-  @spec find_jobs(opts :: Keyword.t()) :: [Job.t()]
-  def find_jobs(opts \\ []) do
-    args = Keyword.get(opts, :args, %{})
-    state = Keyword.get(opts, :state, nil)
-    worker = Keyword.get(opts, :worker, nil)
+  Asserts that a job was enqueued with matching args.
 
-    Job
-    |> maybe_where_worker(worker)
-    |> where([j], fragment("args @> ?", ^Jason.encode!(args)))
-    |> order_by([j], desc: j.inserted_at)
-    |> maybe_where_state(state)
-    |> Alethea.Repo.all()
+  Uses Oban's built-in assertion helpers.
+
+  ## Examples
+
+      assert_job_enqueued(MyWorker, %{"patient_id" => 123})
+
+  """
+  @spec assert_job_enqueued(worker :: module(), args :: map()) :: term()
+  def assert_job_enqueued(worker, args) when is_map(args) do
+    Oban.Testing.assert_enqueued(
+      Oban,
+      worker: worker,
+      args: args
+    )
   end
 
   @doc """
-  Counts jobs matching the given criteria.
-  """
-  @spec count_jobs(opts :: Keyword.t()) :: non_neg_integer()
-  def count_jobs(opts \\ []) do
-    args = Keyword.get(opts, :args, %{})
-    state = Keyword.get(opts, :state, nil)
-    worker = Keyword.get(opts, :worker, nil)
+  Asserts that a job was enqueued within a time window.
 
-    Job
-    |> maybe_where_worker(worker)
-    |> where([j], fragment("args @> ?", ^Jason.encode!(args)))
-    |> maybe_where_state(state)
-    |> select([j], count())
-    |> Alethea.Repo.one()
+  Useful for jobs scheduled in the future.
+
+  ## Examples
+
+      assert_job_enqueued(MyWorker, %{"id" => 1}, scheduled_at: 60_000)
+
+  """
+  @spec assert_job_enqueued(worker :: module(), args :: map(), opts :: keyword()) :: term()
+  def assert_job_enqueued(worker, args, opts) when is_map(args) and is_list(opts) do
+    Oban.Testing.assert_enqueued(
+      Oban,
+      Keyword.merge([worker: worker, args: args], opts)
+    )
   end
 
   @doc """
-  Asserts the exact number of jobs with given criteria.
+  Refutes that a job was enqueued with matching args.
   """
-  @spec assert_job_count(args :: map(), count :: non_neg_integer(), opts :: Keyword.t()) :: :ok
-  def assert_job_count(args, expected_count, opts \\ []) do
-    state = Keyword.get(opts, :state, "completed")
-    worker = Keyword.get(opts, :worker, nil)
+  @spec refute_job_enqueued(worker :: module(), args :: map()) :: term()
+  def refute_job_enqueued(worker, args) when is_map(args) do
+    Oban.Testing.refute_enqueued(
+      Oban,
+      worker: worker,
+      args: args
+    )
+  end
 
-    actual_count = count_jobs(args: args, state: state, worker: worker)
+  @doc """
+  Waits for a job to complete by polling the Oban jobs table.
 
-    unless actual_count == expected_count do
-      ExUnit.Assertions.flunk("""
-      Expected #{expected_count} job(s) with args #{inspect(args)}, state #{state}
-      but found #{actual_count} job(s)
-      """)
+  Returns `:ok` when the job completes successfully, or `{:error, reason}`
+  if it fails or times out.
+
+  ## Options
+
+    * `:timeout` - Maximum time to wait in ms (default: #{@default_timeout})
+    * `:poll_interval` - Time between checks in ms (default: 100)
+
+  ## Examples
+
+      wait_for_job_completion(MyWorker, %{"id" => 1})
+      wait_for_job_completion(MyWorker, %{"id" => 1}, timeout: 10_000)
+
+  """
+  @spec wait_for_job_completion(worker :: module(), args :: map(), timeout :: pos_integer()) ::
+          :ok | {:error, :timeout}
+  def wait_for_job_completion(worker, args, timeout \\ @default_timeout)
+
+  def wait_for_job_completion(worker, args, timeout) when is_map(args) and is_integer(timeout) do
+    wait_for_job_completion(worker, args, timeout: timeout)
+  end
+
+  def wait_for_job_completion(worker, args, opts) when is_map(args) and is_list(opts) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    poll_interval = Keyword.get(opts, :poll_interval, 100)
+
+    worker_name = worker |> Module.split() |> List.last() |> Macro.underscore()
+
+    deadline = System.system_time(:millisecond) + timeout
+
+    do_wait_for_job(worker_name, args, poll_interval, deadline)
+  end
+
+  defp do_wait_for_job(worker_name, args, poll_interval, deadline) do
+    if System.system_time(:millisecond) >= deadline do
+      {:error, :timeout}
+    else
+      do_wait_for_job_poll(worker_name, args, poll_interval, deadline)
     end
-
-    :ok
   end
 
-  # Private helpers
+  defp do_wait_for_job_poll(worker_name, args, poll_interval, deadline) do
+    case find_completed_job(worker_name, args) do
+      {:ok, _job} ->
+        :ok
 
-  defp maybe_where_worker(query, nil), do: query
+      :not_found ->
+        Process.sleep(poll_interval)
+        do_wait_for_job(worker_name, args, poll_interval, deadline)
+    end
+  end
 
-  defp maybe_where_worker(query, worker) when is_binary(worker),
-    do: where(query, [j], j.worker == ^worker)
+  defp find_completed_job(worker_name, args) do
+    encoded_args = Jason.encode!(args)
 
-  defp maybe_where_state(query, nil), do: query
-  defp maybe_where_state(query, state), do: where(query, [j], j.state == ^state)
+    query =
+      from(j in fragment("oban_jobs"),
+        where: fragment("worker = ?", ^worker_name),
+        where: fragment("state = 'completed'"),
+        where: fragment("args = ?::jsonb", ^encoded_args),
+        order_by: [desc: fragment("id")],
+        limit: 1
+      )
+
+    case Alethea.Repo.one(query) do
+      nil -> :not_found
+      _job -> {:ok, %{state: "completed"}}
+    end
+  rescue
+    _ -> :not_found
+  end
+
+  @doc """
+  Asserts that a job completed successfully within the timeout.
+
+  Shortcut for `wait_for_job_completion/3` with assertion.
+
+  ## Examples
+
+      assert_job_completed(MyWorker, %{"id" => 1})
+
+  """
+  @spec assert_job_completed(worker :: module(), args :: map(), timeout :: pos_integer()) ::
+          :ok | no_return()
+  def assert_job_completed(worker, args, timeout \\ @default_timeout) do
+    case wait_for_job_completion(worker, args, timeout) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        flunk("Job #{inspect(worker)} with args #{inspect(args)} did not complete within #{timeout}ms")
+
+      {:error, reason} ->
+        flunk("Job #{inspect(worker)} failed: #{inspect(reason)}")
+    end
+  end
 end
