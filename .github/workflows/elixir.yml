@@ -17,8 +17,8 @@ jobs:
         ports:
           - 5432:5432
         env:
-          POSTGRES_USER: alethea
-          POSTGRES_PASSWORD: password
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: alethea_test
         options: >-
           --health-cmd pg_isready
@@ -52,8 +52,8 @@ jobs:
           MIX_ENV: test
           PGHOST: localhost
           PGPORT: 5432
-          PGUSER: alethea
-          PGPASSWORD: password
+          PGUSER: postgres
+          PGPASSWORD: postgres
           PGDATABASE: alethea_test
           REDIS_HOST: localhost
           REDIS_PORT: 6379
