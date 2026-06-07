@@ -89,16 +89,6 @@ defmodule Alethea.AI.MockCase do
            "Expected RoBERTa mock to be called with #{inspect(args)}, but calls were #{inspect(calls, pretty: true)}"
   end
 
-  @doc """
-  Verifica que se llamó al mock de Phi con ciertos argumentos.
-  """
-  def assert_phi_called(args) do
-    calls = Alethea.AI.Mock.Phi.get_calls()
-
-    assert Enum.any?(calls, fn call -> matches_call?(call, args) end),
-           "Expected Phi mock to be called with #{inspect(args)}, but calls were #{inspect(calls, pretty: true)}"
-  end
-
   defp matches_call?(call, args) when is_map(args) do
     Enum.all?(args, fn {k, v} -> Map.get(call, k) == v end)
   end

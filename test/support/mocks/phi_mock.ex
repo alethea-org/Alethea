@@ -1,11 +1,9 @@
 defmodule Alethea.AI.Mock.Phi do
   @moduledoc """
   Mock específico para PhiWorker en tests.
-  Implementa el behaviour Alethea.AI.PhiWorkerBehaviour.
   """
 
   use GenServer
-  @behaviour Alethea.AI.PhiWorkerBehaviour
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, [], name: Keyword.get(opts, :name, __MODULE__))
