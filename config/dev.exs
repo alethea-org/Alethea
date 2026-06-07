@@ -55,10 +55,9 @@ config :alethea, AletheaWeb.Endpoint,
     web_console_logger: true,
     patterns: [
       # Static assets, except user uploads
-      ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,
-      # Router, Controllers, LiveViews and LiveComponents
-      ~r"lib/alethea_web/router\.ex$"E,
-      ~r"lib/alethea_web/(controllers|live|components)/.*\.(ex|heex)$"E
+      ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$",
+      ~r"lib/alethea_web/router\.ex$",
+      ~r"lib/alethea_web/(controllers|live|components)/.*\.(ex|heex)$"
     ]
   ]
 

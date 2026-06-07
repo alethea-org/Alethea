@@ -3,11 +3,14 @@ defmodule AletheaWeb.DashboardLive do
   import Ecto.Query
   alias Alethea.Accounts
   alias Alethea.Clinical.{MockData, Message}
+  alias AletheaWeb.DashboardLive.Components.EmotionChart
   alias Alethea.Encryption.PatientVault
+  alias AletheaWeb.DashboardLive.Components.NotificationCenter
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Alethea.PubSub, "crisis:alerts")
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
       Phoenix.PubSub.subscribe(Alethea.PubSub, "patients:#{id}")
     end
 
@@ -35,6 +38,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:weekly_summary, nil)
       |> assign(:session_summaries, [])
       |> assign(:emotion_rows, [])
+      |> assign(:emotion_chart_data, [])
       |> assign(:mood_signal, default_mood_signal())
       |> assign(
         :today_day_of_week,
@@ -251,11 +255,20 @@ defmodule AletheaWeb.DashboardLive do
 
     emotion_rows = format_emotion_trends(trends)
 
+    emotion_chart_data =
+      if use_mock? do
+        MockData.list_mock_daily_emotions(patient.id)
+      else
+        seven_days_ago = DateTime.utc_now() |> DateTime.add(-7, :day)
+        Alethea.Clinical.list_daily_emotion_scores(patient.id, seven_days_ago)
+      end
+
     socket
     |> assign(:selected_patient, patient)
     |> assign(:weekly_summary, weekly_summary)
     |> assign(:session_summaries, session_summaries)
     |> assign(:emotion_rows, emotion_rows)
+    |> assign(:emotion_chart_data, emotion_chart_data)
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
   end
 
@@ -275,6 +288,18 @@ defmodule AletheaWeb.DashboardLive do
 
       patient ->
         patient = %{patient | urgent_intervention: true}
+
+        notif =
+          NotificationCenter.build_notification(:crisis_detected, %{
+            patient_id: patient_id,
+            patient_alias: patient.alias,
+            level: level
+          })
+
+        Phoenix.LiveView.send_update(NotificationCenter,
+          id: "notification-center",
+          new_notification: notif
+        )
 
         socket =
           socket
@@ -296,6 +321,17 @@ defmodule AletheaWeb.DashboardLive do
     if patient.professional_id == socket.assigns.current_professional.id do
       patients = Accounts.list_patients(socket.assigns.current_professional.id)
       critical_patients = Accounts.list_critical_patients(socket.assigns.current_professional.id)
+
+      notif =
+        NotificationCenter.build_notification(:patient_created, %{
+          patient_id: patient.id,
+          patient_alias: patient.alias
+        })
+
+      Phoenix.LiveView.send_update(NotificationCenter,
+        id: "notification-center",
+        new_notification: notif
+      )
 
       {:noreply,
        socket
