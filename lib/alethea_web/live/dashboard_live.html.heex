@@ -6,13 +6,20 @@
 
 <%!-- ── Header + stats ── --%>
 <div style="margin-bottom:24px;">
-  <div style="margin-bottom:12px;">
-    <p style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:#94a3b8;">
-      Alethea · Centro de Control
-    </p>
-    <h1 style="font-size:22px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-top:2px;">
-      {@current_professional.full_name || "Profesional Clínico"}
-    </h1>
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:12px;">
+    <div>
+      <p style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:#94a3b8;">
+        Alethea · Centro de Control
+      </p>
+      <h1 style="font-size:22px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-top:2px;">
+        {@current_professional.full_name || "Profesional Clínico"}
+      </h1>
+    </div>
+    <.live_component
+      module={NotificationCenter}
+      id="notification-center"
+      professional_id={@current_professional.id}
+    />
   </div>
 
   <%!-- Stats — FlyonUI stat component --%>
