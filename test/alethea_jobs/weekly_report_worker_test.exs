@@ -68,7 +68,17 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
       # Verificar que se recibieron los trends agregados
       assert Enum.any?(trends, fn t -> t.label == "joy" end)
 
-      {:ok, "Reporte: El paciente está estable pero con picos de alegría."}
+      {:ok,
+       %{
+         summary_text: "Reporte: El paciente está estable pero con picos de alegría.",
+         status_level: "Estable",
+         anxiety_score: 0.2,
+         social_score: 0.7,
+         emotional_range: %{"joy" => 0.5, "sadness" => 0.1, "anger" => 0.0, "fear" => 0.1, "neutral" => 0.3},
+         crisis_events: 0,
+         session_count: 1,
+         tokens_used: 42
+       }}
     end)
 
     # 3. Ejecutar Worker
