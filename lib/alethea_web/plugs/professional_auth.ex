@@ -7,6 +7,9 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
 
   require Logger
 
+  @remember_cookie "_alethea_remember_me"
+  @remember_cookie_options [http_only: true, secure: true, same_site: "Lax", path: "/"]
+
   def on_mount(:mount_current_professional, _params, session, socket) do
     case session["professional_id"] do
       nil ->
@@ -80,14 +83,10 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
   def call(conn, :redirect_if_authenticated), do: redirect_if_authenticated(conn, [])
 
   def fetch_current_professional(conn, _opts) do
-    professional_id = get_session(conn, :professional_id)
-
-    professional =
-      professional_id && Accounts.get_professional!(professional_id)
-
-    assign(conn, :current_professional, professional)
-  rescue
-    Ecto.NoResultsError -> assign(conn, :current_professional, nil)
+    case get_session(conn, :professional_id) do
+      nil -> fetch_current_professional_from_remember_cookie(conn)
+      professional_id -> fetch_current_professional_from_session(conn, professional_id)
+    end
   end
 
   def require_authenticated_professional(conn, _opts) do
@@ -112,6 +111,51 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
   end
 
   # NEW private functions
+
+  defp fetch_current_professional_from_session(conn, professional_id) do
+    professional = Accounts.get_professional!(professional_id)
+
+    assign(conn, :current_professional, professional)
+  rescue
+    Ecto.NoResultsError -> assign(conn, :current_professional, nil)
+  end
+
+  defp fetch_current_professional_from_remember_cookie(conn) do
+    conn = fetch_cookies(conn)
+
+    case Map.get(conn.req_cookies, @remember_cookie) do
+      nil ->
+        assign(conn, :current_professional, nil)
+
+      token ->
+        case Accounts.verify_remember_token(token) do
+          {:ok, professional, rotated_token} ->
+            conn
+            |> configure_session(renew: true)
+            |> put_session(:professional_id, professional.id)
+            |> put_remember_cookie(rotated_token)
+            |> assign(:current_professional, professional)
+
+          {:error, _reason} ->
+            conn
+            |> delete_remember_cookie()
+            |> assign(:current_professional, nil)
+        end
+    end
+  end
+
+  defp put_remember_cookie(conn, token) do
+    put_resp_cookie(
+      conn,
+      @remember_cookie,
+      token,
+      Keyword.put(@remember_cookie_options, :max_age, Accounts.remember_token_max_age())
+    )
+  end
+
+  defp delete_remember_cookie(conn) do
+    delete_resp_cookie(conn, @remember_cookie, @remember_cookie_options)
+  end
 
   defp log_kek_access(professional_id, result) do
     try do

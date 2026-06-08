@@ -8,6 +8,10 @@ defmodule Alethea.Accounts do
   alias Alethea.Accounts.{Professional, Patient, EncryptionKey}
   alias Alethea.Encryption.{PatientVault, ProfessionalKek}
 
+  @remember_token_bytes 32
+  @remember_token_max_age 30 * 24 * 60 * 60
+  @remember_token_salt "professional remember me"
+
   # Professionals
 
   def list_professionals do
@@ -57,6 +61,58 @@ defmodule Alethea.Accounts do
         {:error, :invalid_credentials}
     end
   end
+
+  def remember_token_max_age, do: @remember_token_max_age
+
+  def generate_remember_token(%Professional{} = professional) do
+    {signed_token, token_hash, expires_at} = build_remember_token()
+
+    professional
+    |> Ecto.Changeset.change(%{
+      remember_token_hash: token_hash,
+      remember_token_expires_at: expires_at
+    })
+    |> Repo.update()
+    |> case do
+      {:ok, _professional} -> {:ok, signed_token}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  def verify_remember_token(token) when is_binary(token) do
+    with {:ok, raw_token} <-
+           Phoenix.Token.verify(AletheaWeb.Endpoint, @remember_token_salt, token,
+             max_age: @remember_token_max_age
+           ),
+         {:ok, professional, rotated_token} <-
+           rotate_remember_token(remember_token_hash(raw_token)) do
+      {:ok, professional, rotated_token}
+    end
+  end
+
+  def verify_remember_token(_token), do: {:error, :invalid}
+
+  def invalidate_remember_token(%Professional{id: professional_id}) do
+    invalidate_remember_token(professional_id)
+  end
+
+  def invalidate_remember_token(professional_id) when is_binary(professional_id) do
+    now = utc_now()
+
+    Professional
+    |> where([p], p.id == ^professional_id)
+    |> Repo.update_all(
+      set: [
+        remember_token_hash: nil,
+        remember_token_expires_at: nil,
+        updated_at: now
+      ]
+    )
+
+    :ok
+  end
+
+  def invalidate_remember_token(_professional_id), do: :ok
 
   def load_professional_kek(professional) do
     ProfessionalKek.load_kek(professional)
@@ -281,5 +337,52 @@ defmodule Alethea.Accounts do
       "+" <> _ = phone -> phone
       phone -> "+" <> phone
     end)
+  end
+
+  defp rotate_remember_token(old_token_hash) do
+    now = utc_now()
+    {signed_token, new_token_hash, expires_at} = build_remember_token(now)
+
+    Repo.transaction(fn ->
+      Professional
+      |> where([p], p.remember_token_hash == ^old_token_hash)
+      |> where([p], p.remember_token_expires_at > ^now)
+      |> Repo.update_all(
+        set: [
+          remember_token_hash: new_token_hash,
+          remember_token_expires_at: expires_at,
+          updated_at: now
+        ]
+      )
+      |> case do
+        {1, _} ->
+          professional = Repo.get_by!(Professional, remember_token_hash: new_token_hash)
+          {professional, signed_token}
+
+        _ ->
+          Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, {professional, rotated_token}} -> {:ok, professional, rotated_token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp build_remember_token(now \\ utc_now()) do
+    raw_token = :crypto.strong_rand_bytes(@remember_token_bytes)
+    signed_token = Phoenix.Token.sign(AletheaWeb.Endpoint, @remember_token_salt, raw_token)
+    token_hash = remember_token_hash(raw_token)
+    expires_at = DateTime.add(now, @remember_token_max_age, :second)
+
+    {signed_token, token_hash, expires_at}
+  end
+
+  defp remember_token_hash(token) when is_binary(token) do
+    :crypto.hash(:sha256, token)
+  end
+
+  defp utc_now do
+    DateTime.utc_now() |> DateTime.truncate(:second)
   end
 end
