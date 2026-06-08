@@ -27,6 +27,11 @@ defmodule AletheaWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  # OpenAPI/Swagger UI
+  pipeline :swagger_ui do
+    plug(:accepts, ["html"])
+  end
+
   pipeline :require_auth do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional)
   end
@@ -40,6 +45,18 @@ defmodule AletheaWeb.Router do
 
     get("/whatsapp", WhatsappWebhookController, :verify)
     post("/whatsapp", WhatsappWebhookController, :receive)
+  end
+
+  # Swagger UI for API documentation
+  scope "/api-docs", AletheaWeb do
+    pipe_through([:swagger_ui])
+    get("/", SwaggerUIPlug, :index)
+  end
+
+  # OpenAPI spec JSON endpoint
+  scope "/openapi", AletheaWeb do
+    pipe_through(:api)
+    get("/", OpenApiSpecPlug, :show)
   end
 
   scope "/", AletheaWeb do

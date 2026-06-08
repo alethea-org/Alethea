@@ -102,7 +102,9 @@ defmodule Alethea.Test.ObanHelper do
   # Private helpers
 
   defp maybe_where_worker(query, nil), do: query
-  defp maybe_where_worker(query, worker) when is_binary(worker), do: where(query, [j], j.worker == ^worker)
+
+  defp maybe_where_worker(query, worker) when is_binary(worker),
+    do: where(query, [j], j.worker == ^worker)
 
   defp maybe_where_state(query, nil), do: query
   defp maybe_where_state(query, state), do: where(query, [j], j.state == ^state)
