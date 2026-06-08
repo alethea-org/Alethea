@@ -74,7 +74,13 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
          status_level: "Estable",
          anxiety_score: 0.2,
          social_score: 0.7,
-         emotional_range: %{"joy" => 0.5, "sadness" => 0.1, "anger" => 0.0, "fear" => 0.1, "neutral" => 0.3},
+         emotional_range: %{
+           "joy" => 0.5,
+           "sadness" => 0.1,
+           "anger" => 0.0,
+           "fear" => 0.1,
+           "neutral" => 0.3
+         },
          crisis_events: 0,
          session_count: 1,
          tokens_used: 42
