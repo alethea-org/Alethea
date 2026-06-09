@@ -10,6 +10,8 @@ defmodule Alethea.Accounts.Professional do
     field :mfa_secret, :string
     field :full_name, :string
     field :crisis_message, :string
+    field :remember_token_hash, :binary
+    field :remember_token_expires_at, :utc_datetime
     field :password, :string, virtual: true
 
     has_many :patients, Alethea.Accounts.Patient
