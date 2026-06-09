@@ -9,7 +9,6 @@ rel
 # Dependencies
 deps
 _build
-mix.lock
 
 # IDE
 .vscode
