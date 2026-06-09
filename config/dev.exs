@@ -1,14 +1,21 @@
 import Config
 
 # Configure your database
+# Use DATABASE_URL if set (for Docker), otherwise use individual settings
+if db_url = System.get_env("DATABASE_URL") do
+  config :alethea, Alethea.Repo, url: db_url, pool_size: 10
+else
+  config :alethea, Alethea.Repo,
+    username: "postgres",
+    password: "postgres",
+    hostname: "localhost",
+    database: "alethea_dev",
+    pool_size: 10
+end
+
 config :alethea, Alethea.Repo,
-  username: System.get_env("POSTGRES_USER", "postgres"),
-  password: System.get_env("POSTGRES_PASSWORD", "postgres"),
-  hostname: System.get_env("POSTGRES_HOST", "localhost"),
-  database: System.get_env("POSTGRES_DB", "alethea_dev"),
   stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
-  pool_size: 10
+  show_sensitive_data_on_connection_error: true
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
