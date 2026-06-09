@@ -44,6 +44,7 @@ defmodule AletheaWeb.Router do
   scope "/health", AletheaWeb do
     get("/", HealthController, :liveness)
     get("/ready", HealthController, :readiness)
+    get("/test-roberta", HealthController, :test_roberta)
   end
 
   scope "/webhooks", AletheaWeb do
