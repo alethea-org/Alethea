@@ -8,6 +8,8 @@ defmodule AletheaWeb.Telemetry do
 
   @impl true
   def init(_arg) do
+    Alethea.Telemetry.DatabaseMonitoring.attach()
+
     children = [
       # Telemetry poller will execute the given period measurements
       # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
@@ -74,6 +76,18 @@ defmodule AletheaWeb.Telemetry do
         description:
           "The time the connection spent waiting before being checked out for the query"
       ),
+      last_value("alethea.repo.pool.metrics.checkout_queue_length",
+        description: "The number of callers waiting for a database connection"
+      ),
+      last_value("alethea.repo.pool.metrics.ready_conn_count",
+        description: "The number of database connections ready for checkout"
+      ),
+      sum("alethea.repo.pool.saturation.count",
+        description: "The number of detected database pool saturation signals"
+      ),
+      sum("alethea.repo.connection.error.count",
+        description: "The number of database connection checkout errors"
+      ),
 
       # VM Metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
@@ -88,6 +102,7 @@ defmodule AletheaWeb.Telemetry do
       # A module, function and arguments to be invoked periodically.
       # This function must call :telemetry.execute/3 and a metric must be added above.
       # {AletheaWeb, :count_users, []}
+      {Alethea.Telemetry.DatabaseMonitoring, :emit_pool_metrics, []}
     ]
   end
 end
