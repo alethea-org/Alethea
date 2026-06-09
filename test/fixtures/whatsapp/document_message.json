@@ -1,0 +1,43 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "WHATSAPP_BUSINESS_ACCOUNT_ID",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551234567",
+              "phone_number_id": "PHONE_NUMBER_ID"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Test User"
+                },
+                "wa_id": "56912345678"
+              }
+            ],
+            "messages": [
+              {
+                "from": "56912345678",
+                "id": "wamid.HBgLNjkxMjM0NTY3OA==",
+                "timestamp": "1717431234",
+                "type": "document",
+                "document": {
+                  "caption": "Resultados de laboratorio",
+                  "filename": "lab_results.pdf",
+                  "mime_type": "application/pdf",
+                  "sha256": "d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2g3h4i5",
+                  "id": "DOCUMENT_ID"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

@@ -55,10 +55,9 @@ config :alethea, AletheaWeb.Endpoint,
     web_console_logger: true,
     patterns: [
       # Static assets, except user uploads
-      ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,
-      # Router, Controllers, LiveViews and LiveComponents
-      ~r"lib/alethea_web/router\.ex$"E,
-      ~r"lib/alethea_web/(controllers|live|components)/.*\.(ex|heex)$"E
+      ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$",
+      ~r"lib/alethea_web/router\.ex$",
+      ~r"lib/alethea_web/(controllers|live|components)/.*\.(ex|heex)$"
     ]
   ]
 
@@ -70,8 +69,10 @@ config :alethea,
        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
 config :alethea, :whatsapp,
-  api_token: "mock_token",
-  phone_number_id: "mock_id"
+  api_token: "mock",
+  phone_number_id: "mock",
+  app_secret: nil,
+  verify_token: "alethea_verify_token"
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"

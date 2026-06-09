@@ -26,13 +26,18 @@ defmodule AletheaJobs.WeeklyReportWorker do
         %{summary | summary_text: Sanitizer.sanitize(summary.summary_text)}
       end)
 
-    with {:ok, report_text} <- weekly_summary_chain().run(sanitized_summaries, aggregated_trends),
+    with {:ok, report} <- weekly_summary_chain().run(sanitized_summaries, aggregated_trends),
          {:ok, _summary} <-
            Clinical.save_summary(%{
              period_start: seven_days_ago,
              period_end: DateTime.utc_now() |> DateTime.truncate(:second),
-             summary_text: report_text,
-             status_level: extract_status_level(report_text),
+             summary_text: report.summary_text,
+             status_level: report.status_level,
+             anxiety_score: report.anxiety_score,
+             social_score: report.social_score,
+             emotional_range: report.emotional_range,
+             crisis_events: report.crisis_events,
+             session_count: report.session_count,
              type: "weekly",
              patient_id: patient.id
            }) do
@@ -40,16 +45,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
     else
       {:error, reason} ->
         Logger.error("WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}")
-
         {:error, reason}
-    end
-  end
-
-  defp extract_status_level(text) do
-    cond do
-      String.contains?(text, "Intervención") -> "Intervención Requerida"
-      String.contains?(text, "Alerta") -> "Alerta"
-      true -> "Estable"
     end
   end
 end

@@ -40,6 +40,12 @@ defmodule AletheaWeb.Router do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :redirect_if_authenticated)
   end
 
+  # Health check endpoints (no auth required)
+  scope "/health", AletheaWeb do
+    get("/", HealthController, :liveness)
+    get("/ready", HealthController, :readiness)
+  end
+
   scope "/webhooks", AletheaWeb do
     pipe_through(:api)
 
@@ -93,6 +99,7 @@ defmodule AletheaWeb.Router do
       live("/dashboard/patients/:id", DashboardLive, :show)
       live("/patients", PatientLive.Index, :index)
       live("/patients/new", PatientLive.Index, :new)
+      live("/admin/oban-dashboard", ObanDashboardLive, :index)
     end
   end
 end
