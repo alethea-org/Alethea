@@ -66,7 +66,7 @@ defmodule AletheaWeb.Router do
   end
 
   scope "/", AletheaWeb do
-    pipe_through(:browser)
+    pipe_through([:browser_auth])
 
     get("/", PageController, :home)
   end
