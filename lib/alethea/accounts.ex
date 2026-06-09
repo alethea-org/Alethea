@@ -4,6 +4,7 @@ defmodule Alethea.Accounts do
   """
 
   import Ecto.Query, warn: false
+  require Logger
   alias Alethea.Repo
   alias Alethea.Accounts.{Professional, Patient, EncryptionKey}
   alias Alethea.Encryption.{PatientVault, ProfessionalKek}
@@ -244,6 +245,9 @@ defmodule Alethea.Accounts do
         |> Repo.transaction()
         |> case do
           {:ok, %{patient: patient}} ->
+            # Enviar términos de consentimiento automáticamente
+            send_consent_terms(patient)
+
             # Notificar a los LiveViews del profesional
             Phoenix.PubSub.broadcast(
               Alethea.PubSub,
@@ -281,5 +285,43 @@ defmodule Alethea.Accounts do
       "+" <> _ = phone -> phone
       phone -> "+" <> phone
     end)
+  end
+
+  @terms_message """
+  Hola, soy Alethea, tu diario clínico inteligente.
+
+  Para poder ayudarte y que tu terapeuta pueda ver tu progreso, necesito que aceptes los términos de uso y el tratamiento de tus datos personales (que están cifrados y protegidos).
+
+  Responde "ACEPTO" para continuar.
+  """
+
+  # Envía automáticamente los términos de consentimiento cuando se registra un paciente
+  defp send_consent_terms(patient) do
+    patient = get_patient_with_professional(patient.id)
+    whatsapp_number = patient.encrypted_whatsapp_number
+
+    # Solo enviar si el paciente tiene número de WhatsApp
+    if is_binary(whatsapp_number) and whatsapp_number != "" do
+      # Obtener el número descifrado para enviar el mensaje
+      case get_decrypted_whatsapp_number(patient) do
+        {:ok, phone} ->
+          client = Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+          client.send_message(phone, @terms_message)
+          Logger.info("Consent terms sent to new patient #{patient.alias}")
+
+        {:error, _} ->
+          Logger.warning("Could not decrypt WhatsApp number for patient #{patient.id}")
+      end
+    end
+  end
+
+  # Helper para obtener el número descifrado del paciente
+  defp get_decrypted_whatsapp_number(patient) do
+    with {:ok, key} <- PatientVault.get_key_for_patient(patient.id),
+         {:ok, decrypted} <- PatientVault.decrypt(patient.encrypted_whatsapp_number, key) do
+      {:ok, decrypted}
+    else
+      error -> error
+    end
   end
 end
