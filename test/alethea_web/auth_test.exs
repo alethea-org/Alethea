@@ -96,7 +96,7 @@ defmodule AletheaWeb.AuthTest do
 
       conn =
         build_conn()
-        |> Plug.Conn.put_req_cookie(@remember_cookie, old_token)
+        |> Plug.Test.put_req_cookie(@remember_cookie, old_token)
         |> get("/dashboard")
 
       assert html_response(conn, 200) =~ "Dashboard"
@@ -108,14 +108,14 @@ defmodule AletheaWeb.AuthTest do
 
       replay_conn =
         build_conn()
-        |> Plug.Conn.put_req_cookie(@remember_cookie, old_token)
+        |> Plug.Test.put_req_cookie(@remember_cookie, old_token)
         |> get("/dashboard")
 
       assert redirected_to(replay_conn) == "/login"
 
       rotated_conn =
         build_conn()
-        |> Plug.Conn.put_req_cookie(@remember_cookie, rotated_token)
+        |> Plug.Test.put_req_cookie(@remember_cookie, rotated_token)
         |> get("/dashboard")
 
       assert html_response(rotated_conn, 200) =~ "Dashboard"
@@ -149,7 +149,7 @@ defmodule AletheaWeb.AuthTest do
       conn =
         build_conn()
         |> Plug.Test.init_test_session(%{professional_id: professional.id})
-        |> Plug.Conn.put_req_cookie(@remember_cookie, remember_token)
+        |> Plug.Test.put_req_cookie(@remember_cookie, remember_token)
         |> delete("/logout")
 
       assert redirected_to(conn) == "/login"
@@ -161,7 +161,7 @@ defmodule AletheaWeb.AuthTest do
 
       conn =
         build_conn()
-        |> Plug.Conn.put_req_cookie(@remember_cookie, remember_token)
+        |> Plug.Test.put_req_cookie(@remember_cookie, remember_token)
         |> get("/dashboard")
 
       assert redirected_to(conn) == "/login"
