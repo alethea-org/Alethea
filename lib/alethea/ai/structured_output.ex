@@ -91,15 +91,27 @@ defmodule Alethea.AI.StructuredOutput do
     %{
       "type" => "object",
       "properties" => %{
-        "emotional_overview" => %{"type" => "string"},
-        "recurring_patterns" => %{"type" => "array", "items" => %{"type" => "string"}},
-        "milestones" => %{"type" => "array", "items" => %{"type" => "string"}},
-        "risk_level" => %{
+        "summary_text" => %{"type" => "string"},
+        "status_level" => %{
           "type" => "string",
           "enum" => ["Estable", "Alerta", "Intervención Requerida"]
-        }
+        },
+        "anxiety_score" => %{"type" => "number", "minimum" => 0.0, "maximum" => 1.0},
+        "social_score" => %{"type" => "number", "minimum" => 0.0, "maximum" => 1.0},
+        "emotional_range" => %{
+          "type" => "object",
+          "properties" => %{
+            "joy" => %{"type" => "number"},
+            "sadness" => %{"type" => "number"},
+            "anger" => %{"type" => "number"},
+            "fear" => %{"type" => "number"},
+            "neutral" => %{"type" => "number"}
+          }
+        },
+        "crisis_events" => %{"type" => "integer", "minimum" => 0},
+        "session_count" => %{"type" => "integer", "minimum" => 0}
       },
-      "required" => ["emotional_overview", "risk_level"]
+      "required" => ["summary_text", "status_level"]
     }
   end
 

@@ -1,0 +1,39 @@
+# ============================================
+# Dockerfile - Development
+# Multi-stage build optimized for dev with hot reload
+# ============================================
+
+FROM elixir:1.17-alpine
+
+# Install Node.js 20.x (Alpine uses community package)
+RUN apk add --no-cache nodejs npm
+
+# Install build dependencies
+RUN apk add --no-cache \
+    build-base \
+    git \
+    inotify-tools \
+    postgresql-client \
+    ncurses
+
+# Install hex and rebar
+RUN mix local.hex --force && \
+    mix local.rebar --force
+
+WORKDIR /app
+
+# Copy Elixir files first for caching
+COPY mix.exs mix.lock ./
+COPY config ./config
+
+# Install dependencies
+RUN mix deps.get
+
+# Copy remaining app files
+COPY . .
+
+# Expose Phoenix port
+EXPOSE 4000
+
+# Start Phoenix with hot reload
+CMD ["mix", "phx.server"]

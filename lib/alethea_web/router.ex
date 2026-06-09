@@ -27,12 +27,23 @@ defmodule AletheaWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  # OpenAPI/Swagger UI
+  pipeline :swagger_ui do
+    plug(:accepts, ["html"])
+  end
+
   pipeline :require_auth do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional)
   end
 
   pipeline :redirect_if_auth do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :redirect_if_authenticated)
+  end
+
+  # Health check endpoints (no auth required)
+  scope "/health", AletheaWeb do
+    get("/", HealthController, :liveness)
+    get("/ready", HealthController, :readiness)
   end
 
   scope "/webhooks", AletheaWeb do
@@ -42,8 +53,20 @@ defmodule AletheaWeb.Router do
     post("/whatsapp", WhatsappWebhookController, :receive)
   end
 
+  # Swagger UI for API documentation
+  scope "/api-docs", AletheaWeb do
+    pipe_through([:swagger_ui])
+    get("/", SwaggerUIPlug, :index)
+  end
+
+  # OpenAPI spec JSON endpoint
+  scope "/openapi", AletheaWeb do
+    pipe_through(:api)
+    get("/", OpenApiSpecPlug, :show)
+  end
+
   scope "/", AletheaWeb do
-    pipe_through(:browser)
+    pipe_through([:browser_auth])
 
     get("/", PageController, :home)
   end
@@ -76,6 +99,7 @@ defmodule AletheaWeb.Router do
       live("/dashboard/patients/:id", DashboardLive, :show)
       live("/patients", PatientLive.Index, :index)
       live("/patients/new", PatientLive.Index, :new)
+      live("/admin/oban-dashboard", ObanDashboardLive, :index)
     end
   end
 end

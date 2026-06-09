@@ -1,14 +1,21 @@
 import Config
 
 # Configure your database
+# Use DATABASE_URL if set (for Docker), otherwise use individual settings
+if db_url = System.get_env("DATABASE_URL") do
+  config :alethea, Alethea.Repo, url: db_url, pool_size: 10
+else
+  config :alethea, Alethea.Repo,
+    username: "postgres",
+    password: "postgres",
+    hostname: "localhost",
+    database: "alethea_dev",
+    pool_size: 10
+end
+
 config :alethea, Alethea.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "alethea_dev",
   stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
-  pool_size: 10
+  show_sensitive_data_on_connection_error: true
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
@@ -17,9 +24,8 @@ config :alethea, Alethea.Repo,
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
 config :alethea, AletheaWeb.Endpoint,
-  # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  # Binding to all interfaces for Docker
+  http: [ip: {0, 0, 0, 0}],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
@@ -55,10 +61,9 @@ config :alethea, AletheaWeb.Endpoint,
     web_console_logger: true,
     patterns: [
       # Static assets, except user uploads
-      ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,
-      # Router, Controllers, LiveViews and LiveComponents
-      ~r"lib/alethea_web/router\.ex$"E,
-      ~r"lib/alethea_web/(controllers|live|components)/.*\.(ex|heex)$"E
+      ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$",
+      ~r"lib/alethea_web/router\.ex$",
+      ~r"lib/alethea_web/(controllers|live|components)/.*\.(ex|heex)$"
     ]
   ]
 
@@ -70,8 +75,10 @@ config :alethea,
        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
 config :alethea, :whatsapp,
-  api_token: "mock_token",
-  phone_number_id: "mock_id"
+  api_token: System.get_env("WHATSAPP_API_TOKEN", "mock"),
+  phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "mock"),
+  app_secret: System.get_env("WHATSAPP_APP_SECRET"),
+  verify_token: System.get_env("WHATSAPP_VERIFY_TOKEN", "alethea2026")
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
