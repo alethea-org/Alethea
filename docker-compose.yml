@@ -10,6 +10,9 @@ version: "3.9"
 services:
   # Application
   app:
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     build:
       context: .
       dockerfile: Dockerfile.dev
