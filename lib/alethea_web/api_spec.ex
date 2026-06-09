@@ -36,7 +36,6 @@ defmodule AletheaWeb.ApiSpec do
     }
   end
 
-  @impl true
   def info do
     %Info{
       title: "Alethea API",
@@ -58,7 +57,6 @@ defmodule AletheaWeb.ApiSpec do
     }
   end
 
-  @impl true
   def servers do
     [
       %OpenApiSpex.Server{
@@ -68,7 +66,6 @@ defmodule AletheaWeb.ApiSpec do
     ]
   end
 
-  @impl true
   def tags do
     [
       %OpenApiSpex.Tag{name: "Webhooks", description: "WhatsApp webhook integration endpoints"},

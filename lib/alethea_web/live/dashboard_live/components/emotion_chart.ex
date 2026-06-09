@@ -84,14 +84,13 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
           stroke="#e2e8f0"
           stroke-width="1"
           stroke-dasharray="3,3"
-        />
-        <line x1="40" y1="170" x2="552" y2="170" stroke="#e2e8f0" stroke-width="1" />
-
+        /> <line x1="40" y1="170" x2="552" y2="170" stroke="#e2e8f0" stroke-width="1" />
         <%!-- y-axis labels --%>
         <text x="34" y="13" text-anchor="end" font-size="9" fill="#94a3b8">100%</text>
-        <text x="34" y="93" text-anchor="end" font-size="9" fill="#94a3b8">50%</text>
-        <text x="34" y="173" text-anchor="end" font-size="9" fill="#94a3b8">0%</text>
 
+        <text x="34" y="93" text-anchor="end" font-size="9" fill="#94a3b8">50%</text>
+
+        <text x="34" y="173" text-anchor="end" font-size="9" fill="#94a3b8">0%</text>
         <%!-- bars --%>
         <%= for bar <- @bars do %>
           <rect
@@ -104,7 +103,6 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
             opacity="0.85"
           />
         <% end %>
-
         <%!-- x-axis day labels --%>
         <%= for lbl <- @day_labels do %>
           <text x={lbl.x} y={lbl.y} text-anchor="middle" font-size="9" fill="#94a3b8">
@@ -112,14 +110,12 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
           </text>
         <% end %>
       </svg>
-
-      <%!-- legend --%>
+       <%!-- legend --%>
       <div style="display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:4px; padding:0 40px;">
         <%= for {_key, label, color} <- @emotions do %>
           <div style="display:flex; align-items:center; gap:4px;">
             <span style={"width:10px; height:10px; border-radius:2px; background:#{color}; flex-shrink:0; display:inline-block;"}>
-            </span>
-            <span style="font-size:10px; color:#64748b;">{label}</span>
+            </span> <span style="font-size:10px; color:#64748b;">{label}</span>
           </div>
         <% end %>
       </div>

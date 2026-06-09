@@ -437,16 +437,6 @@ defmodule AletheaWeb.DashboardLive do
     }
   end
 
-  defp format_session_day(nil), do: "-"
-  defp format_session_day(1), do: "Lunes"
-  defp format_session_day(2), do: "Martes"
-  defp format_session_day(3), do: "Miercoles"
-  defp format_session_day(4), do: "Jueves"
-  defp format_session_day(5), do: "Viernes"
-  defp format_session_day(6), do: "Sabado"
-  defp format_session_day(7), do: "Domingo"
-  defp format_session_day(_day), do: "-"
-
   defp format_session_time(%Time{} = time) do
     Calendar.strftime(time, "%H:%M")
   end

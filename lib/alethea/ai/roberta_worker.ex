@@ -63,6 +63,15 @@ defmodule Alethea.AI.RoBERTaWorker do
   def analyze_batch([]), do: empty_result()
 
   def analyze_batch(texts) when is_list(texts) do
+    texts
+    |> analyze_batch_per_message()
+    |> average_score_sets()
+  end
+
+  @impl true
+  def analyze_batch_per_message([]), do: []
+
+  def analyze_batch_per_message(texts) when is_list(texts) do
     config = Application.get_env(:alethea, __MODULE__, [])
     provider = Keyword.get(config, :provider, :local)
 
@@ -78,8 +87,7 @@ defmodule Alethea.AI.RoBERTaWorker do
       end
 
     results
-    |> normalize_results()
-    |> average_scores(length(texts))
+    |> normalize_per_message_results()
   end
 
   defp run_huggingface(texts, hf_config) do
@@ -96,46 +104,92 @@ defmodule Alethea.AI.RoBERTaWorker do
     response.body
   end
 
-  defp normalize_results(results) when is_list(results) do
+  defp normalize_per_message_results(results) when is_list(results) do
     Enum.map(results, fn
       # Formato Bumblebee (top_k: 1)
       %{predictions: [%{label: label, score: score}]} ->
-        canonical = Map.get(@label_map, String.downcase(label))
-        if canonical, do: %{canonical => score}, else: %{}
+        label
+        |> canonical_score_map(score)
+        |> to_score_list()
 
       # Formato Hugging Face API (lista de listas de dicts)
       # El API suele devolver [[{"label": "...", "score": ...}, ...], ...]
       # Si enviamos batch, devuelve una lista de listas.
       [%{"label" => label, "score" => score} | _] ->
-        canonical = Map.get(@label_map, String.downcase(label))
-        if canonical, do: %{canonical => score}, else: %{}
+        label
+        |> canonical_score_map(score)
+        |> to_score_list()
 
       # Soporte para formato de mock simple en tests
       %{"label" => label, "score" => score} ->
-        canonical = Map.get(@label_map, String.downcase(label))
-        if canonical, do: %{canonical => score}, else: %{}
+        label
+        |> canonical_score_map(score)
+        |> to_score_list()
+
+      %{label: label, score: score} ->
+        label
+        |> canonical_score_map(score)
+        |> to_score_list()
 
       _ ->
-        %{}
+        empty_result()
     end)
   end
 
-  defp normalize_results(_), do: []
+  defp normalize_per_message_results(_), do: []
 
-  defp average_scores(normalized_list, count) do
+  defp canonical_score_map(label, score) do
+    canonical =
+      label
+      |> to_string()
+      |> String.downcase()
+      |> then(&Map.get(@label_map, &1))
+
+    if canonical, do: %{canonical => score}, else: %{}
+  end
+
+  defp to_score_list(score_map) do
+    Enum.map(@canonical_labels, fn label ->
+      %{label: label, score: Map.get(score_map, label, 0.0) || 0.0}
+    end)
+  end
+
+  defp average_score_sets([]), do: empty_result()
+
+  defp average_score_sets(score_sets) do
     base = Map.new(@canonical_labels, fn l -> {l, 0.0} end)
 
     totals =
-      Enum.reduce(normalized_list, base, fn emotions, acc ->
-        Enum.reduce(emotions, acc, fn {label, score}, inner_acc ->
-          Map.update(inner_acc, label, score, &(&1 + score))
+      Enum.reduce(score_sets, base, fn emotions, acc ->
+        Enum.reduce(emotions, acc, fn emotion, inner_acc ->
+          label = emotion_label(emotion)
+          score = emotion_score(emotion)
+
+          if label in @canonical_labels do
+            Map.update(inner_acc, label, score, &(&1 + score))
+          else
+            inner_acc
+          end
         end)
       end)
+
+    count = length(score_sets)
 
     Enum.map(@canonical_labels, fn label ->
       %{label: label, score: totals[label] / count}
     end)
   end
+
+  defp emotion_label(%{label: label}), do: to_string(label)
+  defp emotion_label(%{"label" => label}), do: to_string(label)
+  defp emotion_label(_emotion), do: nil
+
+  defp emotion_score(%{score: score}), do: score_value(score)
+  defp emotion_score(%{"score" => score}), do: score_value(score)
+  defp emotion_score(_emotion), do: 0.0
+
+  defp score_value(score) when is_number(score), do: score
+  defp score_value(_score), do: 0.0
 
   defp empty_result do
     Enum.map(@canonical_labels, fn label -> %{label: label, score: 0.0} end)

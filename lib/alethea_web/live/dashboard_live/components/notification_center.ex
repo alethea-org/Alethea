@@ -94,8 +94,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
           {min(@unread_count, 99)}
         </span>
       </button>
-
-      <%!-- Dropdown panel --%>
+       <%!-- Dropdown panel --%>
       <div
         :if={@show_panel}
         id={"#{@id}-panel"}
@@ -114,6 +113,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
               {@unread_count}
             </span>
           </div>
+
           <div style="display:flex; align-items:center; gap:6px;">
             <button
               :if={@unread_count > 0}
@@ -132,7 +132,6 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
             </button>
           </div>
         </div>
-
         <%!-- Empty state --%>
         <div :if={@page_items == []} style="padding:32px 16px; text-align:center;">
           <.icon
@@ -141,7 +140,6 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
           />
           <p style="font-size:12px; color:#94a3b8;">Sin notificaciones</p>
         </div>
-
         <%!-- Notification list --%>
         <div :if={@page_items != []}>
           <%= for notif <- @page_items do %>
@@ -157,17 +155,16 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
                 <span style={"width:8px; height:8px; border-radius:50%; display:block; background:#{severity_color(notif.severity)};"}>
                 </span>
               </div>
-
               <%!-- Content --%>
               <div style="flex:1; min-width:0;">
                 <p style={"font-size:12px; line-height:1.4; color:#334155; " <> if(notif.read, do: "", else: "font-weight:500;")}>
                   {notif.message}
                 </p>
+
                 <p style="font-size:10px; color:#94a3b8; margin-top:2px;">
                   {relative_time(notif.inserted_at)}
                 </p>
               </div>
-
               <%!-- Mark read --%>
               <button
                 :if={!notif.read}
@@ -182,7 +179,6 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
             </div>
           <% end %>
         </div>
-
         <%!-- Pagination --%>
         <div
           :if={@total_pages > 1}

@@ -2,7 +2,6 @@
   Registration page — rendered inside auth.html.heex.
   @changeset always assigned by RegistrationController.
 --%>
-
 <style>
   .auth-card { width: 100%; max-width: 400px; }
 
@@ -107,14 +106,15 @@
         style="filter:brightness(0) invert(1);"
       />
     </div>
+
     <h1 style="font-size:22px; font-weight:800; color:#1e293b; letter-spacing:-0.03em; margin-bottom:2px;">
       Alethea
     </h1>
+
     <p style="font-size:11px; color:#94a3b8; font-weight:600; text-transform:uppercase; letter-spacing:0.09em;">
       Centro de Control Clínico
     </p>
   </div>
-
   <%!-- Card --%>
   <div class="auth-card-inner">
     <div style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;background:#eef2ff;color:#6366f1;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:14px;">
@@ -128,10 +128,8 @@
         stroke-linecap="round"
         stroke-linejoin="round"
       >
-        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-        <line x1="19" y1="8" x2="19" y2="14" />
-        <line x1="22" y1="11" x2="16" y2="11" />
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <circle cx="9" cy="7" r="4" />
+        <line x1="19" y1="8" x2="19" y2="14" /> <line x1="22" y1="11" x2="16" y2="11" />
       </svg>
       Cuenta profesional
     </div>
@@ -139,14 +137,13 @@
     <h2 style="font-size:17px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-bottom:4px;">
       Crear tu cuenta
     </h2>
+
     <p style="font-size:13px; color:#94a3b8; margin-bottom:24px;">
       Completá los datos para acceder a Alethea
     </p>
 
     <form action="/register" method="post" id="registration-form">
-      <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-
-      <%!-- Full name --%>
+      <input type="hidden" name="_csrf_token" value={get_csrf_token()} /> <%!-- Full name --%>
       <div style="margin-bottom:16px;">
         <label for="reg-full-name" class="auth-label">Nombre completo</label>
         <div class="auth-input-wrap">
@@ -161,8 +158,7 @@
             stroke-linecap="round"
             stroke-linejoin="round"
           >
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /> <circle cx="12" cy="7" r="4" />
           </svg>
           <input
             type="text"
@@ -178,6 +174,7 @@
             ]}
           />
         </div>
+
         <%= for {msg, _} <- Keyword.get_values(@changeset.errors, :full_name) do %>
           <p class="auth-field-err">
             <svg
@@ -190,15 +187,13 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
+              <circle cx="12" cy="12" r="10" /> <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            {msg}
+             {msg}
           </p>
         <% end %>
       </div>
-
       <%!-- Email --%>
       <div style="margin-bottom:16px;">
         <label for="reg-email" class="auth-label">Correo electrónico</label>
@@ -231,6 +226,7 @@
             ]}
           />
         </div>
+
         <%= for {msg, _} <- Keyword.get_values(@changeset.errors, :email) do %>
           <p class="auth-field-err">
             <svg
@@ -243,15 +239,13 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
+              <circle cx="12" cy="12" r="10" /> <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            {msg}
+             {msg}
           </p>
         <% end %>
       </div>
-
       <%!-- Password --%>
       <div style="margin-bottom:24px;">
         <label for="reg-password" class="auth-label">Contraseña</label>
@@ -283,6 +277,7 @@
             ]}
           />
         </div>
+
         <%= for {msg, _} <- Keyword.get_values(@changeset.errors, :password) do %>
           <p class="auth-field-err">
             <svg
@@ -295,13 +290,13 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
+              <circle cx="12" cy="12" r="10" /> <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            {msg}
+             {msg}
           </p>
         <% end %>
+
         <%= if @changeset.errors[:password] == nil do %>
           <p class="auth-hint">Mínimo 12 caracteres</p>
         <% end %>
@@ -318,19 +313,16 @@
           stroke-linecap="round"
           stroke-linejoin="round"
         >
-          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-          <line x1="19" y1="8" x2="19" y2="14" />
-          <line x1="22" y1="11" x2="16" y2="11" />
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <circle cx="9" cy="7" r="4" />
+          <line x1="19" y1="8" x2="19" y2="14" /> <line x1="22" y1="11" x2="16" y2="11" />
         </svg>
         Crear cuenta
       </button>
     </form>
   </div>
 
-  <p class="auth-footer-link">
-    ¿Ya tenés cuenta? <a href="/login">Iniciá sesión</a>
-  </p>
+  <p class="auth-footer-link">¿Ya tenés cuenta? <a href="/login">Iniciá sesión</a></p>
+
   <p class="auth-security-note">
     <svg
       width="11"

@@ -2,7 +2,6 @@
   Login page — rendered inside auth.html.heex.
   auth.html.heex provides the full-viewport centered wrapper + flash_group.
 --%>
-
 <style>
   .auth-card {
     width: 100%;
@@ -144,23 +143,24 @@
         style="filter:brightness(0) invert(1);"
       />
     </div>
+
     <h1 style="font-size:22px; font-weight:800; color:#1e293b; letter-spacing:-0.03em; margin-bottom:2px;">
       Alethea
     </h1>
+
     <p style="font-size:11px; color:#94a3b8; font-weight:600; text-transform:uppercase; letter-spacing:0.09em;">
       Centro de Control Clínico
     </p>
   </div>
-
   <%!-- Card --%>
   <div class="auth-card-inner">
     <h2 style="font-size:17px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-bottom:4px;">
       Bienvenido de vuelta
     </h2>
+
     <p style="font-size:13px; color:#94a3b8; margin-bottom:24px;">
       Ingresá tus credenciales para continuar
     </p>
-
     <%!-- Error --%>
     <%= if @flash["error"] do %>
       <div class="auth-error-box">
@@ -175,14 +175,12 @@
           stroke-linecap="round"
           stroke-linejoin="round"
         >
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="8" x2="12" y2="12" />
+          <circle cx="12" cy="12" r="10" /> <line x1="12" y1="8" x2="12" y2="12" />
           <line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
-        {@flash["error"]}
+         {@flash["error"]}
       </div>
     <% end %>
-
     <%!-- Info (e.g. after register) --%>
     <%= if @flash["info"] do %>
       <div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;color:#16a34a;font-size:13px;line-height:1.45;margin-bottom:20px;">
@@ -191,9 +189,7 @@
     <% end %>
 
     <form action="/login" method="post" id="login-form">
-      <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-
-      <%!-- Email --%>
+      <input type="hidden" name="_csrf_token" value={get_csrf_token()} /> <%!-- Email --%>
       <div style="margin-bottom:16px;">
         <label for="login-email" class="auth-label">Correo electrónico</label>
         <div class="auth-input-wrap">
@@ -222,7 +218,6 @@
           />
         </div>
       </div>
-
       <%!-- Password --%>
       <div style="margin-bottom:24px;">
         <label for="login-password" class="auth-label">Contraseña</label>
@@ -265,17 +260,15 @@
           stroke-linejoin="round"
         >
           <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-          <polyline points="10 17 15 12 10 7" />
-          <line x1="15" y1="12" x2="3" y2="12" />
+          <polyline points="10 17 15 12 10 7" /> <line x1="15" y1="12" x2="3" y2="12" />
         </svg>
         Iniciar sesión
       </button>
     </form>
   </div>
 
-  <p class="auth-footer-link">
-    ¿No tenés cuenta? <a href="/register">Registrate aquí</a>
-  </p>
+  <p class="auth-footer-link">¿No tenés cuenta? <a href="/register">Registrate aquí</a></p>
+
   <p class="auth-security-note">
     <svg
       width="11"

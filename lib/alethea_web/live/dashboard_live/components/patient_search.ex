@@ -82,7 +82,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             {length(@filtered)}/{length(@patients)}
           </span>
         </div>
-
         <%!-- Search input --%>
         <div style="position:relative;">
           <.icon
@@ -101,7 +100,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             style="width:100%; padding:6px 10px 6px 28px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; background:#fff; color:#334155; outline:none; box-sizing:border-box;"
           />
         </div>
-
         <%!-- Filter chips — AND logic --%>
         <div style="display:flex; gap:4px; flex-wrap:wrap;">
           <%= for {key, label} <- @filter_labels do %>
@@ -115,7 +113,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             </button>
           <% end %>
         </div>
-
         <%!-- Sort select --%>
         <div style="display:flex; align-items:center; gap:6px;">
           <span style="font-size:10px; color:#94a3b8; white-space:nowrap;">Ordenar:</span>
@@ -131,7 +128,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
           </select>
         </div>
       </div>
-
       <%!-- Patient list --%>
       <nav id={"#{@id}-results"}>
         <div :if={@filtered == []} style="padding:32px 16px; text-align:center;">
@@ -163,6 +159,7 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
               <div style="font-size:13px; font-weight:600; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                 {patient.alias}
               </div>
+
               <div style="font-size:10px; color:#94a3b8; margin-top:1px;">
                 {status_label(patient)}
               </div>

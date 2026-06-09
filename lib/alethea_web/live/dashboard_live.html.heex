@@ -3,7 +3,6 @@
      Uses: FlyonUI semantic classes (card, badge, progress, chat…)
            + dashboard-* layout classes from app.css
 ═══════════════════════════════════════════════════════════ --%>
-
 <%!-- ── Header + stats ── --%>
 <div style="margin-bottom:24px;">
   <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:12px;">
@@ -11,17 +10,18 @@
       <p style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:#94a3b8;">
         Alethea · Centro de Control
       </p>
+
       <h1 style="font-size:22px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-top:2px;">
         {@current_professional.full_name || "Profesional Clínico"}
       </h1>
     </div>
+
     <.live_component
       module={NotificationCenter}
       id="notification-center"
       professional_id={@current_professional.id}
     />
   </div>
-
   <%!-- Stats — FlyonUI stat component --%>
   <div
     class="stats"
@@ -31,35 +31,41 @@
       <div class="stat-figure" style="color:#6366f1;">
         <.icon name="hero-users" style="width:28px; height:28px;" />
       </div>
+
       <div
         class="stat-title"
         style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;"
       >
         Pacientes
       </div>
+
       <div class="stat-value" style="font-size:22px; font-weight:800;">{length(@patients)}</div>
+
       <div class="stat-desc" style="font-size:11px; color:#94a3b8;">Activos en seguimiento</div>
     </div>
+
     <div class="stat" style="padding:16px 24px;">
       <div class="stat-figure" style="color:#ef4444;">
         <.icon name="hero-exclamation-triangle" style="width:28px; height:28px;" />
       </div>
+
       <div
         class="stat-title"
         style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;"
       >
         Alertas
       </div>
+
       <div class="stat-value" style="font-size:22px; font-weight:800; color:#ef4444;">
         {length(@critical_patients)}
       </div>
+
       <div class="stat-desc" style="font-size:11px; color:#94a3b8;">
         {if @critical_patients == [], do: "Sin alertas activas", else: "Requieren atención"}
       </div>
     </div>
   </div>
 </div>
-
 <%!-- ── Two-column layout: patient sidebar + detail ── --%>
 <div class="dashboard-grid">
   <%!-- ──── LEFT: Patient sidebar ──── --%>
@@ -122,16 +128,19 @@
                 |> String.upcase()}
               </span>
             </div>
+
             <span
               style="position:absolute; top:0; right:0; width:8px; height:8px; border-radius:50%; background:#ef4444; border:2px solid #fff;"
               class="animate-pulse-dot"
             >
             </span>
           </div>
+
           <div style="min-width:0; flex:1;">
             <div style="font-size:13px; font-weight:600; color:#1e293b;" class="truncate">
               {patient.alias}
             </div>
+
             <div style="font-size:10px; color:#ef4444; font-weight:500;">
               Intervención prioritaria
             </div>
@@ -139,7 +148,6 @@
         </.link>
       <% end %>
     </div>
-
     <%!-- Patient search + list --%>
     <.live_component
       module={AletheaWeb.DashboardLive.Components.PatientSearch}
@@ -148,7 +156,6 @@
       selected_patient_id={@selected_patient && @selected_patient.id}
     />
   </div>
-
   <%!-- ──── RIGHT: Detail panel ──── --%>
   <div class="dashboard-main">
     <%!-- Empty state --%>
@@ -161,13 +168,14 @@
         <div style="width:56px; height:56px; border-radius:16px; background:#eef2ff; display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
           <.icon name="hero-user-circle" style="width:28px; height:28px; color:#818cf8;" />
         </div>
+
         <h2 style="font-size:15px; font-weight:700; color:#64748b; margin-bottom:4px;">
           Selecciona un paciente
         </h2>
+
         <p style="font-size:13px; color:#94a3b8;">El detalle clínico aparecerá aquí.</p>
       </div>
     </div>
-
     <%!-- Patient detail --%>
     <div :if={@selected_patient} id="dashboard-patient-detail">
       <%!-- Patient header — mood semaphore --%>
@@ -185,6 +193,7 @@
                 |> String.upcase()}
               </span>
             </div>
+
             <%= if @selected_patient.urgent_intervention do %>
               <span
                 style="position:absolute; top:0; right:0; width:10px; height:10px; border-radius:50%; background:#ef4444; border:2px solid #fff;"
@@ -193,6 +202,7 @@
               </span>
             <% end %>
           </div>
+
           <div>
             <div style="display:flex; align-items:center; gap:6px;">
               <span
@@ -206,9 +216,11 @@
                 {@selected_patient.alias}
               </h2>
             </div>
+
             <p style="font-size:11px; color:#94a3b8; margin-top:2px;">Detalle clínico activo</p>
           </div>
         </div>
+
         <span
           class={"badge " <> @mood_signal.badge_class}
           style="font-weight:600; font-size:11px;"
@@ -216,7 +228,6 @@
           {@mood_signal.label}
         </span>
       </div>
-
       <%!-- Detail grid: reports left, controls right --%>
       <div class="dashboard-detail-grid">
         <%!-- ── Left: clinical content ── --%>
@@ -236,14 +247,17 @@
                   Weekly Pre-Session Report
                 </span>
               </div>
+
               <span :if={@weekly_summary} style="font-size:10px; color:#94a3b8;">
                 {format_summary_date(@weekly_summary.period_end)}
               </span>
             </div>
+
             <div style="padding:14px 16px; background:#fff;">
               <div :if={@weekly_summary} style="font-size:13px; line-height:1.6; color:#475569;">
                 {@weekly_summary.summary_text}
               </div>
+
               <div :if={!@weekly_summary} style="text-align:center; padding:16px 0;">
                 <.icon
                   name="hero-document-text"
@@ -255,7 +269,6 @@
               </div>
             </div>
           </div>
-
           <%!-- Emotion trends — progress bars --%>
           <div
             id="emotion-trends"
@@ -291,6 +304,7 @@
                       {emotion.percent}%
                     </span>
                   </div>
+
                   <progress
                     class={"progress " <> emotion.progress_class}
                     value={emotion.percent}
@@ -302,7 +316,6 @@
               <% end %>
             </div>
           </div>
-
           <%!-- Emotion SVG bar chart — 7-day daily breakdown --%>
           <div
             id="emotion-chart"
@@ -318,7 +331,6 @@
             </div>
             <EmotionChart.emotion_chart daily_data={@emotion_chart_data} />
           </div>
-
           <%!-- Session Snapshots — accordion --%>
           <div id="session-snapshots">
             <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; padding:0 4px;">
@@ -363,6 +375,7 @@
                         style="width:14px; height:14px; color:#94a3b8; transition:transform .2s;"
                       />
                     </summary>
+
                     <div style="padding:10px 14px 14px; font-size:13px; line-height:1.6; color:#475569; border-top:1px solid #f1f5f9;">
                       {summary.summary_text}
                     </div>
@@ -372,7 +385,6 @@
             <% end %>
           </div>
         </div>
-
         <%!-- ── Right: controls ── --%>
         <div style="display:flex; flex-direction:column; gap:16px;">
           <%!-- Session schedule --%>
@@ -380,6 +392,7 @@
             <h3 style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:10px;">
               Horario de Sesión
             </h3>
+
             <.form for={%{}} id="schedule-form" phx-submit="save_session_schedule">
               <div style="margin-bottom:8px;">
                 <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
@@ -392,26 +405,33 @@
                   <option value="1" selected={@selected_patient.session_day_of_week == 1}>
                     Lunes
                   </option>
+
                   <option value="2" selected={@selected_patient.session_day_of_week == 2}>
                     Martes
                   </option>
+
                   <option value="3" selected={@selected_patient.session_day_of_week == 3}>
                     Miércoles
                   </option>
+
                   <option value="4" selected={@selected_patient.session_day_of_week == 4}>
                     Jueves
                   </option>
+
                   <option value="5" selected={@selected_patient.session_day_of_week == 5}>
                     Viernes
                   </option>
+
                   <option value="6" selected={@selected_patient.session_day_of_week == 6}>
                     Sábado
                   </option>
+
                   <option value="7" selected={@selected_patient.session_day_of_week == 7}>
                     Domingo
                   </option>
                 </select>
               </div>
+
               <div style="margin-bottom:10px;">
                 <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
                   Hora
@@ -423,6 +443,7 @@
                   style="width:100%; padding:6px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; background:#fff; color:#334155;"
                 />
               </div>
+
               <button
                 type="submit"
                 class="btn btn-primary"
@@ -432,7 +453,6 @@
               </button>
             </.form>
           </div>
-
           <%!-- Crisis containment message --%>
           <div style="border:1px solid rgba(245,158,11,.2); border-radius:16px; padding:14px; background:rgba(255,251,235,.5);">
             <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
@@ -441,9 +461,11 @@
                 Mensaje de Contención
               </span>
             </div>
+
             <p style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:10px;">
               Enviado automáticamente en crisis detectada por la IA.
             </p>
+
             <.form for={%{}} id="crisis-message-form" phx-submit="save_crisis_message">
               <textarea
                 name="crisis_message"
@@ -459,12 +481,12 @@
               </button>
             </.form>
           </div>
-
           <%!-- Decrypt chat button + history --%>
           <div style="border:1px solid #e2e8f0; border-radius:16px; padding:14px; background:#fff;">
             <h3 style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:10px;">
               Historial Clínico
             </h3>
+
             <button
               id="decrypt-chat-button"
               type="button"
@@ -480,11 +502,9 @@
               <.icon
                 name={if(@chat_decrypted, do: "hero-lock-open", else: "hero-lock-closed")}
                 style="width:14px; height:14px;"
-              />
-              {if @chat_decrypted, do: "Chat descifrado", else: "Descifrar chat"}
+              /> {if @chat_decrypted, do: "Chat descifrado", else: "Descifrar chat"}
             </button>
-
-            <%!-- Chat bubbles --%>
+             <%!-- Chat bubbles --%>
             <div
               :if={@chat_decrypted}
               id="chat-history-panel"
@@ -499,6 +519,7 @@
                 <div class="chat-header" style="font-size:9px; color:#94a3b8; margin-bottom:2px;">
                   {Calendar.strftime(msg.timestamp, "%H:%M")}
                 </div>
+
                 <div
                   class={"chat-bubble " <> if(msg.direction == "outbound", do: "chat-bubble-primary", else: "")}
                   style="font-size:12px; line-height:1.5;"

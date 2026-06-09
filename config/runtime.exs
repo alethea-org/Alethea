@@ -34,6 +34,80 @@ Por favor, comunícate con tu terapeuta directamente o llama a una línea de cri
 Si estás en peligro inmediato, llama al 131 (SAMU).
 """
 
+scheduled_emotion_analysis_enabled? =
+  case System.get_env("SCHEDULED_EMOTION_ANALYSIS_ENABLED") do
+    nil -> config_env() != :test
+    value -> String.downcase(String.trim(value)) in ~w(true 1 yes y on)
+  end
+
+scheduled_emotion_analysis_cron =
+  System.get_env("SCHEDULED_EMOTION_ANALYSIS_CRON", "0 2 * * *")
+
+parse_positive_integer = fn env_var, default ->
+  case System.get_env(env_var) do
+    nil ->
+      default
+
+    value ->
+      case Integer.parse(value) do
+        {parsed, ""} when parsed > 0 -> parsed
+        _invalid -> default
+      end
+  end
+end
+
+scheduled_emotion_analysis_max_messages =
+  parse_positive_integer.("SCHEDULED_EMOTION_ANALYSIS_MAX_MESSAGES", 1000)
+
+scheduled_emotion_analysis_batch_size =
+  parse_positive_integer.("SCHEDULED_EMOTION_ANALYSIS_BATCH_SIZE", 100)
+
+config :alethea, AletheaJobs.ScheduledEmotionAnalysisWorker,
+  max_messages: scheduled_emotion_analysis_max_messages,
+  batch_size: scheduled_emotion_analysis_batch_size
+
+if scheduled_emotion_analysis_enabled? do
+  scheduled_emotion_analysis_entry =
+    {scheduled_emotion_analysis_cron, AletheaJobs.ScheduledEmotionAnalysisWorker,
+     args: %{
+       "max_messages" => scheduled_emotion_analysis_max_messages,
+       "batch_size" => scheduled_emotion_analysis_batch_size
+     }}
+
+  oban_config = Application.get_env(:alethea, Oban, [])
+  plugins = Keyword.get(oban_config, :plugins, [])
+
+  {cron_plugins, other_plugins} =
+    Enum.split_with(plugins, fn
+      {Oban.Plugins.Cron, _opts} -> true
+      Oban.Plugins.Cron -> true
+      _plugin -> false
+    end)
+
+  cron_plugin =
+    case cron_plugins do
+      [{Oban.Plugins.Cron, opts} | _rest] ->
+        opts =
+          opts
+          |> Keyword.update(:crontab, [scheduled_emotion_analysis_entry], fn crontab ->
+            crontab ++ [scheduled_emotion_analysis_entry]
+          end)
+          |> Keyword.put(:timezone, "Etc/UTC")
+
+        {Oban.Plugins.Cron, opts}
+
+      [Oban.Plugins.Cron | _rest] ->
+        {Oban.Plugins.Cron, crontab: [scheduled_emotion_analysis_entry], timezone: "Etc/UTC"}
+
+      [] ->
+        {Oban.Plugins.Cron, crontab: [scheduled_emotion_analysis_entry], timezone: "Etc/UTC"}
+    end
+
+  updated_oban_config = Keyword.put(oban_config, :plugins, [cron_plugin | other_plugins])
+
+  config :alethea, Oban, updated_oban_config
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

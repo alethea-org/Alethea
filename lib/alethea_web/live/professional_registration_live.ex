@@ -33,17 +33,17 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
+              <path d="M12 2L2 7l10 5 10-5-10-5z" /> <path d="M2 17l10 5 10-5" />
               <path d="M2 12l10 5 10-5" />
             </svg>
           </div>
+
           <h1 style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-bottom:4px;">
             Alethea
           </h1>
+
           <p style="font-size:13px; color:#64748b;">Centro de Control Clínico</p>
         </div>
-
         <%!-- Register card --%>
         <div style="background:#fff; border-radius:20px; padding:32px; box-shadow:0 4px 24px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04); border:1px solid rgba(226,232,240,.8);">
           <h2 style="font-size:17px; font-weight:700; color:#1e293b; margin-bottom:24px; text-align:center;">
@@ -82,7 +82,6 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 {elem(error, 0)}
               </p>
             </div>
-
             <%!-- Full name field --%>
             <div>
               <label
@@ -108,7 +107,6 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 {elem(error, 0)}
               </p>
             </div>
-
             <%!-- Password field --%>
             <div>
               <label
@@ -129,6 +127,7 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
               <p style="margin-top:4px; font-size:11px; color:#94a3b8;">
                 La contraseña debe tener al menos 12 caracteres.
               </p>
+
               <p
                 :for={error <- Keyword.get_values(@changeset.errors, :password)}
                 style="margin-top:4px; font-size:11px; color:#dc2626;"
@@ -136,7 +135,6 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 {elem(error, 0)}
               </p>
             </div>
-
             <%!-- Submit button --%>
             <button
               type="submit"
@@ -146,7 +144,6 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
             </button>
           </.form>
         </div>
-
         <%!-- Login link --%>
         <p style="text-align:center; margin-top:20px; font-size:13px; color:#64748b;">
           ¿Ya tenés cuenta?
@@ -154,7 +151,6 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
             Iniciá sesión
           </a>
         </p>
-
         <%!-- Security note --%>
         <p style="text-align:center; margin-top:12px; font-size:11px; color:#94a3b8;">
           Tus datos están protegidos con cifrado de extremo a extremo

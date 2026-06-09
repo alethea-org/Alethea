@@ -45,6 +45,10 @@ defmodule Alethea.AI.Mock.RoBERTa do
     GenServer.call(__MODULE__, {:analyze_batch, texts})
   end
 
+  def analyze_batch_per_message(texts) do
+    GenServer.call(__MODULE__, {:analyze_batch_per_message, texts})
+  end
+
   # Server Implementation
 
   def init(_opts) do
@@ -72,9 +76,10 @@ defmodule Alethea.AI.Mock.RoBERTa do
     {:reply, :ok, %{response: nil, error: nil, sequence: [], calls: []}}
   end
 
-  def handle_call({:analyze_batch, texts}, _from, state) do
+  def handle_call({function, texts}, _from, state)
+      when function in [:analyze_batch, :analyze_batch_per_message] do
     new_calls = [
-      %{function: :analyze_batch, args: texts, timestamp: DateTime.utc_now()} | state.calls
+      %{function: function, args: texts, timestamp: DateTime.utc_now()} | state.calls
     ]
 
     # Handle sequence - keep returning last element if sequence exhausted
