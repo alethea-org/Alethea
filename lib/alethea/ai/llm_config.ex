@@ -222,7 +222,7 @@ defmodule Alethea.AI.LLMConfig do
   defp resolve_api_key({:system, env_var}) when is_binary(env_var),
     do: System.get_env(env_var)
 
-  defp default_endpoint(:local), do: "https://api-inference.huggingface.co/models/"
+  defp default_endpoint(:local), do: "https://router.huggingface.co/hf-inference/models/"
   defp default_endpoint(:cloud), do: "https://api.openai.com/v1/"
 
   defp default_model(:local), do: "phi-4-mini"

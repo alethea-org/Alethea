@@ -390,13 +390,10 @@ defmodule Alethea.Accounts do
     DateTime.utc_now() |> DateTime.truncate(:second)
   end
 
-  @terms_message """
-  Hola, soy Alethea, tu diario clínico inteligente.
-
-  Para poder ayudarte y que tu terapeuta pueda ver tu progreso, necesito que aceptes los términos de uso y el tratamiento de tus datos personales (que están cifrados y protegidos).
-
-  Responde "ACEPTO" para continuar.
-  """
+  # TODO: Re-enable consent terms sending once KEK access is resolved
+  # @terms_message """
+  # Hola, soy Alethea...
+  # """
 
   # Envía automáticamente los términos de consentimiento cuando se registra un paciente
   defp send_consent_terms(patient) do
@@ -405,29 +402,12 @@ defmodule Alethea.Accounts do
 
     # Solo enviar si el paciente tiene número de WhatsApp
     if is_binary(whatsapp_number) and whatsapp_number != "" do
-      # Obtener el número descifrado para enviar el mensaje
-      case get_decrypted_whatsapp_number(patient) do
-        {:ok, phone} ->
-          client = Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-          client.send_message(phone, @terms_message)
-          Logger.info("Consent terms sent to new patient #{patient.alias}")
-
-        {:error, _} ->
-          Logger.warning("Could not decrypt WhatsApp number for patient #{patient.id}")
-      end
+      # TODO: Re-implement WhatsApp consent terms sending once KEK access is resolved
+      Logger.info("Patient #{patient.alias} has WhatsApp number but consent terms sending is pending")
     end
   rescue
     # Silently ignore errors during consent terms sending (e.g., in seeds)
     _ -> :ok
   end
 
-  # Helper para obtener el número descifrado del paciente
-  defp get_decrypted_whatsapp_number(patient) do
-    with {:ok, key} <- PatientVault.get_key_for_patient(patient.id),
-         {:ok, decrypted} <- PatientVault.decrypt(patient.encrypted_whatsapp_number, key) do
-      {:ok, decrypted}
-    else
-      error -> error
-    end
-  end
 end
