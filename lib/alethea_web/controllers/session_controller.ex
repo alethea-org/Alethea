@@ -52,7 +52,7 @@ defmodule AletheaWeb.SessionController do
   def set_session(conn, %{"professional_id" => professional_id}) do
     conn
     |> configure_session(renew: true)
-    |> put_session(:professional_id, String.to_integer(professional_id))
+    |> put_session(:professional_id, professional_id)
     |> redirect(to: "/dashboard")
   end
 
