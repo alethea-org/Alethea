@@ -23,7 +23,6 @@ tmp
 
 # Assets (generated during build)
 priv/static/cache
-priv/static/assets
 
 # Development files
 .dockerignore
