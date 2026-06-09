@@ -3,6 +3,6 @@ defmodule AletheaWeb.PageControllerTest do
 
   test "GET /", %{conn: conn} do
     conn = get(conn, ~p"/")
-    assert html_response(conn, 200) =~ "Bienvenido a Alethea"
+    assert html_response(conn, 200) =~ "Crear cuenta gratis"
   end
 end

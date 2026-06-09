@@ -7,7 +7,6 @@ defmodule AletheaJobs.SessionReminderWorkerTest do
   alias Alethea.Accounts
   alias AletheaJobs.SessionReminderWorker
 
-  setup :set_mox_from_context
   setup :verify_on_exit!
 
   setup do

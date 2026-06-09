@@ -62,6 +62,7 @@ defmodule Alethea.ObanTelemetry do
 
   def handle_stop(_event, _measurements, metadata, _config) do
     duration_ms = get_duration_ms(metadata)
+    success? = Map.get(metadata, :success, Map.get(metadata, :state) == :success)
 
     :telemetry.execute(
       [:alethea, :oban, :job, :stop],
@@ -71,7 +72,7 @@ defmodule Alethea.ObanTelemetry do
         queue: metadata.queue,
         job_id: metadata.id,
         attempt: metadata.attempt,
-        success: metadata.success
+        success: success?
       }
     )
 

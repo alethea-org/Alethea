@@ -1,7 +1,6 @@
 defmodule AletheaJobs.EmotionAnalysisWorkerTest do
   use ExUnit.Case, async: true
 
-  alias AletheaJobs.EmotionAnalysisWorker
   alias Alethea.Clinical.EmotionAnalysis
 
   describe "EmotionAnalysis schema" do

@@ -9,7 +9,6 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
   alias Alethea.Clinical.{Summary, Trend}
   alias AletheaJobs.WeeklyReportWorker
 
-  setup :set_mox_from_context
   setup :verify_on_exit!
 
   setup do

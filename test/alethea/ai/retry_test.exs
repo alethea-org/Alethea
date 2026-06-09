@@ -35,11 +35,9 @@ defmodule Alethea.AI.RetryTest do
 
     test "respects max_attempts limit" do
       retry = %Retry{max_attempts: 1}
-      call_count = 0
 
       result =
         Retry.with_retry(retry, fn ->
-          call_count = call_count + 1
           raise %LangChain.LangChainError{message: "model is loading (503)"}
         end)
 

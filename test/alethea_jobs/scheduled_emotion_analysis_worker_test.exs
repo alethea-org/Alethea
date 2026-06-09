@@ -8,7 +8,6 @@ defmodule AletheaJobs.ScheduledEmotionAnalysisWorkerTest do
   alias Alethea.Clinical.{EmotionAnalysis, Message, Trend}
   alias AletheaJobs.ScheduledEmotionAnalysisWorker
 
-  setup :set_mox_from_context
   setup :verify_on_exit!
 
   setup do

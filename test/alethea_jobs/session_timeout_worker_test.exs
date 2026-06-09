@@ -9,7 +9,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   alias Alethea.Clinical.{Session, SessionManager, Summary, Trend}
   alias AletheaJobs.SessionTimeoutWorker
 
-  setup :set_mox_from_context
   setup :verify_on_exit!
 
   setup do
