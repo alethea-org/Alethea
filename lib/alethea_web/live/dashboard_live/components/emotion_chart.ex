@@ -110,7 +110,7 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
           </text>
         <% end %>
       </svg>
-       <%!-- legend --%>
+      <%!-- legend --%>
       <div style="display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:4px; padding:0 40px;">
         <%= for {_key, label, color} <- @emotions do %>
           <div style="display:flex; align-items:center; gap:4px;">

@@ -94,7 +94,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
           {min(@unread_count, 99)}
         </span>
       </button>
-       <%!-- Dropdown panel --%>
+      <%!-- Dropdown panel --%>
       <div
         :if={@show_panel}
         id={"#{@id}-panel"}
