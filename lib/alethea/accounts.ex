@@ -4,9 +4,14 @@ defmodule Alethea.Accounts do
   """
 
   import Ecto.Query, warn: false
+  require Logger
   alias Alethea.Repo
   alias Alethea.Accounts.{Professional, Patient, EncryptionKey}
   alias Alethea.Encryption.{PatientVault, ProfessionalKek}
+
+  @remember_token_bytes 32
+  @remember_token_max_age 30 * 24 * 60 * 60
+  @remember_token_salt "professional remember me"
 
   # Professionals
 
@@ -57,6 +62,58 @@ defmodule Alethea.Accounts do
         {:error, :invalid_credentials}
     end
   end
+
+  def remember_token_max_age, do: @remember_token_max_age
+
+  def generate_remember_token(%Professional{} = professional) do
+    {signed_token, token_hash, expires_at} = build_remember_token()
+
+    professional
+    |> Ecto.Changeset.change(%{
+      remember_token_hash: token_hash,
+      remember_token_expires_at: expires_at
+    })
+    |> Repo.update()
+    |> case do
+      {:ok, _professional} -> {:ok, signed_token}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  def verify_remember_token(token) when is_binary(token) do
+    with {:ok, raw_token} <-
+           Phoenix.Token.verify(AletheaWeb.Endpoint, @remember_token_salt, token,
+             max_age: @remember_token_max_age
+           ),
+         {:ok, professional, rotated_token} <-
+           rotate_remember_token(remember_token_hash(raw_token)) do
+      {:ok, professional, rotated_token}
+    end
+  end
+
+  def verify_remember_token(_token), do: {:error, :invalid}
+
+  def invalidate_remember_token(%Professional{id: professional_id}) do
+    invalidate_remember_token(professional_id)
+  end
+
+  def invalidate_remember_token(professional_id) when is_binary(professional_id) do
+    now = utc_now()
+
+    Professional
+    |> where([p], p.id == ^professional_id)
+    |> Repo.update_all(
+      set: [
+        remember_token_hash: nil,
+        remember_token_expires_at: nil,
+        updated_at: now
+      ]
+    )
+
+    :ok
+  end
+
+  def invalidate_remember_token(_professional_id), do: :ok
 
   def load_professional_kek(professional) do
     ProfessionalKek.load_kek(professional)
@@ -244,6 +301,9 @@ defmodule Alethea.Accounts do
         |> Repo.transaction()
         |> case do
           {:ok, %{patient: patient}} ->
+            # Enviar términos de consentimiento automáticamente
+            send_consent_terms(patient)
+
             # Notificar a los LiveViews del profesional
             Phoenix.PubSub.broadcast(
               Alethea.PubSub,
@@ -281,5 +341,98 @@ defmodule Alethea.Accounts do
       "+" <> _ = phone -> phone
       phone -> "+" <> phone
     end)
+  end
+
+  defp rotate_remember_token(old_token_hash) do
+    now = utc_now()
+    {signed_token, new_token_hash, expires_at} = build_remember_token(now)
+
+    Repo.transaction(fn ->
+      Professional
+      |> where([p], p.remember_token_hash == ^old_token_hash)
+      |> where([p], p.remember_token_expires_at > ^now)
+      |> Repo.update_all(
+        set: [
+          remember_token_hash: new_token_hash,
+          remember_token_expires_at: expires_at,
+          updated_at: now
+        ]
+      )
+      |> case do
+        {1, _} ->
+          professional = Repo.get_by!(Professional, remember_token_hash: new_token_hash)
+          {professional, signed_token}
+
+        _ ->
+          Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, {professional, rotated_token}} -> {:ok, professional, rotated_token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp build_remember_token(now \\ utc_now()) do
+    raw_token = :crypto.strong_rand_bytes(@remember_token_bytes)
+    signed_token = Phoenix.Token.sign(AletheaWeb.Endpoint, @remember_token_salt, raw_token)
+    token_hash = remember_token_hash(raw_token)
+    expires_at = DateTime.add(now, @remember_token_max_age, :second)
+
+    {signed_token, token_hash, expires_at}
+  end
+
+  defp remember_token_hash(token) when is_binary(token) do
+    :crypto.hash(:sha256, token)
+  end
+
+  defp utc_now do
+    DateTime.utc_now() |> DateTime.truncate(:second)
+  end
+
+  @terms_message """
+  Hola, soy Alethea, tu diario clínico inteligente.
+
+  Para poder ayudarte y que tu terapeuta pueda ver tu progreso, necesito que aceptes los términos de uso y el tratamiento de tus datos personales (que están cifrados y protegidos).
+
+  Responde "ACEPTO" para continuar.
+  """
+
+  # Envía automáticamente los términos de consentimiento cuando se registra un paciente
+  defp send_consent_terms(patient) do
+    patient = get_patient_with_professional(patient.id)
+    whatsapp_number = patient.encrypted_whatsapp_number
+
+    # Solo enviar si el paciente tiene número de WhatsApp
+    if is_binary(whatsapp_number) and whatsapp_number != "" do
+      # Obtener el número descifrado para enviar el mensaje
+      case get_decrypted_whatsapp_number(patient) do
+        {:ok, phone} ->
+          client = Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
+          client.send_message(phone, @terms_message)
+          Logger.info("Consent terms sent to new patient #{patient.alias}")
+
+        {:error, _} ->
+          Logger.warning("Could not decrypt WhatsApp number for patient #{patient.id}")
+      end
+    end
+  rescue
+    # Silently ignore errors during consent terms sending (e.g., in seeds)
+    _ -> :ok
+  end
+
+  # Helper para obtener el número descifrado del paciente
+  defp get_decrypted_whatsapp_number(patient) do
+    patient = Repo.preload(patient, :professional)
+
+    with %Professional{} = professional <- patient.professional,
+         {:ok, kek} <- ProfessionalKek.load_kek(professional),
+         {:ok, dek} <- load_patient_dek(patient, kek),
+         {:ok, decrypted} <- PatientVault.decrypt(patient.encrypted_whatsapp_number, dek) do
+      {:ok, decrypted}
+    else
+      nil -> {:error, :missing_professional}
+      error -> error
+    end
   end
 end

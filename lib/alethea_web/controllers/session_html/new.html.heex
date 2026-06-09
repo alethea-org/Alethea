@@ -219,7 +219,7 @@
         </div>
       </div>
       <%!-- Password --%>
-      <div style="margin-bottom:24px;">
+      <div style="margin-bottom:14px;">
         <label for="login-password" class="auth-label">Contraseña</label>
         <div class="auth-input-wrap">
           <svg
@@ -247,6 +247,20 @@
           />
         </div>
       </div>
+
+      <label
+        for="login-remember-me"
+        style="display:flex; align-items:center; gap:8px; margin-bottom:24px; font-size:13px; color:#475569; cursor:pointer;"
+      >
+        <input
+          type="checkbox"
+          name="professional[remember_me]"
+          id="login-remember-me"
+          value="true"
+          style="width:15px; height:15px; accent-color:#6366f1;"
+        />
+        <span>Recordarme</span>
+      </label>
 
       <button type="submit" id="login-submit-btn" class="auth-btn">
         <svg

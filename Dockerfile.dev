@@ -5,12 +5,8 @@
 
 FROM elixir:1.17-alpine
 
-# Install Node.js 20.x
-RUN apk add --no-cache \
-    gnupg \
-    curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apk del gnupg curl
+# Install Node.js 20.x (Alpine uses community package)
+RUN apk add --no-cache nodejs npm
 
 # Install build dependencies
 RUN apk add --no-cache \
