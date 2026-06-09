@@ -23,6 +23,17 @@ end
 config :alethea, AletheaWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+database_monitoring_enabled? =
+  String.downcase(System.get_env("DB_MONITORING_ENABLED", "true")) in ~w(true 1 yes y on)
+
+config :alethea, :database_monitoring,
+  enabled: database_monitoring_enabled?,
+  slow_query_threshold_ms:
+    String.to_integer(System.get_env("DB_SLOW_QUERY_THRESHOLD_MS", "1000")),
+  pool_queue_warn_ms: String.to_integer(System.get_env("DB_POOL_QUEUE_WARN_MS", "100")),
+  pool_queue_length_warn: String.to_integer(System.get_env("DB_POOL_QUEUE_LENGTH_WARN", "1")),
+  query_log_max_chars: String.to_integer(System.get_env("DB_QUERY_LOG_MAX_CHARS", "4000"))
+
 # Crisis patterns are configured directly in Alethea.Alerts.CrisisMonitor.default_patterns/0
 # to avoid duplication. Override via app env only if needed for testing.
 
