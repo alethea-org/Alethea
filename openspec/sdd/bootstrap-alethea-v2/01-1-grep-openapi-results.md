@@ -25,6 +25,7 @@ The proposal, design, and `03-tasks.md` task 1.3 all list **3 files** to delete.
 - `priv/` — `priv/static/api-docs/` is mentioned only in `openspec/archive/issues-v1/PLAN-DE-ISSUES.md` (archived, untouched).
 - `openspec/sdd/bootstrap-alethea-v2/` — many matches, all in **the spec/proposal/design/tasks docs themselves**. These are intentionally descriptive and stay.
 - `openspec/adr/004-telegram-unico-canal-paciente.md` — historical mention; stays.
+- `openspec/changes/` — contains historical mentions (e.g. `openspec/changes/sdd-integration-001-proposal.md`); out of scope for this removal slice.
 - `.pi/mem-summaries/bootstrap-alethea-v2.md` — Engram cache; out of scope.
 
 ## Baseline (pre-removal, branch tip = `origin/main`)
