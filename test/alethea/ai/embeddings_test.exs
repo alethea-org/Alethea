@@ -64,12 +64,12 @@ defmodule Alethea.AI.EmbeddingsTest do
     test "embed/2 single-text result is a list of one element" do
       # Triangulation: confirm the type contract is {:ok, [float()]} for
       # single input, not {:ok, [[float()]]}.
-      assert {:ok, [0.0]} = Fake.embed("cualquier cosa", [])
+      assert {:ok, [+0.0]} = Fake.embed("cualquier cosa", [])
     end
 
     test "embed/2 batch result wraps each input in its own vector" do
       # Triangulation: distinct batch shape, not flattened into a single vector.
-      assert {:ok, [[0.0], [0.0]]} = Fake.embed(["a", "b"], [])
+      assert {:ok, [[+0.0], [+0.0]]} = Fake.embed(["a", "b"], [])
     end
 
     test "model/0 returns a string identifying the fake model" do
