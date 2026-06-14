@@ -63,4 +63,20 @@ defmodule Alethea.Foundation.Accounts.ProfessionalTest do
       assert %{password: [_ | _]} = errors_on(changeset)
     end
   end
+
+  describe "password hashing" do
+    test "the persisted hash round-trips through Pbkdf2.verify_pass/2" do
+      password = "supersecret12"
+
+      {:ok, professional} =
+        Professional.register_professional(%{
+          email: "hash-#{System.unique_integer([:positive])}@example.com",
+          password: password,
+          full_name: "Hash Test"
+        })
+
+      assert Pbkdf2.verify_pass(password, professional.password_hash)
+      refute Pbkdf2.verify_pass("wrong-password", professional.password_hash)
+    end
+  end
 end
