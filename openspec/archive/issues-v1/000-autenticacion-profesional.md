@@ -11,7 +11,7 @@
 
 ## Description
 
-Implementar el sistema de autenticación para el profesional (psicólogo). El schema de `Professional` ya existe con `password_hash` (usando `Pbkdf2`), `mfa_secret`, `email` y `full_name`. Las rutas protegidas, los plugs de sesión y la UI de login no están implementados. Esta issue es un prerequisito bloqueante para cualquier LiveView que requiera un profesional autenticado.
+Implementar el sistema de autenticación para el profesional (psicólogo). El schema de `Professional` ya existe con `password_hash` (usando `Pbkdf2`), `mfa_secret`, `email` y `full_name`. Las rutas protegidas, los plugs de sesión y la UI de login no están implementadas. Esta issue es un prerequisito bloqueante para cualquier LiveView que requiera un profesional autenticado.
 
 ## Decisiones de Diseño
 

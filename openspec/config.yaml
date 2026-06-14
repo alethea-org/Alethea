@@ -2,7 +2,7 @@
 # This file configures the SDD workflow for this project
 
 version: "1.0"
-strict_tdd: false
+strict_tdd: true
 artifact_store: openspec
 
 preferences:
@@ -13,3 +13,8 @@ preferences:
 test_runner:
   command: "mix test"
   coverage_command: "mix test --cover"
+
+rules:
+  apply:
+    tdd: true
+    test_command: "mix test"
