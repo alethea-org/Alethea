@@ -1,0 +1,75 @@
+# Workflow state for bootstrap-alethea-v2
+
+> This file follows the orchestrator's convention (path `openspec/sdd/...`) which is
+> non-standard relative to the OpenSpec `openspec/changes/...` convention.
+> We follow the orchestrator's path per session preflight.
+
+change_id: bootstrap-alethea-v2
+title: Foundational setup for the v2 reset of Alethea
+status: proposed
+created: 2026-06-11
+author: sdd-new (interactive mode)
+
+phases:
+  propose: completed
+  spec: completed
+  design: completed
+  tasks: completed
+  apply: pending
+  verify: pending
+  archive: pending
+
+capabilities:
+  new:
+    - accounts-foundation
+    - ai-adapters-foundation
+    - encryption-foundation
+  modified: []
+
+artifacts:
+  proposal: openspec/sdd/bootstrap-alethea-v2/00-proposal.md
+  spec: openspec/sdd/bootstrap-alethea-v2/specs/
+  design: openspec/sdd/bootstrap-alethea-v2/02-design.md
+  tasks: openspec/sdd/bootstrap-alethea-v2/03-tasks.md
+
+preflight:
+  execution_mode: interactive
+  artifact_store.mode: openspec
+  delivery_strategy: ask-always
+  review_budget_lines: 400
+  strict_tdd: true
+  test_command: mix test
+
+review_workload_forecast:
+  estimated_changed_lines: 650
+  chained_prs_recommended: yes
+  budget_risk: medium
+  decision_needed_before_apply: yes
+  chain_strategy: feature-branch-chain
+  suggested_work_units:
+    - pr: 1
+      goal: open_api_spex removal + tests still green
+      base: feature/bootstrap-foundation
+    - pr: 2
+      goal: Alethea.Foundation.Accounts.* + Tenant helper
+      base: pr-1-branch
+    - pr: 3
+      goal: AI behaviour trio + KEK/DEK primitive + Fake adapters
+      base: pr-2-branch
+
+risks:
+  - low: open_api_spex has a route caller we missed. Mitigation: grep first.
+  - medium: parallel Alethea.Foundation namespace confuses callers. Mitigation: @moduledoc boundary note.
+  - medium: KEK/DEK skeleton overlaps with legacy PatientVault. Mitigation: @moduledoc and typespecs make boundary explicit.
+  - low: page_controller_test.exs:6 pre-existing failure gets "fixed" accidentally. Mitigation: documented in 05-no-go.md.
+
+language_gaps_flagged:
+  - "Foundation" as a meta-namespace is not in UBIQUITOUS_LANGUAGE.md. Recommendation: do not add. (Foundation is plumbing, not a domain term.)
+
+adr_respect_check:
+  adr-001-llm-en-groq: respected (LLM behaviour is the swap point; Groq impl is the future change)
+  adr-002-embeddings-hf-multilingue: respected (Embeddings behaviour is the swap point)
+  adr-003-rag-historia-clinica-navegable: not touched (RAG is out of this change; future change)
+  adr-004-telegram-unico-canal-paciente: not contradicted (no Telegram bot added; legacy whatsapp code untouched)
+
+next_action: orchestrator decides on chained PR strategy (ask-always in preflight)
