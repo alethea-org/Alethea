@@ -102,8 +102,8 @@ defmodule Alethea.Foundation.Encryption.KEK do
   @spec wrap(dek(), kek()) ::
           {:ok, wrapped :: binary()}
           | {:error, :invalid_kek | :invalid_dek}
-  def wrap(dek, kek) when byte_size(kek) != @key_length, do: {:error, :invalid_kek}
-  def wrap(dek, kek) when byte_size(dek) != @key_length, do: {:error, :invalid_dek}
+  def wrap(_dek, kek) when byte_size(kek) != @key_length, do: {:error, :invalid_kek}
+  def wrap(dek, _kek) when byte_size(dek) != @key_length, do: {:error, :invalid_dek}
 
   def wrap(dek, kek) do
     iv = :crypto.strong_rand_bytes(@iv_length)
