@@ -9,15 +9,17 @@ defmodule Alethea.Foundation.TenantTest do
   alias Alethea.Foundation.Tenant
 
   describe "scope_query/2 — filters by tenant" do
-    test "returns a query that filters patients by professional_id" do
+    test "returns a query with a WHERE clause on professional_id" do
       query = from(p in Patient)
       scoped = Tenant.scope_query(query, "prof-uuid-1")
 
-      # The query must contain a WHERE clause
-      assert %Ecto.Query{wheres: [_ | _]} = scoped
+      assert %Ecto.Query{wheres: [%Ecto.Query.BooleanExpr{params: params} | _]} = scoped
 
-      # The parameter binding for the professional_id is captured
-      assert scoped.params == ["prof-uuid-1"]
+      # The interpolated value is in the first tuple element of the
+      # where clause's params list. We assert the value, not the
+      # internal structure, so the test is not coupled to Ecto's
+      # binding-format.
+      assert [{"prof-uuid-1", _binding}] = params
     end
 
     test "executes against the test repo and returns only matching patients" do
@@ -59,8 +61,8 @@ defmodule Alethea.Foundation.TenantTest do
       query = from(p in Patient)
       scoped = Tenant.scope_query(query, "not-a-uuid")
 
-      assert %Ecto.Query{wheres: [_ | _]} = scoped
-      assert scoped.params == ["not-a-uuid"]
+      assert %Ecto.Query{wheres: [%Ecto.Query.BooleanExpr{params: params} | _]} = scoped
+      assert [{"not-a-uuid", _binding}] = params
     end
   end
 end
