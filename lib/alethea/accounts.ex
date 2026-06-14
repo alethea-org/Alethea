@@ -403,11 +403,12 @@ defmodule Alethea.Accounts do
     # Solo enviar si el paciente tiene número de WhatsApp
     if is_binary(whatsapp_number) and whatsapp_number != "" do
       # TODO: Re-implement WhatsApp consent terms sending once KEK access is resolved
-      Logger.info("Patient #{patient.alias} has WhatsApp number but consent terms sending is pending")
+      Logger.info(
+        "Patient #{patient.alias} has WhatsApp number but consent terms sending is pending"
+      )
     end
   rescue
     # Silently ignore errors during consent terms sending (e.g., in seeds)
     _ -> :ok
   end
-
 end

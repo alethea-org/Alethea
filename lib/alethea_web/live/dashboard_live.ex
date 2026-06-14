@@ -437,7 +437,6 @@ defmodule AletheaWeb.DashboardLive do
     }
   end
 
-
   defp format_session_time(%Time{} = time) do
     Calendar.strftime(time, "%H:%M")
   end
