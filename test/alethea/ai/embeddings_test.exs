@@ -57,7 +57,8 @@ defmodule Alethea.AI.EmbeddingsTest do
       assert {:ok, vectors} = Fake.embed(["uno", "dos"], [])
       assert is_list(vectors)
       assert length(vectors) == 2
-      assert Enum.all?(vectors, &is_float/1)
+      # Each element is itself a list of floats (one vector per input).
+      assert Enum.all?(vectors, fn v -> is_list(v) and Enum.all?(v, &is_float/1) end)
     end
 
     test "embed/2 single-text result is a list of one element" do
