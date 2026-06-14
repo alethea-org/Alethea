@@ -1,0 +1,107 @@
+defmodule Alethea.Foundation.Accounts.Patient do
+  @moduledoc """
+  The foundation v2 `Paciente` schema.
+
+  ## Boundary with legacy
+
+  This module is part of the `Alethea.Foundation.*` parallel namespace. The
+  legacy `Alethea.Accounts.Patient` continues to back the existing
+  `patients` table. The two schemas share the `professional_id` FK
+  convention so the `Alethea.Foundation.Tenant.scope_query/2` helper can
+  operate on either.
+
+  See `openspec/sdd/bootstrap-alethea-v2/specs/accounts/spec.md` for the
+  full contract and the test scenarios in this directory for the
+  acceptance criteria.
+
+  ## Profile fields
+
+  The `profile_*` and `emergency_contact_*` fields come from the
+  `Perfil del paciente` section of `UBIQUITOUS_LANGUAGE.md`. They are
+  optional and may be populated over time; they are NOT required at
+  signup. `telegram_chat_id` is filled by the `telegram-paciente-foundation`
+  change.
+  """
+
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  alias Alethea.Foundation.Accounts.Professional
+  alias Alethea.Repo
+
+  @status_values ~w(active archived deleted)
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+
+  schema "foundation_patients" do
+    belongs_to :professional, Professional
+
+    field :alias, :string
+    field :status, :string, default: "active"
+    field :telegram_chat_id, :string
+
+    field :profile_name, :string
+    field :profile_birth_date, :date
+    field :profile_gender, :string
+    field :profile_language, :string
+    field :profile_email, :string
+
+    field :emergency_contact_name, :string
+    field :emergency_contact_relationship, :string
+    field :emergency_contact_phone, :string
+
+    timestamps(type: :utc_datetime)
+  end
+
+  @doc """
+  Creates a patient bound to the given professional. The
+  `professional_id` is set programmatically (NOT in the changeset cast
+  list) so callers cannot override the tenant boundary via attrs.
+  """
+  def create_patient(%Professional{id: professional_id}, attrs) when is_map(attrs) do
+    %__MODULE__{}
+    |> changeset(attrs)
+    |> Ecto.Changeset.put_change(:professional_id, professional_id)
+    |> Repo.insert()
+  end
+
+  def create_patient(nil, _attrs) do
+    changeset =
+      %__MODULE__{}
+      |> changeset(%{})
+      |> Ecto.Changeset.add_error(:professional_id, "can't be blank")
+
+    {:error, %{changeset | action: :insert}}
+  end
+
+  @doc """
+  Updates a patient. Only the fields in the changeset cast list are
+  accepted; `professional_id` is never re-bindable through this path.
+  """
+  def update_patient(%__MODULE__{} = patient, attrs) when is_map(attrs) do
+    patient
+    |> changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc false
+  def changeset(patient, attrs) do
+    patient
+    |> cast(attrs, [
+      :alias,
+      :status,
+      :telegram_chat_id,
+      :profile_name,
+      :profile_birth_date,
+      :profile_gender,
+      :profile_language,
+      :profile_email,
+      :emergency_contact_name,
+      :emergency_contact_relationship,
+      :emergency_contact_phone
+    ])
+    |> validate_required([:alias])
+    |> validate_inclusion(:status, @status_values)
+  end
+end
