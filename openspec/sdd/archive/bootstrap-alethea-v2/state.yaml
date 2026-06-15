@@ -6,8 +6,11 @@
 
 change_id: bootstrap-alethea-v2
 title: Foundational setup for the v2 reset of Alethea
-status: in-progress
+status: archived
 created: 2026-06-11
+archived: 2026-06-15
+archived_to: openspec/sdd/archive/bootstrap-alethea-v2/
+verify_verdict: PASS
 author: sdd-new (interactive mode)
 
 phases:
@@ -15,9 +18,9 @@ phases:
   spec: completed
   design: completed
   tasks: completed
-  apply: in-progress
-  verify: pending
-  archive: pending
+  apply: completed
+  verify: completed
+  archive: completed
 
 capabilities:
   new:
@@ -84,7 +87,7 @@ implementation_prs:
       Approved as size:exception by user mid-cycle.
 
   - id: PR-B
-    pr_number: null
+    pr_number: 70
     title: "feat(ai): AI behaviours + Encryption KEK"
     goal: |
       Alethea.AI.{LLM,Embeddings,Whisper} behaviour modules +
@@ -92,20 +95,33 @@ implementation_prs:
       Alethea.Foundation.Encryption.KEK primitive +
       Alethea.AI top-level namespace with adapter discovery +
       config/test.exs wiring the Fakes as configured adapters.
-    status: pending
+    status: merged
     base: main
     target_branch: feat/ai-behaviours-encryption-kek
-    sha: null
-    size_exception: false
+    sha: 357cf58
+    branch_tip_sha: 260a872
+    size_exception: true
     forecast_lines:
       code_pre_multiplier: 138
       code_with_multiplier: 180
       test_pre_multiplier: 92
       test_with_multiplier: 140
       total: 320
+    actual_lines: 1280
+    delta_ratio: 4.0
     files_added: 13
     files_touched: 1   # config/test.exs
-    budget_risk: low
+    budget_risk: high
+    forecast_under_delivery_cause: |
+      Same root cause as PR A: test triangulation ran ~1.7 tests/req
+      instead of 1 test/scenario, and behaviour @moduledoc boundary
+      notes + adapter-discovery test surface ran ~30% longer than
+      forecast. Forecast multipliers (1.3 code, 1.5 test) under-estimated
+      the spec's actual surface. Approved as size:exception by user
+      mid-cycle (see 04-review-workload.md). Calibration feedback:
+      future sdd-tasks runs should re-derive multipliers from the
+      realised ratios (PR A: 2.79×, PR B: 4.0×) — the multiplier
+      approach in this change was too conservative on the test side.
 
 # ─────────────────────────────────────────────────────────────────
 # Forecast adjustments (lesson from PR A)
@@ -147,10 +163,11 @@ test_baseline:
   pr_a_added: 25
   pr_b_expected_additions: 25   # see 04-review-workload.md math
   pr_b_expected_total: 273
+  pr_b_actual_additions: 44   # 292 - 248
   failures: 0
   skipped: 5
   verified_command: "mix test"
-  verified_at: "2026-06-14 (PR B tasks phase start)"
+  verified_at: "2026-06-15 (archive phase)"
 
 # ─────────────────────────────────────────────────────────────────
 # Review workload forecast (PR B, with multipliers)
@@ -205,8 +222,8 @@ adr_respect_check:
 
 change_progress:
   implementation_prs_total: 2
-  implementation_prs_merged: 1
-  implementation_prs_pending: 1
-  summary: "1 of 2 implementation PRs merged (PR A), 1 in progress (PR B)"
+  implementation_prs_merged: 2
+  implementation_prs_pending: 0
+  summary: "2 of 2 implementation PRs merged (PR A = #69 @ e67bc84, PR B = #70 @ 357cf58)"
 
-next_action: orchestrator proceeds to sdd-apply on PR B (branch feat/ai-behaviours-encryption-kek off main, stacked-to-main)
+next_action: archive complete — proceed to sdd-archive commit and next change planning (recommended: telegram-paciente-foundation)
