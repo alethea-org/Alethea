@@ -6,7 +6,7 @@
 
 change_id: bootstrap-alethea-v2
 title: Foundational setup for the v2 reset of Alethea
-status: proposed
+status: in-progress
 created: 2026-06-11
 author: sdd-new (interactive mode)
 
@@ -15,7 +15,7 @@ phases:
   spec: completed
   design: completed
   tasks: completed
-  apply: pending
+  apply: in-progress
   verify: pending
   archive: pending
 
@@ -31,6 +31,7 @@ artifacts:
   spec: openspec/sdd/bootstrap-alethea-v2/specs/
   design: openspec/sdd/bootstrap-alethea-v2/02-design.md
   tasks: openspec/sdd/bootstrap-alethea-v2/03-tasks.md
+  review_workload: openspec/sdd/bootstrap-alethea-v2/04-review-workload.md
 
 preflight:
   execution_mode: interactive
@@ -40,36 +41,172 @@ preflight:
   strict_tdd: true
   test_command: mix test
 
+# ─────────────────────────────────────────────────────────────────
+# Implementation PR DAG
+# ─────────────────────────────────────────────────────────────────
+#
+# Status legend:
+#   merged    — landed on main, SHA recorded
+#   pending   — scoped in tasks.md, not yet applied
+#   skipped   — absorbed into a prior PR (e.g., open_api_spex cleanup)
+#   blocked   — explicit reason recorded
+implementation_prs:
+  - id: bootstrap-pre-work
+    goal: open_api_spex removal + bootstrap docs + namespace marker
+    status: merged
+    base: main
+    target_branch: main
+    sha: cc01494
+    note: |
+      Landed as commit-level prep before PR A was cut; not a separate PR.
+      Removed the open_api_spex dep, the 3 OpenApiSpex files, and the
+      stale `lib/alethea/CONTEXT.md` references. Reflects the "PR 1"
+      slice of the original 3-PR plan in 03-tasks.md.
+
+  - id: PR-A
+    pr_number: 69
+    title: "feat(foundation): Accounts context delegating to the three schemas"
+    goal: |
+      Alethea.Foundation.Accounts.{Professional,Patient,Admin} schemas +
+      Alethea.Foundation.Tenant.scope_query/2 + Alethea.Foundation.Accounts
+      context module + test/support/foundation_test_helper.ex.
+    status: merged
+    base: main
+    target_branch: main
+    sha: 3dc2adf
+    size_exception: true
+    forecast_lines: 340
+    actual_lines: 949
+    delta_ratio: 2.79
+    forecast_under_delivery_cause: |
+      Test triangulation (1.7 tests/req vs 1 scenario/req assumption) +
+      @moduledoc boundary notes ran ~30% longer than spec scenarios.
+      Approved as size:exception by user mid-cycle.
+
+  - id: PR-B
+    pr_number: null
+    title: "feat(ai): AI behaviours + Encryption KEK"
+    goal: |
+      Alethea.AI.{LLM,Embeddings,Whisper} behaviour modules +
+      Alethea.AI.{LLM,Embeddings,Whisper}.Fake adapters +
+      Alethea.Foundation.Encryption.KEK primitive +
+      Alethea.AI top-level namespace with adapter discovery +
+      config/test.exs wiring the Fakes as configured adapters.
+    status: pending
+    base: main
+    target_branch: feat/ai-behaviours-encryption-kek
+    sha: null
+    size_exception: false
+    forecast_lines:
+      code_pre_multiplier: 138
+      code_with_multiplier: 180
+      test_pre_multiplier: 92
+      test_with_multiplier: 140
+      total: 320
+    files_added: 13
+    files_touched: 1   # config/test.exs
+    budget_risk: low
+
+# ─────────────────────────────────────────────────────────────────
+# Forecast adjustments (lesson from PR A)
+# ─────────────────────────────────────────────────────────────────
+# These multipliers are how PR B's forecast is computed. Persisted
+# here so future re-forecasts (e.g., for the next change) know the
+# lesson and don't re-derive it.
+forecast_adjustments:
+  trigger: "PR A actual 949 vs forecast 340 (2.79× over)"
+  applied_to: PR-B
+  multipliers:
+    code_lines: 1.3
+    test_lines: 1.5
+    files_added: 1.0
+  rationale:
+    code_lines: |
+      @moduledoc boundary notes ran ~30% longer than the spec-scenario
+      lines alone. The 1.3× captures this for behaviour/fake modules
+      that need explicit "v2 contract, wire-incompatible with legacy"
+      notes.
+    test_lines: |
+      Original estimate assumed 1 test per spec scenario. PR A landed
+      1.7 tests/requirement once triangulation (e.g., wrong-KEK,
+      tampered-ciphertext), compiler-warning checks, and config-discovery
+      checks were included. The 1.5× is the conservative version of
+      that ratio.
+    files_added: |
+      File count in PR A was accurate (19 files added vs 11 forecast —
+      off by 8, but those were test helper + context module + a
+      foundation marker file that the original spec didn't enumerate
+      separately). File count is not the bottleneck.
+
+# ─────────────────────────────────────────────────────────────────
+# Test baseline (verified at start of PR B tasks phase)
+# ─────────────────────────────────────────────────────────────────
+test_baseline:
+  pre_pr_a: 223
+  post_pr_a: 248
+  pr_a_added: 25
+  pr_b_expected_additions: 25   # see 04-review-workload.md math
+  pr_b_expected_total: 273
+  failures: 0
+  skipped: 5
+  verified_command: "mix test"
+  verified_at: "2026-06-14 (PR B tasks phase start)"
+
+# ─────────────────────────────────────────────────────────────────
+# Review workload forecast (PR B, with multipliers)
+# ─────────────────────────────────────────────────────────────────
 review_workload_forecast:
-  estimated_changed_lines: 650
-  chained_prs_recommended: yes
-  budget_risk: medium
-  decision_needed_before_apply: yes
-  chain_strategy: feature-branch-chain
+  estimated_changed_lines: 320
+  chained_prs_recommended: no
+  budget_risk: low
+  decision_needed_before_apply: no
+  chain_strategy: stacked-to-main
+  pr_b_breakdown:
+    code_lines: 180
+    test_lines: 140
+    total_lines: 320
+    files_added: 13
+    files_touched: 1
+    risks:
+      - low: KEK envelope accidentally wire-compatible with legacy PatientVault. Mitigation: distinct AAD + 0x01 version byte.
+      - low: test config keys collide. Mitigation: grep before commit.
+      - low: mix format flagged on whole repo. Mitigation: per-file format checks only.
   suggested_work_units:
-    - pr: 1
-      goal: open_api_spex removal + tests still green
-      base: feature/bootstrap-foundation
-    - pr: 2
-      goal: Alethea.Foundation.Accounts.* + Tenant helper
-      base: pr-1-branch
-    - pr: 3
-      goal: AI behaviour trio + KEK/DEK primitive + Fake adapters
-      base: pr-2-branch
+    - unit: 1
+      goal: scaffold lib/alethea/ai/ and test/alethea/ai/ directories
+    - unit: 2
+      goal: LLM behaviour + Fake adapter (2 commits: behaviour, fake)
+    - unit: 3
+      goal: Embeddings behaviour + Fake adapter
+    - unit: 4
+      goal: Whisper behaviour + Fake adapter
+    - unit: 5
+      goal: KEK primitive (wrap/unwrap/generate with versioned envelope)
+    - unit: 6
+      goal: test config wiring (config/test.exs — only legacy file touched)
+    - unit: 7
+      goal: Alethea.AI top-level namespace + adapter discovery
 
 risks:
-  - low: open_api_spex has a route caller we missed. Mitigation: grep first.
-  - medium: parallel Alethea.Foundation namespace confuses callers. Mitigation: @moduledoc boundary note.
-  - medium: KEK/DEK skeleton overlaps with legacy PatientVault. Mitigation: @moduledoc and typespecs make boundary explicit.
-  - low: page_controller_test.exs:6 pre-existing failure gets "fixed" accidentally. Mitigation: documented in 05-no-go.md.
+  - low: PR B lands > 400 lines despite the multiplier. Mitigation: file-count × line/file average is ~320; no migrations, no LiveView.
+  - low: KEK envelope wire format confusion with legacy PatientVault. Mitigation: distinct AAD + version byte, explicit moduledoc.
+  - low: config keys collision. Mitigation: grep before commit.
+  - low: pre-existing 5 skipped tests get touched. Mitigation: PR A established the 248 baseline; PR B only adds new tests.
 
 language_gaps_flagged:
   - "Foundation" as a meta-namespace is not in UBIQUITOUS_LANGUAGE.md. Recommendation: do not add. (Foundation is plumbing, not a domain term.)
+  - "KEK" / "DEK" are not in UBIQUITOUS_LANGUAGE.md. The encryption spec calls them out explicitly; the foundation module's moduledoc links to "cryptographic erasure" which IS in the language. No new term introduced.
 
 adr_respect_check:
-  adr-001-llm-en-groq: respected (LLM behaviour is the swap point; Groq impl is the future change)
-  adr-002-embeddings-hf-multilingue: respected (Embeddings behaviour is the swap point)
+  adr-001-llm-en-groq: respected (LLM behaviour is the swap point; Fake is the test adapter; Groq impl is a future change)
+  adr-002-embeddings-hf-multilingue: respected (Embeddings behaviour is the swap point; Fake is the test adapter; HF impl is a future change)
   adr-003-rag-historia-clinica-navegable: not touched (RAG is out of this change; future change)
   adr-004-telegram-unico-canal-paciente: not contradicted (no Telegram bot added; legacy whatsapp code untouched)
 
-next_action: orchestrator decides on chained PR strategy (ask-always in preflight)
+change_progress:
+  implementation_prs_total: 2
+  implementation_prs_merged: 1
+  implementation_prs_pending: 1
+  summary: "1 of 2 implementation PRs merged (PR A), 1 in progress (PR B)"
+
+next_action: orchestrator proceeds to sdd-apply on PR B (branch feat/ai-behaviours-encryption-kek off main, stacked-to-main)
