@@ -344,7 +344,7 @@ If the Pacer were buggy and collapsed all per-chat keys to a single bucket, the 
 
 ### Commit SHA
 
-To be filled in after `git commit`. Subject: `test(telegram): assert per-chat independence holds when global bucket is drained (W-2)`.
+`d39dace` — `test(telegram): assert per-chat independence holds when global bucket is drained (W-2)`.
 
 ### Test counts (delta vs PR #1b baseline)
 
