@@ -103,6 +103,7 @@ defmodule Alethea.Foundation.Accounts.BotConfigTest do
 
     test "a second upsert for the same env updates the row in place" do
       assert {:ok, %BotConfig{id: first_id}} = BotConfig.upsert(@valid_attrs)
+
       assert {:ok, %BotConfig{id: ^first_id, bot_username: "new_username"}} =
                BotConfig.upsert(%{@valid_attrs | bot_username: "new_username"})
 
@@ -120,6 +121,7 @@ defmodule Alethea.Foundation.Accounts.BotConfigTest do
   describe "for_env/1" do
     test "returns the row for the given env" do
       assert {:ok, %BotConfig{}} = BotConfig.upsert(@valid_attrs)
+
       assert {:ok, %BotConfig{env: "prod", bot_username: "alethea_prod_bot"}} =
                BotConfig.for_env("prod")
     end
