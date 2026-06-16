@@ -111,12 +111,37 @@ defmodule Alethea.Telegram.PacerTest do
              "expected chat-B acquire to be independent of chat-A, blocked #{elapsed}ms"
     end
 
-    test "per-chat bucket is keyed by the chat_id_hash argument" do
-      # Same chat, second call — blocks. Different chat — does not block.
-      assert :ok = Pacer.acquire("chat-X")
+    test "per-chat buckets are independent even when the global bucket is drained" do
+      # Drain the global bucket with 30 distinct chats (capacity = 30).
+      for i <- 1..30 do
+        assert :ok = Pacer.acquire("chat-#{i}")
+      end
 
+      # Global bucket is now empty; subsequent acquires block on global refill.
+
+      # Two new distinct chats (chat-Y, chat-Z) must each acquire within
+      # 50ms because their per-chat buckets are independent of each other
+      # and of the 30 already-drained chats. Each new chat's per-chat
+      # bucket starts full (1 token), so the wait is only the global
+      # refill (~33ms at 30 Hz), NOT a per-chat refill (~1000ms at 1 Hz).
+      #
+      # If the Pacer collapsed all keys to a single per-chat bucket,
+      # chat-Y's "fresh per-chat bucket" would actually be the same as
+      # chat-1's empty bucket, and chat-Y would block ~1000ms — far
+      # more than 50ms.
+      start_y = monotonic_ms()
       assert :ok = Pacer.acquire("chat-Y")
-      # (no assertion on timing — the second call to chat-Y was instant)
+      elapsed_y = monotonic_ms() - start_y
+
+      assert elapsed_y < 50,
+             "expected chat-Y acquire to be independent (no per-chat block), blocked #{elapsed_y}ms"
+
+      start_z = monotonic_ms()
+      assert :ok = Pacer.acquire("chat-Z")
+      elapsed_z = monotonic_ms() - start_z
+
+      assert elapsed_z < 50,
+             "expected chat-Z acquire to be independent (no per-chat block), blocked #{elapsed_z}ms"
     end
   end
 
