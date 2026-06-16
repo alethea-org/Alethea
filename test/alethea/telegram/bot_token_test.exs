@@ -280,4 +280,66 @@ defmodule Alethea.Telegram.BotTokenTest do
       assert :ok = BotToken.stop()
     end
   end
+
+  describe "init/1 — whitelist reason tag (W-2)" do
+    test "reason_tag/1 is a whitelist match — never inspect/1 — so a non-trivial :unexpected payload never reaches the log" do
+      # The :not_found reason: the most common case (row deleted). The
+      # tag is the literal atom string, which is safe to log.
+      assert BotToken.reason_tag(:not_found) == ":not_found"
+
+      # The :unexpected reason: a non-trivial payload (e.g. a
+      # %BotConfig{} struct with ciphertext blobs, ids, etc.). The
+      # WHITELIST match discards the payload and returns just the
+      # tag. This is the W-2 fix: a defence-in-depth guarantee that
+      # init/1's Logger.error never leaks the struct's fields.
+      assert BotToken.reason_tag({:unexpected, %BotConfig{}}) == ":unexpected"
+
+      # A non-trivial :unexpected payload with sensitive-looking data
+      # — the tag still does NOT include the payload.
+      sensitive = %BotConfig{
+        id: "secret-uuid",
+        env: "test",
+        bot_token: "sensitive-token",
+        secret_token: "sensitive-secret",
+        bot_username: "sensitive_username"
+      }
+
+      tag = BotToken.reason_tag({:unexpected, sensitive})
+      assert tag == ":unexpected"
+      # Defence in depth: the tag string is exactly the whitelist
+      # value, with no payload data appended.
+      assert tag == ":unexpected"
+      refute tag =~ "secret-uuid"
+      refute tag =~ "sensitive-token"
+      refute tag =~ "sensitive-secret"
+
+      # Any other term: mapped to "other" (the catch-all bucket).
+      assert BotToken.reason_tag(:something_else) == "other"
+      assert BotToken.reason_tag({:weird, "shape"}) == "other"
+      assert BotToken.reason_tag(%{anything: 42}) == "other"
+    end
+
+    test "init/1 logs the whitelist tag for the :not_found reason (regression for the W-2 substitution)" do
+      # The init/1 path that fires when no BotConfig row exists for
+      # the env. The log message MUST contain the :not_found tag (it
+      # did with `inspect(reason)` too, but this test pins the new
+      # code path) and MUST NOT contain `inspect` output of any other
+      # reason.
+      import ExUnit.CaptureLog
+
+      Process.flag(:trap_exit, true)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {%RuntimeError{message: msg}, _stack}} = BotToken.start_link([])
+
+          assert msg =~ "no BotConfig row for env=test"
+        end)
+
+      # The whitelist tag is in the log.
+      assert log =~ "Alethea.Telegram.BotToken failed to boot"
+      assert log =~ "env=test"
+      assert log =~ "(reason: :not_found)"
+    end
+  end
 end

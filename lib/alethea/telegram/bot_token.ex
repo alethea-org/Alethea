@@ -111,11 +111,16 @@ defmodule Alethea.Telegram.BotToken do
         # Fail-loud: a missing row is a misconfiguration, not a default.
         # We log a clear error so the operator can see why the app failed
         # to boot, and we raise to keep the supervision tree honest.
+        #
+        # W-2 fix: never `inspect(reason)` — the whitelist match in
+        # `reason_tag/1` guarantees we never leak a future `:unexpected`
+        # payload (which could be a `%BotConfig{}` struct with
+        # ciphertext blobs, ids, etc.) into the log.
         require Logger
 
         Logger.error(
           "Alethea.Telegram.BotToken failed to boot: " <>
-            "no BotConfig row for env=#{Mix.env()} (reason: #{inspect(reason)}). " <>
+            "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag(reason)}). " <>
             "Seed a row via Alethea.Foundation.Accounts.BotConfig.upsert/1 before starting the app."
         )
 
@@ -130,7 +135,25 @@ defmodule Alethea.Telegram.BotToken do
 
   @impl true
   def handle_cast(:reload, _state), do: do_reload()
+
+  @impl true
   def handle_info(:reload, _state), do: do_reload()
+
+  @doc """
+  Maps a `load/0` failure reason to a safe, opaque log tag.
+
+  W-2 fix: this is a WHITELIST match — never `inspect/1` — so the
+  `init/1` and `do_reload/0` `Logger.error` calls never leak a future
+  `:unexpected` payload (which could be a `%BotConfig{}` struct with
+  ciphertext blobs, ids, etc.) into the operator's log feed. Today the
+  only realistic reasons are `:not_found` (the row is gone) and
+  `{:unexpected, other}` (the loaded struct did not match the guard).
+  Both are mapped to a safe tag; any other term is mapped to `"other"`.
+  """
+  @spec reason_tag(term()) :: String.t()
+  def reason_tag(:not_found), do: ":not_found"
+  def reason_tag({:unexpected, _}), do: ":unexpected"
+  def reason_tag(_), do: "other"
 
   ## Private
 
@@ -171,22 +194,16 @@ defmodule Alethea.Telegram.BotToken do
   # :reload again, while still failing closed (state reset to nil) so
   # the system never sends traffic with stale credentials.
   #
-  # The reason tag is a WHITELIST match — never `inspect(reason)` — so
-  # we never leak a future `:unexpected` payload into the logs.
+  # The reason tag in the log uses `reason_tag/1` — a WHITELIST match,
+  # never `inspect(reason)` — so we never leak a future `:unexpected`
+  # payload into the logs.
   @spec log_and_reset(term()) :: {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
   defp log_and_reset(reason) do
     require Logger
 
-    reason_tag =
-      case reason do
-        :not_found -> ":not_found"
-        {:unexpected, _} -> ":unexpected"
-        _ -> "other"
-      end
-
     Logger.error(
       "Alethea.Telegram.BotToken reload failed: " <>
-        "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag}). " <>
+        "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag(reason)}). " <>
         "Re-seed the row via Alethea.Foundation.Accounts.BotConfig.upsert/1 and send :reload again. " <>
         "Failing closed: bot_token/0 now returns nil until the row is restored."
     )
