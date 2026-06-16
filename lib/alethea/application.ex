@@ -23,6 +23,17 @@ defmodule Alethea.Application do
     ]
 
     children =
+      if Application.get_env(:alethea, :start_bot_token, true) do
+        # BotToken performs a fail-loud DB read in `init/1`; the supervisor
+        # process is not a SQL sandbox owner, so we skip the supervised
+        # child in `:test` (the test cases for BotToken start the GenServer
+        # manually with the sandbox explicitly allowed).
+        children ++ [Alethea.Telegram.BotToken]
+      else
+        children
+      end
+
+    children =
       if Application.get_env(:alethea, :start_ai, true) do
         children ++ [Alethea.AI.RoBERTaWorker, Alethea.AI.ConversationMemory]
       else
