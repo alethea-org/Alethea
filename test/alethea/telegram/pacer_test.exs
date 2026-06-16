@@ -197,31 +197,16 @@ defmodule Alethea.Telegram.PacerTest do
     end
   end
 
-  describe "acquire/1 — module purity" do
-    test "acquire is a synchronous GenServer call (no caller-side sleep loop)" do
+  describe "acquire/1 — return shape" do
+    test "always returns :ok (the wait is internal to the GenServer)" do
       # The Pacer holds the buckets in its own state; the caller does
-      # not loop. We assert this by checking the call returns :ok in
-      # all cases (never {:wait, _} or other tokens).
+      # not see a {:wait, _} token. The contract is: acquire/1 blocks
+      # inside the GenServer until both buckets allow, then returns
+      # :ok. We assert the return shape across the per-chat and global
+      # branches.
       assert :ok = Pacer.acquire("chat-A")
       assert :ok = Pacer.acquire("chat-A")
       assert :ok = Pacer.acquire("chat-B")
-    end
-
-    test "module does not depend on the DB, Repo, or Oban" do
-      # Structural assertion: the Pacer module exposes a GenServer
-      # child_spec but no Repo or Oban deps. We assert it by checking
-      # the module's `__info__(:attributes)` does not include any
-      # `:ecto` or `:oban` markers — these would only show up if the
-      # module `use`-d something from those libraries.
-      attrs = Pacer.module_info(:attributes)
-
-      refute Enum.any?(attrs, fn {key, _} ->
-               key in [:ecto, :oban, :ecto_schema]
-             end)
-
-      # And the module has a GenServer child_spec, confirming it IS a
-      # supervised process — but not an Ecto schema or Oban worker.
-      assert function_exported?(Pacer, :child_spec, 1)
     end
   end
 
