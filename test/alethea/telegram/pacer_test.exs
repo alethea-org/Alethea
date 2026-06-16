@@ -41,20 +41,19 @@ defmodule Alethea.Telegram.PacerTest do
     # Reset the GenServer so each test gets a fresh bucket state.
     # The Pacer is registered under `__MODULE__`; if a previous test
     # left it running, stop it before starting a new one.
-    case Process.whereis(Pacer) do
-      nil -> :ok
-      pid -> GenServer.stop(pid, :normal, 5_000)
-    end
+    #
+    # `GenServer.stop/3` raises `:exit` (not an exception) when the
+    # target process is already dead — the typical race condition when
+    # the next test's setup starts before this test's on_exit fires.
+    # Use `try/catch :exit` to swallow both: the exception case
+    # (rescue) and the link/exit case (catch).
+    safe_stop()
 
     {:ok, _} = Pacer.start_link([])
 
     on_exit(fn ->
       Application.delete_env(:alethea, Alethea.Telegram.Pacer)
-
-      case Process.whereis(Pacer) do
-        nil -> :ok
-        pid -> GenServer.stop(pid, :normal, 5_000)
-      end
+      safe_stop()
     end)
 
     :ok
@@ -230,5 +229,19 @@ defmodule Alethea.Telegram.PacerTest do
 
   defp monotonic_ms do
     System.monotonic_time(:millisecond)
+  end
+
+  defp safe_stop do
+    case Process.whereis(Pacer) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.stop(pid, :normal, 5_000)
+        catch
+          :exit, _ -> :ok
+        end
+    end
   end
 end
