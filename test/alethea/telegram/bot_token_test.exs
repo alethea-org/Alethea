@@ -68,8 +68,8 @@ defmodule Alethea.Telegram.BotTokenTest do
     end
   end
 
-  describe "handle_info(:reload, _) — re-reads the row from the DB" do
-    test "the next call returns the updated plaintext values" do
+  describe "reload — re-reads the row from the DB" do
+    test "BotToken.reload/0 (cast path, public API) re-reads the row from the DB" do
       {:ok, _} =
         BotConfig.upsert(%{
           env: "test",
@@ -84,7 +84,9 @@ defmodule Alethea.Telegram.BotTokenTest do
       # Sanity check the initial load.
       assert BotToken.bot_token() == "old-token"
 
-      # Update the row, then ask the GenServer to reload.
+      # Update the row, then ask the GenServer to reload via the
+      # public `BotToken.reload/0` API (which is `GenServer.cast/2`,
+      # i.e. `handle_cast/2`).
       {:ok, _} =
         BotConfig.upsert(%{
           env: "test",
@@ -93,7 +95,7 @@ defmodule Alethea.Telegram.BotTokenTest do
           bot_username: "new_username"
         })
 
-      send(pid, :reload)
+      BotToken.reload()
       # Drain the inbox so the GenServer processes the :reload before the
       # next call. `_ = :sys.get_state/1` is the project-discipline sync
       # primitive: it forces a synchronous exchange that proves the
@@ -103,6 +105,37 @@ defmodule Alethea.Telegram.BotTokenTest do
       assert BotToken.bot_token() == "new-token"
       assert BotToken.secret_token() == "new-secret"
       assert BotToken.bot_username() == "new_username"
+    end
+
+    test "send(pid, :reload) (info path) re-reads the row from the DB" do
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "old-token-info",
+          secret_token: "old-secret-info",
+          bot_username: "old_username_info"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      assert BotToken.bot_token() == "old-token-info"
+
+      # Update the row.
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "new-token-info",
+          secret_token: "new-secret-info",
+          bot_username: "new_username_info"
+        })
+
+      send(pid, :reload)
+      _ = :sys.get_state(pid)
+
+      assert BotToken.bot_token() == "new-token-info"
+      assert BotToken.secret_token() == "new-secret-info"
+      assert BotToken.bot_username() == "new_username_info"
     end
   end
 
@@ -130,6 +163,101 @@ defmodule Alethea.Telegram.BotTokenTest do
         })
 
       assert BotToken.bot_token() == "stable-token"
+    end
+  end
+
+  describe "reload — failure path is loud (W-1)" do
+    import ExUnit.CaptureLog
+
+    test "send(pid, :reload) — when the row is gone, logs a Logger.error and resets to nil" do
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "live-token",
+          secret_token: "live-secret",
+          bot_username: "live_username"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      # Sanity: the GenServer is up and serving the seeded values.
+      assert BotToken.bot_token() == "live-token"
+
+      # Wipe the row to simulate a delete-while-running.
+      Repo.delete_all(BotConfig)
+
+      # The :reload message via send/2 (handle_info) MUST log a
+      # Logger.error and reset state to nil. The fail-closed behaviour
+      # is preserved (webhooks 401 on nil token), but the operator now
+      # sees an alert.
+      log =
+        capture_log(fn ->
+          send(pid, :reload)
+          _ = :sys.get_state(pid)
+        end)
+
+      # State is reset to nil — fail-closed.
+      assert BotToken.bot_token() == nil
+      assert BotToken.secret_token() == nil
+      assert BotToken.bot_username() == nil
+
+      # The GenServer is still alive (we did not raise).
+      assert Process.alive?(pid)
+
+      # The log message is clear and contains the env and the
+      # :not_found whitelist tag.
+      assert log =~ "Alethea.Telegram.BotToken"
+      assert log =~ "env=test"
+      assert log =~ ":not_found"
+      assert log =~ "reload"
+
+      # The previous plaintext token MUST NOT be in the log.
+      refute log =~ "live-token"
+      refute log =~ "live-secret"
+    end
+
+    test "BotToken.reload/0 (cast) — when the row is gone, logs a Logger.error and resets to nil" do
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "live-token-2",
+          secret_token: "live-secret-2",
+          bot_username: "live_username_2"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      assert BotToken.bot_token() == "live-token-2"
+
+      # Wipe the row.
+      Repo.delete_all(BotConfig)
+
+      # The public API uses GenServer.cast/2 (handle_cast/2). Same
+      # fail-loud-and-reset behaviour as the info path.
+      log =
+        capture_log(fn ->
+          BotToken.reload()
+          _ = :sys.get_state(pid)
+        end)
+
+      # State is reset to nil.
+      assert BotToken.bot_token() == nil
+      assert BotToken.secret_token() == nil
+      assert BotToken.bot_username() == nil
+
+      # The GenServer is still alive.
+      assert Process.alive?(pid)
+
+      # The log message is clear.
+      assert log =~ "Alethea.Telegram.BotToken"
+      assert log =~ "env=test"
+      assert log =~ ":not_found"
+
+      # The previous plaintext token MUST NOT be in the log.
+      refute log =~ "live-token-2"
+      refute log =~ "live-secret-2"
     end
   end
 

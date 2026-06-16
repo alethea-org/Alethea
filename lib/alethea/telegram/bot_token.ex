@@ -129,23 +129,25 @@ defmodule Alethea.Telegram.BotToken do
   def handle_call(:bot_username, _from, state), do: {:reply, state.bot_username, state}
 
   @impl true
-  def handle_cast(:reload, _state) do
-    case load() do
-      {:ok, plain} -> {:noreply, plain}
-      {:error, _reason} -> {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
-    end
-  end
-
-  @impl true
-  def handle_info(:reload, _state) do
-    # Same shape as the cast — support both send/2 and GenServer.cast/2.
-    case load() do
-      {:ok, plain} -> {:noreply, plain}
-      {:error, _reason} -> {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
-    end
-  end
+  def handle_cast(:reload, _state), do: do_reload()
+  def handle_info(:reload, _state), do: do_reload()
 
   ## Private
+
+  # W-1 fix + S-4 cleanup: both `handle_cast(:reload, _)` and
+  # `handle_info(:reload, _)` are wired to the same `do_reload/0` so
+  # the load + log-and-reset logic lives in exactly one place.
+  # The two callbacks exist so operators can use either
+  # `GenServer.cast/2` (the public `BotToken.reload/0` API) or
+  # `send/2` (a shell SIGHUP-style nudge) — both paths share the
+  # same handler.
+  @spec do_reload() :: {:noreply, plain() | %{bot_token: nil, secret_token: nil, bot_username: nil}}
+  defp do_reload do
+    case load() do
+      {:ok, plain} -> {:noreply, plain}
+      {:error, reason} -> log_and_reset(reason)
+    end
+  end
 
   @spec load() :: {:ok, plain()} | {:error, :not_found | term()}
   defp load do
@@ -160,5 +162,35 @@ defmodule Alethea.Telegram.BotToken do
       other ->
         {:error, {:unexpected, other}}
     end
+  end
+
+  # W-1 fix: a reload that fails (e.g. the row was deleted while the
+  # GenServer was running) used to silently reset state to nil with no
+  # log. That made production webhooks 401 with no operator visibility.
+  # We now log a clear error so the operator can re-seed the row and call
+  # :reload again, while still failing closed (state reset to nil) so
+  # the system never sends traffic with stale credentials.
+  #
+  # The reason tag is a WHITELIST match — never `inspect(reason)` — so
+  # we never leak a future `:unexpected` payload into the logs.
+  @spec log_and_reset(term()) :: {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
+  defp log_and_reset(reason) do
+    require Logger
+
+    reason_tag =
+      case reason do
+        :not_found -> ":not_found"
+        {:unexpected, _} -> ":unexpected"
+        _ -> "other"
+      end
+
+    Logger.error(
+      "Alethea.Telegram.BotToken reload failed: " <>
+        "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag}). " <>
+        "Re-seed the row via Alethea.Foundation.Accounts.BotConfig.upsert/1 and send :reload again. " <>
+        "Failing closed: bot_token/0 now returns nil until the row is restored."
+    )
+
+    {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
   end
 end
