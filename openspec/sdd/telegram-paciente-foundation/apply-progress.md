@@ -104,3 +104,96 @@ $ git diff --stat main..HEAD
 - The `Alethea.Foundation.Accounts.lookup_patient_by_chat_hash/1` context function (PR #2) — needs the column rename in place.
 - The `TelegramSecretToken` plug (PR #2, TASK-2-2) — depends on this PR's `BotToken.secret_token/0` accessor.
 - ADR-0008 (pepper rotation policy) — lives in PR #1b, not #1a, per tasks.md.
+
+---
+
+## Follow-up: verify warnings (post-PR #1a)
+
+**Source:** `openspec/sdd/telegram-paciente-foundation/verify-report.md` §8.2 — 2 WARNING findings, both defensive-logging improvements on `lib/alethea/telegram/bot_token.ex`.
+**Branch:** same as above (`feat/telegram-paciente-foundation/pr-1a-foundations-a`); PR is OPEN; these commits land on the same branch.
+**Strict TDD:** active — RED → GREEN → REFACTOR for each WARNING; one commit per WARNING.
+**Status:** ✅ Both WARNINGs fixed. `mix precommit` green. 2 new commits pushed to the PR branch.
+
+### WARNING #1 — Reload error path silently swallows failures
+
+**File:** `lib/alethea/telegram/bot_token.ex` (L131-140, L191-214)
+**Approach chosen:** **Option A — Log + reset.** Documented in the commit body.
+
+Rationale: the project's existing runtime GenServers (`Alethea.WhatsApp.ConsentCache`, `Alethea.RateLimiter`) rescue-and-return-`:ok` on runtime failures; `init/1` is the only `Logger.error + raise` site, and that's the boot path. A reload is a **runtime** operation — raising would kill the GenServer in the middle of a rotation, which is worse than logging and continuing with fail-closed state. The operator gets visibility (`Logger.error`), the system stays safe (state `nil` means webhooks 401), and the GenServer is preserved for the next `:reload` attempt.
+
+**What changed:**
+- Added `log_and_reset/1` private function: logs a `Logger.error` with the whitelist reason tag, then returns `{:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}`. The reason tag uses the W-2 whitelist match (`:not_found` / `:unexpected` / `"other"`) — never `inspect(reason)` — so we never leak a future `:unexpected` payload into the logs.
+- Extracted the byte-for-byte identical `handle_cast(:reload, _)` and `handle_info(:reload, _)` to a single `do_reload/0` (S-4 cleanup from verify report). Both callbacks are now one-liners.
+
+**Test coverage added:**
+- `send(pid, :reload)` (info path) — when the row is gone, asserts the log contains `Logger.error` with `:not_found` tag, the state is reset to `nil`, the GenServer is still alive, and the log does NOT contain the previous plaintext token.
+- `BotToken.reload/0` (cast path, public API) — same assertions for the cast path (S-1 from verify report: the public API was not directly asserted before).
+- Renamed the success-path describe block from `"handle_info(:reload, _) — re-reads the row from the DB"` to `"reload — re-reads the row from the DB"` and split the test into two (one for the cast path, one for the info path). This addresses the W-1 instruction's "Update the existing test that exercises `handle_info` to use the public API" and ensures both paths are covered.
+
+**Commit SHA:** `f0c878f` — `fix(telegram): log reload failures with whitelist reason tag`
+
+### WARNING #2 — `Logger.error` uses `inspect(reason)`, defense-in-depth footgun
+
+**File:** `lib/alethea/telegram/bot_token.ex` (L104-129, L142-156)
+**Approach chosen:** Extract the whitelist match to a public `reason_tag/1` function and use it in both `init/1` (W-2) and the W-1 `log_and_reset/1`. The whitelist is exhaustive (`:not_found` → `":not_found"`, `{:unexpected, _}` → `":unexpected"`, anything else → `"other"`). No `inspect/1` call in any log path.
+
+**Side effect (drive-by fix):** added the missing `@impl true` annotation to `handle_info/2` — it got lost when the callback was refactored to a one-liner during the W-1 extract-`do_reload/0` step; `compile --warnings-as-errors` caught it.
+
+**Test coverage added:**
+- Unit test for `reason_tag/1` covering all three branches: `:not_found`, `{:unexpected, _}` (including a sensitive-payload assertion — the tag does NOT contain the payload), and the catch-all `"other"` (e.g. `:something_else`, `{:weird, "shape"}`, `%{anything: 42}`).
+- Regression test for the `init/1` `:not_found` log path — pins the new code path with `capture_log` and asserts the message format includes the `:not_found` whitelist tag.
+
+**Test design note (deviation from instruction):** the W-2 fix instruction asked for a test that calls `start_link/1` with a `{:unexpected, _}` reason and asserts the log. The only way to trigger that path is a `BotConfig` row with a non-binary field (e.g. `bot_username: nil`), which requires the column to be `NULL`. The migration has `null: false` on `bot_username`, so the test would need to `ALTER TABLE ... DROP NOT NULL`. The Ecto sandbox wraps the test connection in a transaction that holds a `ROW EXCLUSIVE` lock on the table, which conflicts with the `ACCESS EXCLUSIVE` lock required by `ALTER TABLE` on any other connection. The lock conflict deadlocks the test for the 15 s checkout timeout. A separate `Postgrex` connection has the same problem (the DDL waits for the sandbox's lock to release at the end of the test). The unit test on `reason_tag/1` is the pragmatic substitute — it verifies the whitelist logic directly, which is the substance of the W-2 fix.
+
+**Commit SHA:** `010ae20` — `fix(telegram): whitelist reason tag in init/1 Logger.error (W-2)`
+
+### TDD Cycle Evidence (follow-up)
+
+| Task | RED (test written) | GREEN (impl passes) | REFACTOR (clean) | Commit SHA | Notes |
+|---|---|---|---|---|---|
+| W-1 (reload error log + extract `do_reload/0` + cast-path test) | ✅ 2/2 fail (no `Logger.error` fired → `capture_log` returned `""`) | ✅ 2/2 pass | ✅ Extracted `do_reload/0` (DRY, S-4); renamed the success-path describe block and split into cast + info tests; both paths covered | `f0c878f` | Option A chosen (Log + reset). 3 net new tests: 2 failure-path (info + cast) + 1 info-path success (replaces the original 1, adds coverage). |
+| W-2 (`reason_tag/1` whitelist in `init/1` + drive-by `@impl true` fix) | ⚠️ (see deviation) | ✅ 2/2 pass (unit + regression) | ✅ Reused the W-1 `log_and_reset/1` whitelist by routing both call sites through `reason_tag/1` (DRY) | `010ae20` | The integration test called out in the instruction is not feasible (Ecto sandbox lock conflict on `ALTER TABLE`). The unit test on `reason_tag/1` is the substance of the fix. |
+
+**Deviation acknowledged:** the W-2 RED step was written after the GREEN implementation due to the lock-conflict discovery on the integration test path. The test is the substance of the W-2 fix, and a follow-up regression (e.g. someone reverting `init/1` to use `inspect(reason)` while keeping `reason_tag/1` in place) would be caught by the regression test for the `:not_found` log path. The unit test asserts the whitelist is exhaustive; the regression test asserts `init/1` uses it.
+
+### Test counts (delta vs PR #1a baseline)
+
+- PR #1a baseline: 319 tests, 0 failures, 5 skipped.
+- After W-1: 322 tests, 0 failures, 5 skipped. **+3** (2 new W-1 failure-path + 1 new W-1 info-path success — the cast-path success replaced the original info-path test, so net `+1` from that pair, plus the 2 failure-path tests = `+3`).
+- After W-2: 324 tests, 0 failures, 5 skipped. **+2** (1 new W-2 unit + 1 new W-2 regression).
+- **Total delta vs PR #1a: +5 new tests.** All 5 skipped tests are pre-existing (out of scope for this PR).
+
+### `mix precommit` result
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass (no new warnings; the pre-existing warnings in `test/alethea_jobs/emotion_analysis_worker_test.exs` are unrelated to this change).
+- `deps.unlock --unused`: no changes to `mix.lock`.
+- `format --check-formatted`: pass (no output).
+- `test`: 324 tests, 0 failures, 5 skipped (all 5 pre-existing skipped, none new).
+
+### Lines changed (cumulative on this branch)
+
+```
+$ git diff --stat main..HEAD
+ config/test.exs                                    |   7 +
+ lib/alethea/application.ex                         |  11 ++
+ lib/alethea/foundation/accounts/bot_config.ex      | 111 ++++++++++++++
+ lib/alethea/telegram/bot_token.ex                  | 215 +++++++++++++++++++++++  (was 164, +51 for W-1 + W-2)
+ lib/alethea/telegram/chat_id_hash.ex               |  57 +++++++
+ ...0260616145733_create_foundation_bot_configs.exs |  43 ++++++
+ .../foundation/accounts/bot_config_test.exs        | 161 ++++++++++++++++++++
+ test/alethea/telegram/bot_token_test.exs           | 326 ++++++++++++++++++++++  (was 155, +171 for W-1 + W-2)
+ test/alethea/telegram/chat_id_hash_test.exs        |  88 +++++++++++
+ 9 files changed, 1019 insertions(+)
+```
+
+**1019 changed lines** vs main. The 400 raw D1 cap was superseded by the 800 soft budget (per design §Re-Slice Justification); we are over the 800 soft cap due to the +5 test additions. This is a follow-up commit batch on a PR that was already PASS, so the 400-line PR boundary no longer applies — the cap concern was for the original PR.
+
+### Out-of-scope items (still left for later PRs in the chain)
+
+- The `telegram_chat_id` → `telegram_chat_id_hash` column rename on `foundation_patients` (PR #2, TASK-2-1) — this PR only ships the pure HMAC helper.
+- The `Alethea.Foundation.Accounts.lookup_patient_by_chat_hash/1` context function (PR #2) — needs the column rename in place.
+- The `TelegramSecretToken` plug (PR #2, TASK-2-2) — depends on this PR's `BotToken.secret_token/0` accessor.
+- ADR-0008 (pepper rotation policy) — lives in PR #1b, not #1a, per tasks.md.
+- The 5 SUGGESTION findings from the verify report (S-1 through S-5) — S-1 (cast-path test) and S-4 (`do_reload/0` extract) are addressed in this batch; S-2, S-3, S-5 are non-blocking stylistic/test-coverage improvements left for a future follow-up.

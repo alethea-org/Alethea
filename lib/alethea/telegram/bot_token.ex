@@ -164,7 +164,8 @@ defmodule Alethea.Telegram.BotToken do
   # `GenServer.cast/2` (the public `BotToken.reload/0` API) or
   # `send/2` (a shell SIGHUP-style nudge) — both paths share the
   # same handler.
-  @spec do_reload() :: {:noreply, plain() | %{bot_token: nil, secret_token: nil, bot_username: nil}}
+  @spec do_reload() ::
+          {:noreply, plain() | %{bot_token: nil, secret_token: nil, bot_username: nil}}
   defp do_reload do
     case load() do
       {:ok, plain} -> {:noreply, plain}
@@ -197,7 +198,8 @@ defmodule Alethea.Telegram.BotToken do
   # The reason tag in the log uses `reason_tag/1` — a WHITELIST match,
   # never `inspect(reason)` — so we never leak a future `:unexpected`
   # payload into the logs.
-  @spec log_and_reset(term()) :: {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
+  @spec log_and_reset(term()) ::
+          {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
   defp log_and_reset(reason) do
     require Logger
 
