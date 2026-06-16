@@ -56,6 +56,13 @@ config :phoenix, :plug_init_mode, :runtime
 
 config :alethea, :start_ai, false
 
+# BotToken performs a fail-loud DB read in `init/1`; the supervisor
+# process is not a SQL sandbox owner, so we skip the supervised child
+# in `:test` (the test cases for BotToken start the GenServer manually
+# with the sandbox explicitly allowed). The accessor is still exercised
+# end-to-end in the test suite — see `Alethea.Telegram.BotTokenTest`.
+config :alethea, :start_bot_token, false
+
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
