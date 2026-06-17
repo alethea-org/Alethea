@@ -116,9 +116,15 @@ defmodule Alethea.Telegram.BotToken do
     end
 
     :ok
-  rescue
-    # If the process is already dead or the stop call races, treat as :ok.
-    _ -> :ok
+  catch
+    # F-06: `GenServer.stop/3` raises `:exit` (not an exception)
+    # when the target process is already dead — `try/rescue` does
+    # NOT catch `:exit` signals, only raised exceptions. We must use
+    # `try/catch :exit, _` (or the equivalent `catch :exit, _` form)
+    # to swallow the link/exit case. Pattern matches the
+    # `pacer_test.exs:244-256` `safe_stop/0` helper, which already
+    # has the same race condition.
+    :exit, _ -> :ok
   end
 
   ## GenServer callbacks

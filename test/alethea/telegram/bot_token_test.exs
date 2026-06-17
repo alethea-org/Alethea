@@ -279,6 +279,41 @@ defmodule Alethea.Telegram.BotTokenTest do
       # Should not raise; returns :ok whether or not the process exists.
       assert :ok = BotToken.stop()
     end
+
+    test "stop swallows the :exit signal when the process is already dead (F-06)" do
+      # F-06 regression guard. `GenServer.stop/3` on a dead pid raises
+      # `:exit` (not an exception), so `try/rescue _` does NOT catch
+      # it. The fix switches to `try/catch :exit, _`. This test
+      # documents the contract: calling `stop/0` when the process is
+      # already dead must return :ok and must not crash the caller.
+      Process.flag(:trap_exit, true)
+
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "f6-tok",
+          secret_token: "f6-sec",
+          bot_username: "f6_user"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      # Forcefully kill the GenServer. Because the test process is
+      # linked to the GenServer via `start_link/1`, we trap exits so
+      # the kill signal does not propagate and crash the test pid.
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+
+      # Drain the EXIT message that the link triggered.
+      assert_receive {:EXIT, ^pid, :killed}
+
+      # Now call `stop/0` — the GenServer is dead. The fix uses
+      # `try/catch :exit, _` to swallow the :exit from
+      # `GenServer.stop/3`. A `try/rescue _` would crash here.
+      assert :ok = BotToken.stop()
+    end
   end
 
   describe "format_status/1 — redaction of plaintext in introspection output (F-04)" do
