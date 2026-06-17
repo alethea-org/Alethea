@@ -70,6 +70,68 @@ defmodule Alethea.Telegram.PacerTest do
     end
   end
 
+  describe "start_link/1 — config validation (F-09)" do
+    # F-09 regression guard. `init/1` used to silently accept any
+    # config. A `per_chat_capacity: 0` or `global_capacity: 0` value
+    # would brick the Pacer — `do_acquire/1` enters an infinite
+    # loop on the `{:wait, _non_positive}` branch because
+    # `ms_until_next_token/2` returns 1 ms forever. The fix mirrors
+    # `BotToken.init/1`'s fail-loud pattern: validate all four knobs
+    # in `init/1` and raise a clear error on any `≤ 0`.
+    setup do
+      # Stop the GenServer created by the module-level setup; the
+      # F-09 tests need to start a fresh one with a custom (bad)
+      # config, and we must not leave a zombie process around.
+      safe_stop()
+      :ok
+    end
+
+    test "raises on per_chat_capacity: 0" do
+      Application.put_env(:alethea, Alethea.Telegram.Pacer, per_chat_capacity: 0)
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: msg}, _stack}} = Pacer.start_link([])
+      assert msg =~ "per_chat_capacity must be > 0"
+    end
+
+    test "raises on per_chat_capacity: -1 (negative)" do
+      Application.put_env(:alethea, Alethea.Telegram.Pacer, per_chat_capacity: -1)
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: msg}, _stack}} = Pacer.start_link([])
+      assert msg =~ "per_chat_capacity must be > 0"
+    end
+
+    test "raises on per_chat_refill_per_sec: 0" do
+      Application.put_env(:alethea, Alethea.Telegram.Pacer, per_chat_refill_per_sec: 0.0)
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: msg}, _stack}} = Pacer.start_link([])
+      assert msg =~ "per_chat_refill_per_sec must be > 0"
+    end
+
+    test "raises on global_capacity: 0" do
+      Application.put_env(:alethea, Alethea.Telegram.Pacer, global_capacity: 0)
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: msg}, _stack}} = Pacer.start_link([])
+      assert msg =~ "global_capacity must be > 0"
+    end
+
+    test "raises on global_refill_per_sec: 0" do
+      Application.put_env(:alethea, Alethea.Telegram.Pacer, global_refill_per_sec: 0.0)
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {%ArgumentError{message: msg}, _stack}} = Pacer.start_link([])
+      assert msg =~ "global_refill_per_sec must be > 0"
+    end
+  end
+
   describe "acquire/1 — REQ-C7-pacer-per-chat-limit (per-chat 1 Hz)" do
     test "first message to a chat goes through immediately" do
       # Fresh per-chat bucket: 1 token available. No block.

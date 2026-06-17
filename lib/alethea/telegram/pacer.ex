@@ -93,10 +93,31 @@ defmodule Alethea.Telegram.Pacer do
 
   @impl true
   def init(_opts) do
+    # F-09: validate all four config knobs at boot. A 0 or negative
+    # value would brick the Pacer — `do_acquire/1` enters an infinite
+    # loop on the `{:wait, _non_positive}` branch because
+    # `ms_until_next_token/2` returns 1 ms forever. Mirrors the
+    # `BotToken.init/1` fail-loud pattern: a misconfiguration must
+    # crash the supervisor, not silently throttle every Telegram
+    # message to "wait 1 ms, then check again".
+    validate_positive!(:per_chat_capacity, per_chat_capacity())
+    validate_positive!(:per_chat_refill_per_sec, per_chat_refill_per_sec())
+    validate_positive!(:global_capacity, global_capacity())
+    validate_positive!(:global_refill_per_sec, global_refill_per_sec())
+
     create_table(@table_per_chat)
     create_table(@table_global)
 
     {:ok, %{}}
+  end
+
+  defp validate_positive!(name, value) when is_integer(value) and value > 0, do: :ok
+  defp validate_positive!(name, value) when is_float(value) and value > 0, do: :ok
+
+  defp validate_positive!(name, value) do
+    raise ArgumentError,
+          "Alethea.Telegram.Pacer: #{name} must be > 0 (got #{inspect(value)}). " <>
+            "A 0 or negative value bricks the Pacer (infinite-loop in do_acquire/1)."
   end
 
   @impl true
