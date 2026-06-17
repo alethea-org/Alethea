@@ -297,6 +297,81 @@ defmodule Alethea.Telegram.PacerTest do
     end
   end
 
+  describe "acquire/1 — finite timeout (F-10)" do
+    # F-10 regression guard. The original `acquire/1` used
+    # `GenServer.call(__MODULE__, {:acquire, ...}, :infinity)`. With
+    # the single-GS design and the wait-loop inside `handle_call`,
+    # an empty per-chat bucket blocks ALL other chats for the
+    # refill period (1 s at 1 Hz). The fix changes the call timeout
+    # to a finite 30 s and returns `{:error, :pacer_timeout}` on
+    # exhaustion. Callers can decide to retry or escalate.
+    #
+    # We exercise the timeout path by configuring a very small
+    # timeout (1 ms) and asserting the call returns
+    # `{:error, :pacer_timeout}` instead of hanging. The 1 ms
+    # timeout will fire well before any refill can complete.
+    test "returns {:error, :pacer_timeout} when the call exceeds the timeout" do
+      # Drain the per-chat bucket for chat-F10 so the next acquire
+      # for chat-F10 will block on the per-chat refill (~1 s at
+      # 1 Hz). The 1 ms call timeout fires well before that.
+      assert :ok = Pacer.acquire("chat-F10")
+
+      # Override the call timeout to 1 ms via Application config.
+      # The Pacer reads `Application.get_env(:alethea, Pacer, [...])`
+      # for the call timeout the same way it reads the rate knobs.
+      original_timeout =
+        :alethea
+        |> Application.get_env(Pacer, [])
+        |> Keyword.get(:call_timeout)
+
+      Application.put_env(
+        :alethea,
+        Pacer,
+        Keyword.put(
+          Application.get_env(:alethea, Pacer, []),
+          :call_timeout,
+          1
+        )
+      )
+
+      try do
+        # The second acquire for the same chat will block on
+        # per-chat refill. With a 1 ms call timeout, the call
+        # returns :pacer_timeout.
+        result = Pacer.acquire("chat-F10")
+        assert {:error, :pacer_timeout} = result
+      after
+        env = Application.get_env(:alethea, Pacer, [])
+
+        Application.put_env(
+          :alethea,
+          Pacer,
+          if(original_timeout,
+            do: Keyword.put(env, :call_timeout, original_timeout),
+            else: Keyword.delete(env, :call_timeout)
+          )
+        )
+      end
+    end
+
+    test "the default call timeout is 30_000 ms" do
+      # F-10 contract: the call timeout is 30 s by default (long
+      # enough to survive a per-chat refill at the production 1 Hz
+      # rate, short enough that a stuck Pacer does not hang every
+      # outbound Telegram call forever).
+      #
+      # We assert the contract by reading the timeout from the
+      # module attribute. This is a structural assertion that
+      # the production default is not `:infinity` (which would
+      # deadlock every consumer in the event of a stuck Pacer).
+      timeout = Pacer.call_timeout()
+
+      assert is_integer(timeout)
+      assert timeout == 30_000
+      refute timeout == :infinity
+    end
+  end
+
   ## Helpers
 
   defp monotonic_ms do
