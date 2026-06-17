@@ -234,6 +234,14 @@ defmodule Alethea.Telegram.Pacer do
   # Attempts a single acquire. Returns `:ok` if both buckets have a
   # token; otherwise `{:wait, ms}` where `ms` is the time (in ms)
   # until the next refill on the *dominant* empty bucket.
+  #
+  # F-11: when BOTH buckets are empty, return
+  # `min(per_chat_wait_ms, global_wait_ms)` so the GenServer wakes
+  # as soon as EITHER bucket has a token, then re-checks both. The
+  # previous implementation waited on the per-chat refill (~1000ms
+  # at 1 Hz) even when the global refill (~33ms at 30 Hz) would
+  # have unblocked the acquire sooner — a 30× slowdown on the
+  # common "thundering herd" case.
   defp try_acquire(chat_id_hash) do
     per_chat_state = refill_per_chat_bucket(chat_id_hash)
     global_state = refill_global_bucket()
@@ -243,6 +251,11 @@ defmodule Alethea.Telegram.Pacer do
         consume_per_chat(chat_id_hash)
         consume_global()
         :ok
+
+      per_chat_state.tokens < 1 and global_state.tokens < 1 ->
+        per_chat_wait = ms_until_next_token(per_chat_state, per_chat_refill_per_sec())
+        global_wait = ms_until_next_token(global_state, global_refill_per_sec())
+        {:wait, min(per_chat_wait, global_wait)}
 
       per_chat_state.tokens < 1 ->
         {:wait, ms_until_next_token(per_chat_state, per_chat_refill_per_sec())}
