@@ -68,6 +68,72 @@ defmodule Alethea.Telegram.PacerTest do
       assert :ets.info(:telegram_pacer_per_chat) != :undefined
       assert :ets.info(:telegram_pacer_global) != :undefined
     end
+
+    test "ETS tables are :protected (writes go through the GenServer only) (F-12)" do
+      # F-12 regression guard. The previous `:public` access meant
+      # any process could write to the bucket tables, contradicting
+      # the moduledoc claim that "writes go through the GenServer
+      # only". `:protected` access allows reads from any process
+      # but writes only from the table owner (the GenServer).
+      # Foreign writes must be rejected.
+      for table <- [:telegram_pacer_per_chat, :telegram_pacer_global] do
+        info = :ets.info(table, :protection)
+        assert info == :protected,
+               "expected ETS table #{inspect(table)} to be :protected, got #{inspect(info)}"
+      end
+
+      # A foreign process MUST NOT be able to write. We assert the
+      # write raises ArgumentError (ETS rejects :protected writes
+      # from non-owner processes).
+      test_pid = self()
+
+      foreign_pid =
+        spawn(fn ->
+          send(test_pid, {:ready, self()})
+
+          receive do
+            :go_ahead ->
+              # Attempt a foreign write. `:protected` tables reject
+              # writes from non-owner processes with `ArgumentError`.
+              :ets.insert(:telegram_pacer_per_chat, {"foreign-write", 999, 0})
+          end
+        end)
+
+      assert_receive {:ready, ^foreign_pid}, 1_000
+
+      ref = Process.monitor(foreign_pid)
+      send(foreign_pid, :go_ahead)
+      assert_receive {:DOWN, ^ref, :process, ^foreign_pid, reason}, 1_000
+
+      assert match?({:badarg, _stack}, reason),
+             "expected foreign write to fail with :badarg, got #{inspect(reason)}"
+    end
+
+    test "Pacer.inspect_per_chat/0 and Pacer.inspect_global/0 are GenServer-mediated read accessors (F-12)" do
+      # F-12 accessor. The moduledoc claims "writes go through the
+      # GenServer only" and that the buckets can be inspected by
+      # ops dashboards. With :protected ETS, foreign processes cannot
+      # read raw rows either (they CAN read the table directly via
+      # :ets.lookup/2, but the canonical accessor goes through the
+      # GenServer for consistency with the redaction rules in
+      # format_status/2). The accessor returns a serializable
+      # snapshot.
+      :ok = Pacer.acquire("chat-inspect")
+
+      snapshot = Pacer.inspect_per_chat()
+      assert is_map(snapshot)
+      assert Map.has_key?(snapshot, "chat-inspect")
+
+      entry = Map.get(snapshot, "chat-inspect")
+      assert is_map(entry)
+      assert Map.has_key?(entry, :tokens)
+      assert Map.has_key?(entry, :last_refill_ms)
+
+      global_snapshot = Pacer.inspect_global()
+      assert is_map(global_snapshot)
+      assert Map.has_key?(global_snapshot, :tokens)
+      assert Map.has_key?(global_snapshot, :last_refill_ms)
+    end
   end
 
   describe "start_link/1 — config validation (F-09)" do

@@ -24,9 +24,14 @@ defmodule Alethea.Telegram.Pacer do
   stale refill state. The GenServer serialises the acquire path so
   the two buckets stay consistent under concurrent Telegram traffic.
 
-  The ETS tables are `:public` and `:named_table` so the buckets can
-  be inspected (read-only) by future ops dashboards without going
-  through the GenServer. Writes go through the GenServer only.
+  The ETS tables are `:protected` and `:named_table`. `:protected`
+  access means reads are allowed from any process, but writes are
+  allowed ONLY from the table owner (the GenServer). This enforces
+  the moduledoc claim that "writes go through the GenServer only" —
+  a foreign process cannot silently corrupt the bucket state. The
+  `Pacer.inspect_per_chat/0` and `Pacer.inspect_global/0` accessors
+  are the canonical read path for ops dashboards; they go through
+  the GenServer for consistency with the redaction rules.
 
   ## Why a `Process.sleep/1` inside `handle_call`
 
@@ -135,6 +140,27 @@ defmodule Alethea.Telegram.Pacer do
     |> Keyword.get(:call_timeout, @default_call_timeout)
   end
 
+  @doc """
+  Returns a serializable snapshot of the per-chat bucket table
+  (F-12 accessor). Goes through the GenServer for consistency with
+  the redaction rules in `format_status/2`. The map is keyed by
+  `chat_id_hash`; each value is `%{tokens: float, last_refill_ms: integer}`.
+  """
+  @spec inspect_per_chat() :: %{optional(String.t()) => %{tokens: float(), last_refill_ms: integer()}}
+  def inspect_per_chat do
+    GenServer.call(__MODULE__, :inspect_per_chat)
+  end
+
+  @doc """
+  Returns a serializable snapshot of the global bucket table
+  (F-12 accessor). Goes through the GenServer for consistency with
+  the redaction rules in `format_status/2`.
+  """
+  @spec inspect_global() :: %{tokens: float(), last_refill_ms: integer()}
+  def inspect_global do
+    GenServer.call(__MODULE__, :inspect_global)
+  end
+
   ## GenServer callbacks
 
   @impl true
@@ -174,6 +200,30 @@ defmodule Alethea.Telegram.Pacer do
     end
   end
 
+  # F-12: the GenServer is the table owner, so the inspector reads
+  # are done inside `handle_call`. The snapshot is a plain map
+  # (serializable for ops dashboards).
+  def handle_call(:inspect_per_chat, _from, state) do
+    rows = :ets.tab2list(@table_per_chat)
+
+    snapshot =
+      Map.new(rows, fn {key, tokens, last_refill_ms} ->
+        {key, %{tokens: tokens, last_refill_ms: last_refill_ms}}
+      end)
+
+    {:reply, snapshot, state}
+  end
+
+  def handle_call(:inspect_global, _from, state) do
+    case :ets.lookup(@table_global, :singleton) do
+      [] ->
+        {:reply, %{tokens: 0, last_refill_ms: 0}, state}
+
+      [{:singleton, tokens, last_refill_ms}] ->
+        {:reply, %{tokens: tokens, last_refill_ms: last_refill_ms}, state}
+    end
+  end
+
   ## Private
 
   defp create_table(name) do
@@ -181,9 +231,8 @@ defmodule Alethea.Telegram.Pacer do
       :ets.new(name, [
         :set,
         :named_table,
-        :public,
-        {:read_concurrency, true},
-        {:write_concurrency, true}
+        :protected,
+        {:read_concurrency, true}
       ])
     end
 
