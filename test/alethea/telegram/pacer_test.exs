@@ -109,6 +109,27 @@ defmodule Alethea.Telegram.PacerTest do
              "expected foreign write to fail with :badarg, got #{inspect(reason)}"
     end
 
+    test "ETS tables are :set (single-writer, no write_concurrency) (F-13)" do
+      # F-13 structural assertion. The Pacer is a single-GS design
+      # — only the GenServer process writes to the bucket tables.
+      # The :write_concurrency option is a NOP for a single-writer
+      # table and adds a small amount of internal overhead (the
+      # table is split into N sub-tables for concurrent writers).
+      # The previous implementation enabled :write_concurrency
+      # out of habit, contradicting the single-writer invariant.
+      #
+      # We assert: the :write_concurrency option is NOT in the
+      # table's options list. :read_concurrency is still allowed
+      # (many processes can :ets.lookup/2 the table for the
+      # inspect accessor).
+      for table <- [:telegram_pacer_per_chat, :telegram_pacer_global] do
+        options = :ets.info(table)
+
+        refute :write_concurrency in options,
+               "expected ETS table #{inspect(table)} to NOT have :write_concurrency enabled, got options: #{inspect(options)}"
+      end
+    end
+
     test "Pacer.inspect_per_chat/0 and Pacer.inspect_global/0 are GenServer-mediated read accessors (F-12)" do
       # F-12 accessor. The moduledoc claims "writes go through the
       # GenServer only" and that the buckets can be inspected by
