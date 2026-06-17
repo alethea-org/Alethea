@@ -32,7 +32,8 @@ pepper del chat_id — la decisión del pepper NO debe afectar el contenido de l
 
 1. El pepper vive en **un solo lugar**: la variable de entorno `TELEGRAM_CHAT_ID_PEPPER`.
    Nunca se persiste a la base de datos, nunca se loguea, nunca se incluye en ningún
-   dump de configuración.
+   dump de configuración. Para la foundation; el modelo per-psicólogo del Vault es un
+   cambio futuro (ver `design.md` §2 Decision 1).
 2. El pepper **no tiene byte de versión**. Hay exactamente un pepper activo a la vez.
 3. La rotación es una **acción manual del operador**: deploy con un nuevo
    `TELEGRAM_CHAT_ID_PEPPER` y ejecución de un Mix task
