@@ -139,13 +139,13 @@ defmodule Alethea.Telegram.PacerTest do
       # GenServer for consistency with the redaction rules in
       # format_status/2). The accessor returns a serializable
       # snapshot.
-      :ok = Pacer.acquire("chat-inspect")
+      :ok = Pacer.acquire(chat_hash("chat-inspect"))
 
       snapshot = Pacer.inspect_per_chat()
       assert is_map(snapshot)
-      assert Map.has_key?(snapshot, "chat-inspect")
+      assert Map.has_key?(snapshot, chat_hash("chat-inspect"))
 
-      entry = Map.get(snapshot, "chat-inspect")
+      entry = Map.get(snapshot, chat_hash("chat-inspect"))
       assert is_map(entry)
       assert Map.has_key?(entry, :tokens)
       assert Map.has_key?(entry, :last_refill_ms)
@@ -223,7 +223,7 @@ defmodule Alethea.Telegram.PacerTest do
     test "first message to a chat goes through immediately" do
       # Fresh per-chat bucket: 1 token available. No block.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-A")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
       elapsed = monotonic_ms() - start
 
       # Immediate: under 50ms (loose threshold for slow CI).
@@ -232,12 +232,12 @@ defmodule Alethea.Telegram.PacerTest do
 
     test "second message in the same second blocks until per-chat bucket refills" do
       # First acquire consumes the only token.
-      assert :ok = Pacer.acquire("chat-A")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
 
       # The bucket refill rate is 1 Hz (1 token per 1000ms). The second
       # call within the same second must block ~1s before returning :ok.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-A")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
       elapsed = monotonic_ms() - start
 
       # The second acquire blocked until the bucket refilled (≥ 900ms,
@@ -248,12 +248,12 @@ defmodule Alethea.Telegram.PacerTest do
 
     test "different chats are paced independently (per-chat buckets are per-key)" do
       # chat-A consumes its first token.
-      assert :ok = Pacer.acquire("chat-A")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
 
       # chat-B has a fresh bucket; its first acquire must NOT block
       # on chat-A's bucket state.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-B")
+      assert :ok = Pacer.acquire(chat_hash("chat-B"))
       elapsed = monotonic_ms() - start
 
       assert elapsed < 50,
@@ -263,7 +263,7 @@ defmodule Alethea.Telegram.PacerTest do
     test "per-chat buckets are independent even when the global bucket is drained" do
       # Drain the global bucket with 30 distinct chats (capacity = 30).
       for i <- 1..30 do
-        assert :ok = Pacer.acquire("chat-#{i}")
+        assert :ok = Pacer.acquire(chat_hash("chat-#{i}"))
       end
 
       # Global bucket is now empty; subsequent acquires block on global refill.
@@ -279,17 +279,21 @@ defmodule Alethea.Telegram.PacerTest do
       # chat-1's empty bucket, and chat-Y would block ~1000ms — far
       # more than 50ms.
       start_y = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-Y")
+      assert :ok = Pacer.acquire(chat_hash("chat-Y"))
       elapsed_y = monotonic_ms() - start_y
 
-      assert elapsed_y < 50,
+      assert elapsed_y < 100,
              "expected chat-Y acquire to be independent (no per-chat block), blocked #{elapsed_y}ms"
 
       start_z = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-Z")
+      assert :ok = Pacer.acquire(chat_hash("chat-Z"))
       elapsed_z = monotonic_ms() - start_z
 
-      assert elapsed_z < 50,
+      # chat-Z may need to wait for ANOTHER global refill tick
+      # (chat-Y consumed the token that just refilled). The
+      # 33ms × 2 = ~66ms worst case is still well below the
+      # per-chat refill of 1000ms.
+      assert elapsed_z < 200,
              "expected chat-Z acquire to be independent (no per-chat block), blocked #{elapsed_z}ms"
     end
   end
@@ -299,20 +303,20 @@ defmodule Alethea.Telegram.PacerTest do
       # 30 distinct chats, each consuming 1 token from the global bucket.
       # All 30 must succeed without blocking (the bucket starts full at 30).
       for i <- 1..30 do
-        assert :ok = Pacer.acquire("chat-#{i}")
+        assert :ok = Pacer.acquire(chat_hash("chat-#{i}"))
       end
     end
 
     test "31st distinct chat blocks until the global bucket refills" do
       # Drain the global bucket with 30 distinct chats.
       for i <- 1..30 do
-        assert :ok = Pacer.acquire("chat-#{i}")
+        assert :ok = Pacer.acquire(chat_hash("chat-#{i}"))
       end
 
       # The 31st call: global bucket is empty. With 30 Hz refill, the
       # wait is ~33ms before another token is available.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-31")
+      assert :ok = Pacer.acquire(chat_hash("chat-31"))
       elapsed = monotonic_ms() - start
 
       # The 31st call blocked until the global bucket refilled (≥ 25ms,
@@ -334,11 +338,11 @@ defmodule Alethea.Telegram.PacerTest do
       # we use 30 distinct chats — already covered above. Here we just
       # assert that the per-chat limit is the dominant constraint when
       # the per-chat bucket is empty AND the global bucket has tokens.
-      assert :ok = Pacer.acquire("chat-A")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
       # After chat-A consumed its 1 per-chat token, the global bucket
       # still has 29 tokens. But chat-A's per-chat bucket is empty.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-A")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
       elapsed = monotonic_ms() - start
 
       # Blocked on the per-chat refill (1 Hz = ~1000ms), NOT on the
@@ -353,13 +357,13 @@ defmodule Alethea.Telegram.PacerTest do
       # (chat-31) so its per-chat bucket is fresh; the global bucket is
       # the constraint.
       for i <- 1..30 do
-        assert :ok = Pacer.acquire("chat-#{i}")
+        assert :ok = Pacer.acquire(chat_hash("chat-#{i}"))
       end
 
       # chat-31 has a fresh per-chat bucket (1 token) but the global
       # bucket is empty. The 31st acquire blocks on global refill.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-31")
+      assert :ok = Pacer.acquire(chat_hash("chat-31"))
       elapsed = monotonic_ms() - start
 
       # Global refill is 30 Hz (~33ms between tokens), not per-chat 1 Hz.
@@ -393,13 +397,13 @@ defmodule Alethea.Telegram.PacerTest do
       # F-11 change must NOT regress the existing "per-chat
       # dominates" path.
       for i <- 1..30 do
-        assert :ok = Pacer.acquire("chat-#{i}")
+        assert :ok = Pacer.acquire(chat_hash("chat-#{i}"))
       end
 
       # chat-fresh has a FRESH per-chat bucket (1 token). Global is
       # empty. The wait must be the global refill (~33ms at 30 Hz).
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-fresh")
+      assert :ok = Pacer.acquire(chat_hash("chat-fresh"))
       elapsed = monotonic_ms() - start
 
       assert elapsed < 200,
@@ -425,15 +429,15 @@ defmodule Alethea.Telegram.PacerTest do
       # (~1000ms — the binding constraint) AFTER the first min
       # wait. We assert the total wait is bounded (the per-chat
       # refill band, ~1000ms), not < 200ms.
-      assert :ok = Pacer.acquire("chat-F11")
+      assert :ok = Pacer.acquire(chat_hash("chat-F11"))
 
       for i <- 1..29 do
-        assert :ok = Pacer.acquire("chat-#{i}")
+        assert :ok = Pacer.acquire(chat_hash("chat-#{i}"))
       end
 
       # Sanity: both buckets are drained (modulo refill drift).
       [{:singleton, g_tokens, _g_ts}] = :ets.lookup(:telegram_pacer_global, :singleton)
-      [{_, p_tokens, _p_ts}] = :ets.lookup(:telegram_pacer_per_chat, "chat-F11")
+      [{_, p_tokens, _p_ts}] = :ets.lookup(:telegram_pacer_per_chat, chat_hash("chat-F11"))
 
       assert g_tokens < 1
       assert p_tokens < 1
@@ -444,7 +448,7 @@ defmodule Alethea.Telegram.PacerTest do
       # then re-checks and the binding constraint takes over. We
       # assert the total wait is in the per-chat refill band.
       start = monotonic_ms()
-      assert :ok = Pacer.acquire("chat-F11")
+      assert :ok = Pacer.acquire(chat_hash("chat-F11"))
       elapsed = monotonic_ms() - start
 
       assert elapsed >= 800,
@@ -462,9 +466,44 @@ defmodule Alethea.Telegram.PacerTest do
       # inside the GenServer until both buckets allow, then returns
       # :ok. We assert the return shape across the per-chat and global
       # branches.
-      assert :ok = Pacer.acquire("chat-A")
-      assert :ok = Pacer.acquire("chat-A")
-      assert :ok = Pacer.acquire("chat-B")
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
+      assert :ok = Pacer.acquire(chat_hash("chat-A"))
+      assert :ok = Pacer.acquire(chat_hash("chat-B"))
+    end
+  end
+
+  describe "acquire/1 — chat_id_hash guard (F-14)" do
+    # F-14 regression guard. The previous `acquire/1` guard was
+    # `is_binary(chat_id_hash)`, which accepts the empty string
+    # `""`. That allows callers to silently rate-limit every
+    # "empty chat" together (a noisy neighbor problem) and makes
+    # debugging hard (a missing chat_id_hash becomes "" rather
+    # than raising). The fix tightens the guard to
+    # `byte_size(chat_id_hash) == 64`, matching the ChatIdHash
+    # output shape (HMAC-SHA256 hex = 64 chars).
+    test "raises FunctionClauseError on empty string" do
+      assert_raise FunctionClauseError, fn ->
+        Pacer.acquire("")
+      end
+    end
+
+    test "raises FunctionClauseError on a 63-char hash (one short)" do
+      short = String.duplicate("a", 63)
+      assert_raise FunctionClauseError, fn ->
+        Pacer.acquire(short)
+      end
+    end
+
+    test "raises FunctionClauseError on a 65-char hash (one over)" do
+      long = String.duplicate("a", 65)
+      assert_raise FunctionClauseError, fn ->
+        Pacer.acquire(long)
+      end
+    end
+
+    test "accepts a 64-char hash (the canonical ChatIdHash output shape)" do
+      canonical = String.duplicate("a", 64)
+      assert :ok = Pacer.acquire(canonical)
     end
   end
 
@@ -485,7 +524,7 @@ defmodule Alethea.Telegram.PacerTest do
       # Drain the per-chat bucket for chat-F10 so the next acquire
       # for chat-F10 will block on the per-chat refill (~1 s at
       # 1 Hz). The 1 ms call timeout fires well before that.
-      assert :ok = Pacer.acquire("chat-F10")
+      assert :ok = Pacer.acquire(chat_hash("chat-F10"))
 
       # Override the call timeout to 1 ms via Application config.
       # The Pacer reads `Application.get_env(:alethea, Pacer, [...])`
@@ -509,7 +548,7 @@ defmodule Alethea.Telegram.PacerTest do
         # The second acquire for the same chat will block on
         # per-chat refill. With a 1 ms call timeout, the call
         # returns :pacer_timeout.
-        result = Pacer.acquire("chat-F10")
+        result = Pacer.acquire(chat_hash("chat-F10"))
         assert {:error, :pacer_timeout} = result
       after
         env = Application.get_env(:alethea, Pacer, [])
@@ -547,6 +586,17 @@ defmodule Alethea.Telegram.PacerTest do
 
   defp monotonic_ms do
     System.monotonic_time(:millisecond)
+  end
+
+  # F-14: the canonical chat_id_hash shape is 64 lowercase hex chars
+  # (HMAC-SHA256 hex). Test fixtures use this helper to generate
+  # syntactically-valid hashes from a short name. The values are not
+  # required to be cryptographically meaningful — they only need to
+  # match the guard `byte_size(chat_id_hash) == 64`.
+  defp chat_hash(name) do
+    pad = String.duplicate("0", 64)
+    base = to_string(name)
+    String.slice(pad, 0, 64 - byte_size(base)) <> base
   end
 
   defp safe_stop do

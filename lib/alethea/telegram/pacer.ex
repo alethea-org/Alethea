@@ -113,7 +113,15 @@ defmodule Alethea.Telegram.Pacer do
   by the call timeout, not by `:infinity`.
   """
   @spec acquire(String.t()) :: :ok | {:error, :pacer_timeout}
-  def acquire(chat_id_hash) when is_binary(chat_id_hash) do
+  def acquire(chat_id_hash) when is_binary(chat_id_hash) and byte_size(chat_id_hash) == 64 do
+    # F-14: the guard requires `byte_size(chat_id_hash) == 64`,
+    # matching the ChatIdHash output shape (HMAC-SHA256 hex = 64
+    # chars). The previous `is_binary(chat_id_hash)` guard accepted
+    # the empty string `""`, which allowed callers to silently
+    # rate-limit every "empty chat" together (a noisy neighbor
+    # problem). A missing or malformed chat_id_hash now raises
+    # `FunctionClauseError` instead of silently consuming tokens.
+    #
     # F-10: `GenServer.call/3` raises `:exit` on timeout (not an
     # exception), so `try/rescue` does not catch it. We must use
     # `try/catch :exit, _` to convert the timeout into a clean
