@@ -281,6 +281,45 @@ defmodule Alethea.Telegram.BotTokenTest do
     end
   end
 
+  describe "format_status/1 — redaction of plaintext in introspection output (F-04)" do
+    test ":sys.get_status/1 redacts :bot_token and :secret_token (plaintext is not in the human-readable status)" do
+      # The moduledoc claims the plaintext is not in the human-readable
+      # status. `:sys.get_status/1` is the introspection path that
+      # actually invokes `format_status/2`; the redaction lives there.
+      # (`:sys.get_state/1` does NOT route through `format_status/2` in
+      # OTP — it returns the raw state struct, which is why the
+      # moduledoc warns "the process pid is secret-bearing" and
+      # "raw state access still requires an explicit, privileged call".)
+      #
+      # The contract: the bot_token and secret_token MUST appear as
+      # `"[REDACTED]"` in the human-readable status; the bot_username
+      # (a non-secret public handle) is allowed through.
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "visible-in-introspection",
+          secret_token: "also-visible-in-introspection",
+          bot_username: "public_username"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      # `:sys.get_status/1` invokes `format_status/2` internally.
+      # The redacted status must NOT contain the plaintext.
+      status = :sys.get_status(pid)
+      flat = inspect(status)
+
+      refute flat =~ "visible-in-introspection"
+      refute flat =~ "also-visible-in-introspection"
+      # The redacted form is present (defence in depth — also confirms
+      # we are actually invoking the format_status path, not bypassing it).
+      assert flat =~ "[REDACTED]"
+      # The non-secret handle is allowed through.
+      assert flat =~ "public_username"
+    end
+  end
+
   describe "init/1 — whitelist reason tag (W-2)" do
     test "reason_tag/1 is a whitelist match — never inspect/1 — so a non-trivial :unexpected payload never reaches the log" do
       # The :not_found reason: the most common case (row deleted). The
