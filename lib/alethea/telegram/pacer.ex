@@ -154,7 +154,9 @@ defmodule Alethea.Telegram.Pacer do
   the redaction rules in `format_status/2`. The map is keyed by
   `chat_id_hash`; each value is `%{tokens: float, last_refill_ms: integer}`.
   """
-  @spec inspect_per_chat() :: %{optional(String.t()) => %{tokens: float(), last_refill_ms: integer()}}
+  @spec inspect_per_chat() :: %{
+          optional(String.t()) => %{tokens: float(), last_refill_ms: integer()}
+        }
   def inspect_per_chat do
     GenServer.call(__MODULE__, :inspect_per_chat)
   end
@@ -191,8 +193,8 @@ defmodule Alethea.Telegram.Pacer do
     {:ok, %{}}
   end
 
-  defp validate_positive!(name, value) when is_integer(value) and value > 0, do: :ok
-  defp validate_positive!(name, value) when is_float(value) and value > 0, do: :ok
+  defp validate_positive!(_name, value) when is_integer(value) and value > 0, do: :ok
+  defp validate_positive!(_name, value) when is_float(value) and value > 0, do: :ok
 
   defp validate_positive!(name, value) do
     raise ArgumentError,

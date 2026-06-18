@@ -78,6 +78,7 @@ defmodule Alethea.Telegram.PacerTest do
       # Foreign writes must be rejected.
       for table <- [:telegram_pacer_per_chat, :telegram_pacer_global] do
         info = :ets.info(table, :protection)
+
         assert info == :protected,
                "expected ETS table #{inspect(table)} to be :protected, got #{inspect(info)}"
       end
@@ -489,6 +490,7 @@ defmodule Alethea.Telegram.PacerTest do
 
     test "raises FunctionClauseError on a 63-char hash (one short)" do
       short = String.duplicate("a", 63)
+
       assert_raise FunctionClauseError, fn ->
         Pacer.acquire(short)
       end
@@ -496,6 +498,7 @@ defmodule Alethea.Telegram.PacerTest do
 
     test "raises FunctionClauseError on a 65-char hash (one over)" do
       long = String.duplicate("a", 65)
+
       assert_raise FunctionClauseError, fn ->
         Pacer.acquire(long)
       end
