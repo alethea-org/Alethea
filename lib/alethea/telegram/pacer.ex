@@ -24,9 +24,14 @@ defmodule Alethea.Telegram.Pacer do
   stale refill state. The GenServer serialises the acquire path so
   the two buckets stay consistent under concurrent Telegram traffic.
 
-  The ETS tables are `:public` and `:named_table` so the buckets can
-  be inspected (read-only) by future ops dashboards without going
-  through the GenServer. Writes go through the GenServer only.
+  The ETS tables are `:protected` and `:named_table`. `:protected`
+  access means reads are allowed from any process, but writes are
+  allowed ONLY from the table owner (the GenServer). This enforces
+  the moduledoc claim that "writes go through the GenServer only" —
+  a foreign process cannot silently corrupt the bucket state. The
+  `Pacer.inspect_per_chat/0` and `Pacer.inspect_global/0` accessors
+  are the canonical read path for ops dashboards; they go through
+  the GenServer for consistency with the redaction rules.
 
   ## Why a `Process.sleep/1` inside `handle_call`
 
@@ -65,6 +70,17 @@ defmodule Alethea.Telegram.Pacer do
   @default_global_capacity 30
   @default_global_refill_per_sec 30.0
 
+  # F-10: finite call timeout. The previous `:infinity` combined with
+  # the single-GS design and the wait-loop inside `handle_call` meant
+  # a single chat's empty bucket could block ALL other chats for the
+  # refill period (1 s at 1 Hz per-chat), and a stuck Pacer would
+  # deadlock every consumer forever. 30 s is the new default — long
+  # enough to survive a per-chat refill at the production 1 Hz rate,
+  # short enough that a stuck Pacer does not hang every outbound
+  # Telegram call. Callers receive `{:error, :pacer_timeout}` and can
+  # decide to retry or escalate.
+  @default_call_timeout 30_000
+
   ## Public API
 
   @doc """
@@ -83,26 +99,139 @@ defmodule Alethea.Telegram.Pacer do
   The per-chat limit dominates over the global limit: if the per-chat
   bucket is empty, the call blocks at the per-chat refill rate,
   regardless of how many tokens the global bucket has.
+
+  ## Timeout (F-10)
+
+  The call uses a **finite** timeout (30 s by default; configurable
+  via `:call_timeout` in `Application.get_env(:alethea, Pacer, [...])`).
+  On timeout exhaustion the call returns `{:error, :pacer_timeout}`
+  rather than blocking forever. Callers can decide to retry or
+  escalate. A stuck Pacer does not deadlock every consumer.
+
+  Cross-chat blocking is still possible within a single in-flight
+  call (the GenServer is single-threaded), but the wait is bounded
+  by the call timeout, not by `:infinity`.
   """
-  @spec acquire(String.t()) :: :ok
-  def acquire(chat_id_hash) when is_binary(chat_id_hash) do
-    GenServer.call(__MODULE__, {:acquire, chat_id_hash}, :infinity)
+  @spec acquire(String.t()) :: :ok | {:error, :pacer_timeout}
+  def acquire(chat_id_hash) when is_binary(chat_id_hash) and byte_size(chat_id_hash) == 64 do
+    # F-14: the guard requires `byte_size(chat_id_hash) == 64`,
+    # matching the ChatIdHash output shape (HMAC-SHA256 hex = 64
+    # chars). The previous `is_binary(chat_id_hash)` guard accepted
+    # the empty string `""`, which allowed callers to silently
+    # rate-limit every "empty chat" together (a noisy neighbor
+    # problem). A missing or malformed chat_id_hash now raises
+    # `FunctionClauseError` instead of silently consuming tokens.
+    #
+    # F-10: `GenServer.call/3` raises `:exit` on timeout (not an
+    # exception), so `try/rescue` does not catch it. We must use
+    # `try/catch :exit, _` to convert the timeout into a clean
+    # `{:error, :pacer_timeout}` return value.
+    try do
+      GenServer.call(__MODULE__, {:acquire, chat_id_hash}, call_timeout())
+    catch
+      :exit, {:timeout, _} -> {:error, :pacer_timeout}
+    end
+  end
+
+  @doc """
+  Returns the configured call timeout in milliseconds (F-10).
+
+  Reads from `Application.get_env(:alethea, Pacer, [...])` with a
+  30_000 ms default. Exposed as a public function so tests can assert
+  the production default is not `:infinity` (a structural guarantee
+  that the Pacer cannot deadlock every consumer).
+  """
+  @spec call_timeout() :: pos_integer()
+  def call_timeout do
+    :alethea
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:call_timeout, @default_call_timeout)
+  end
+
+  @doc """
+  Returns a serializable snapshot of the per-chat bucket table
+  (F-12 accessor). Goes through the GenServer for consistency with
+  the redaction rules in `format_status/2`. The map is keyed by
+  `chat_id_hash`; each value is `%{tokens: float, last_refill_ms: integer}`.
+  """
+  @spec inspect_per_chat() :: %{
+          optional(String.t()) => %{tokens: float(), last_refill_ms: integer()}
+        }
+  def inspect_per_chat do
+    GenServer.call(__MODULE__, :inspect_per_chat)
+  end
+
+  @doc """
+  Returns a serializable snapshot of the global bucket table
+  (F-12 accessor). Goes through the GenServer for consistency with
+  the redaction rules in `format_status/2`.
+  """
+  @spec inspect_global() :: %{tokens: float(), last_refill_ms: integer()}
+  def inspect_global do
+    GenServer.call(__MODULE__, :inspect_global)
   end
 
   ## GenServer callbacks
 
   @impl true
   def init(_opts) do
+    # F-09: validate all four config knobs at boot. A 0 or negative
+    # value would brick the Pacer — `do_acquire/1` enters an infinite
+    # loop on the `{:wait, _non_positive}` branch because
+    # `ms_until_next_token/2` returns 1 ms forever. Mirrors the
+    # `BotToken.init/1` fail-loud pattern: a misconfiguration must
+    # crash the supervisor, not silently throttle every Telegram
+    # message to "wait 1 ms, then check again".
+    validate_positive!(:per_chat_capacity, per_chat_capacity())
+    validate_positive!(:per_chat_refill_per_sec, per_chat_refill_per_sec())
+    validate_positive!(:global_capacity, global_capacity())
+    validate_positive!(:global_refill_per_sec, global_refill_per_sec())
+
     create_table(@table_per_chat)
     create_table(@table_global)
 
     {:ok, %{}}
   end
 
+  defp validate_positive!(_name, value) when is_integer(value) and value > 0, do: :ok
+  defp validate_positive!(_name, value) when is_float(value) and value > 0, do: :ok
+
+  defp validate_positive!(name, value) do
+    raise ArgumentError,
+          "Alethea.Telegram.Pacer: #{name} must be > 0 (got #{inspect(value)}). " <>
+            "A 0 or negative value bricks the Pacer (infinite-loop in do_acquire/1)."
+  end
+
   @impl true
   def handle_call({:acquire, chat_id_hash}, _from, state) do
-    do_acquire(chat_id_hash)
-    {:reply, :ok, state}
+    case do_acquire(chat_id_hash) do
+      :acquired -> {:reply, :ok, state}
+      :timed_out -> {:reply, {:error, :pacer_timeout}, state}
+    end
+  end
+
+  # F-12: the GenServer is the table owner, so the inspector reads
+  # are done inside `handle_call`. The snapshot is a plain map
+  # (serializable for ops dashboards).
+  def handle_call(:inspect_per_chat, _from, state) do
+    rows = :ets.tab2list(@table_per_chat)
+
+    snapshot =
+      Map.new(rows, fn {key, tokens, last_refill_ms} ->
+        {key, %{tokens: tokens, last_refill_ms: last_refill_ms}}
+      end)
+
+    {:reply, snapshot, state}
+  end
+
+  def handle_call(:inspect_global, _from, state) do
+    case :ets.lookup(@table_global, :singleton) do
+      [] ->
+        {:reply, %{tokens: 0, last_refill_ms: 0}, state}
+
+      [{:singleton, tokens, last_refill_ms}] ->
+        {:reply, %{tokens: tokens, last_refill_ms: last_refill_ms}, state}
+    end
   end
 
   ## Private
@@ -112,9 +241,8 @@ defmodule Alethea.Telegram.Pacer do
       :ets.new(name, [
         :set,
         :named_table,
-        :public,
-        {:read_concurrency, true},
-        {:write_concurrency, true}
+        :protected,
+        {:read_concurrency, true}
       ])
     end
 
@@ -140,13 +268,15 @@ defmodule Alethea.Telegram.Pacer do
 
   # The acquire loop. Both buckets must have at least one token; if
   # either is empty, we sleep until the next refill and try again.
-  # The loop is intentionally bounded by the GenServer.call timeout
-  # (`:infinity` from `acquire/1`), so a sustained overload waits
-  # forever rather than dropping the message.
+  # The loop is bounded by the GenServer.call timeout (30 s by
+  # default; see `call_timeout/0`); on timeout exhaustion the call
+  # returns `:timed_out` to the caller, who receives
+  # `{:error, :pacer_timeout}` from `acquire/1`. A sustained overload
+  # does NOT block the caller forever.
   defp do_acquire(chat_id_hash) do
     case try_acquire(chat_id_hash) do
       :ok ->
-        :ok
+        :acquired
 
       {:wait, wait_ms} when wait_ms > 0 ->
         Process.sleep(wait_ms)
@@ -163,6 +293,14 @@ defmodule Alethea.Telegram.Pacer do
   # Attempts a single acquire. Returns `:ok` if both buckets have a
   # token; otherwise `{:wait, ms}` where `ms` is the time (in ms)
   # until the next refill on the *dominant* empty bucket.
+  #
+  # F-11: when BOTH buckets are empty, return
+  # `min(per_chat_wait_ms, global_wait_ms)` so the GenServer wakes
+  # as soon as EITHER bucket has a token, then re-checks both. The
+  # previous implementation waited on the per-chat refill (~1000ms
+  # at 1 Hz) even when the global refill (~33ms at 30 Hz) would
+  # have unblocked the acquire sooner — a 30× slowdown on the
+  # common "thundering herd" case.
   defp try_acquire(chat_id_hash) do
     per_chat_state = refill_per_chat_bucket(chat_id_hash)
     global_state = refill_global_bucket()
@@ -172,6 +310,11 @@ defmodule Alethea.Telegram.Pacer do
         consume_per_chat(chat_id_hash)
         consume_global()
         :ok
+
+      per_chat_state.tokens < 1 and global_state.tokens < 1 ->
+        per_chat_wait = ms_until_next_token(per_chat_state, per_chat_refill_per_sec())
+        global_wait = ms_until_next_token(global_state, global_refill_per_sec())
+        {:wait, min(per_chat_wait, global_wait)}
 
       per_chat_state.tokens < 1 ->
         {:wait, ms_until_next_token(per_chat_state, per_chat_refill_per_sec())}

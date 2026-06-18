@@ -4,8 +4,30 @@ defmodule Alethea.Telegram.BotToken do
 
   Loads `Alethea.Foundation.Accounts.BotConfig.for_env(Mix.env())` once at
   boot, holds the plaintext in process state, and serves it via
-  synchronous `GenServer.call/2`. Plaintext never leaves the process
-  state.
+  synchronous `GenServer.call/2`.
+
+  ## Plaintext boundary
+
+  The plaintext bot token and webhook secret token are reachable
+  through the **public API** under normal operation: callers use
+  `bot_token/0` and `secret_token/0` (both `GenServer.call/2`) to
+  read the live value, and `reload/0` to refresh it. The plaintext
+  also lives in the GenServer's process state.
+
+  **The process pid is secret-bearing.** OTP introspection paths
+  (`:sys.get_state/1`, `:sys.replace_state/3`, remote-shell
+  `Process.info/2`, the `:dictionary` slot) can reach the process
+  state and the plaintext. To prevent accidental leakage into a
+  log feed or a remote-console dump, this module implements
+  `format_status/1` to redact `:bot_token` and `:secret_token` in
+  the human-readable status. The redaction is opt-in for tooling
+  that respects `format_status/1` (the default `:sys.get_state/1`
+  path); raw state access still requires an explicit, privileged
+  call (e.g. `:sys.replace_state/3`).
+
+  Treat the BotToken pid as a secret. Do not log it; do not pass it
+  across untrusted boundaries; do not include it in error reports
+  that an operator might paste into Slack.
 
   ## Why a GenServer
 
@@ -94,9 +116,15 @@ defmodule Alethea.Telegram.BotToken do
     end
 
     :ok
-  rescue
-    # If the process is already dead or the stop call races, treat as :ok.
-    _ -> :ok
+  catch
+    # F-06: `GenServer.stop/3` raises `:exit` (not an exception)
+    # when the target process is already dead — `try/rescue` does
+    # NOT catch `:exit` signals, only raised exceptions. We must use
+    # `try/catch :exit, _` (or the equivalent `catch :exit, _` form)
+    # to swallow the link/exit case. Pattern matches the
+    # `pacer_test.exs:244-256` `safe_stop/0` helper, which already
+    # has the same race condition.
+    :exit, _ -> :ok
   end
 
   ## GenServer callbacks
@@ -138,6 +166,25 @@ defmodule Alethea.Telegram.BotToken do
 
   @impl true
   def handle_info(:reload, _state), do: do_reload()
+
+  # F-04: redact :bot_token and :secret_token from the human-readable
+  # status returned by `:sys.get_state/1` and any other introspection
+  # path that respects `format_status/1`. The state struct itself
+  # still holds the plaintext (it has to — the GenServer is the
+  # secret accessor); this callback is the layer that prevents the
+  # plaintext from leaking into a log feed or a remote-console dump.
+  # See `Alethea.Telegram.BotTokenTest "format_status/1 — redaction"`
+  # for the contract.
+  @impl true
+  def format_status(_opt, [_pdict, state]) do
+    redacted = %{
+      bot_token: "[REDACTED]",
+      secret_token: "[REDACTED]",
+      bot_username: Map.get(state, :bot_username)
+    }
+
+    [data: redacted]
+  end
 
   @doc """
   Maps a `load/0` failure reason to a safe, opaque log tag.

@@ -279,6 +279,80 @@ defmodule Alethea.Telegram.BotTokenTest do
       # Should not raise; returns :ok whether or not the process exists.
       assert :ok = BotToken.stop()
     end
+
+    test "stop swallows the :exit signal when the process is already dead (F-06)" do
+      # F-06 regression guard. `GenServer.stop/3` on a dead pid raises
+      # `:exit` (not an exception), so `try/rescue _` does NOT catch
+      # it. The fix switches to `try/catch :exit, _`. This test
+      # documents the contract: calling `stop/0` when the process is
+      # already dead must return :ok and must not crash the caller.
+      Process.flag(:trap_exit, true)
+
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "f6-tok",
+          secret_token: "f6-sec",
+          bot_username: "f6_user"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      # Forcefully kill the GenServer. Because the test process is
+      # linked to the GenServer via `start_link/1`, we trap exits so
+      # the kill signal does not propagate and crash the test pid.
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+
+      # Drain the EXIT message that the link triggered.
+      assert_receive {:EXIT, ^pid, :killed}
+
+      # Now call `stop/0` — the GenServer is dead. The fix uses
+      # `try/catch :exit, _` to swallow the :exit from
+      # `GenServer.stop/3`. A `try/rescue _` would crash here.
+      assert :ok = BotToken.stop()
+    end
+  end
+
+  describe "format_status/1 — redaction of plaintext in introspection output (F-04)" do
+    test ":sys.get_status/1 redacts :bot_token and :secret_token (plaintext is not in the human-readable status)" do
+      # The moduledoc claims the plaintext is not in the human-readable
+      # status. `:sys.get_status/1` is the introspection path that
+      # actually invokes `format_status/2`; the redaction lives there.
+      # (`:sys.get_state/1` does NOT route through `format_status/2` in
+      # OTP — it returns the raw state struct, which is why the
+      # moduledoc warns "the process pid is secret-bearing" and
+      # "raw state access still requires an explicit, privileged call".)
+      #
+      # The contract: the bot_token and secret_token MUST appear as
+      # `"[REDACTED]"` in the human-readable status; the bot_username
+      # (a non-secret public handle) is allowed through.
+      {:ok, _} =
+        BotConfig.upsert(%{
+          env: "test",
+          bot_token: "visible-in-introspection",
+          secret_token: "also-visible-in-introspection",
+          bot_username: "public_username"
+        })
+
+      :ok = start_bot_token!()
+      pid = Process.whereis(BotToken)
+
+      # `:sys.get_status/1` invokes `format_status/2` internally.
+      # The redacted status must NOT contain the plaintext.
+      status = :sys.get_status(pid)
+      flat = inspect(status)
+
+      refute flat =~ "visible-in-introspection"
+      refute flat =~ "also-visible-in-introspection"
+      # The redacted form is present (defence in depth — also confirms
+      # we are actually invoking the format_status path, not bypassing it).
+      assert flat =~ "[REDACTED]"
+      # The non-secret handle is allowed through.
+      assert flat =~ "public_username"
+    end
   end
 
   describe "init/1 — whitelist reason tag (W-2)" do

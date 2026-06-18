@@ -31,6 +31,15 @@ defmodule Alethea.Telegram.ChatIdHash do
   and trivially testable. The lookup is a one-time string; future
   per-psychologist pepper changes are a separate refactor (see ADR-0008
   stub in the change design).
+
+  ### Pepper length minimum (32 bytes)
+
+  `hash/2` requires the pepper to be **at least 32 bytes**. HMAC-SHA256
+  with a 0-byte or short key is cryptographically weak (the security
+  bound collapses to the key length). A `byte_size(pepper) < 32` value
+  raises `ArgumentError` rather than silently producing a weak hash. In
+  production the pepper is a deployment secret and is expected to be
+  generated at ≥ 32 random bytes by the secret manager.
   """
 
   @doc """
@@ -43,15 +52,30 @@ defmodule Alethea.Telegram.ChatIdHash do
 
   ## Examples
 
-      iex> Alethea.Telegram.ChatIdHash.hash("123456789", "pepper-v1")
-      "62b1afd3a86f0e2c8d0a0e1c3f5e9b7a3d2c1e4f5a6b7c8d9e0f1a2b3c4d5e6f7"
+      iex> Alethea.Telegram.ChatIdHash.hash("123456789", "pepper-v1-32-bytes-min-len-padding-pad")
+      "bef615b48f2c547f4d5bd20f44c2d3814c043f80762361ff25c1a8cf88ad1891"
 
-      iex> Alethea.Telegram.ChatIdHash.hash(123_456_789, "pepper-v1")
-      "62b1afd3a86f0e2c8d0a0e1c3f5e9b7a3d2c1e4f5a6b7c8d9e0f1a2b3c4d5e6f7"
+      iex> Alethea.Telegram.ChatIdHash.hash(123_456_789, "pepper-v1-32-bytes-min-len-padding-pad")
+      "bef615b48f2c547f4d5bd20f44c2d3814c043f80762361ff25c1a8cf88ad1891"
   """
   @spec hash(integer() | String.t(), String.t()) :: String.t()
-  def hash(chat_id, pepper) when is_binary(pepper) do
+  def hash(chat_id, pepper)
+      when (is_integer(chat_id) or is_binary(chat_id)) and is_binary(pepper) and
+             byte_size(pepper) >= 32 do
     :crypto.mac(:hmac, :sha256, pepper, to_string(chat_id))
     |> Base.encode16(case: :lower)
+  end
+
+  def hash(_chat_id, pepper) when is_binary(pepper) and byte_size(pepper) < 32 do
+    raise ArgumentError,
+          "Alethea.Telegram.ChatIdHash.hash/2: pepper must be at least 32 bytes " <>
+            "(got #{byte_size(pepper)} bytes). " <>
+            "HMAC-SHA256 with a 0-byte or short key is cryptographically weak."
+  end
+
+  def hash(chat_id, _pepper) do
+    raise ArgumentError,
+          "Alethea.Telegram.ChatIdHash.hash/2: chat_id must be an integer or a string " <>
+            "(got #{inspect(chat_id)})"
   end
 end
