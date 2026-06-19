@@ -70,6 +70,12 @@ config :alethea, :start_bot_token, false
 # doesn't hit a "name already registered" error.
 config :alethea, :start_telegram_pacer, false
 
+# Telegram Client adapter. The `Req` production adapter lands in
+# PR #3a; the Fake is the test/dev no-op that accumulates sends in
+# an ETS table. The outbound worker (PR #3a) reads this config at
+# call-time and dispatches `send_message/2` to the chosen adapter.
+config :alethea, :telegram_client, Alethea.Telegram.Client.Fake
+
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true

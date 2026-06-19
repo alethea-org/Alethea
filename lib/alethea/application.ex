@@ -49,6 +49,19 @@ defmodule Alethea.Application do
       end
 
     children =
+      if Application.get_env(:alethea, :start_telegram_pacer, true) do
+        # The Telegram Client Fake GenServer is started under the
+        # same gate as the Pacer (the Fake is used in :dev for
+        # no-network smoke runs; in :test the Fake is started
+        # per-test via `start_supervised!` to hermetic-ify the
+        # ETS). The production Req adapter (PR #3a) will not need
+        # this supervision — it is a stateless HTTP client.
+        children ++ [Alethea.Telegram.Client.Fake]
+      else
+        children
+      end
+
+    children =
       if Application.get_env(:alethea, :start_ai, true) do
         children ++ [Alethea.AI.RoBERTaWorker, Alethea.AI.ConversationMemory]
       else
