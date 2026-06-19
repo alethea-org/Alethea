@@ -32,10 +32,20 @@ config :phoenix, :json_library, Jason
 
 # Configure Oban
 #
-# `telegram_inbound` ships in TASK-2-3 (PR #2) because the webhook
-# controller enqueues to it. The outbound queues (`telegram_outbound`,
-# `telegram_outbound_crisis`) land in TASK-2-6 alongside the rest of
-# the Oban queue wiring.
+# Telegram queues (PR #2):
+#   - `telegram_inbound` (TASK-2-3) — the webhook controller enqueues
+#     `TelegramMessageWorker` + `TelegramOnboardingWorker` here. Shared
+#     queue; the routing decision (message vs onboarding) lives at the
+#     controller level, not the queue level.
+#   - `telegram_outbound` (TASK-2-6) — the safe-path outbound worker
+#     (`TelegramOutboundWorker`) consumes from this queue. The actual
+#     worker lands in PR #3a; the queue is registered here so PR #3a
+#     can `:use Oban.Worker, queue: :telegram_outbound` without a config
+#     delta.
+#   - `telegram_outbound_crisis` (PR #3b) — the crisis-bypass priority
+#     lane. Higher priority than `telegram_outbound` so a crisis message
+#     is not blocked by a backlog of safe-path replies. The worker lands
+#     in PR #3b; the queue is registered here for the same reason.
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
   queues: [
@@ -45,7 +55,9 @@ config :alethea, Oban,
     schedulers: 5,
     reports: 5,
     ai_analysis: 5,
-    telegram_inbound: 10
+    telegram_inbound: 10,
+    telegram_outbound: 10,
+    telegram_outbound_crisis: 10
   ],
   repo: Alethea.Repo,
   plugins: [
@@ -54,6 +66,13 @@ config :alethea, Oban,
        {"0 0 * * *", AletheaJobs.DailySchedulerWorker}
      ]}
   ]
+
+# Telegram Pacer (PR #2 TASK-2-6). The Pacer is a singleton GenServer
+# that owns the rate-limit ETS tables. It is started under the
+# application supervisor in `dev` and `prod`; in `test` it is started
+# manually per-test (mirrors the `start_bot_token` gate) so each test
+# gets a fresh bucket state.
+config :alethea, :start_telegram_pacer, true
 
 # --- AI & Clinical Configuration ---
 

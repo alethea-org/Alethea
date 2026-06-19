@@ -25,10 +25,25 @@ defmodule Alethea.Application do
     children =
       if Application.get_env(:alethea, :start_bot_token, true) do
         # BotToken performs a fail-loud DB read in `init/1`; the supervisor
-        # process is not a SQL sandbox owner, so we skip the supervised
-        # child in `:test` (the test cases for BotToken start the GenServer
+        # process is not a SQL sandbox owner, so we skip the supervised child
+        # in `:test` (the test cases for BotToken start the GenServer
         # manually with the sandbox explicitly allowed).
         children ++ [Alethea.Telegram.BotToken]
+      else
+        children
+      end
+
+    children =
+      if Application.get_env(:alethea, :start_telegram_pacer, true) do
+        # Pacer owns the rate-limit ETS tables; in :test we start it
+        # manually per test so the bucket state is hermetic. The
+        # bot_token / pacer / ai gates are independent (the Pacer
+        # is pure-ETS and does NOT touch the DB, so it could in
+        # principle run under the supervisor in :test — but the
+        # current PacerTest suite starts the GenServer explicitly
+        # to control the config overrides; making the gate
+        # independent keeps the test contract unchanged).
+        children ++ [Alethea.Telegram.Pacer]
       else
         children
       end

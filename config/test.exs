@@ -63,6 +63,13 @@ config :alethea, :start_ai, false
 # end-to-end in the test suite — see `Alethea.Telegram.BotTokenTest`.
 config :alethea, :start_bot_token, false
 
+# Pacer owns the rate-limit ETS tables. The PacerTest suite starts the
+# GenServer explicitly per-test (to hermetic-ify the bucket state and
+# override the test knobs without leaking across cases). We skip the
+# supervised child in `:test` so the per-test `Pacer.start_link/1`
+# doesn't hit a "name already registered" error.
+config :alethea, :start_telegram_pacer, false
+
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
