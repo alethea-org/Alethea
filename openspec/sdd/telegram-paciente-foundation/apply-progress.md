@@ -503,3 +503,118 @@ This work lands in TASK-2-6 alongside the Pacer supervision wiring so the timer 
 
 After the 6 remaining tasks land, run `mix precommit` and proceed to `sdd-verify PR #2`. PR #2 will be ready to open as a chained PR targeting `feat/telegram-paciente-foundation/pr-1b-foundations-b` (NOT `main`).
 
+---
+
+# Apply Progress — `telegram-paciente-foundation` (PR #2)
+
+**Branch:** `feat/telegram-paciente-foundation/pr-2-entrypoint`
+**Base:** `feat/telegram-paciente-foundation/pr-1b-foundations-b` (NOT `main`)
+**PR title:** `feat(telegram): webhook entrypoint with secret-token plug and skeleton controllers`
+**PR:** (TBD — to be opened against `pr-1b-foundations-b`)
+**Strict TDD:** active — every task follows RED → GREEN → REFACTOR.
+**Status:** ✅ All 8 tasks complete. `mix precommit` green (422 tests, 0 failures, 5 skipped).
+
+## Plan (8 tasks, all complete)
+
+| ID | Title | Est. lines | Final SHA |
+|---|---|---|---|
+| TASK-2-1 | `foundation_patients.telegram_chat_id` → `telegram_chat_id_hash` migration + `lookup_patient_by_chat_hash/1` + partial unique index | 110 | `ea7a6ff` |
+| TASK-2-2 | `TelegramSecretToken` plug (C-1) | 60 | `a29e6f7` |
+| TASK-2-3 | `TelegramWebhookController` skeleton (C-1) + worker stubs | 180 | `1d1028f` |
+| TASK-2-4 | `TelegramAuthController` skeleton (C-4 wire-up only) | 50 | `d224847` |
+| TASK-2-5 | Router pipeline `:telegram_webhook` + scope block | 14 | `e05b7db` |
+| TASK-2-6 | Oban queue config + Pacer supervision + **W-1 cleanup** | 24 + W-1 | `0b1b4de` |
+| TASK-2-7 | Worker stubs (`TelegramMessageWorker` + `TelegramOnboardingWorker`) | 100 | (created in TASK-2-3) |
+| TASK-2-8 | `Telegram.Client` behaviour + `Fake` adapter | 104 | (in commit `1d1028f` for impls, separate test commit) |
+| **Total** | | **~640** | (est., within 700 hard target; 800 soft budget) |
+
+## Commit history (chronological, on this PR)
+
+```
+1d1028f feat(telegram): webhook controller with Oban enqueue and 24h unique (TASK-2-3 + worker stubs + Client behaviour/Fake)
+0b1b4de feat(telegram): pacer cleanup + outbound queues + supervision (W-1) (TASK-2-6)
+e05b7db feat(telegram): wire webhook routes in router (TASK-2-5)
+d224847 feat(telegram): auth controller skeleton (200 + log) (TASK-2-4)
+1d1028f feat(telegram): webhook controller with Oban enqueue and 24h unique (TASK-2-3)
+f7b0a1a docs(apply): record PR #2 TASK-2-1 and TASK-2-2 TDD evidence
+a29e6f7 feat(telegram): add secret-token validation plug (TASK-2-2)
+ea7a6ff feat(telegram): rename patient telegram chat id to HMAC hash (TASK-2-1)
+9fa4db54 ← base (PR #1b tip after PR #1b-fixes merge)
+```
+
+## Test counts (delta)
+
+- PR #1b tip (PR #1a + PR #1b + PR #1b-fixes): 379 tests, 0 failures, 5 skipped
+- After PR #2: 422 tests, 0 failures, 5 skipped
+- **Delta: +43 new tests** across 11 test files (8 controller tests, 3 auth tests, 3 Pacer cleanup tests, 4 worker tests, 1 client contract test, 7 fake tests, etc.)
+
+## `mix precommit` result
+
+✅ GREEN (422 tests, 0 failures, 5 skipped, 0 new warnings).
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec file | Status |
+|---|---|---|
+| `REQ-C1-secret-token-validates-header` | `specs/C-1-telegram-webhook-entrypoint/spec.md` | ✅ `AletheaWeb.Plugs.TelegramSecretToken` with `Plug.Crypto.secure_compare/2` (constant-time, defense against timing attacks; design §8 used `==` which the PR #1b-fixes F-XX batch replaced). |
+| `REQ-C1-webhook-fast-acks` | same | ✅ `TelegramWebhookController.update/2` returns 200 immediately, before any worker runs. |
+| `REQ-C1-webhook-enqueues-inbound-worker` | same | ✅ `TelegramMessageWorker.new(%{telegram_update_id, message}) \|> Oban.insert()` with `unique: [period: 86_400, keys: [:telegram_update_id]]` on the worker. |
+| `REQ-C1-webhook-routes-start-to-onboarding` | same | ✅ `/start` and `/start <token>` route to `TelegramOnboardingWorker`; case-sensitive (Telegram convention; `/START` falls through to message worker). |
+| `REQ-C2-lookup-by-hash` | `specs/C-2-hmac-chat-id-lookup/spec.md` | ✅ `Alethea.Foundation.Accounts.lookup_patient_by_chat_hash/1` — accepts only 64-char hex (rejects raw `chat_id` as `:not_found` per design boundary). |
+| `REQ-C2-partial-unique-index` | same | ✅ `unique_index(:telegram_chat_id_hash, ...)` via the migration; `unique_constraint/3` on the Patient changeset converts violations to `{:error, changeset}`. |
+| (C-7 prep) Oban queue definitions | `specs/C-7-outbound-rate-limit/spec.md` | ✅ `:telegram_inbound` (controller, PR #2) + `:telegram_outbound` + `:telegram_outbound_crisis` (consumers land in PR #3a / #3b). |
+
+The remaining C-7 requirements (429 retry, dead-letter, crisis lane) live in PR #3a / #3b. The C-1 web auth controller (TelegramAuthController) is a 200+log skeleton in PR #2; the full `consume/2` semantics land in PR #4.
+
+## W-1 (from PR #1b verify report) — RESOLVED in PR #2
+
+The PR #1b verify report flagged W-1: ETS per-chat rows are not cleaned up. TASK-2-6 implements the recommended fix:
+
+- `handle_info(:cleanup, state)` callback in `Alethea.Telegram.Pacer`
+- `:cleanup_interval_ms` knob (default `5 * 60 * 1000` = 5 min) — how often the cleanup runs
+- `:idle_threshold_ms` knob (default `60 * 60 * 1000` = 1 h) — a per-chat row is considered stale and dropped if its `last_refill_ms` is older than `now - idle_threshold_ms`
+- Cleanup runs in a SEPARATE `handle_info` callback — does NOT touch the `acquire/1` call path (the verify report invariant)
+- Global table is a singleton — never accumulates, never touched by cleanup
+- 3 new tests (per acceptance criteria):
+  - drops per-chat rows whose `last_refill_ms` is older than `idle_threshold` and keeps recent rows
+  - does not affect the global bucket (singleton — no accumulation)
+  - is a no-op when the per-chat table is empty
+- Application supervisor wiring under `:start_telegram_pacer` gate (default `true`, `false` in `:test` — same pattern as `:start_bot_token`)
+
+## Deviations from tasks.md
+
+1. **TASK-2-3 — `Phoenix.ConnTest.dispatch/4` vs `/5`.** The test was written with `dispatch/4` (no method); Phoenix 1.8.7 requires `dispatch/5` with the method as the 4th argument. Fixed by adding `:post` to each dispatch call.
+2. **TASK-2-3 — `Oban.Testing.assert_enqueued/1` arity.** The arity-1 function builds a fresh `Oban.Config.new([])` (with `repo: nil`, `testing: :disabled`) and the assertions fail. The arity-2 function takes the repo explicitly. Fixed by switching to `assert_enqueued(Alethea.Repo, ...)` and `refute_enqueued(Alethea.Repo, ...)`.
+3. **TASK-2-3 — Worker column storage.** The `oban_jobs.worker` column stores `"Alethea.Jobs.TelegramMessageWorker"` (no `Elixir.` prefix), not the prefixed form the test originally expected. Fixed by removing the `Elixir.` prefix from the worker's test filter.
+4. **TASK-2-6 — Cleanup test ETS access.** The per-chat ETS table is `:protected` (F-12), so the test process cannot write to it directly. Used `:sys.replace_state/2` which runs the writes IN the Pacer's process (where they have owner privileges). Documented in the test moduledoc.
+5. **TASK-2-7 — `__oban_worker__` doesn't exist.** Oban 2.x exposes the worker opts via `__opts__/0`, not `__oban_worker__`. Fixed the test.
+6. **TASK-2-7 — `.new/1` returns a Changeset, not a Job struct.** Oban 2.x's `new/2` returns an `Ecto.Changeset{}`. Fixed the test to assert on the Changeset.
+7. **TASK-2-7 — `unique: []` vs `unique: nil`.** When the `unique` key is absent, Oban stores `nil` (not `[]`). The onboarding worker test asserts `opts[:unique] in [nil, []]` (both are semantically "no uniqueness").
+8. **TASK-2-8 — Calling the behaviour directly fails.** `Alethea.Telegram.Client.send_message/2` is a behaviour callback (declared, not implemented); calling it directly raises `UndefinedFunctionError`. The Fake test calls `Fake.send_message/2` (the implementation) instead.
+9. **TASK-2-8 — `behaviour_info(:callbacks)` returns a keyword list, not a tuple list.** The test asserts `Keyword.get(callbacks, :send_message) == 2` instead of `{Client, :send_message, 2} in callbacks`.
+10. **TASK-2-8 — ETS `:set` doesn't preserve insertion order.** The "appends to the sends list" test was looking up by `Enum.at(sends, 0)`; replaced with `Enum.find(sends, &(&1.chat_id == 111))` lookups.
+
+All 10 deviations are test-side fixes; no production logic was changed beyond the original `tasks.md` plan.
+
+## Out-of-scope items (left for later PRs in the chain)
+
+- `TelegramOnboardingWorker` full body (token verification + `bind_patient_to_chat/2` + welcome) — PR #3a
+- `TelegramMessageWorker` full body (idempotency + patient resolution + LLM + emotion + outbound) — PR #3a
+- `TelegramOutboundWorker` (Pacer + 429 + dead-letter) — PR #3a
+- `TelegramOutboundWorker.perform_now/1` (crisis queue-full escalation) — PR #3b
+- `Telegram.Client.Req` production adapter — PR #3a
+- `:crisis_detected` PubSub broadcast + `ops:alerts` broadcast on crisis dead-letter — PR #3b
+- Onboarding (PatientAuthCode + DeepLink + 6-digit + welcome) — PR #4
+- Telegram webhook body parsing depth (the controller passes the message through; the worker validates the deeper shape) — PR #3a
+
+## Chain state after PR #2
+
+```
+main  (4d6e8cf — PR #1a merge #72, unchanged)
+  └─ pr-1a-foundations-a  (47c94d6d — PR #1b clean merge #73)
+       └─ pr-1b-foundations-b  (9fa4db54 — PR #1b-fixes merge #74)
+            └─ pr-2-entrypoint  (local HEAD, ~8 commits ahead of 9fa4db54)
+```
+
+After the PR #2 branch is pushed, the next step is the PR (against `pr-1b-foundations-b`). After PR #2 merges, PR #3a (clinical safe path) is next.
+
