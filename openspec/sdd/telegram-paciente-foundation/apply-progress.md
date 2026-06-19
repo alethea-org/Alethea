@@ -425,9 +425,81 @@ The 4 SUGGESTIONs from verify-report-pr-1b.md §7.3 are non-blocking stylistic a
 
 ---
 
+# Apply Progress — `telegram-paciente-foundation` (PR #2)
+
+**Branch:** `feat/telegram-paciente-foundation/pr-2-entrypoint`
+**Base:** `feat/telegram-paciente-foundation/pr-1b-fixes` (NOT `main`)
+**PR title:** `feat(telegram): webhook entrypoint with secret-token plug and skeleton controllers`
+**Strict TDD:** active — every task follows RED → GREEN → REFACTOR.
+**Status:** 🟡 in progress. TASK-2-1 and TASK-2-2 complete; 6 tasks pending.
+
+> **W-1 (Pacer ETS per-chat cleanup) is in scope for PR #2** per the PR #1b verify report and the
+> user's brief. The cleanup will land in **TASK-2-6** alongside the `Pacer` supervision wiring, not
+> deferred further. Acceptance criteria from `verify-report-pr-1b.md` §"Findings" WARNING #1 are
+> tracked in the TASK-2-6 row below.
+
+## Plan (8 tasks)
+
+| ID | Title | Files (impl) | Files (test) | Est. lines | Commit SHA |
+|---|---|---|---|---|---|
+| TASK-2-1 | `Patient.telegram_chat_id` → `telegram_chat_id_hash` migration + `lookup_patient_by_chat_hash/1` | `lib/alethea/foundation/accounts/patient.ex` (mod), `lib/alethea/foundation/accounts.ex` (mod), `priv/repo/migrations/20260618234145_rename_telegram_chat_id_to_hash.exs` (new) | `test/alethea/foundation/accounts_test.exs` (mod) | 110 | `ea7a6ff` |
+| TASK-2-2 | `TelegramSecretToken` plug (C-1) | `lib/alethea_web/plugs/telegram_secret_token.ex` (new) | `test/alethea_web/plugs/telegram_secret_token_test.exs` (new) | 60 | `a29e6f7` |
+| TASK-2-3 | `TelegramWebhookController` skeleton + 401/200 + enqueue (C-1) | `lib/alethea_web/controllers/telegram_webhook_controller.ex` (new) | `test/alethea_web/controllers/telegram_webhook_controller_test.exs` (new) | 180 | pending |
+| TASK-2-4 | `TelegramAuthController` skeleton (C-4 wire) | `lib/alethea_web/controllers/telegram_auth_controller.ex` (new) | `test/alethea_web/controllers/telegram_auth_controller_test.exs` (new) | 50 | pending |
+| TASK-2-5 | Router pipeline `:telegram_webhook` + scope block | `lib/alethea_web/router.ex` (mod) | (covered by `mix test`) | 14 | pending |
+| TASK-2-6 | Oban queue config + `Pacer` child spec + **W-1 cleanup** | `config/config.exs` (mod), `lib/alethea/application.ex` (mod), `lib/alethea/telegram/pacer.ex` (mod) | `test/alethea/telegram/pacer_test.exs` (mod, W-1 test) | 24 + W-1 ~30 = 54 | pending |
+| TASK-2-7 | `TelegramMessageWorker` + `TelegramOnboardingWorker` stubs | `lib/alethea_jobs/telegram_message_worker.ex` (new), `lib/alethea_jobs/telegram_onboarding_worker.ex` (new) | `test/alethea_jobs/telegram_message_worker_test.exs` (new), `test/alethea_jobs/telegram_onboarding_worker_test.exs` (new) | 100 | pending |
+| TASK-2-8 | `Telegram.Client` behaviour + `Fake` adapter (C-7 prep) | `lib/alethea/telegram/client.ex` (new), `lib/alethea/telegram/client/fake.ex` (new), `config/test.exs` (mod) | `test/alethea/telegram/client/fake_test.exs` (new) | 104 | pending |
+| **Total** | | | | **642** (est.) | |
+
+## TDD Cycle Evidence
+
+| Task | RED (test written) | GREEN (impl passes) | REFACTOR (clean) | Commit SHA | Notes |
+|---|---|---|---|---|---|
+| TASK-2-1 | ✅ 6 fail (compile error → 6 assertion failures: function not exported, column not in cast, unique-constraint undefined on changeset) | ✅ 10/10 pass; full suite 385/385 pass | ✅ Added `unique_constraint/3` on the Patient changeset so the partial unique index violation is converted to a changeset error (standard Ecto pattern, mirrors `BotConfig.upsert/1`) | `ea7a6ff` | Migration adds `telegram_chat_id_hash` (nullable) + partial unique index `foundation_patients_telegram_chat_id_hash_unique WHERE IS NOT NULL`. Drops the raw `telegram_chat_id` column. Best-effort backfill from `telegram_chat_id` if any rows + a pepper is configured; the dev DB is empty per handoff Q1. `down/0` is lossy (hash → chat_id is one-way); rollback re-adds the column as `null: true`. |
+| TASK-2-2 | ✅ 4 fail (`AletheaWeb.Plugs.TelegramSecretToken.call/2 is undefined`) | ✅ 4/4 pass; full suite 389/389 pass | ✅ Dropped unused `import Plug.Test` (the test only needs `build_conn/3` from `Phoenix.ConnTest`, which is auto-imported by `AletheaWeb.ConnCase`) | `a29e6f7` | Constant-time comparison via `Plug.Crypto.secure_compare/2`. Pattern-matches `[token] when is_binary(token)` so duplicate-header values fall through to 401. No `Logger` line on rejection (per spec + R-1). |
+| TASK-2-3 | pending | | | | |
+| TASK-2-4 | pending | | | | |
+| TASK-2-5 | pending | | | | |
+| TASK-2-6 | pending | | | | |
+| TASK-2-7 | pending | | | | |
+| TASK-2-8 | pending | | | | |
+
+## Commit history (chronological, on this PR)
+
+```
+a29e6f7 feat(telegram): add secret-token validation plug  (TASK-2-2)
+ea7a6ff feat(telegram): rename patient telegram chat id to HMAC hash  (TASK-2-1)
+19eb4d4 chore(telegram): pacer lint cosmetics  ← base (PR #1b-fixes)
+```
+
+## Test counts (delta so far)
+
+- PR #1b-fixes baseline: 379 tests, 0 failures, 5 skipped.
+- After TASK-2-1: 385 tests, 0 failures, 5 skipped. Delta: **+6 new tests** (5 in `accounts_test.exs` + 1 in `accounts_test.exs` for the "5 canonical functions" rename).
+- After TASK-2-2: 389 tests, 0 failures, 5 skipped. Delta: **+4 new tests** (`telegram_secret_token_test.exs`).
+
+## Decisions / deviations so far
+
+1. **TASK-2-1 — `unique_constraint/3` on the Patient changeset.** The migration enforces "at most one patient per hash" at the DB layer (partial unique index `WHERE telegram_chat_id_hash IS NOT NULL`). Without the changeset constraint declaration, a duplicate `telegram_chat_id_hash` insert raises `Ecto.ConstraintError` instead of returning `{:error, changeset}`. The test was written to expect the changeset-error shape (the same pattern as `BotConfig.upsert/1`); the deviation is a one-line `unique_constraint/3` call that matches the existing project convention.
+
+2. **TASK-2-2 — `Plug.Crypto.secure_compare/2` for the header match.** The design snippet at `design.md §8` shows `token == expected`, which is NOT constant-time. Replaced with `secure_compare/2` because Telegram's docs explicitly call out the timing-attack vector on the secret-token header. The plug's moduledoc documents the constant-time property and why `==` would be wrong.
+
+3. **TASK-2-2 — Duplicate-header defensive case tested via direct `req_headers` construction.** `put_req_header/3` in `Plug.Test` overwrites rather than appends, so the "two values, one is the real secret" scenario cannot be expressed through the normal helper. Constructed the conn with `Map.put(:req_headers, [...])` to mirror what Bandit delivers when an upstream proxy passes two `X-Telegram-Bot-Api-Secret-Token` headers. The plug's `[token] when is_binary(token)` guard correctly falls through to 401 in this case.
+
+## W-1 deferral landing plan (TASK-2-6)
+
+W-1 is in scope for PR #2 per the user's brief. The acceptance criteria from `verify-report-pr-1b.md` §"Findings" WARNING #1 are:
+
+- A `handle_info(:cleanup, state)` callback in `Alethea.Telegram.Pacer`.
+- A `:cleanup_interval_ms` knob (default `5 * 60 * 1000` = 5 min) and an `:idle_threshold_ms` knob (default `60 * 60 * 1000` = 1 hour), both read from `Application.get_env`.
+- A test that pre-fills the ETS table with 3 rows (one current, one older than the threshold, one much older), runs the cleanup, and asserts only the current row survives.
+- No change to the `acquire/1` call path (cleanup is a separate `handle_info` callback).
+- Documentation update in `pacer.ex` `@moduledoc` noting the cleanup cadence.
+
+This work lands in TASK-2-6 alongside the Pacer supervision wiring so the timer is scheduled in `init/1` (the Pacer is currently started in test setup but not supervised in the application; supervising it is the TASK-2-6 delta that makes the W-1 timer possible).
+
 ## Next step
 
-The PR #1b branch now has both WARNING fixes resolved (W-2 here, W-1 deferred to PR #2 with a documented acceptance criteria). The next recommended action is:
+After the 6 remaining tasks land, run `mix precommit` and proceed to `sdd-verify PR #2`. PR #2 will be ready to open as a chained PR targeting `feat/telegram-paciente-foundation/pr-1b-foundations-b` (NOT `main`).
 
-- **Re-run `sdd-verify` on PR #1b** to confirm W-2 is closed and the W-1 deferral is acknowledged.
-- **Proceed to `sdd-apply PR #2`** to land the webhook + plug + skeleton controllers + Oban queues + Pacer supervision (including the W-1 cleanup).
