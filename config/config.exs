@@ -31,9 +31,22 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 # Configure Oban
+#
+# `telegram_inbound` ships in TASK-2-3 (PR #2) because the webhook
+# controller enqueues to it. The outbound queues (`telegram_outbound`,
+# `telegram_outbound_crisis`) land in TASK-2-6 alongside the rest of
+# the Oban queue wiring.
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5, ai_analysis: 5],
+  queues: [
+    default: 10,
+    whatsapp: 20,
+    sessions: 10,
+    schedulers: 5,
+    reports: 5,
+    ai_analysis: 5,
+    telegram_inbound: 10
+  ],
   repo: Alethea.Repo,
   plugins: [
     {Oban.Plugins.Cron,

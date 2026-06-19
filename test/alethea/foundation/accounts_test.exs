@@ -66,7 +66,9 @@ defmodule Alethea.Foundation.AccountsTest do
     test "returns {:ok, patient} for a patient bound to a known hash" do
       pro = Alethea.FoundationTestHelper.professional_fixture()
       hash = valid_hash_for(42)
-      {:ok, patient} = Accounts.create_patient(pro, %{alias: "Bound", telegram_chat_id_hash: hash})
+
+      {:ok, patient} =
+        Accounts.create_patient(pro, %{alias: "Bound", telegram_chat_id_hash: hash})
 
       assert {:ok, %Alethea.Foundation.Accounts.Patient{id: id}} =
                Accounts.lookup_patient_by_chat_hash(hash)

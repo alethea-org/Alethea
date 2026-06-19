@@ -26,8 +26,6 @@ defmodule Alethea.Foundation.Accounts do
   alias Alethea.Foundation.Accounts.{Admin, Patient, Professional}
   alias Alethea.Repo
 
-  import Ecto.Query
-
   @doc """
   Registers a new professional. Delegates to
   `Alethea.Foundation.Accounts.Professional.register_professional/1`.
@@ -80,7 +78,8 @@ defmodule Alethea.Foundation.Accounts do
   must NOT log the input hash.
   """
   @spec lookup_patient_by_chat_hash(any()) :: {:ok, Patient.t()} | :not_found
-  def lookup_patient_by_chat_hash(hash) when is_binary(hash) and byte_size(hash) == @valid_hash_byte_size do
+  def lookup_patient_by_chat_hash(hash)
+      when is_binary(hash) and byte_size(hash) == @valid_hash_byte_size do
     case Repo.get_by(Patient, telegram_chat_id_hash: hash) do
       nil -> :not_found
       %Patient{} = patient -> {:ok, patient}

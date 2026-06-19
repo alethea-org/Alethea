@@ -55,11 +55,11 @@ defmodule Alethea.Repo.Migrations.RenameTelegramChatIdToHash do
     # 4. Partial unique index. At most one patient per hash; multiple
     #    NULL rows are allowed.
     create unique_index(
-      :foundation_patients,
-      [:telegram_chat_id_hash],
-      name: :foundation_patients_telegram_chat_id_hash_unique,
-      where: "telegram_chat_id_hash IS NOT NULL"
-    )
+             :foundation_patients,
+             [:telegram_chat_id_hash],
+             name: :foundation_patients_telegram_chat_id_hash_unique,
+             where: "telegram_chat_id_hash IS NOT NULL"
+           )
   end
 
   def down do
@@ -103,21 +103,27 @@ defmodule Alethea.Repo.Migrations.RenameTelegramChatIdToHash do
     case pepper do
       nil ->
         require Logger
-        Logger.warning(fn -> "telegram_chat_id -> hash migration: no pepper configured; skipping backfill" end)
+
+        Logger.warning(fn ->
+          "telegram_chat_id -> hash migration: no pepper configured; skipping backfill"
+        end)
 
       pepper ->
-        execute("""
-        UPDATE foundation_patients
-        SET telegram_chat_id_hash = encode(
-          hmac(
-            convert_to(telegram_chat_id, 'UTF8'),
-            convert_to($1, 'UTF8'),
-            'sha256'
-          ),
-          'hex'
+        execute(
+          """
+          UPDATE foundation_patients
+          SET telegram_chat_id_hash = encode(
+            hmac(
+              convert_to(telegram_chat_id, 'UTF8'),
+              convert_to($1, 'UTF8'),
+              'sha256'
+            ),
+            'hex'
+          )
+          WHERE telegram_chat_id IS NOT NULL
+          """,
+          [pepper]
         )
-        WHERE telegram_chat_id IS NOT NULL
-        """, [pepper])
     end
   end
 end
