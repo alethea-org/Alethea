@@ -31,9 +31,34 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 # Configure Oban
+#
+# Telegram queues (PR #2):
+#   - `telegram_inbound` (TASK-2-3) — the webhook controller enqueues
+#     `TelegramMessageWorker` + `TelegramOnboardingWorker` here. Shared
+#     queue; the routing decision (message vs onboarding) lives at the
+#     controller level, not the queue level.
+#   - `telegram_outbound` (TASK-2-6) — the safe-path outbound worker
+#     (`TelegramOutboundWorker`) consumes from this queue. The actual
+#     worker lands in PR #3a; the queue is registered here so PR #3a
+#     can `:use Oban.Worker, queue: :telegram_outbound` without a config
+#     delta.
+#   - `telegram_outbound_crisis` (PR #3b) — the crisis-bypass priority
+#     lane. Higher priority than `telegram_outbound` so a crisis message
+#     is not blocked by a backlog of safe-path replies. The worker lands
+#     in PR #3b; the queue is registered here for the same reason.
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5, ai_analysis: 5],
+  queues: [
+    default: 10,
+    whatsapp: 20,
+    sessions: 10,
+    schedulers: 5,
+    reports: 5,
+    ai_analysis: 5,
+    telegram_inbound: 10,
+    telegram_outbound: 10,
+    telegram_outbound_crisis: 10
+  ],
   repo: Alethea.Repo,
   plugins: [
     {Oban.Plugins.Cron,
@@ -41,6 +66,20 @@ config :alethea, Oban,
        {"0 0 * * *", AletheaJobs.DailySchedulerWorker}
      ]}
   ]
+
+# Telegram Pacer (PR #2 TASK-2-6). The Pacer is a singleton GenServer
+# that owns the rate-limit ETS tables. It is started under the
+# application supervisor in `dev` and `prod`; in `test` it is started
+# manually per-test (mirrors the `start_bot_token` gate) so each test
+# gets a fresh bucket state.
+config :alethea, :start_telegram_pacer, true
+
+# Telegram Client adapter (PR #2 TASK-2-8). Defaults to the Fake
+# so a missing config degrades to the no-op adapter (a crash on
+# start would be worse than a no-op). The `Req` production
+# adapter lands in PR #3a — production deployments set this
+# config explicitly.
+config :alethea, :telegram_client, Alethea.Telegram.Client.Fake
 
 # --- AI & Clinical Configuration ---
 

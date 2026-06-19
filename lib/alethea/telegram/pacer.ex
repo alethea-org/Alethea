@@ -52,6 +52,22 @@ defmodule Alethea.Telegram.Pacer do
   - `:global_capacity` (default `30`)
   - `:global_refill_per_sec` (default `30.0`)
 
+  W-1 (PR #1b verify report WARNING #1, resolved in PR #2): the
+  per-chat ETS table accumulates one row per unique `chat_id_hash`
+  ever seen. A long-running production bot would grow without
+  bound, so the Pacer schedules a periodic cleanup in
+  `handle_info(:cleanup, _)`:
+
+  - `:cleanup_interval_ms` (default `5 * 60 * 1000` = 5 min) — how
+    often the cleanup runs.
+  - `:idle_threshold_ms` (default `60 * 60 * 1000` = 1 h) — a
+    per-chat row is considered stale and dropped if its
+    `last_refill_ms` is older than `now - idle_threshold_ms`.
+
+  The cleanup runs entirely in a separate `handle_info` invocation
+  so the `acquire/1` call path is not affected. The global table
+  is a singleton (no accumulation) and does not need cleanup.
+
   The defaults match Telegram's published limits. Tests can override
   any knob in `setup` blocks.
 
@@ -73,13 +89,26 @@ defmodule Alethea.Telegram.Pacer do
   # F-10: finite call timeout. The previous `:infinity` combined with
   # the single-GS design and the wait-loop inside `handle_call` meant
   # a single chat's empty bucket could block ALL other chats for the
-  # refill period (1 s at 1 Hz per-chat), and a stuck Pacer would
+  # refill period (1 s at 1 Hz), and a stuck Pacer would
   # deadlock every consumer forever. 30 s is the new default — long
   # enough to survive a per-chat refill at the production 1 Hz rate,
   # short enough that a stuck Pacer does not hang every outbound
   # Telegram call. Callers receive `{:error, :pacer_timeout}` and can
   # decide to retry or escalate.
   @default_call_timeout 30_000
+
+  # W-1 (PR #1b verify report): per-chat ETS row cleanup. Each unique
+  # `chat_id_hash` ever seen leaves a row in the per-chat table; a
+  # long-running production bot accumulates rows indefinitely.
+  # `handle_info(:cleanup, state)` drops rows whose `last_refill_ms`
+  # is older than the idle threshold (default 1 h) and re-schedules
+  # itself every cleanup interval (default 5 min). Production defaults
+  # are conservative (1 h idle is plenty for any active patient;
+  # 5 min cadence is below the 1 h idle so no in-flight acquire can
+  # be affected). Tests set the interval to a large value and trigger
+  # cleanup via `send(pid, :cleanup)` for deterministic behaviour.
+  @default_cleanup_interval_ms 5 * 60 * 1000
+  @default_idle_threshold_ms 60 * 60 * 1000
 
   ## Public API
 
@@ -149,6 +178,33 @@ defmodule Alethea.Telegram.Pacer do
   end
 
   @doc """
+  Returns the per-chat-row cleanup interval in milliseconds (W-1).
+
+  Default 5 min. Read from `Application.get_env(:alethea, Pacer, [...])`.
+  """
+  @spec cleanup_interval() :: pos_integer()
+  def cleanup_interval do
+    :alethea
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:cleanup_interval_ms, @default_cleanup_interval_ms)
+  end
+
+  @doc """
+  Returns the per-chat-row idle threshold in milliseconds (W-1).
+
+  Default 1 h. A per-chat row is considered stale and is removed
+  during a cleanup if its `last_refill_ms` is older than
+  `now - idle_threshold_ms`. Read from
+  `Application.get_env(:alethea, Pacer, [...])`.
+  """
+  @spec idle_threshold() :: pos_integer()
+  def idle_threshold do
+    :alethea
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:idle_threshold_ms, @default_idle_threshold_ms)
+  end
+
+  @doc """
   Returns a serializable snapshot of the per-chat bucket table
   (F-12 accessor). Goes through the GenServer for consistency with
   the redaction rules in `format_status/2`. The map is keyed by
@@ -186,11 +242,62 @@ defmodule Alethea.Telegram.Pacer do
     validate_positive!(:per_chat_refill_per_sec, per_chat_refill_per_sec())
     validate_positive!(:global_capacity, global_capacity())
     validate_positive!(:global_refill_per_sec, global_refill_per_sec())
+    validate_positive!(:cleanup_interval_ms, cleanup_interval())
+    validate_positive!(:idle_threshold_ms, idle_threshold())
 
     create_table(@table_per_chat)
     create_table(@table_global)
 
+    # W-1: schedule the first per-chat row cleanup. The cleanup runs
+    # entirely in `handle_info(:cleanup, _)` so the `acquire/1` call
+    # path is NOT affected — the verify report explicitly required
+    # "no change to the acquire/1 call path" and this design honors
+    # that: the cleanup callback runs in a separate `handle_info`
+    # invocation, not inline with an acquire.
+    schedule_cleanup()
+
     {:ok, %{}}
+  end
+
+  @impl true
+  # W-1: per-chat row cleanup. Iterates the per-chat ETS table, drops
+  # rows whose `last_refill_ms` is older than `idle_threshold`, and
+  # re-schedules itself. The global table is a singleton (no
+  # accumulation), so it does not need cleanup.
+  def handle_info(:cleanup, state) do
+    now_ms = monotonic_ms()
+    idle_cutoff_ms = now_ms - idle_threshold()
+
+    :ets.foldl(
+      fn {chat_id_hash, _tokens, last_refill_ms}, acc ->
+        if last_refill_ms < idle_cutoff_ms do
+          :ets.delete(@table_per_chat, chat_id_hash)
+          acc + 1
+        else
+          acc
+        end
+      end,
+      0,
+      @table_per_chat
+    )
+    |> tap(fn dropped -> maybe_log_cleanup(dropped) end)
+
+    schedule_cleanup()
+    {:noreply, state}
+  end
+
+  defp schedule_cleanup do
+    Process.send_after(self(), :cleanup, cleanup_interval())
+  end
+
+  # The cleanup is a maintenance task, not a per-request event. We
+  # log at debug level so the production logs do not flood; ops can
+  # raise the level to info if a long-running bot needs visibility.
+  defp maybe_log_cleanup(0), do: :ok
+
+  defp maybe_log_cleanup(dropped) when dropped > 0 do
+    require Logger
+    Logger.debug("Alethea.Telegram.Pacer: dropped #{dropped} stale per-chat rows")
   end
 
   defp validate_positive!(_name, value) when is_integer(value) and value > 0, do: :ok

@@ -29,11 +29,17 @@ defmodule Alethea.Telegram.PacerTest do
     # Save the test overrides so each test starts from a known config.
     # The Pacer reads `Application.get_env(:alethea, Alethea.Telegram.Pacer, ...)`
     # at acquire-time, so per-test overrides take effect immediately.
+    #
+    # The W-1 cleanup interval is set to 1 h so the timer does NOT
+    # fire during a test. Tests that need to exercise the cleanup
+    # send `:cleanup` to the Pacer directly via `send(pid, :cleanup)`.
     base = [
       per_chat_capacity: 1,
       per_chat_refill_per_sec: 1.0,
       global_capacity: 30,
-      global_refill_per_sec: 30.0
+      global_refill_per_sec: 30.0,
+      cleanup_interval_ms: 60 * 60 * 1000,
+      idle_threshold_ms: 1000
     ]
 
     Application.put_env(:alethea, Alethea.Telegram.Pacer, base)
@@ -582,6 +588,80 @@ defmodule Alethea.Telegram.PacerTest do
       assert is_integer(timeout)
       assert timeout == 30_000
       refute timeout == :infinity
+    end
+  end
+
+  describe "handle_info(:cleanup, _) — W-1 per-chat row cleanup" do
+    test "drops per-chat rows whose last_refill_ms is older than idle_threshold and keeps recent rows" do
+      # The cleanup callback runs in a separate handle_info invocation
+      # (NOT in the acquire/1 call path — that is the design invariant
+      # the verify report required). The test sends :cleanup to the
+      # Pacer directly to exercise the callback deterministically.
+      #
+      # The per-chat ETS table is `:protected` (F-12) so the test
+      # process cannot write to it directly. We use
+      # `:sys.replace_state/2` which runs the given function IN the
+      # Pacer's process — the writes are from the table owner.
+      now_ms = monotonic_ms()
+      idle_threshold_ms = 1000
+
+      recent_hash = chat_hash("recent-chat")
+      stale_hash = chat_hash("stale-chat")
+      very_stale_hash = chat_hash("very-stale-chat")
+
+      :sys.replace_state(Pacer, fn state ->
+        :ets.insert(:telegram_pacer_per_chat, {recent_hash, 1.0, now_ms})
+
+        :ets.insert(
+          :telegram_pacer_per_chat,
+          {stale_hash, 0.5, now_ms - idle_threshold_ms - 1}
+        )
+
+        :ets.insert(
+          :telegram_pacer_per_chat,
+          {very_stale_hash, 0.0, now_ms - idle_threshold_ms - 60_000}
+        )
+
+        state
+      end)
+
+      # Trigger the cleanup synchronously.
+      send(Process.whereis(Pacer), :cleanup)
+      # Allow the handle_info to run. The cleanup is purely local
+      # (ETS fold + ETS delete) and re-schedules itself, so a tiny
+      # yield is enough.
+      _ = :sys.get_state(Pacer)
+
+      surviving_keys =
+        :ets.tab2list(:telegram_pacer_per_chat)
+        |> Enum.map(fn {key, _tokens, _ts} -> key end)
+        |> Enum.sort()
+
+      assert surviving_keys == [recent_hash]
+    end
+
+    test "does not affect the global bucket (singleton — no accumulation)" do
+      # The cleanup targets the per-chat table only. The global
+      # table is a singleton (one row keyed by :singleton) and
+      # never accumulates, so the cleanup must not touch it.
+      now_ms = monotonic_ms()
+
+      :sys.replace_state(Pacer, fn state ->
+        :ets.insert(:telegram_pacer_global, {:singleton, 30.0, now_ms - 60_000})
+        state
+      end)
+
+      send(Process.whereis(Pacer), :cleanup)
+      _ = :sys.get_state(Pacer)
+
+      assert [{:singleton, 30.0, _ts}] = :ets.lookup(:telegram_pacer_global, :singleton)
+    end
+
+    test "is a no-op when the per-chat table is empty" do
+      send(Process.whereis(Pacer), :cleanup)
+      _ = :sys.get_state(Pacer)
+
+      assert :ets.info(:telegram_pacer_per_chat, :size) == 0
     end
   end
 
