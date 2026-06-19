@@ -49,6 +49,33 @@ defmodule AletheaWeb.Router do
     post("/whatsapp", WhatsappWebhookController, :receive)
   end
 
+  # Telegram webhook + auth routes.
+  #
+  # The POST `/webhooks/telegram/` route is behind the
+  # `TelegramSecretToken` plug (validates the
+  # `X-Telegram-Bot-Api-Secret-Token` header against
+  # `BotConfig.secret_token/0`). The GET `/webhooks/telegram/auth`
+  # route is a public patient-facing URL with a 10-minute TTL token —
+  # the secret-token check does NOT apply (design §8 rationale: the
+  # auth route carries its own TTL'd token in the query string, the
+  # plug is the auth surface for the POST).
+  pipeline :telegram_webhook do
+    plug(:accepts, ["json"])
+    plug(AletheaWeb.Plugs.TelegramSecretToken)
+  end
+
+  scope "/webhooks/telegram", AletheaWeb do
+    pipe_through(:telegram_webhook)
+
+    post("/", TelegramWebhookController, :update)
+  end
+
+  scope "/webhooks/telegram", AletheaWeb do
+    pipe_through(:api)
+
+    get("/auth", TelegramAuthController, :consume)
+  end
+
   scope "/", AletheaWeb do
     pipe_through([:browser_auth])
 
