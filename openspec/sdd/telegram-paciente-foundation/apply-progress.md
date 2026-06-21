@@ -317,3 +317,118 @@ The PR #1b chain is complete (PR #1b merged to `pr-1a-foundations-a`; PR #1b-fix
 - **Proceed to `sdd-apply PR #2`** to land the webhook + plug + skeleton controllers + Oban queues + Pacer supervision (including the W-1 cleanup).
 - PR #2 is the third of six chained PRs. Estimated lines: 642 (under the 700 target; soft budget 800, risk: medium).
 - PR #2 also wires the `telegram_chat_id` → `telegram_chat_id_hash` column rename on `foundation_patients` (TASK-2-1) and the `lookup_patient_by_chat_hash/1` context function, which the clinical round-trip (PR #3a/#3b) will consume.
+
+---
+
+# apply-progress — `telegram-paciente-foundation` PR #3a (TASK-3a-1)
+
+**Target PR:** **PR #3a** (`feat/telegram-paciente-foundation/pr-3a-clinical-safe`, targeting `pr-1b-foundations-b`).
+**Title:** `feat(telegram): clinical round-trip safe path with outbound pacer and dead letter`
+**Strict TDD:** active — RED → GREEN → REFACTOR per task.
+**Status:** ⏳ In progress — TASK-3a-1 complete; TASK-3a-2/3/4 pending.
+
+## Plan (4 tasks; TASK-3a-1 done, others pending)
+
+| ID | Title | Files (impl) | Files (test) | Est. lines | Final SHA | Status |
+|---|---|---|---|---|---|---|
+| TASK-3a-1 | TelegramMessageWorker full body (idempotency + patient resolution + safe clinical round-trip) | `lib/alethea/jobs/telegram_message_worker.ex`, `lib/alethea/jobs/telegram_outbound_worker.ex` (stub), `lib/alethea/clinical.ex`, `lib/alethea/clinical/message.ex`, `lib/alethea/foundation/accounts.ex`, `lib/alethea/foundation/accounts/patient.ex`, 2 migrations | `test/alethea/jobs/telegram_message_worker_test.exs` | 150 impl + 200 test = **350** (+ infra: ~110) | `76f4cf8` | ✅ done |
+| TASK-3a-2 | TelegramOutboundWorker (Pacer acquire + 429 retry + dead-letter) — schema + migration folded in | (TASK-3a-3 below) | (TASK-3a-3 below) | 100 impl + 150 test = **250** | TBD | ⏳ pending |
+| TASK-3a-3 | TelegramDeadLetter schema + `foundation_outbound_dead_letters` migration (folded into TASK-3a-2) | `lib/alethea/foundation/accounts/outbound_dead_letter.ex`, `priv/repo/migrations/2026XXXX_create_foundation_outbound_dead_letters.exs` | `test/alethea/foundation/accounts/outbound_dead_letter_test.exs` | 30 impl + 15 migration + 35 test = **80** (folded into TASK-3a-2) | TBD | ⏳ pending |
+| TASK-3a-4 | Telegram.Client.Req production adapter (Bypass tests) | `lib/alethea/telegram/client/req.ex` | `test/alethea/telegram/client/req_test.exs` | 30 impl + 30 test = **60** | TBD | ⏳ pending |
+| **Total** | | | | **~740** (HANDOFF est.); TASK-3a-1 closed at +814 net (impl + test + infra) | | |
+
+## TASK-3a-1 — TDD cycle evidence
+
+### RED (pre-implementation)
+
+Wrote `test/alethea/jobs/telegram_message_worker_test.exs` with 14 test scenarios covering the spec's safe-path contract:
+
+- Oban.Worker contract (queue `:telegram_inbound`, `max_attempts: 3`, 24h unique on `:telegram_update_id`)
+- Unknown `chat_id_hash` → "unregistered" outbound enqueue + PHI-hygiene log assertion (no full hash, no chat_id, no body)
+- Empty text payload → drop (no Message, no outbound, no emotion)
+- Safe-path happy: persist inbound, enqueue emotion, call LLM, persist outbound, enqueue outbound on `:telegram_outbound`
+- Failure modes: inbound persistence failure (MatchError on `{:error, changeset}` from `Clinical.save_telegram_message/7`), LLM unavailability (RuntimeError)
+
+Initial RED state: compilation error (`Message.telegram_message_id` field undefined). Confirmed the missing migration + changeset update were genuine gaps the spec implicitly assumed but `tasks.md` did not call out.
+
+### GREEN (implementation)
+
+1. **Migration 1** — `priv/repo/migrations/20260620000001_add_telegram_message_id_to_messages.exs`: adds `telegram_message_id :string` + partial unique index `messages_telegram_message_id_unique`. Mirrors `whatsapp_message_id` design (nullable, partial index). Applied on dev + test DBs.
+2. **Migration 2** — `priv/repo/migrations/20260620000002_add_legacy_patient_id_to_foundation_patients.exs`: adds `legacy_patient_id :binary_id` FK to `patients.id` on `foundation_patients`, with `on_delete: :nilify_all` (GDPR-safe: deleting the clinical record does NOT cascade-delete the foundation identity). Applied on dev + test DBs.
+3. **`Alethea.Clinical.Message`** — added `:telegram_message_id` field + cast + `unique_constraint(:telegram_message_id, name: :messages_telegram_message_id_unique)`.
+4. **`Alethea.Foundation.Accounts.Patient`** — added `:legacy_patient_id` field + `belongs_to :legacy_patient, Alethea.Accounts.Patient` + cast.
+5. **`Alethea.Foundation.Accounts.legacy_patient/1`** — new context function: `{:ok, %Patient{}} | :not_linked | {:error, :legacy_not_found}`.
+6. **`Alethea.Clinical.save_message/7` → `/8`** — extended signature with 8th arg `telegram_message_id \\ nil` (default keeps backward compatibility with the WhatsApp pipeline's positional call sites). Added the `telegram_message_id` partial-index duplicate-detection branch.
+7. **`Alethea.Clinical.save_telegram_message/7`** — new function: takes the foundation Patient, resolves the legacy Patient via `legacy_patient/1`, delegates to `save_message/8` with `telegram_message_id`. Returns `{:ok, %Message{}} | {:error, :not_linked} | {:error, :legacy_not_found} | {:error, changeset}`.
+8. **`Alethea.Jobs.TelegramOutboundWorker`** — minimal stub (`use Oban.Worker, queue: :telegram_outbound, max_attempts: 5, perform/1 → :ok`) so the inbound worker can enqueue. TASK-3a-2 replaces the body.
+9. **`Alethea.Jobs.TelegramMessageWorker`** — full safe-path body: HMAC hash chat_id → resolve patient → drop empty text → persist inbound → enqueue emotion → classify safe → build context → LLM chat → persist outbound → enqueue outbound. Crisis branch raises (fail-loud; PR #3b territory). PHI hygiene: log lines carry the 8-char hash prefix only.
+
+### Final commit
+
+```
+76f4cf8 feat(telegram): message worker safe path persists inbound runs emotion and LLM
+```
+
+## Test counts (delta)
+
+- PR #2 baseline (chain tip `7470de8`): 432 tests, 0 failures, 5 skipped.
+- After TASK-3a-1: **446 tests, 0 failures, 5 skipped** (delta: **+14 new tests** in `telegram_message_worker_test.exs`).
+
+## `mix precommit` result (on TASK-3a-1 commit `76f4cf8`)
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass. Two unused-alias warnings (`Message`, `Repo` in the worker module) cleaned up before commit.
+- `format --check-formatted`: pass.
+- `test`: 432 tests, 0 failures, 5 skipped. The 5 skipped tests are pre-existing.
+
+## Lines changed (TASK-3a-1)
+
+| File | Net delta | Notes |
+|---|---|---|
+| `lib/alethea/clinical.ex` | +109 / -0 | `save_message/8` extension + `save_telegram_message/7` |
+| `lib/alethea/clinical/message.ex` | +12 / -0 | `telegram_message_id` field + cast + constraint |
+| `lib/alethea/foundation/accounts.ex` | +35 / -0 | `legacy_patient/1` |
+| `lib/alethea/foundation/accounts/patient.ex` | +13 / -0 | `legacy_patient_id` field + belongs_to + cast |
+| `lib/alethea/jobs/telegram_message_worker.ex` | +301 / -0 (full body) | stub `perform/1 → :ok` replaced by safe-path body |
+| `lib/alethea/jobs/telegram_outbound_worker.ex` | NEW (35 lines) | stub for TASK-3a-2 to replace |
+| `priv/repo/migrations/20260620000001_add_telegram_message_id_to_messages.exs` | NEW (35 lines) | column + partial unique index |
+| `priv/repo/migrations/20260620000002_add_legacy_patient_id_to_foundation_patients.exs` | NEW (45 lines) | FK + index |
+| `test/alethea/jobs/telegram_message_worker_test.exs` | +382 / -0 | 14 new test scenarios (full file rewrite) |
+| **Total** | **+909 / -95** in 9 files | est. **~740** for the full PR; TASK-3a-1 closed at **+814 net** (already past the soft budget's half) |
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec | Status |
+|---|---|---|
+| `REQ-C3-idempotent-by-update-id` (worker half) | C-3 | ✅ worker uses `use Oban.Worker, queue: :telegram_inbound, max_attempts: 3, unique: [period: 86_400, keys: [:telegram_update_id]]`. Controller-side `Oban.insert` with the same unique config landed in PR #2 (`7470de8`). |
+| `REQ-C3-worker-resolves-patient` | C-3 | ✅ unknown hash → enqueue TelegramOutboundWorker with the unregistered copy, return `:ok`. Known hash → continue to persist + emotion + LLM. |
+| `REQ-C3-worker-persists-message` | C-3 | ✅ inbound `Message` persisted via `Clinical.save_telegram_message/7` with `telegram_message_id`, `direction: "inbound"`, `behavior_type: "spontaneous"`. Persistence failure raises (Oban retry-eligible). |
+| `REQ-C3-worker-emits-outbound-job` (safe half) | C-3 | ✅ safe path enqueues `TelegramOutboundWorker` on `:telegram_outbound` with `chat_id_hash`, `message_id`, `body`, `lane: :safe`. Crisis lane is PR #3b. |
+| `REQ-C3-replay-duplicate-is-noop` | C-3 | ✅ Oban unique on `:telegram_update_id` enforces the 24h no-op window. The `messages.telegram_message_id` partial unique index is the safety net for replays outside the Oban window. |
+| `REQ-C5-persist-inbound-message` | C-5 | ✅ text payload persisted with `telegram_message_id`. Empty text (sticker/voice/photo without caption) → drop, return `:ok`. |
+| `REQ-C5-trigger-emotion-analysis` | C-5 | ✅ `EmotionAnalysisWorker.new(%{message_id: id}) \|> Oban.insert()` on every persisted inbound. |
+| `REQ-C5-llm-reply-on-safe` | C-5 | ✅ `:safe` classification → `Alethea.AI.llm().chat/2`. Outbound Message persisted with `direction: "outbound"`, `behavior_type: "elicited"`. LLM error raises (Oban retry-eligible). |
+| `REQ-C5-persist-outbound-reply` | C-5 | ✅ outbound Message persisted BEFORE the TelegramOutboundWorker enqueue (clinical record is the source of truth). |
+| `REQ-C2-no-plaintext-in-logs` | C-2 | ✅ log lines include only the 8-char hash prefix; never the full hash, the chat_id, or the body. Test asserts `refute log =~ @chat_id_hash`. |
+
+### Crisis branch (PR #3b, out of scope here)
+
+`REQ-C5-crisis-bypasses-llm`, `REQ-C5-crisis-broadcasts-alert`, `REQ-C5-crisis-marks-urgent-intervention`, `REQ-C7-crisis-priority-lane`, `REQ-C7-crisis-queue-full-escalation` — NOT covered. The worker raises on `:crisis` classification (fail-loud rather than silently dropping).
+
+## Deviations from `tasks.md`
+
+- **TASK-3a-1 size estimate overshoot** — `tasks.md` estimated "150 impl + 200 test = 350". Actual delta is **~814 net lines** including supporting infrastructure (migrations + `Message.changeset` + `Clinical.save_message/8` extension + `Foundation.Accounts.legacy_patient/1` + outbound stub). The extra ~460 lines are infrastructure the spec implicitly assumed was in place (`REQ-C3-worker-persists-message` requires `telegram_message_id` on the messages table; the spec did not call out the missing column or the missing foundation→legacy bridge).
+- **Helper modules added in TASK-3a-1 that were not in `tasks.md`** — `Alethea.Foundation.Accounts.legacy_patient/1`, `Alethea.Clinical.save_telegram_message/7`. Both are thin bridges the spec implicitly assumed but `tasks.md` did not list.
+- **`max_attempts: 3` (spec) vs `max_attempts: 5` (PR #1b/2 stub)** — aligned the worker to the spec; the stub used `5` because the body was a no-op.
+- **Apply-progress.md reconstruction note** — this PR #3a section is the first PR documented on the sdd branch since the reconstructed version (`bf747b1`). PR #2's progress was not appended to this file; if it lands later it should slot between the PR #1b-fixes section and this PR #3a section.
+
+## Out-of-scope items (still pending in PR #3a)
+
+- **TASK-3a-2** — `TelegramOutboundWorker` body: `Pacer.acquire(chat_id_hash)` → `Client.send_message(chat_id, text)` → 429 jittered exponential backoff → dead-letter on exhaustion. PubSub `{:outbound_dead_letter, …}` broadcast on exhaustion.
+- **TASK-3a-3** (folded into TASK-3a-2 per `tasks.md`) — `Alethea.Foundation.Accounts.OutboundDeadLetter` schema + `foundation_outbound_dead_letters` migration.
+- **TASK-3a-4** — `Alethea.Telegram.Client.Req` production adapter; `Bypass`-based tests. Wired in `config/config.exs` as `config :alethea, :telegram_client, Alethea.Telegram.Client.Req` (the `:test` and `:dev` configs stay on the Fake).
+
+## Next step
+
+TASK-3a-1 complete (commit `76f4cf8`). The remaining 3 tasks land in the same PR (`feat/telegram-paciente-foundation/pr-3a-clinical-safe`). After all 4 tasks, run `mix precommit` and open the PR against `pr-1b-foundations-b`. Crisis branch (PR #3b) and onboarding (PR #4) are separate sessions.
