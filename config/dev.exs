@@ -120,3 +120,10 @@ config :phoenix_live_view,
 # NEVER use this value in production.
 config :alethea, Alethea.Encryption.Vault,
   aes_key: System.get_env("CLOAK_AES_KEY", "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc=")
+
+# Telegram Client adapter override for :dev (PR #3a / TASK-3a-4).
+# The config/config.exs default is the Req production adapter; :dev
+# overrides to the Fake so `mix phx.server` does NOT hit the real
+# Telegram API by accident. The Fake accumulates sends in ETS and is
+# inspected via `iex> Alethea.Telegram.Client.Fake.sends/0`.
+config :alethea, :telegram_client, Alethea.Telegram.Client.Fake
