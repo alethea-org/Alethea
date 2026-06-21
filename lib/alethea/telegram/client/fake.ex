@@ -26,6 +26,24 @@ defmodule Alethea.Telegram.Client.Fake do
   The production `Req` adapter (`Alethea.Telegram.Client.Req`) lands
   in PR #3a. This file is the test/dev no-op.
 
+  ## Error injection (PR #3a / TASK-3a-2)
+
+  Tests for the outbound worker's retry / dead-letter paths need to
+  drive `send_message/2` into non-success return values. The Fake
+  supports a FIFO queue of pre-scripted responses via
+  `queue_responses/1`:
+
+      Fake.queue_responses([
+        {:error, {:rate_limited, 2}},   # first call: 429 with Retry-After: 2
+        {:error, :network},             # second call: network failure
+        {:ok, 999_999_999}              # third call: success
+      ])
+      TelegramOutboundWorker.perform(...)   # consumes the queue in order
+
+  Once the queue is exhausted, the Fake falls back to the default
+  `{:ok, <unique message_id>}` path. `reset/0` clears the queue
+  alongside the recorded sends.
+
   ## Why a GenServer (not just an ETS table)
 
   A bare `:ets.new/2` would work for read-mostly test access, but
@@ -92,6 +110,31 @@ defmodule Alethea.Telegram.Client.Fake do
     GenServer.call(__MODULE__, :reset)
   end
 
+  @doc """
+  Queues a list of pre-scripted responses for subsequent `send_message/2`
+  calls. Each call consumes one entry from the head of the queue; once
+  exhausted, the Fake falls back to the default `{:ok, <unique id>}`
+  path. The queue is a FIFO (head = next call). Tests use this to
+  drive the outbound worker's retry / dead-letter paths without a real
+  Telegram API.
+
+  ## Recognised response shapes
+
+    - `{:ok, message_id}` — success; not recorded in the sends list
+      (only the default success path is recorded).
+    - `{:error, {:rate_limited, retry_after_seconds}}` — 429 with
+      `Retry-After` header; the worker's backoff uses this value.
+    - `{:error, :rate_limited}` — 429 without `Retry-After`; the
+      worker falls back to exponential backoff.
+    - `{:error, {:server_error, status_code}}` — 5xx; exponential
+      backoff.
+    - `{:error, :network}` — connection failure; exponential backoff.
+  """
+  @spec queue_responses([{:ok, pos_integer()} | {:error, term()}]) :: :ok
+  def queue_responses(responses) when is_list(responses) do
+    GenServer.call(__MODULE__, {:queue_responses, responses})
+  end
+
   # --- GenServer ---
 
   def start_link(_opts) do
@@ -100,7 +143,7 @@ defmodule Alethea.Telegram.Client.Fake do
 
   @impl true
   def init(_) do
-    state =
+    table =
       case :ets.info(@table) do
         :undefined ->
           :ets.new(@table, [
@@ -115,18 +158,42 @@ defmodule Alethea.Telegram.Client.Fake do
           @table
       end
 
-    {:ok, state}
+    {:ok, %{table: table, queued_responses: []}}
   end
 
   @impl true
-  def handle_call({:send, chat_id, text}, _from, state) do
+  def handle_call({:send, chat_id, text}, _from, %{queued_responses: []} = state) do
     message_id = :rand.uniform(2_147_483_647)
-    :ets.insert(state, {message_id, chat_id, text})
+    :ets.insert(state.table, {message_id, chat_id, text})
     {:reply, {:ok, message_id}, state}
   end
 
-  def handle_call(:sends, _from, state) do
-    rows = :ets.tab2list(state)
+  def handle_call(
+        {:send, chat_id, text},
+        _from,
+        %{queued_responses: [{:ok, _id} = response | rest]} = state
+      ) do
+    # Queued success responses are also recorded in the sends list so
+    # tests can assert on `sends/0` regardless of whether the success
+    # came from the queue or the default path. The recorded id is a
+    # fresh random one — the queued value is a stub `9_999_999` etc.
+    message_id = :rand.uniform(2_147_483_647)
+    :ets.insert(state.table, {message_id, chat_id, text})
+    {:reply, response, %{state | queued_responses: rest}}
+  end
+
+  def handle_call(
+        {:send, _chat_id, _text},
+        _from,
+        %{queued_responses: [{:error, _reason} = response | rest]} = state
+      ) do
+    # Queued error responses are NOT recorded (the test asserts on
+    # `sends/0` to verify the success path, not the error path).
+    {:reply, response, %{state | queued_responses: rest}}
+  end
+
+  def handle_call(:sends, _from, %{table: table} = state) do
+    rows = :ets.tab2list(table)
 
     sends =
       Enum.map(rows, fn {message_id, chat_id, text} ->
@@ -136,8 +203,12 @@ defmodule Alethea.Telegram.Client.Fake do
     {:reply, sends, state}
   end
 
-  def handle_call(:reset, _from, state) do
-    :ets.delete_all_objects(state)
-    {:reply, :ok, state}
+  def handle_call(:reset, _from, %{table: table} = state) do
+    :ets.delete_all_objects(table)
+    {:reply, :ok, %{state | queued_responses: []}}
+  end
+
+  def handle_call({:queue_responses, responses}, _from, state) do
+    {:reply, :ok, %{state | queued_responses: responses}}
   end
 end

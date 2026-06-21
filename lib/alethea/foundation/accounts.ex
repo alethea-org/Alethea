@@ -94,4 +94,39 @@ defmodule Alethea.Foundation.Accounts do
     # the lookup into returning a row.
     :not_found
   end
+
+  @doc """
+  Resolves the legacy `Alethea.Accounts.Patient` row that the given
+  foundation Patient is bridged to via `legacy_patient_id`.
+
+  Per REQ-C3-worker-resolves-patient + C-5, the Telegram worker
+  resolves the inbound chat via `lookup_patient_by_chat_hash/1`
+  (returns a foundation row) and then needs the legacy row to
+  persist the `Message` (the `messages.patient_id` column references
+  `patients.id`). This function is that bridge.
+
+  Returns `{:ok, %Alethea.Accounts.Patient{}}` if the foundation row
+  has `legacy_patient_id` set, `:not_linked` if it is `nil` (the
+  foundation row exists but the patient has not been onboarded to the
+  clinical pipeline), or `{:error, :legacy_not_found}` if the
+  `legacy_patient_id` is set but the referenced legacy row is gone
+  (deleted out from under the FK — possible because
+  `on_delete: :nilify_all` only fires on the next write; until then
+  the dangling FK is detectable here).
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. The legacy patient id is an internal FK;
+  the foundation Patient id is the public surface.
+  """
+  @spec legacy_patient(Patient.t()) ::
+          {:ok, Alethea.Accounts.Patient.t()} | :not_linked | {:error, :legacy_not_found}
+  def legacy_patient(%Patient{legacy_patient_id: nil}), do: :not_linked
+
+  def legacy_patient(%Patient{legacy_patient_id: legacy_id}) do
+    case Repo.get(Alethea.Accounts.Patient, legacy_id) do
+      nil -> {:error, :legacy_not_found}
+      %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
+    end
+  end
 end

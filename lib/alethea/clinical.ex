@@ -21,7 +21,8 @@ defmodule Alethea.Clinical do
           String.t(),
           String.t(),
           String.t() | nil,
-          binary() | nil
+          binary() | nil,
+          String.t() | nil
         ) ::
           {:ok, Message.t()} | {:error, term()} | {:error, :duplicate, Message.t()}
   def save_message(
@@ -31,7 +32,8 @@ defmodule Alethea.Clinical do
         direction,
         behavior_type,
         whatsapp_message_id \\ nil,
-        session_id \\ nil
+        session_id \\ nil,
+        telegram_message_id \\ nil
       ) do
     with {:ok, dek} <- get_dek(patient, dek),
          {:ok, encrypted_content} <- PatientVault.encrypt(text, dek) do
@@ -49,6 +51,11 @@ defmodule Alethea.Clinical do
           do: Map.put(attrs, :whatsapp_message_id, whatsapp_message_id),
           else: attrs
 
+      attrs =
+        if telegram_message_id,
+          do: Map.put(attrs, :telegram_message_id, telegram_message_id),
+          else: attrs
+
       %Message{}
       |> Message.changeset(attrs)
       |> Repo.insert()
@@ -57,15 +64,99 @@ defmodule Alethea.Clinical do
           {:ok, message}
 
         {:error, changeset} ->
-          if Keyword.has_key?(changeset.errors, :whatsapp_message_id) && whatsapp_message_id do
-            case Repo.get_by(Message, whatsapp_message_id: whatsapp_message_id) do
-              nil -> {:error, changeset}
-              existing_message -> {:error, :duplicate, existing_message}
-            end
-          else
-            {:error, changeset}
+          cond do
+            Keyword.has_key?(changeset.errors, :whatsapp_message_id) && whatsapp_message_id ->
+              case Repo.get_by(Message, whatsapp_message_id: whatsapp_message_id) do
+                nil -> {:error, changeset}
+                existing_message -> {:error, :duplicate, existing_message}
+              end
+
+            Keyword.has_key?(changeset.errors, :telegram_message_id) && telegram_message_id ->
+              # Telegram duplicates are surfaced as raw errors so the
+              # worker treats them as retry-eligible (REQ-C3). The
+              # Oban unique-period on `telegram_update_id` is the
+              # first line of defence; this DB-level constraint is
+              # the safety net for replays outside the Oban window.
+              {:error, changeset}
+
+            true ->
+              {:error, changeset}
           end
       end
+    end
+  end
+
+  @doc """
+  Persists a `Message` for the Telegram channel (REQ-C3-worker-persists-message
+  + REQ-C5-persist-inbound-message + REQ-C5-persist-outbound-reply).
+
+  Unlike `save_message/8`, this variant takes the **foundation**
+  `Alethea.Foundation.Accounts.Patient` (the row returned by
+  `lookup_patient_by_chat_hash/1`) and the Telegram `message_id`. It
+  resolves the legacy `Alethea.Accounts.Patient` via
+  `Alethea.Foundation.Accounts.legacy_patient/1`, then delegates to
+  `save_message/8` (passing `telegram_message_id` as the 8th arg) for
+  the encryption + insert.
+
+  The split between foundation and legacy Patient schemas is
+  deliberate: the foundation row is the public identity surface
+  (carries `telegram_chat_id_hash`, the tenant boundary); the legacy
+  row backs the clinical pipeline (carries the DEK, the messages FK).
+  This function is the single bridge.
+
+  Returns `{:ok, %Message{}}` on success,
+  `{:error, :not_linked}` if the foundation row has no
+  `legacy_patient_id` set (the patient has not been onboarded to the
+  clinical pipeline — should not happen in production for bound
+  patients; surfaces the data integrity gap loudly),
+  `{:error, :legacy_not_found}` if the referenced legacy row is gone,
+  or `{:error, reason}` for downstream failures.
+
+  ## Duplicate handling
+
+  The `telegram_message_id` partial unique index rejects a second
+  row for the same id. Unlike the WhatsApp path (which catches the
+  constraint and returns `{:error, :duplicate, existing}`), this
+  function surfaces the changeset error to the caller — the worker
+  treats it as a retry-eligible failure (REQ-C3-worker-persists-message
+  "persistence failure crashes the job"). The Oban unique-period on
+  `telegram_update_id` is the first line of defence; this DB-level
+  constraint is the safety net for replays outside the Oban window.
+  """
+  @spec save_telegram_message(
+          Alethea.Foundation.Accounts.Patient.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t() | nil,
+          binary() | nil
+        ) :: {:ok, Message.t()} | {:error, term()}
+  def save_telegram_message(
+        foundation_patient,
+        text,
+        direction,
+        behavior_type,
+        telegram_message_id,
+        session_id \\ nil
+      ) do
+    case Alethea.Foundation.Accounts.legacy_patient(foundation_patient) do
+      {:ok, legacy_patient} ->
+        save_message(
+          legacy_patient,
+          text,
+          nil,
+          direction,
+          behavior_type,
+          nil,
+          session_id,
+          telegram_message_id
+        )
+
+      :not_linked ->
+        {:error, :not_linked}
+
+      {:error, :legacy_not_found} ->
+        {:error, :legacy_not_found}
     end
   end
 

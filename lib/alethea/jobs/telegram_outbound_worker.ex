@@ -1,0 +1,196 @@
+defmodule Alethea.Jobs.TelegramOutboundWorker do
+  @moduledoc """
+  Oban worker that ships an outbound Telegram reply to the patient
+  (C-7 outbound + dead-letter; PR #3a / TASK-3a-2).
+
+  ## Lifecycle
+
+    1. Acquire a Pacer token for the chat (`Pacer.acquire/1`). This
+       blocks until both the per-chat bucket (1 msg/s) and the
+       global bucket (30 msg/s) have tokens.
+    2. Call `Alethea.Telegram.Client.send_message(chat_id, body)`.
+       The adapter is selected at compile-time from
+       `Application.get_env(:alethea, :telegram_client)`.
+    3. On `{:ok, _}` → return `:ok`.
+    4. On `{:error, reason}`:
+       - If `attempt >= @max_attempts` (5): write a dead-letter row to
+         `foundation_outbound_dead_letters`, broadcast
+         `{:outbound_dead_letter, %{…}}` on `"ops:alerts"`, and
+         return `:ok` so Oban does NOT schedule a 6th retry.
+       - Else: reschedule via `Oban.insert/2` with a
+         `scheduled_at` computed from the backoff + jitter rules.
+
+  ## Backoff (REQ-C7-429-retry-with-jitter)
+
+  The cap-and-jitter rules:
+    - 429 with `Retry-After: N` → `N` seconds ± 25% jitter.
+    - 5xx / network / unknown → `base_backoff_ms * 2^(attempt - 1)`
+      capped at `max_backoff_ms`, ± 25% jitter.
+    - Production defaults: `base_backoff_ms = 1_000`,
+      `max_backoff_ms = 300_000` (5 min). Tests override.
+
+  ## Why `max_attempts: 1` on the worker
+
+  Oban's built-in retry would stack on top of the worker's own
+  exponential backoff (`Oban.retry` uses its own `backoff` config,
+  not the worker's). `max_attempts: 1` ensures Oban does NOT
+  auto-retry on top of the worker's manual `Oban.insert/2`
+  reschedule. The retry counter (`_attempt`) is passed in the args
+  and incremented by the worker itself.
+
+  ## Why the chat_id is in the args (PHI surface)
+
+  The args carry BOTH `chat_id_hash` (for the Pacer key) AND
+  `chat_id` (the plaintext Telegram identifier, required by
+  `Client.send_message/2`). The chat_id is the Telegram API's
+  addressing primitive; without it the send cannot happen. The
+  hash is the rate-limit key (PHI hygiene: logs carry the prefix
+  only). Both surfaces are intentional and documented.
+
+  ## Out of scope (PR #3b)
+
+  - Crisis-bypass `perform_now/1` escalation when the crisis queue
+    reports `:queue_full` (REQ-C7-crisis-queue-full-escalation).
+  - The crisis lane `:telegram_outbound_crisis` queue is registered
+    (PR #2) but the worker body does not route to it yet — the
+    `TelegramMessageWorker` enqueues on `:telegram_outbound` only.
+  """
+
+  use Oban.Worker, queue: :telegram_outbound, max_attempts: 1
+
+  require Logger
+
+  alias Alethea.Telegram.{Pacer, Client}
+  alias Alethea.Foundation.Accounts.OutboundDeadLetter
+  alias Alethea.Repo
+
+  @max_attempts 5
+  @base_backoff_ms 1_000
+  @max_backoff_ms 300_000
+  @jitter_ratio 0.25
+
+  @impl Oban.Worker
+  def perform(%Oban.Job{args: args, attempt: _oban_attempt}) do
+    chat_id = Map.fetch!(args, "chat_id")
+    chat_id_hash = Map.fetch!(args, "chat_id_hash")
+    body = Map.fetch!(args, "body")
+    attempt = Map.get(args, "_attempt", 1)
+
+    # 1. Pacer acquire. Blocks until tokens are available (1 msg/s/chat
+    #    AND 30 msg/s global). The Pacer does NOT raise — it sleeps
+    #    inside the GenServer and returns `:ok` when the token is
+    #    granted.
+    Pacer.acquire(chat_id_hash)
+
+    # 2. Send.
+    case telegram_client().send_message(chat_id, body) do
+      {:ok, _message_id} ->
+        :ok
+
+      {:error, reason} when attempt >= @max_attempts ->
+        dead_letter_and_broadcast(chat_id_hash, body, reason, attempt)
+        :ok
+
+      {:error, reason} ->
+        reschedule(args, attempt + 1, compute_backoff_ms(attempt, reason))
+        :ok
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Backoff computation
+  # ----------------------------------------------------------------
+
+  # 429 with Retry-After → use the header value (in seconds) ± jitter.
+  defp compute_backoff_ms(_attempt, {:rate_limited, retry_after_seconds})
+       when is_integer(retry_after_seconds) and retry_after_seconds > 0 do
+    base_ms = retry_after_seconds * 1_000
+    apply_jitter(base_ms)
+  end
+
+  # 5xx / network / unknown → exponential backoff capped at @max_backoff_ms.
+  defp compute_backoff_ms(attempt, _reason) do
+    exponent = max(attempt - 1, 0)
+    base_ms = min(@base_backoff_ms * Integer.pow(2, exponent), @max_backoff_ms)
+    apply_jitter(base_ms)
+  end
+
+  # ± 25% jitter: `base_ms + (rand - 0.5) * 2 * 0.25 * base_ms`.
+  # The lower bound is `base_ms * (1 - jitter_ratio)`; the upper bound
+  # is `base_ms * (1 + jitter_ratio)`.
+  defp apply_jitter(base_ms) do
+    spread = trunc(base_ms * @jitter_ratio)
+    jitter = :rand.uniform(spread * 2 + 1) - spread - 1
+    max(base_ms + jitter, 0)
+  end
+
+  # ----------------------------------------------------------------
+  # Rescheduling
+  # ----------------------------------------------------------------
+
+  defp reschedule(args, next_attempt, delay_ms) do
+    scheduled_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+    new_args = Map.put(args, "_attempt", next_attempt)
+
+    new_args
+    |> new(scheduled_at: scheduled_at)
+    |> Oban.insert()
+    |> case do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("TelegramOutboundWorker: failed to reschedule (reason=#{inspect(reason)})")
+
+        :ok
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Dead-letter + PubSub broadcast
+  # ----------------------------------------------------------------
+
+  defp dead_letter_and_broadcast(chat_id_hash, body, reason, attempt) do
+    last_error = inspect(reason)
+
+    {:ok, _row} =
+      %OutboundDeadLetter{}
+      |> OutboundDeadLetter.changeset(%{
+        chat_id_hash: chat_id_hash,
+        text: body,
+        last_error: last_error,
+        attempts: attempt,
+        failed_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+      |> Repo.insert()
+
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "ops:alerts",
+      {:outbound_dead_letter,
+       %{
+         chat_id_hash: chat_id_hash,
+         text: body,
+         error: last_error,
+         attempts: attempt,
+         at: DateTime.utc_now()
+       }}
+    )
+
+    Logger.error(
+      "TelegramOutboundWorker: exhausted retries, dead-letter written " <>
+        "(chat_id_hash_prefix=#{String.slice(chat_id_hash, 0, 8)}, " <>
+        "attempts=#{attempt}, error=#{last_error})"
+    )
+
+    :ok
+  end
+
+  # ----------------------------------------------------------------
+  # Config adapter resolution
+  # ----------------------------------------------------------------
+
+  defp telegram_client do
+    Application.get_env(:alethea, :telegram_client, Client.Fake)
+  end
+end

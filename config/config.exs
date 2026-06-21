@@ -74,12 +74,13 @@ config :alethea, Oban,
 # gets a fresh bucket state.
 config :alethea, :start_telegram_pacer, true
 
-# Telegram Client adapter (PR #2 TASK-2-8). Defaults to the Fake
-# so a missing config degrades to the no-op adapter (a crash on
-# start would be worse than a no-op). The `Req` production
-# adapter lands in PR #3a — production deployments set this
-# config explicitly.
-config :alethea, :telegram_client, Alethea.Telegram.Client.Fake
+# Telegram Client adapter (PR #3a / TASK-3a-4). Defaults to the
+# Req production adapter for prod (config/config.exs); the `:test`
+# and `:dev` env configs override to the Fake (no-op accumulator
+# adapter that records sends in an ETS table). The behaviour
+# contract `Alethea.Telegram.Client` is what every consumer codes
+# against — the adapter swap is config-only.
+config :alethea, :telegram_client, Alethea.Telegram.Client.Req
 
 # --- AI & Clinical Configuration ---
 

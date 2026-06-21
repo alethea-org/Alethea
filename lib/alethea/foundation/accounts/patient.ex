@@ -37,6 +37,18 @@ defmodule Alethea.Foundation.Accounts.Patient do
   schema "foundation_patients" do
     belongs_to :professional, Professional
 
+    # Bridge to the legacy `patients` table that backs the clinical
+    # message pipeline (REQ-C3-worker-resolves-patient + C-5).
+    # Nullable: a foundation row may exist before the patient is
+    # onboarded to the clinical pipeline (e.g., created by foundation
+    # admin tools). PR #4 (Telegram onboarding) populates this in
+    # lockstep with the legacy row creation.
+    # `on_delete: :nilify_all` on the FK so deleting a legacy patient
+    # (GDPR right-to-erasure, admin tooling) does NOT cascade-delete
+    # the foundation identity row — see migration
+    # `20260620000002_add_legacy_patient_id_to_foundation_patients.exs`.
+    belongs_to :legacy_patient, Alethea.Accounts.Patient, foreign_key: :legacy_patient_id
+
     field :alias, :string
     field :status, :string, default: "active"
 
@@ -99,6 +111,7 @@ defmodule Alethea.Foundation.Accounts.Patient do
       :alias,
       :status,
       :telegram_chat_id_hash,
+      :legacy_patient_id,
       :profile_name,
       :profile_birth_date,
       :profile_gender,
