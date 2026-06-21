@@ -86,12 +86,12 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
     case FoundationAccounts.lookup_patient_by_chat_hash(chat_id_hash) do
       {:ok, foundation_patient} ->
-        process_bound_message(foundation_patient, chat_id_hash, hash_prefix, text,
+        process_bound_message(foundation_patient, chat_id, chat_id_hash, hash_prefix, text,
           telegram_message_id: telegram_message_id
         )
 
       :not_found ->
-        enqueue_unregistered_reply(chat_id_hash, hash_prefix)
+        enqueue_unregistered_reply(chat_id, chat_id_hash, hash_prefix)
         :ok
     end
   end
@@ -102,6 +102,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   defp process_bound_message(
          foundation_patient,
+         chat_id,
          chat_id_hash,
          hash_prefix,
          text,
@@ -131,7 +132,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
       case CrisisMonitor.detect(text) do
         :safe ->
-          handle_safe_path(foundation_patient, chat_id_hash, hash_prefix, inbound, text)
+          handle_safe_path(foundation_patient, chat_id, chat_id_hash, hash_prefix, inbound, text)
 
         {:crisis, _severity, _triggers} ->
           # PR #3b territory — fail loud rather than silently drop.
@@ -141,7 +142,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     end
   end
 
-  defp handle_safe_path(foundation_patient, chat_id_hash, hash_prefix, inbound, text) do
+  defp handle_safe_path(foundation_patient, chat_id, chat_id_hash, hash_prefix, inbound, text) do
     context_limit =
       Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10
 
@@ -159,6 +160,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       {:ok, %{content: reply}} when is_binary(reply) and reply != "" ->
         persist_and_enqueue_outbound(
           foundation_patient,
+          chat_id,
           chat_id_hash,
           hash_prefix,
           reply,
@@ -176,6 +178,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   defp persist_and_enqueue_outbound(
          foundation_patient,
+         chat_id,
          chat_id_hash,
          hash_prefix,
          reply,
@@ -196,7 +199,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     # can persist the `reply_to_message_id` directly.
     _ = inbound_message_id
 
-    enqueue_outbound(chat_id_hash, outbound.id, reply, hash_prefix)
+    enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix)
     :ok
   end
 
@@ -217,9 +220,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     end
   end
 
-  defp enqueue_outbound(chat_id_hash, message_id, body, hash_prefix) do
+  defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix) do
     TelegramOutboundWorker.new(%{
       chat_id_hash: chat_id_hash,
+      chat_id: chat_id,
       message_id: message_id,
       body: body,
       lane: :safe
@@ -235,13 +239,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     end
   end
 
-  defp enqueue_unregistered_reply(chat_id_hash, hash_prefix) do
+  defp enqueue_unregistered_reply(chat_id, chat_id_hash, hash_prefix) do
     Logger.info(
       "TelegramMessageWorker: unbound chat, enqueuing unregistered reply " <>
         "(hash_prefix=#{hash_prefix})"
     )
 
-    enqueue_outbound(chat_id_hash, nil, @unregistered_copy, hash_prefix)
+    enqueue_outbound(chat_id_hash, chat_id, nil, @unregistered_copy, hash_prefix)
   end
 
   # ----------------------------------------------------------------
