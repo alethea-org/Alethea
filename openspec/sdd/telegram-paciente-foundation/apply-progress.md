@@ -542,3 +542,136 @@ c559387 feat(telegram): outbound worker paces through Pacer with 429 backoff and
 Total net lines added so far on the PR: ~1,623 (TASK-3a-1: ~814 + TASK-3a-2: ~761). Above the 800 soft budget — TASK-3a-4 will add ~60 more lines. The PR will close at ~1,680 lines, ~2.1× the soft budget.
 
 **Documented in PR body** (per chain strategy): the PR ships the full safe-path meat (worker body + outbound worker + dead-letter + production client) as a single cohesive unit. Splitting them would create half-states where the worker persists clinical records but the outbound path cannot send, or where the outbound worker dead-letters but the production adapter is still the Fake. Strict TDD requires the RED-GREEN-REFACTOR cycle to land on a coherent worker surface, which is one PR.
+
+---
+
+# PR #3a / TASK-3a-4 — Telegram.Client.Req production adapter
+
+**Commit:** `3817185 feat(telegram): add Client Req production adapter` (on `feat/telegram-paciente-foundation/pr-3a-clinical-safe`, pushed).
+**Strict TDD:** active.
+**Status:** ✅ TASK-3a-4 done — PR #3a is COMPLETE (all 4 tasks).
+
+## Plan
+
+| ID | Title | Files (impl) | Files (test) | Est. lines | Final SHA |
+|---|---|---|---|---|---|
+| TASK-3a-4 | Telegram.Client.Req production adapter (Req.Test stubbed) | `lib/alethea/telegram/client/req.ex`, `config/config.exs`, `config/dev.exs` | `test/alethea/telegram/client/req_test.exs` | 30 impl + 30 test = **60** | `3817185` |
+
+## TDD cycle evidence (TASK-3a-4)
+
+### RED (pre-implementation)
+
+Wrote `test/alethea/telegram/client/req_test.exs` with 11 test scenarios covering the full callback contract:
+
+- 200 OK with `message_id` → `{:ok, message_id}`
+- 200 OK with `ok: false` → `{:error, {:http_error, 200, body}}`
+- 200 OK without `message_id` → `{:ok, nil}`
+- 429 with `Retry-After: 2` → `{:error, {:rate_limited, 2}}`
+- 429 without `Retry-After` → `{:error, {:rate_limited, 1}}` (default)
+- 5xx (500, 502, 503, 504) → `{:error, {:server_error, status}}`
+- Network failure (Req.Test stub raises) → `{:error, :network}`
+- Req options read from `Application.get_env(:alethea, :telegram_client_req_options, [])` at call-time
+- Works without req_options config (no crash on missing config)
+- PHI hygiene: bot token is NEVER in any log line (200/429/500)
+- PHI hygiene: message body is NEVER logged on success
+
+Initial RED state: 11/11 tests fail because `Alethea.Telegram.Client.Req` module does not exist (`UndefinedFunctionError`).
+
+### GREEN (implementation)
+
+`lib/alethea/telegram/client/req.ex` — production Req adapter:
+
+- Reads `bot_token` from `Alethea.Telegram.BotToken.bot_token/0` (the sealed-accessor GenServer).
+- Reads `req_options` from `Application.get_env(:alethea, :telegram_client_req_options, [])` (default `[]`).
+- POSTs to `https://api.telegram.org/bot<token>/sendMessage` via `Req.post/2`.
+- Maps responses:
+  - `200` with `body.ok == true` and `result.message_id` (integer) → `{:ok, message_id}`
+  - `200` with `body.ok == true` but no `result.message_id` → `{:ok, nil}`
+  - `200` with `body.ok == false` → `{:error, {:http_error, 200, body}}`
+  - `429` → `{:error, {:rate_limited, parse_retry_after(headers) || 1}}` (default 1s if header missing/unparseable)
+  - `5xx` → `{:error, {:server_error, status}}`
+  - Other 4xx → `{:error, {:http_error, status, body}}`
+  - `{:error, _}` from `Req.post/2` → `{:error, :network}`
+  - Transport exceptions (rescued via `try/rescue`) → `{:error, :network}`
+- `parse_retry_after/1` handles Req 0.5's headers-as-map shape (key: `retry-after`, value: list of strings or a string).
+
+### Final commit
+
+```
+3817185 feat(telegram): add Client Req production adapter
+```
+
+## Test counts (delta)
+
+- After TASK-3a-2+3: 451 tests, 0 failures, 5 skipped.
+- After TASK-3a-4: **462 tests, 0 failures, 5 skipped** (delta: **+11 new tests** in `req_test.exs`).
+
+## `mix precommit` result (on commit `3817185`)
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass.
+- `format --check-formatted`: pass.
+- `test`: 462 tests, 0 failures, 5 skipped.
+
+## Lines changed (TASK-3a-4)
+
+| File | Net delta | Notes |
+|---|---|---|
+| `lib/alethea/telegram/client/req.ex` | NEW (105 lines) | Req adapter with Req 0.5 headers-as-map parsing |
+| `config/config.exs` | +7 / -6 | default `:telegram_client` → `Req` (production) |
+| `config/dev.exs` | +7 / -0 | dev override back to `Fake` (no real Telegram in `mix phx.server`) |
+| `test/alethea/telegram/client/req_test.exs` | NEW (240 lines) | 11 test scenarios with `Req.Test.stub/2` |
+| **Total** | **+359 / -6** in 4 files | est. **60** → actual **359** (6× the budget) |
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec | Status |
+|---|---|---|
+| C-7 production transport (`Req`) | C-7 | ✅ `Alethea.Telegram.Client.Req` is the production adapter; selected via `config :alethea, :telegram_client, Alethea.Telegram.Client.Req` in `config/config.exs`. Dev/test stay on the Fake via overrides. |
+
+## Deviations from `tasks.md`
+
+- **TASK-3a-4 size estimate overshoot** — `tasks.md` estimated "30 impl + 30 test = 60". Actual delta is **+359 / -6 in 4 files** (≈353 net). The 6× overshoot is because:
+  - The adapter's `try/rescue/catch` (≈20 lines) and the Req 0.5 headers-as-map parser (≈15 lines) are non-trivial error-mapping logic not in `tasks.md`.
+  - The test file's setup (BotToken seeding, SQL sandbox allow, Req.Test plug wiring) is ≈50 lines that `tasks.md` did not enumerate.
+  - The two config files (`config/config.exs` + `config/dev.exs`) required careful swapping of the default-with-override semantics.
+- **`Bypass` → `Req.Test`** — `tasks.md` says "tests with Bypass". The project does not have Bypass as a dep; `Req.Test` (already a sub-module of `Req`, itself a dep) was used instead. The behaviour is equivalent: both stub the HTTP layer. The existing test pattern (`config :alethea, Alethea.AI.RoBERTaWorker, req_options: [plug: {Req.Test, …}]`) established `Req.Test` as the project's HTTP-stub idiom. The adapter reads `:telegram_client_req_options` from `Application.get_env` to honour this plug.
+- **`try/rescue/catch` around `Req.post/2`** — `Req` does not catch transport exceptions (connection refused, DNS failure, socket reset). The adapter wraps the call in `try/rescue/catch` so transport failures surface as `{:error, :network}` rather than propagating to the outbound worker. This unifies the retry / dead-letter path: 5xx, 429, and network errors all funnel into the same exponential-backoff + dead-letter logic.
+
+## PR #3a cumulative progress — ALL TASKS COMPLETE
+
+| ID | Title | SHA | Net lines |
+|---|---|---|---|
+| TASK-3a-1 | TelegramMessageWorker full body | `76f4cf8` | +814 |
+| TASK-3a-2 | TelegramOutboundWorker body + Fake extension | `c559387` | +809 / -48 |
+| TASK-3a-3 | TelegramDeadLetter schema + migration (folded into TASK-3a-2) | (same) | — |
+| TASK-3a-4 | Telegram.Client.Req production adapter | `3817185` | +359 / -6 |
+| **PR #3a total** | | | **+1,991 / -150 in 20 files** (4 commits) |
+
+**Honest overshoot (cumulative):** the soft budget was 800 lines; PR #3a closes at ≈1,840 net. The 2.3× overshoot is documented in the PR body per chain strategy — the safe-path meat (worker body + outbound worker + dead-letter + production client) is a single cohesive unit. Splitting would create half-states where the worker persists clinical records but the outbound path cannot send, or where the outbound worker dead-letters but the production adapter is still the Fake. Strict TDD requires the RED-GREEN-REFACTOR cycle to land on a coherent worker surface, which is one PR.
+
+**Why this PR is larger than `tasks.md` estimated:** `tasks.md` enumerated the worker body, the outbound worker, and the schema as the three "obvious" pieces. It did NOT enumerate: (a) the foundation→legacy Patient bridge (`legacy_patient_id` FK + `Foundation.Accounts.legacy_patient/1` + `Clinical.save_telegram_message/7`), (b) the `telegram_message_id` column + partial unique index, (c) the `chat_id` PHI surface in outbound args, (d) the `Alethea.Telegram.Client.Fake` error-injection refactor, (e) the production `Req` adapter's `try/rescue` and headers-as-map parser, (f) the config/dev overrides. All six are coherent with the spec but undocumented in `tasks.md`.
+
+## Next step
+
+PR #3a is complete. Ready to open against `pr-1b-foundations-b`:
+
+```
+gh pr create \
+  --base pr-1b-foundations-b \
+  --head feat/telegram-paciente-foundation/pr-3a-clinical-safe \
+  --title "feat(telegram): clinical round-trip safe path with outbound pacer and dead letter" \
+  --body-file ...
+```
+
+Use the PR body template from `tasks.md` §"PR #3a PR body (branch-pr convention)".
+
+After the PR is opened, **the chain state becomes**:
+
+```
+pr-1b-foundations-b  (7470de8 — PR #2 merge #75)
+  └─ pr-3a-clinical-safe  (3817185 — TASK-3a-1+2+3+4, ready for review)
+```
+
+PR #3b (crisis branch) and PR #4 (onboarding) follow in separate sessions.
