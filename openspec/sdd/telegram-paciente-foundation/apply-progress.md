@@ -768,3 +768,87 @@ Initial RED state: 9/10 tests fail with `RuntimeError: TelegramMessageWorker: cr
 - TASK-3b-6 ⏳ pending — Crisis integration scenarios (end-to-end)
 
 Cumulative after TASK-3b-1: ~468 lines. `tasks.md` total estimate for PR #3b: 585 lines. Pace on track (~80% of the budget consumed by the first of six tasks; the remaining five are smaller — integration scenarios, queue config, queue-full escalation, ops broadcast, log redaction).
+
+---
+
+# PR #3b / TASK-3b-2 — Crisis priority lane (max_demand: 2, priority: 1) + Pacer preservation
+
+**Commit:** `2ad51b1 feat(telegram): crisis priority lane preserves Pacer acquire` (on `feat/telegram-paciente-foundation/pr-3b-clinical-crisis`, pushed).
+**Strict TDD:** active.
+**Status:** ✅ TASK-3b-2 done.
+
+## TDD cycle evidence (TASK-3b-2)
+
+### RED (pre-implementation)
+
+Extended `test/alethea/jobs/telegram_outbound_worker_test.exs` with a new `describe "perform/1 — crisis lane"` block (4 tests) and `describe "config :telegram_outbound_crisis queue"` (2 tests):
+
+- Pacer.acquire/1 is called for crisis jobs (Pacer per-chat bucket drained after the send — proves the rate-limit safety net fires for the crisis lane too)
+- `lane` field preserved on reschedule (crisis retry stays on `:telegram_outbound_crisis` queue)
+- `priority` field preserved on reschedule (crisis jobs keep `priority: 1` across retries)
+- default priority for a crisis job is 0 when no explicit priority is passed
+- `:telegram_outbound_crisis` queue configured with `max_demand: 2` per spec
+- `:telegram_outbound_crisis` queue configured with `priority: 1` (above the safe `:telegram_outbound` default of 0)
+
+Initial RED state: 3/6 tests failed — the worker did not pass `lane` or `priority` to the rescheduled job, and the queue config still had `telegram_outbound_crisis: 10` (the PR #2 default).
+
+### GREEN (implementation)
+
+1. **`Alethea.Jobs.TelegramOutboundWorker.perform/1`** — destructure `priority: oban_priority` from the Oban.Job struct; read `lane` and `priority` from the args; pass both to `reschedule/5` and `dead_letter_and_broadcast/5`. The Pacer call is unchanged — REQ-C7-crisis-priority-lane is explicit: the rate-limit MUST NEVER be bypassed, the Pacer is the safety net.
+2. **`reschedule/5`** — new arity; selects the queue by lane (`:telegram_outbound_crisis` for `:crisis`, `:telegram_outbound` for `:safe`); passes `priority` to `Oban.insert/2` so the rescheduled job keeps its Oban priority.
+3. **`dead_letter_and_broadcast/5`** — new arity; includes `lane: lane` in the PubSub broadcast payload (the dead-letter row itself stays audit-only, per the PR #3a decision).
+4. **`config/config.exs`** — `telegram_outbound_crisis: 10` → `telegram_outbound_crisis: [max_demand: 2, priority: 1]`. The Oban full queue-spec syntax (keyword list with `:max_demand` and `:priority`) is documented in the inline comment.
+
+### Final commit
+
+```
+2ad51b1 feat(telegram): crisis priority lane preserves Pacer acquire
+```
+
+## Test counts (delta)
+
+- After TASK-3b-1: 472 tests, 0 failures, 5 skipped.
+- After TASK-3b-2: **478 tests, 0 failures, 5 skipped** (delta: **+6 new tests** in the crisis lane + config describe blocks).
+
+## `mix precommit` result (on commit `2ad51b1`)
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass.
+- `format --check-formatted`: pass.
+- `test`: 478 tests, 0 failures, 5 skipped.
+
+## Lines changed (TASK-3b-2)
+
+| File | Net delta | Notes |
+|---|---|---|
+| `config/config.exs` | +8 / -1 | `telegram_outbound_crisis: 10` → `telegram_outbound_crisis: [max_demand: 2, priority: 1]` |
+| `lib/alethea/jobs/telegram_outbound_worker.ex` | +25 / -8 | perform/1 reads `lane` + `priority`; reschedule/5 selects queue by lane; dead_letter_and_broadcast/5 includes lane in payload |
+| `test/alethea/jobs/telegram_outbound_worker_test.exs` | +135 / -2 | 6 new tests in two describe blocks; build_args/perform helpers extended with `lane` + `priority` kwargs |
+| **Total** | **+168 / -11** in 3 files | est. **100** in `tasks.md` → actual **+157 net** (1.5× the budget) |
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec | Status |
+|---|---|---|
+| `REQ-C7-crisis-priority-lane` (queue max_demand: 2) | C-7 | ✅ `telegram_outbound_crisis: [max_demand: 2, priority: 1]` in `config/config.exs`. Asserted in test. |
+| `REQ-C7-crisis-priority-lane` (Pacer preservation) | C-7 | ✅ The Pacer call in `perform/1` is unconditional — crisis jobs MUST call `Pacer.acquire/1` before sending. Asserted by inspecting the Pacer per-chat bucket before/after the send. |
+
+## Deviations from `tasks.md`
+
+- **`max_attempts: 1` worker choice (carry-over from PR #3a):** the worker manages its own retry budget via the `_attempt` arg counter, NOT via Oban's built-in `max_attempts`. This was the PR #3a decision (to avoid Oban's built-in backoff stacking on top of the worker's manual jittered backoff). TASK-3b-2 preserves this — the `priority` field is forwarded to the rescheduled job via `Oban.insert(..., priority: priority)`, but the worker's `max_attempts: 1` declaration is unchanged.
+- **Oban queue priority vs job priority:** the spec says "priority" is a queue-level concern (REQ-C7-crisis-priority-lane "so that crisis messages are processed independently of normal outbound traffic"). I set BOTH:
+  - **Queue-level:** `telegram_outbound_crisis: [priority: 1]` (above `telegram_outbound`'s default 0) — Oban picks crisis jobs first when both queues have pending work.
+  - **Job-level:** `priority: 1` on the crisis job (preserved across retries) — within the crisis queue, this job is picked before other (priority 0) jobs.
+  - This is a defense-in-depth approach. The queue-level priority prevents starvation; the job-level priority ensures ordering within the queue.
+
+## PR #3b cumulative progress (after TASK-3b-2)
+
+- TASK-3b-1 ✅ (commit `007eca9`, +468 net)
+- TASK-3b-2 ✅ (commit `2ad51b1`, +157 net)
+- TASK-3b-3 ⏳ pending — Queue-full escalation to `perform_now/1`
+- TASK-3b-4 ⏳ pending — `ops:alerts` PubSub broadcast on crisis dead-letter
+- TASK-3b-5 ⏳ pending — Crisis-path log redaction (R-1 hygiene)
+- TASK-3b-6 ⏳ pending — Crisis integration scenarios (end-to-end)
+
+Cumulative after TASK-3b-2: ~625 lines. `tasks.md` total estimate for PR #3b: 585 lines. **Slightly over budget** (107%) but within the soft 800-line threshold. The remaining 4 tasks are smaller — escalation (150 est.), ops broadcast (45 est.), log redaction (50 est.), integration scenarios (80 est.).
