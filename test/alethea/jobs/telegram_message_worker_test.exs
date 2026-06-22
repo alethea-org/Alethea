@@ -287,6 +287,243 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # Crisis branch (REQ-C5-crisis-bypasses-llm, REQ-C5-crisis-broadcasts-alert,
+  #                REQ-C5-persist-outbound-reply — crisis source)
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — crisis branch" do
+    setup :setup_bound_patient
+
+    setup do
+      # Each crisis test subscribes to the psychologist alerts topic
+      # to assert the broadcast shape.
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      :ok
+    end
+
+    test "on :crisis classification, the LLM is NOT invoked (REQ-C5 scenario: never produces a neutral LLM reply)",
+         ctx do
+      Application.put_env(:alethea, :ai_llm, ProbeLLM)
+      _ = ctx
+
+      text = "me voy a quitar la vida"
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args: build_args(text, telegram_message_id: 700, telegram_update_id: 70)
+               })
+
+      # ProbeLLM records calls by sending a message to the test pid.
+      # No call should arrive.
+      refute_received {:llm_called, _}, 200
+    end
+
+    test "persists the inbound Message with direction: 'inbound', behavior_type: 'spontaneous' (crisis share the inbound path)",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a suicidar",
+                     telegram_message_id: 701,
+                     telegram_update_id: 71
+                   )
+               })
+
+      inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+      assert inbound
+      assert inbound.telegram_message_id == "701"
+      assert inbound.behavior_type == "spontaneous"
+      assert inbound.patient_id == ctx.legacy_patient.id
+    end
+
+    test "marks the patient as urgent_intervention: true (REQ-C5-crisis-bypasses-llm 'marks urgent_intervention')",
+         ctx do
+      _ = ctx
+
+      assert ctx.legacy_patient.urgent_intervention == false
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a matar", telegram_message_id: 702, telegram_update_id: 72)
+               })
+
+      updated = Alethea.Accounts.get_patient!(ctx.legacy_patient.id)
+      assert updated.urgent_intervention == true
+    end
+
+    test "saves a crisis-bypass ai_diagnosis row (REQ-C5 'Clinical.save_ai_diagnosis ... model_version: crisis-bypass')",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("tengo el plan y los medios",
+                     telegram_message_id: 703,
+                     telegram_update_id: 73
+                   )
+               })
+
+      inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+      diagnosis = Repo.one(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+
+      assert diagnosis
+      assert diagnosis.model_version == "crisis-bypass"
+      assert diagnosis.ai_response == ctx.legacy_patient.professional.crisis_message
+      assert diagnosis.extracted_emotions["crisis"] == true
+      assert diagnosis.extracted_emotions["level"] == "immediate"
+    end
+
+    test "broadcasts :crisis_detected on 'psychologist:alerts' PubSub (REQ-C5-crisis-broadcasts-alert)",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a suicidar",
+                     telegram_message_id: 704,
+                     telegram_update_id: 74
+                   )
+               })
+
+      assert_receive {:crisis_detected,
+                      %{
+                        patient_id: patient_id,
+                        chat_id_hash: chat_id_hash,
+                        level: level,
+                        triggers: triggers,
+                        at: at
+                      }},
+                     1_000
+
+      assert patient_id == ctx.legacy_patient.id
+      assert chat_id_hash == @chat_id_hash
+      assert level in [:immediate, :high, :low]
+      assert is_list(triggers)
+      assert is_struct(at, DateTime)
+    end
+
+    test "uses the legacy Patient's professional.crisis_message as the outbound body", ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a quitar la vida",
+                     telegram_message_id: 705,
+                     telegram_update_id: 75
+                   )
+               })
+
+      outbound = Repo.one(from m in Message, where: m.direction == "outbound")
+      assert outbound
+
+      # The crisis-bypass reply lives in the legacy Professional's
+      # `crisis_message` field; the test helper seeds it with the
+      # default text. The outbound Message body is encrypted via
+      # Clinical.save_message, so we decrypt to assert.
+      assert decrypted_outbound_body(outbound) == ctx.legacy_patient.professional.crisis_message
+    end
+
+    test "persists the outbound Message with direction: 'outbound', behavior_type: 'crisis_bypass' (REQ-C5-persist-outbound-reply 'crisis_bypass source')",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a matar", telegram_message_id: 706, telegram_update_id: 76)
+               })
+
+      outbound = Repo.one(from m in Message, where: m.direction == "outbound")
+      assert outbound
+      assert outbound.behavior_type == "crisis_bypass"
+    end
+
+    test "enqueues a TelegramOutboundWorker on :telegram_outbound_crisis with lane: :crisis",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a suicidar",
+                     telegram_message_id: 707,
+                     telegram_update_id: 77
+                   )
+               })
+
+      # The crisis lane enqueue has `lane: :crisis` and uses the
+      # preconfigured crisis_message as the body. The TelegramOutbound
+      # Worker job lives on the :telegram_outbound_crisis queue
+      # (its declared queue).
+      assert_enqueued(
+        worker: TelegramOutboundWorker,
+        args: %{chat_id_hash: @chat_id_hash, lane: :crisis}
+      )
+
+      # No job on the safe-path queue.
+      safe_jobs =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.queue == "telegram_outbound" and j.state == "scheduled"
+        )
+
+      assert safe_jobs == []
+    end
+
+    test "safe classification does NOT broadcast on 'psychologist:alerts'", ctx do
+      _ = ctx
+      Process.delete(:telegram_test_pid)
+
+      # Subscribe in the test process (the setup :setup_bound_patient
+      # runs in a different test context, so we re-subscribe here).
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("hola, buen día", telegram_message_id: 708, telegram_update_id: 78)
+               })
+
+      refute_receive {:crisis_detected, _}, 200
+
+      # Regression: the legacy patient's urgent_intervention flag
+      # must NOT have been set on the safe path.
+      assert Alethea.Accounts.get_patient!(ctx.legacy_patient.id).urgent_intervention == false
+    end
+  end
+
+  describe "perform/1 — crisis branch with a customized crisis_message" do
+    setup :setup_bound_patient_with_custom_crisis_message
+
+    test "uses the customized crisis_message in the outbound body and the diagnosis",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a quitar la vida",
+                     telegram_message_id: 800,
+                     telegram_update_id: 80
+                   )
+               })
+
+      outbound = Repo.one(from m in Message, where: m.direction == "outbound")
+      assert decrypted_outbound_body(outbound) == "Custom reply from Dr. Test"
+
+      inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+      diagnosis = Repo.one(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+      assert diagnosis.ai_response == "Custom reply from Dr. Test"
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
 
@@ -303,10 +540,22 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   end
 
   defp setup_bound_patient(_ctx) do
+    setup_bound_patient_with_crisis_message(nil)
+  end
+
+  defp setup_bound_patient_with_custom_crisis_message(_ctx) do
+    setup_bound_patient_with_crisis_message("Custom reply from Dr. Test")
+  end
+
+  defp setup_bound_patient_with_crisis_message(crisis_message) do
     foundation_pro = professional_fixture()
     foundation_pat = patient_fixture(foundation_pro, %{alias: "Pat#{unique_int()}"})
 
-    legacy_pro = insert_legacy_professional()
+    legacy_pro =
+      insert_legacy_professional_with_crisis_message(
+        crisis_message || "Estoy aquí para ayudarte. Llamame al 0800-..."
+      )
+
     legacy_pat = insert_legacy_patient(legacy_pro, "alias-#{unique_int()}")
 
     foundation_pat =
@@ -317,6 +566,11 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       })
       |> Repo.update!()
 
+    # Preload the professional on the legacy patient so the worker
+    # can read `legacy_patient.professional.crisis_message` without
+    # a follow-up DB hit.
+    legacy_pat = Alethea.Accounts.get_patient_with_professional(legacy_pat.id)
+
     [
       foundation_patient: foundation_pat,
       legacy_patient: legacy_pat,
@@ -324,7 +578,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     ]
   end
 
-  defp insert_legacy_professional do
+  defp insert_legacy_professional_with_crisis_message(crisis_message) do
     {:ok, pro} =
       Alethea.Accounts.create_professional(%{
         email: "pro-#{unique_int()}@test.local",
@@ -332,7 +586,12 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
         full_name: "Test Pro #{unique_int()}"
       })
 
+    # `create_professional` does not accept `crisis_message` in the
+    # first-arg attrs (the changeset only casts email/password/full_name).
+    # Update the row directly.
     pro
+    |> Ecto.Changeset.change(%{crisis_message: crisis_message})
+    |> Repo.update!()
   end
 
   defp insert_legacy_patient(professional, alias_name) do
@@ -352,4 +611,20 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   end
 
   defp unique_int, do: System.unique_integer([:positive])
+
+  defp decrypted_outbound_body(%Message{} = message) do
+    # Outbound messages are encrypted at rest via Clinical.save_message
+    # (Cloak.Ecto + the legacy Patient's DEK). For the test to assert on
+    # the body content we read it back through the same Clinical path
+    # the production worker uses.
+    {:ok, legacy_patient} =
+      Alethea.Foundation.Accounts.legacy_patient(
+        Alethea.Foundation.Accounts.Patient
+        |> Repo.get_by!(legacy_patient_id: message.patient_id)
+      )
+
+    {:ok, dek} = Alethea.Clinical.patient_dek(legacy_patient)
+    {:ok, plaintext} = Alethea.Clinical.decrypt_message_content(message, dek)
+    plaintext
+  end
 end

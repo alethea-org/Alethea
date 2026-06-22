@@ -53,7 +53,12 @@ defmodule Alethea.Clinical.Message do
       :patient_id
     ])
     |> validate_inclusion(:direction, ["inbound", "outbound"])
-    |> validate_inclusion(:behavior_type, ["spontaneous", "elicited"])
+    # `crisis_bypass` was added in PR #3b (TASK-3b-1) per REQ-C5-persist-outbound-reply
+    # "crisis reply is persisted with crisis_bypass source". The DB-side check
+    # constraint was widened in migration
+    # `20260622000001_add_crisis_bypass_to_message_behavior_type.exs`; the
+    # Ecto-level validate_inclusion is kept in lockstep with the DB constraint.
+    |> validate_inclusion(:behavior_type, ["spontaneous", "elicited", "crisis_bypass"])
     |> unique_constraint(:whatsapp_message_id)
     |> unique_constraint(:telegram_message_id,
       name: :messages_telegram_message_id_unique

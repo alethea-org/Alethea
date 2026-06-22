@@ -66,7 +66,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   require Logger
 
-  alias Alethea.Clinical
+  alias Alethea.{Accounts, Clinical}
   alias Alethea.AI
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
@@ -117,7 +117,12 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
       :ok
     else
-      {:ok, _legacy_patient} = FoundationAccounts.legacy_patient(foundation_patient)
+      # The crisis branch reads `legacy_patient.professional.crisis_message`,
+      # so we preload the `:professional` association here (the safe
+      # path doesn't need it but the cost is one extra column and the
+      # branch is mutually exclusive with the safe path).
+      {:ok, legacy_patient} = FoundationAccounts.legacy_patient(foundation_patient)
+      legacy_patient = Accounts.get_patient_with_professional(legacy_patient.id)
 
       {:ok, inbound} =
         Clinical.save_telegram_message(
@@ -134,10 +139,17 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         :safe ->
           handle_safe_path(foundation_patient, chat_id, chat_id_hash, hash_prefix, inbound, text)
 
-        {:crisis, _severity, _triggers} ->
-          # PR #3b territory — fail loud rather than silently drop.
-          raise "TelegramMessageWorker: crisis branch is out of scope in PR #3a " <>
-                  "(hash_prefix=#{hash_prefix})"
+        {:crisis, level, triggers} ->
+          handle_crisis_path(
+            foundation_patient,
+            legacy_patient,
+            chat_id,
+            chat_id_hash,
+            hash_prefix,
+            inbound,
+            level,
+            triggers
+          )
       end
     end
   end
@@ -220,14 +232,26 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     end
   end
 
-  defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix) do
-    TelegramOutboundWorker.new(%{
-      chat_id_hash: chat_id_hash,
-      chat_id: chat_id,
-      message_id: message_id,
-      body: body,
-      lane: :safe
-    })
+  defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix, opts \\ []) do
+    lane = Keyword.get(opts, :lane, :safe)
+    # Crisis lane is the dedicated `telegram_outbound_crisis` Oban
+    # queue (REQ-C7-crisis-priority-lane). The safe lane stays on
+    # `telegram_outbound`. The Oban queue name is the Oban worker's
+    # `queue:` option overridden at enqueue-time; the
+    # `TelegramOutboundWorker` module is registered against both
+    # queues in `config/config.exs`.
+    queue = if lane == :crisis, do: :telegram_outbound_crisis, else: :telegram_outbound
+
+    TelegramOutboundWorker.new(
+      %{
+        chat_id_hash: chat_id_hash,
+        chat_id: chat_id,
+        message_id: message_id,
+        body: body,
+        lane: lane
+      },
+      queue: queue
+    )
     |> Oban.insert()
     |> case do
       {:ok, _job} ->
@@ -235,7 +259,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
       {:error, reason} ->
         raise "TelegramMessageWorker: failed to enqueue TelegramOutboundWorker " <>
-                "(reason=#{inspect(reason)}, hash_prefix=#{hash_prefix})"
+                "(reason=#{inspect(reason)}, hash_prefix=#{hash_prefix}, lane=#{lane})"
     end
   end
 
@@ -246,6 +270,111 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     )
 
     enqueue_outbound(chat_id_hash, chat_id, nil, @unregistered_copy, hash_prefix)
+  end
+
+  # ----------------------------------------------------------------
+  # Crisis branch (REQ-C5-crisis-bypasses-llm, REQ-C5-crisis-broadcasts-alert,
+  #                 REQ-C5-persist-outbound-reply)
+  # ----------------------------------------------------------------
+
+  # The crisis branch (REQ-C5-crisis-bypasses-llm): on a `:crisis`
+  # classification the worker MUST NOT call the LLM. Instead it:
+  #
+  #   1. Marks the patient `urgent_intervention: true` on the legacy
+  #      Patient row (the foundation row is the identity surface; the
+  #      clinical-state flag lives on the legacy row).
+  #   2. Saves a `crisis-bypass` ai_diagnosis row for audit (the
+  #      `model_version: "crisis-bypass"` discriminator is the
+  #      clinical/operational signal that distinguishes a bypass
+  #      from a normal elicited reply).
+  #   3. Broadcasts `:crisis_detected` on `"psychologist:alerts"`
+  #      PubSub with `patient_id`, `chat_id_hash`, `level`, and
+  #      `triggers` so the dashboard / LiveView can react.
+  #   4. Persists the outbound Message with
+  #      `behavior_type: "crisis_bypass"` (REQ-C5-persist-outbound-reply
+  #      "crisis_bypass source") so the clinical record reflects what
+  #      the patient is about to see, even if the network send later
+  #      fails.
+  #   5. Enqueues a `TelegramOutboundWorker` job on the
+  #      `:telegram_outbound_crisis` priority queue (REQ-C7-crisis-priority-lane)
+  #      with `lane: :crisis`. The crisis lane is independent of
+  #      the safe lane's saturation (TASK-3b-3 escalates to
+  #      `perform_now/1` if the lane is full).
+  defp handle_crisis_path(
+         foundation_patient,
+         legacy_patient,
+         chat_id,
+         chat_id_hash,
+         hash_prefix,
+         inbound,
+         level,
+         triggers
+       ) do
+    crisis_text = crisis_reply_text(legacy_patient)
+
+    # 1. Mark urgent_intervention on the legacy Patient.
+    {:ok, _updated_patient} =
+      Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true})
+
+    # 2. Save a crisis-bypass ai_diagnosis row for audit.
+    {:ok, _diagnosis} =
+      Clinical.save_ai_diagnosis(inbound.id, %{
+        response: crisis_text,
+        model_version: "crisis-bypass",
+        extracted_emotions: %{crisis: true, level: level, triggers: triggers}
+      })
+
+    # 3. Broadcast on psychologist:alerts.
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "psychologist:alerts",
+      {:crisis_detected,
+       %{
+         patient_id: legacy_patient.id,
+         chat_id_hash: chat_id_hash,
+         level: level,
+         triggers: triggers,
+         at: DateTime.utc_now()
+       }}
+    )
+
+    # 4. Persist the outbound Message with `behavior_type: "crisis_bypass"`.
+    {:ok, outbound} =
+      Clinical.save_telegram_message(
+        foundation_patient,
+        crisis_text,
+        "outbound",
+        "crisis_bypass",
+        nil
+      )
+
+    # 5. Enqueue on the :telegram_outbound_crisis lane.
+    enqueue_outbound(chat_id_hash, chat_id, outbound.id, crisis_text, hash_prefix, lane: :crisis)
+
+    Logger.warning(
+      "TelegramMessageWorker: crisis branch (hash_prefix=#{hash_prefix}, " <>
+        "level=#{level}, triggers=#{length(triggers)})"
+    )
+
+    :ok
+  end
+
+  # Resolve the crisis-bypass reply text. The psychologist preconfigures
+  # a per-professional `crisis_message` (the patient-facing reply the
+  # system sends when a `:crisis` classification lands). If unset, fall
+  # back to a system default — same fallback the WhatsApp pipeline uses
+  # (`AletheaJobs.ProcessMessageWorker` moduledoc).
+  defp crisis_reply_text(legacy_patient) do
+    legacy_patient.professional.crisis_message ||
+      Application.get_env(
+        :alethea,
+        :crisis_support_message,
+        default_crisis_support_message()
+      )
+  end
+
+  defp default_crisis_support_message do
+    "Entiendo que estás pasando por algo muy difícil. Lo que sientes importa."
   end
 
   # ----------------------------------------------------------------
