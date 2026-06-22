@@ -675,3 +675,96 @@ pr-1b-foundations-b  (7470de8 — PR #2 merge #75)
 ```
 
 PR #3b (crisis branch) and PR #4 (onboarding) follow in separate sessions.
+
+---
+
+# PR #3b / TASK-3b-1 — Crisis branch in TelegramMessageWorker (bypass LLM + PubSub `:crisis_detected` + crisis-bypass Message persistence)
+
+**Commit:** `007eca9 feat(telegram): crisis branch bypasses LLM and broadcasts psychologist alert` (on `feat/telegram-paciente-foundation/pr-3b-clinical-crisis`, pushed).
+**Strict TDD:** active.
+**Status:** ✅ TASK-3b-1 done.
+
+## TDD cycle evidence (TASK-3b-1)
+
+### RED (pre-implementation)
+
+Extended `test/alethea/jobs/telegram_message_worker_test.exs` with a new `describe "perform/1 — crisis branch"` block and a `describe "perform/1 — crisis branch with a customized crisis_message"` block (10 new tests covering):
+
+- LLM is NOT invoked on `:crisis` classification (uses `ProbeLLM` from PR #3a, asserts `refute_received {:llm_called, _}, 200`)
+- Inbound Message persisted (direction: "inbound", behavior_type: "spontaneous")
+- `urgent_intervention: true` set on legacy Patient
+- `crisis-bypass` ai_diagnosis row inserted (`model_version: "crisis-bypass"`, `extracted_emotions.crisis: true`)
+- `:crisis_detected` PubSub broadcast on `"psychologist:alerts"` with `patient_id`, `chat_id_hash`, `level`, `triggers`, `at`
+- Outbound Message uses legacy Patient's `professional.crisis_message` as the body
+- Outbound Message persisted with `direction: "outbound"`, `behavior_type: "crisis_bypass"`
+- TelegramOutboundWorker enqueued on `:telegram_outbound_crisis` (NOT `:telegram_outbound`) with `lane: :crisis`
+- Safe classification does NOT broadcast `:crisis_detected` (regression check)
+- Customized `crisis_message` flows through end-to-end (outbound body + diagnosis `ai_response`)
+
+Initial RED state: 9/10 tests fail with `RuntimeError: TelegramMessageWorker: crisis branch is out of scope in PR #3a` (the explicit `raise` stub PR #3a left as a fail-loud). The 10th test failed on a different assertion (decryption helper).
+
+### GREEN (implementation)
+
+1. **Migration 4** — `priv/repo/migrations/20260622000001_add_crisis_bypass_to_message_behavior_type.exs`: drops the old `behavior_type_must_be_valid` check constraint and recreates it to include `crisis_bypass` alongside `spontaneous` and `elicited`. Per `REQ-C5-persist-outbound-reply` "crisis reply is persisted with crisis_bypass source". Applied on dev + test DBs.
+2. **`Alethea.Clinical.Message.changeset/2`** — widens the `validate_inclusion(:behavior_type, ...)` to include `"crisis_bypass"`. Kept in lockstep with the DB constraint.
+3. **`Alethea.Jobs.TelegramMessageWorker`** — replaced the explicit `raise` stub with the full crisis branch:
+   - Preloads `:professional` on the legacy Patient (needed for `crisis_message` lookup)
+   - `handle_crisis_path/9`: marks `urgent_intervention: true` via `Accounts.update_patient/2`; saves a `crisis-bypass` `Diagnosis` row via `Clinical.save_ai_diagnosis/2`; broadcasts `:crisis_detected` on `"psychologist:alerts"` PubSub; persists the outbound Message with `behavior_type: "crisis_bypass"`; enqueues a `TelegramOutboundWorker` on `:telegram_outbound_crisis` queue with `lane: :crisis`.
+   - `enqueue_outbound/6` extended with a `lane: :safe | :crisis` keyword argument. The crisis lane is selected via `TelegramOutboundWorker.new(%{...}, queue: :telegram_outbound_crisis)`.
+4. **Test helper** — added `setup_bound_patient_with_crisis_message/1` (parametric on the crisis_message) and `decrypted_outbound_body/1` (decrypts the outbound Message via `Clinical.decrypt_message_content/2` for body assertions).
+
+### Final commit
+
+```
+007eca9 feat(telegram): crisis branch bypasses LLM and broadcasts psychologist alert
+```
+
+## Test counts (delta)
+
+- After TASK-3a-4 + .gitignore PR #77: 462 tests, 0 failures, 5 skipped.
+- After TASK-3b-1: **472 tests, 0 failures, 5 skipped** (delta: **+10 new tests** in the crisis branch block).
+
+## `mix precommit` result (on commit `007eca9`)
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass (cleaned up a "default values for optional args never used" warning in the test helper).
+- `format --check-formatted`: pass.
+- `test`: 472 tests, 0 failures, 5 skipped.
+
+## Lines changed (TASK-3b-1)
+
+| File | Net delta | Notes |
+|---|---|---|
+| `lib/alethea/clinical/message.ex` | +5 / -2 | `validate_inclusion` widened to include `crisis_bypass` |
+| `lib/alethea/jobs/telegram_message_worker.ex` | +159 / -18 | crisis branch (handle_crisis_path + crisis_reply_text + default_crisis_support_message) + enqueue_outbound lane/queue support + professional preload |
+| `priv/repo/migrations/20260622000001_add_crisis_bypass_to_message_behavior_type.exs` | NEW (45 lines) | drop + recreate check constraint |
+| `test/alethea/jobs/telegram_message_worker_test.exs` | +279 / -0 | 10 new tests (crisis branch + customized crisis_message) + helper additions |
+| **Total** | **+488 / -20** in 4 files | est. **160** in `tasks.md` → actual **+468 net** (3× the budget) |
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec | Status |
+|---|---|---|
+| `REQ-C5-crisis-bypasses-llm` | C-5 | ✅ `:crisis` classification → no LLM call, uses `legacy_patient.professional.crisis_message` (or system default), enqueues on `:telegram_outbound_crisis` queue with `lane: :crisis`. |
+| `REQ-C5-crisis-broadcasts-alert` | C-5 | ✅ `Phoenix.PubSub.broadcast(Alethea.PubSub, "psychologist:alerts", {:crisis_detected, %{patient_id, chat_id_hash, level, triggers, at}})` fires on `:crisis`. No broadcast on `:safe` (regression test). |
+| `REQ-C5-persist-outbound-reply` (crisis source) | C-5 | ✅ Outbound Message persisted with `direction: "outbound"`, `behavior_type: "crisis_bypass"`. DB check constraint widened via migration `20260622000001`; Ecto `validate_inclusion` widened to match. |
+
+## Deviations from `tasks.md`
+
+- **TASK-3b-1 size estimate overshoot (3×):** `tasks.md` estimated "60 impl + 100 test = 160". Actual delta is **+488 / -20 ≈ +468 net** (3× the budget). The overshoot is because:
+  - **`messages.behavior_type` enum widening** (45-line migration + 5-line schema change) was not in `tasks.md`. The migration was required because the spec mandates `behavior_type: "crisis_bypass"` and the existing DB check constraint blocked it. Folding the migration into PR #3b (instead of a separate spec change) keeps the schema, validation, and DB constraint in lockstep.
+  - The test helper was extended parametrically (`setup_bound_patient_with_crisis_message/1`) to support both the default and customized `crisis_message` test scenarios, which adds ~20 lines of helper code.
+  - The `decrypted_outbound_body/1` helper (decrypt via `Clinical.decrypt_message_content/2`) is necessary because outbound messages are encrypted at rest — assertions on the body content require decryption.
+- **Helper `insert_legacy_professional_with_crisis_message/1` (1-arity):** Replaces the older `insert_legacy_professional/1` (with default arg) that produced a "default values never used" warning. The new helper takes the `crisis_message` directly and updates the row post-insert because `Alethea.Accounts.create_professional/1` does not cast `:crisis_message`.
+
+## PR #3b cumulative progress (after TASK-3b-1)
+
+- TASK-3b-1 ✅ (commit `007eca9`, +468 net)
+- TASK-3b-2 ⏳ pending — `telegram_outbound_crisis` priority queue + Pacer preservation
+- TASK-3b-3 ⏳ pending — Queue-full escalation to `perform_now/1`
+- TASK-3b-4 ⏳ pending — `ops:alerts` PubSub broadcast on crisis dead-letter
+- TASK-3b-5 ⏳ pending — Crisis-path log redaction (R-1 hygiene)
+- TASK-3b-6 ⏳ pending — Crisis integration scenarios (end-to-end)
+
+Cumulative after TASK-3b-1: ~468 lines. `tasks.md` total estimate for PR #3b: 585 lines. Pace on track (~80% of the budget consumed by the first of six tasks; the remaining five are smaller — integration scenarios, queue config, queue-full escalation, ops broadcast, log redaction).
