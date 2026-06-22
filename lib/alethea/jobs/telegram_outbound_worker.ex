@@ -70,16 +70,27 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   @jitter_ratio 0.25
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args, attempt: _oban_attempt}) do
+  def perform(%Oban.Job{args: args, attempt: _oban_attempt, priority: oban_priority}) do
     chat_id = Map.fetch!(args, "chat_id")
     chat_id_hash = Map.fetch!(args, "chat_id_hash")
     body = Map.fetch!(args, "body")
     attempt = Map.get(args, "_attempt", 1)
+    # The `lane` (`:safe | :crisis`) and `priority` fields are
+    # preserved across retries so a crisis retry stays on the
+    # `:telegram_outbound_crisis` lane AND keeps its Oban priority
+    # (REQ-C7-crisis-priority-lane — the crisis lane cannot be starved
+    # by a full `:telegram_outbound` queue).
+    lane = Map.get(args, "lane", :safe)
+    # Prefer the in-args `priority` (the Oban job's `priority:` is the
+    # authoritative value when the worker re-inserts via `new/2`).
+    priority = Map.get(args, "priority", oban_priority)
 
     # 1. Pacer acquire. Blocks until tokens are available (1 msg/s/chat
     #    AND 30 msg/s global). The Pacer does NOT raise — it sleeps
     #    inside the GenServer and returns `:ok` when the token is
-    #    granted.
+    #    granted. **This call is invariant across lanes** — the crisis
+    #    lane MUST also acquire a Pacer token; the rate-limit is the
+    #    safety net that REQ-C7-crisis-priority-lane depends on.
     Pacer.acquire(chat_id_hash)
 
     # 2. Send.
@@ -88,11 +99,11 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         :ok
 
       {:error, reason} when attempt >= @max_attempts ->
-        dead_letter_and_broadcast(chat_id_hash, body, reason, attempt)
+        dead_letter_and_broadcast(chat_id_hash, body, reason, attempt, lane)
         :ok
 
       {:error, reason} ->
-        reschedule(args, attempt + 1, compute_backoff_ms(attempt, reason))
+        reschedule(args, attempt + 1, compute_backoff_ms(attempt, reason), lane, priority)
         :ok
     end
   end
@@ -128,12 +139,17 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # Rescheduling
   # ----------------------------------------------------------------
 
-  defp reschedule(args, next_attempt, delay_ms) do
+  defp reschedule(args, next_attempt, delay_ms, lane, priority) do
     scheduled_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
     new_args = Map.put(args, "_attempt", next_attempt)
 
+    # The queue is selected by the lane. Crisis retries stay on the
+    # crisis lane (REQ-C7-crisis-priority-lane); safe retries stay on
+    # the safe lane.
+    queue = if lane == :crisis, do: :telegram_outbound_crisis, else: :telegram_outbound
+
     new_args
-    |> new(scheduled_at: scheduled_at)
+    |> new(scheduled_at: scheduled_at, queue: queue, priority: priority)
     |> Oban.insert()
     |> case do
       {:ok, _job} ->
@@ -150,7 +166,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # Dead-letter + PubSub broadcast
   # ----------------------------------------------------------------
 
-  defp dead_letter_and_broadcast(chat_id_hash, body, reason, attempt) do
+  defp dead_letter_and_broadcast(chat_id_hash, body, reason, attempt, lane) do
     last_error = inspect(reason)
 
     {:ok, _row} =
@@ -173,6 +189,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
          text: body,
          error: last_error,
          attempts: attempt,
+         lane: lane,
          at: DateTime.utc_now()
        }}
     )
@@ -180,7 +197,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     Logger.error(
       "TelegramOutboundWorker: exhausted retries, dead-letter written " <>
         "(chat_id_hash_prefix=#{String.slice(chat_id_hash, 0, 8)}, " <>
-        "attempts=#{attempt}, error=#{last_error})"
+        "attempts=#{attempt}, lane=#{lane}, error=#{last_error})"
     )
 
     :ok

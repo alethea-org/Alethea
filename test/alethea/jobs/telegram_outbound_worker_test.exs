@@ -268,11 +268,140 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # Crisis lane (REQ-C7-crisis-priority-lane; PR #3b / TASK-3b-2)
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — crisis lane" do
+    test "Pacer.acquire/1 is called for crisis jobs (REQ-C7-crisis-priority-lane: rate-limit must NEVER be bypassed — Pacer is the safety net)" do
+      Fake.queue_responses([{:ok, 9_999_999}])
+
+      # Use a distinct chat_id_hash so this test is hermetic against
+      # any per-chat Pacer state left by other tests.
+      crisis_chat_hash = "b" |> String.duplicate(64)
+
+      args =
+        build_args(
+          chat_id_hash: crisis_chat_hash,
+          lane: :crisis,
+          priority: 1
+        )
+
+      # Pacer bucket starts full (1 token). After the call, it should
+      # be drained — confirming `Pacer.acquire/1` was reached before
+      # the send.
+      before_snapshot = Pacer.inspect_per_chat()
+
+      assert :ok = perform(args)
+
+      after_snapshot = Pacer.inspect_per_chat()
+
+      # The crisis job's per-chat bucket went from full to drained.
+      before_tokens = Map.get(before_snapshot, crisis_chat_hash, %{tokens: 1}).tokens
+      after_tokens = Map.get(after_snapshot, crisis_chat_hash, %{tokens: 0}).tokens
+
+      assert before_tokens == 1, "expected Pacer to start full for #{crisis_chat_hash}"
+
+      assert after_tokens == 0,
+             "expected Pacer to be drained after crisis send (rate-limit bypass)"
+
+      # The send was recorded by the Fake.
+      assert length(Fake.sends()) == 1
+    end
+
+    test "the lane field is preserved on reschedule (crisis retry stays on the crisis lane)" do
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+
+      assert :ok = perform(build_args(lane: :crisis, priority: 1))
+
+      [%Oban.Job{args: %{"lane" => lane}, queue: queue}] =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "Alethea.Jobs.TelegramOutboundWorker" and j.state == "scheduled"
+        )
+
+      # Oban JSON-encodes the args on insert; the atom :crisis comes
+      # back as the string "crisis" when the job row is re-read.
+      assert lane == "crisis",
+             "crisis retry should keep lane: :crisis so it stays on :telegram_outbound_crisis (got #{inspect(lane)})"
+
+      assert queue == "telegram_outbound_crisis",
+             "crisis retry should re-enqueue on the crisis queue (got #{queue})"
+    end
+
+    test "the priority field is preserved on reschedule (crisis jobs stay high-priority across retries)" do
+      Fake.queue_responses([{:error, {:server_error, 503}}])
+
+      assert :ok = perform(build_args(lane: :crisis, priority: 1))
+
+      [%Oban.Job{priority: priority}] =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "Alethea.Jobs.TelegramOutboundWorker" and j.state == "scheduled"
+        )
+
+      assert priority == 1, "crisis retry should preserve priority: 1"
+    end
+
+    test "the default priority for a crisis job is 0 (no priority injected by the worker on reschedule)" do
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+
+      # No `priority` in the build_args kwargs; the default of 0 is used.
+      assert :ok = perform(build_args(lane: :crisis))
+
+      [%Oban.Job{priority: priority}] =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "Alethea.Jobs.TelegramOutboundWorker" and j.state == "scheduled"
+        )
+
+      assert priority == 0
+    end
+  end
+
+  describe "config :telegram_outbound_crisis queue (REQ-C7-crisis-priority-lane)" do
+    test "the :telegram_outbound_crisis queue is configured with max_demand: 2 (per spec)" do
+      queue_config =
+        Application.get_env(:alethea, Oban, [])
+        |> Keyword.get(:queues, [])
+
+      crisis_config = Keyword.get(queue_config, :telegram_outbound_crisis)
+
+      assert is_list(crisis_config) or is_integer(crisis_config),
+             ":telegram_outbound_crisis must be configured (got #{inspect(crisis_config)})"
+
+      {max_demand, _queue_opts} =
+        case crisis_config do
+          max when is_integer(max) -> {max, []}
+          opts when is_list(opts) -> {Keyword.get(opts, :max_demand), opts}
+        end
+
+      assert max_demand == 2,
+             ":telegram_outbound_crisis must be limited to 2 concurrent jobs per REQ-C7-crisis-priority-lane"
+    end
+
+    test "the :telegram_outbound_crisis queue has priority: 1 (above the safe :telegram_outbound default of 0)" do
+      queue_config =
+        Application.get_env(:alethea, Oban, [])
+        |> Keyword.get(:queues, [])
+
+      crisis_config = Keyword.get(queue_config, :telegram_outbound_crisis)
+      crisis_priority = Keyword.get(crisis_config || [], :priority, 0)
+
+      assert crisis_priority == 1,
+             "the crisis queue must have priority: 1 (got #{crisis_priority})"
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
 
   defp perform(args) do
-    TelegramOutboundWorker.perform(%Oban.Job{args: args, attempt: Map.get(args, "_attempt", 1)})
+    TelegramOutboundWorker.perform(%Oban.Job{
+      args: args,
+      attempt: Map.get(args, "_attempt", 1),
+      priority: Map.get(args, "priority", 0)
+    })
   end
 
   defp safe_start_pacer do
@@ -296,7 +425,9 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       "chat_id" => Keyword.get(opts, :chat_id, @chat_id),
       "chat_id_hash" => Keyword.get(opts, :chat_id_hash, @chat_id_hash),
       "body" => Keyword.get(opts, :body, @body),
-      "_attempt" => Keyword.get(opts, :attempt, 1)
+      "_attempt" => Keyword.get(opts, :attempt, 1),
+      "lane" => Keyword.get(opts, :lane, :safe),
+      "priority" => Keyword.get(opts, :priority, 0)
     }
   end
 end

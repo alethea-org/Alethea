@@ -57,7 +57,14 @@ config :alethea, Oban,
     ai_analysis: 5,
     telegram_inbound: 10,
     telegram_outbound: 10,
-    telegram_outbound_crisis: 10
+    # `telegram_outbound_crisis` (REQ-C7-crisis-priority-lane; PR #3b /
+    # TASK-3b-2) is a dedicated priority lane for crisis-bypass
+    # replies. `max_demand: 2` caps concurrency at 2 jobs — the
+    # bottleneck is the Pacer (1 msg/s/chat × N active patients), not
+    # Oban throughput. `priority: 1` ensures the crisis queue is
+    # processed before the safe `telegram_outbound` queue (priority
+    # 0) when both have pending jobs.
+    telegram_outbound_crisis: [max_demand: 2, priority: 1]
   ],
   repo: Alethea.Repo,
   plugins: [
