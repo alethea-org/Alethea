@@ -172,5 +172,22 @@ defmodule Alethea.Telegram.LogRedactorTest do
       assert scrubbed =~ "chat=abcdef01"
       refute scrubbed =~ @hash_64
     end
+
+    test "redact/1 is case-insensitive on the hex shape (defense against a future uppercase migration of ChatIdHash.hash/2)" do
+      # Today `ChatIdHash.hash/2` produces lowercase hex via
+      # `Base.encode16(case: :lower)`, so the lowercase-only regex was
+      # safe. The regex now matches uppercase too — assert the
+      # contract explicitly so a future migration that switches the
+      # case (e.g., for FIPS compliance) doesn't silently bypass the
+      # redactor on the PHI surface.
+      upper = String.upcase(@hash_64)
+      assert upper != @hash_64
+
+      # Embedded in a log line.
+      scrubbed = LogRedactor.redact("error: chat=#{upper}, retry")
+
+      assert scrubbed =~ "chat=ABCDEF01"
+      refute scrubbed =~ upper
+    end
   end
 end

@@ -79,11 +79,15 @@ defmodule Alethea.Telegram.LogRedactor do
 
   @prefix_length 8
 
-  # The chat_id_hash shape: 64 contiguous lowercase-hex characters
-  # (per `Alethea.Telegram.ChatIdHash.hash/2`). `\b` enforces word
-  # boundaries so the regex doesn't accidentally match a substring
-  # of a longer hex string (e.g., a 128-char hex digest).
-  @hash_regex ~r/\b[0-9a-f]{64}\b/
+  # The chat_id_hash shape: 64 contiguous hex characters, case-insensitive
+  # (per `Alethea.Telegram.ChatIdHash.hash/2`, which currently produces
+  # lowercase hex via `Base.encode16(case: :lower)`, but a future migration
+  # to uppercase or a different case encoding would otherwise silently
+  # bypass the redactor — `prefix/1` and `redact/1` would reduce to no-ops
+  # on a PHI surface). `\b` enforces word boundaries so the regex doesn't
+  # accidentally match a substring of a longer hex string (e.g., a 128-char
+  # hex digest).
+  @hash_regex ~r/\b[0-9a-fA-F]{64}\b/
 
   @doc """
   Returns the first 8 characters of `chat_id_hash` as a

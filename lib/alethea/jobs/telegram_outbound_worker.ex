@@ -238,6 +238,17 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   defp dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, attempt, lane) do
     last_error = inspect(reason)
 
+    # The persisted audit row keeps the raw `inspect(reason)` so an
+    # operator can replay failures with full diagnostic context. The
+    # `LogRedactor.redact/1` wrappers on the broadcast + log
+    # interpolation sites defend against future error shapes that
+    # accidentally carry PHI (e.g., a future adapter returning
+    # `%{chat_id: ...}` or `%{response_body: ...}` in the error tuple).
+    # Today `inspect(reason)` only carries safe atoms/tuples, but the
+    # redactor is a defense-in-depth guarantee — and it's a no-op when
+    # no 64-char hex is present.
+    safe_error = LogRedactor.redact(last_error)
+
     {:ok, _row} =
       %OutboundDeadLetter{}
       |> OutboundDeadLetter.changeset(%{
@@ -260,7 +271,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
        %{
          chat_id_hash: chat_id_hash,
          text: body,
-         error: last_error,
+         error: safe_error,
          attempts: attempt,
          lane: lane,
          at: now
@@ -292,7 +303,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
            patient_id: patient_id,
            chat_id_hash: chat_id_hash,
            text: body,
-           error: last_error,
+           error: safe_error,
            attempts: attempt,
            at: now
          }}
@@ -302,7 +313,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     Logger.error(
       "TelegramOutboundWorker: exhausted retries, dead-letter written " <>
         "(chat_id_hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, " <>
-        "attempts=#{attempt}, lane=#{lane}, error=#{last_error})"
+        "attempts=#{attempt}, lane=#{lane}, error=#{safe_error})"
     )
 
     :ok
