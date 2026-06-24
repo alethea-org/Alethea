@@ -852,3 +852,94 @@ Initial RED state: 3/6 tests failed — the worker did not pass `lane` or `prior
 - TASK-3b-6 ⏳ pending — Crisis integration scenarios (end-to-end)
 
 Cumulative after TASK-3b-2: ~625 lines. `tasks.md` total estimate for PR #3b: 585 lines. **Slightly over budget** (107%) but within the soft 800-line threshold. The remaining 4 tasks are smaller — escalation (150 est.), ops broadcast (45 est.), log redaction (50 est.), integration scenarios (80 est.).
+
+---
+
+# PR #3b / TASK-3b-3 — Queue-full escalation: `perform_now/1` + `escalate_to_perform_now/2`
+
+**Commit:** `ddee681 feat(telegram): crisis lane escalates on queue full via perform now` (on `feat/telegram-paciente-foundation/pr-3b-clinical-crisis`, pushed).
+**Strict TDD:** active.
+**Status:** ✅ TASK-3b-3 done.
+
+## TDD cycle evidence (TASK-3b-3)
+
+### RED (pre-implementation)
+
+Extended `test/alethea/jobs/telegram_outbound_worker_test.exs` with `describe "perform_now/1 — crisis queue-full escalation"` (5 tests) and `test/alethea/jobs/telegram_message_worker_test.exs` with `describe "escalate_to_perform_now/2 — queue-full escalation"` (3 tests):
+
+- `perform_now/1` calls Pacer.acquire/1 before sending (rate-limit safety net)
+- `perform_now/1` returns :ok on successful send
+- `perform_now/1` dead-letters on send failure (inline mode: no queue to reschedule to)
+- The dead-letter broadcast includes lane: :crisis (via PubSub payload; schema column is TASK-3b-4)
+- `perform_now/1` does NOT enqueue a rescheduled Oban job on send failure
+- `escalate_to_perform_now/2` broadcasts `:crisis_queue_full` on `"ops:alerts"`
+- `escalate_to_perform_now/2` spawned perform_now still calls Pacer.acquire/1
+- Integration: on crisis lane `:queue_full` from Oban.insert, the worker escalates and broadcasts (Mox-stubbed `OutboundEnqueue`)
+
+Initial RED state: 8 failures — `perform_now/1` and `escalate_to_perform_now/2` don't exist (compile errors), `Oban.InsertError` doesn't exist in Oban 2.x (used atom `:queue_full` instead), `Pacer.inspect_per_chat/0` needed fully-qualified alias in message worker test, args key mismatch (atom vs string).
+
+### GREEN (implementation)
+
+1. **`Alethea.Telegram.OutboundEnqueue`** (NEW, 30 lines) — thin wrapper around `Oban.insert/1` with a behaviour so tests can Mox it. Production uses `Oban.insert/1` directly; tests override via `Application.put_env(:alethea, :telegram_outbound_enqueue, Mock)`.
+2. **`Alethea.Jobs.TelegramOutboundWorker.perform_now/1`** (NEW, public) — inline send: `Pacer.acquire/1` then `Client.send_message/2`. On send failure, dead-letters immediately (no queue to retry through). String-keyed args (matching the Oban re-hydrated contract).
+3. **`Alethea.Jobs.TelegramMessageWorker.escalate_to_perform_now/2`** (NEW, public) — broadcasts `:crisis_queue_full` on `"ops:alerts"` and calls `perform_now/1` inline. Converts atom-keyed args (worker's in-process convention) to string-keyed args (perform_now's expected shape) via `Map.new(args, fn {k, v} -> {to_string(k), v} end)`.
+4. **`Alethea.Jobs.TelegramMessageWorker.enqueue_outbound/6`** — catch `{:error, :queue_full}` on the crisis lane and delegate to `escalate_to_perform_now/2`. Other errors still raise. Insert call now goes through `OutboundEnqueue.insert/1` (the Mox-able wrapper) instead of `Oban.insert/1` directly.
+5. **Test setup** — message worker test now starts the Pacer GenServer and the `Client.Fake` GenServer per-test (the escalation path uses both).
+
+### Final commit
+
+```
+ddee681 feat(telegram): crisis lane escalates on queue full via perform now
+```
+
+## Test counts (delta)
+
+- After TASK-3b-2: 478 tests, 0 failures, 5 skipped.
+- After TASK-3b-3: **486 tests, 0 failures, 5 skipped** (delta: **+8 new tests**: 5 in outbound worker, 3 in message worker).
+
+## `mix precommit` result (on commit `ddee681`)
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass.
+- `format --check-formatted`: pass.
+- `test`: 486 tests, 0 failures, 5 skipped.
+
+## Lines changed (TASK-3b-3)
+
+| File | Net delta | Notes |
+|---|---|---|
+| `lib/alethea/telegram/outbound_enqueue.ex` | NEW (30 lines) | Behaviour + default impl wrapping `Oban.insert/1`. Mox-able via `Application.put_env(:alethea, :telegram_outbound_enqueue, Mock)`. |
+| `lib/alethea/jobs/telegram_outbound_worker.ex` | +51 / -0 | `perform_now/1` public function. Inline Pacer + send + dead-letter on failure (no reschedule). |
+| `lib/alethea/jobs/telegram_message_worker.ex` | +82 / -14 | `escalate_to_perform_now/2` public function; `enqueue_outbound/6` catches `:queue_full` and delegates. OutboundEnqueue.insert/1 replaces Oban.insert/1 in the worker. |
+| `test/alethea/jobs/telegram_outbound_worker_test.exs` | +95 / -0 | 5 new tests in `describe "perform_now/1 — crisis queue-full escalation"`. |
+| `test/alethea/jobs/telegram_message_worker_test.exs` | +159 / -0 | 3 new tests in `describe "escalate_to_perform_now/2"` + setup additions (Pacer + Fake GenServers). |
+| **Total** | **+417 / -14** in 5 files | est. **150** in `tasks.md` → actual **+403 net** (2.7× the budget) |
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec | Status |
+|---|---|---|
+| `REQ-C7-crisis-queue-full-escalation` | C-7 | ✅ `TelegramMessageWorker` catches `{:error, :queue_full}` from `OutboundEnqueue.insert/1` on the crisis lane and delegates to `escalate_to_perform_now/2`. The escalation: (a) broadcasts `:crisis_queue_full` on `"ops:alerts"` with `chat_id_hash`, `text`, `at`; (b) calls `TelegramOutboundWorker.perform_now/1` which still calls `Pacer.acquire/1` before `Client.send_message/2`; (c) on send failure, perform_now dead-letters immediately (no queue to retry through). |
+
+## Deviations from `tasks.md`
+
+- **`OutboundEnqueue` wrapper module:** `tasks.md` did not anticipate the testability requirement. Mox can stub a function on a real module only if it's a behaviour (`defcallback` + `defmock(for: ...)`). The wrapper module adds ~30 lines but enables the integration test for the `:queue_full` catch path. Without it, the catch path would be untested.
+- **Oban.InsertError doesn't exist (Oban 2.x API):** the spec (`Oban.InsertError with reason: :queue_full`) was based on a fictional error shape. Oban 2.x returns `{:error, :queue_full}` directly (the atom) — no struct. The worker matches on the atom, which is correct per Oban 2.x's actual API. The spec text is loose ("an `Oban.InsertError` with `reason: :queue_full`") but the semantic intent (catch insert failures on the crisis lane) is preserved.
+- **Public `escalate_to_perform_now/2`:** exposing this function lets tests drive the escalation directly (no need to simulate the full message-worker → catch → perform_now flow). It's a public helper that other callers (e.g., a future admin dashboard for manual retry) might use. Documented in the @doc.
+- **Inline `perform_now/1` (not Task.spawned):** the spec says "a `perform_now/1` invocation ... is spawned". Interpreted as "invoked" — synchronous inline in the caller process. Pros: simpler, exception bubbles up cleanly, easier to test. Cons: blocks the inbound worker briefly during the inline call. The inline call is bounded (Pacer + 1 send attempt), so the latency is low. If the send fails, perform_now dead-letters immediately (no async retry).
+- **Args key shape consistency:** `perform_now/1` uses string keys (matching the Oban re-hydrated contract). `escalate_to_perform_now/2` accepts atom keys (the worker's in-process convention) and converts to string keys before calling `perform_now/1`. This matches the existing worker/test asymmetry: workers build args with atom keys, Oban hydrates them as string keys.
+- **`dead_letter_and_broadcast/5` lane parameter:** added in TASK-3b-2 to thread `lane` through. The dead-letter table itself doesn't yet store `lane` (TASK-3b-4 concern — schema column migration). The PubSub broadcast payload already includes `lane: lane` so TASK-3b-3's tests assert against the broadcast shape, not the schema column.
+
+## PR #3b cumulative progress (after TASK-3b-3)
+
+- TASK-3b-1 ✅ (commit `007eca9`, +468 net)
+- TASK-3b-2 ✅ (commit `2ad51b1`, +157 net)
+- TASK-3b-3 ✅ (commit `ddee681`, +403 net)
+- TASK-3b-4 ⏳ pending — `ops:alerts` PubSub broadcast on crisis dead-letter (the schema column + reportable fields)
+- TASK-3b-5 ⏳ pending — Crisis-path log redaction (R-1 hygiene)
+- TASK-3b-6 ⏳ pending — Crisis integration scenarios (end-to-end)
+
+Cumulative after TASK-3b-3: ~1,028 lines. `tasks.md` total estimate for PR #3b: 585 lines. **Already 76% over budget** with 3 of 6 tasks remaining. The remaining tasks are smaller (45 + 50 + 80 = 175 lines), so final estimate is ~1,200 lines (~2× the soft 800 budget).
+
+The overshoot is concentrated in TASK-3b-3's integration testability (the OutboundEnqueue wrapper) and TASK-3b-1's migration widening. Both were required by the spec's deeper requirements (the crisis branch persists `behavior_type: "crisis_bypass"`, the catch path needs to be testable). The wrapper is justified: the alternative was untested integration code.
