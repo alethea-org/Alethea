@@ -322,13 +322,20 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   Steps:
     1. Log a `Logger.warning` documenting the escalation (the
        `hash_prefix` is the only PHI surface logged).
-    2. Broadcast `:crisis_queue_full` on `"ops:alerts"` PubSub with
-       `chat_id_hash`, `text`, `at`. Operator dashboards subscribe to
-       `"ops:alerts"` and react.
-    3. Invoke `TelegramOutboundWorker.perform_now/1` inline. The
+    2. Invoke `TelegramOutboundWorker.perform_now/1` inline. The
        Pacer is acquired (the rate-limit is preserved) and the send
        runs synchronously. If the inline send fails, perform_now
        dead-letters immediately (no queue to retry through).
+    3. Broadcast `:crisis_queue_full` on `"ops:alerts"` PubSub with
+       `chat_id_hash`, `body_length`, `delivered`, `at`. The
+       `delivered` boolean reflects the post-perform_now outcome so
+       operator dashboards don't react to a "queue full" event and
+       try to replay a send that ALREADY succeeded. The payload
+       intentionally omits `text: body` — operators don't need the
+       outbound body in the alert (it's the psychologist's
+       preconfigured `crisis_message`, not the patient's words) and
+       keeping it off the PubSub bus follows the project's R-1 PHI
+       hygiene rule.
 
   Returns `:ok` always — escalation is the success path; per-call
   failures are surfaced via dead-letter + ops broadcast, not by
@@ -344,24 +351,43 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         "(hash_prefix=#{hash_prefix})"
     )
 
-    Phoenix.PubSub.broadcast(
-      Alethea.PubSub,
-      "ops:alerts",
-      {:crisis_queue_full,
-       %{
-         chat_id_hash: chat_id_hash,
-         text: body,
-         at: DateTime.utc_now()
-       }}
-    )
-
     # The in-process `args` map uses atom keys (the worker's own
     # convention for the pre-insert step). `TelegramOutboundWorker.perform_now/1`
     # expects string keys (the Oban re-hydrated contract). Convert
     # atomically before delegating so the callee reads the same
     # shape it would read from `oban_jobs.args`.
     string_args = Map.new(args, fn {k, v} -> {to_string(k), v} end)
-    TelegramOutboundWorker.perform_now(string_args)
+
+    # Run the inline send FIRST, then broadcast the outcome. The
+    # broadcast must reflect the post-perform_now result (`delivered: true
+    # | false`) so operator dashboards don't react to a "queue full"
+    # event and try to replay a send that ALREADY succeeded (which
+    # would double-send the crisis message to the patient). The
+    # payload intentionally omits `text: body` — operators don't need
+    # the outbound body in the alert (it's the psychologist's
+    # preconfigured `crisis_message`, not the patient's words) and
+    # keeping it off the PubSub bus follows the project's R-1 PHI
+    # hygiene rule (the same rule that drives `LogRedactor` for
+    # logs).
+    delivered =
+      case TelegramOutboundWorker.perform_now(string_args) do
+        :ok -> true
+        {:error, _reason} -> false
+      end
+
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "ops:alerts",
+      {:crisis_queue_full,
+       %{
+         chat_id_hash: chat_id_hash,
+         body_length: byte_size(body),
+         delivered: delivered,
+         at: DateTime.utc_now()
+       }}
+    )
+
+    :ok
   end
 
   defp enqueue_unregistered_reply(chat_id, chat_id_hash, hash_prefix) do

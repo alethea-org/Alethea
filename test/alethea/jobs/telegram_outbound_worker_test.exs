@@ -326,7 +326,12 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     test "publishes :crisis_dead_letter when a crisis lane fails inline (perform_now/1 path — TASK-3b-3 escalation)" do
       Fake.queue_responses([{:error, {:rate_limited, 1}}])
 
-      assert :ok =
+      # Round 1 (judgment-day, WARNING-6): perform_now returns
+      # {:error, reason} on send failure so the caller can
+      # distinguish a successful inline send from a dead-lettered
+      # failure. The :crisis_queue_full PubSub broadcast (TASK-3b-3)
+      # uses this to populate its `delivered` field.
+      assert {:error, {:rate_limited, 1}} =
                TelegramOutboundWorker.perform_now(
                  build_args(lane: :crisis, priority: 1, patient_id: 5678)
                )
@@ -437,7 +442,9 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       # PubSub broadcast.
       Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
 
-      assert :ok =
+      # Round 1 (judgment-day, WARNING-6): perform_now returns
+      # {:error, reason} on send failure.
+      assert {:error, {:rate_limited, 1}} =
                TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
 
       # A dead-letter row was written with attempts: 1 (the inline
@@ -458,7 +465,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
 
       Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
 
-      assert :ok =
+      assert {:error, :network} =
                TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
 
       # The lane flows through the PubSub payload (REQ-C7-crisis-queue-full-escalation).
@@ -472,7 +479,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     test "does NOT enqueue a rescheduled Oban job on send failure (no queue to insert into)" do
       Fake.queue_responses([{:error, {:rate_limited, 1}}])
 
-      assert :ok =
+      assert {:error, {:rate_limited, 1}} =
                TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
 
       # Inline mode must not produce a rescheduled job — the queue is

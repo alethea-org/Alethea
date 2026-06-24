@@ -141,7 +141,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   chat_id, message_id, body, lane, priority, _attempt}`. `_attempt` is
   unused in inline mode (no retry).
   """
-  @spec perform_now(map()) :: :ok
+  @spec perform_now(map()) :: :ok | {:error, term()}
   def perform_now(args) do
     # String keys (matches the Oban Job contract — args come from
     # JSON-decoded oban_jobs.args after Oban re-hydrates the job).
@@ -163,8 +163,13 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
       {:error, reason} ->
         # Inline mode: no queue to reschedule to → dead-letter
         # immediately. attempt is 1 because the inline call ran once.
+        # Return `{:error, reason}` so the caller (escalation path)
+        # can distinguish a successful send from a dead-lettered
+        # failure — the `:crisis_queue_full` PubSub broadcast carries
+        # the outcome so operator dashboards don't react to a "queue
+        # full" event and replay an already-succeeded send.
         dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, 1, lane)
-        :ok
+        {:error, reason}
     end
   end
 

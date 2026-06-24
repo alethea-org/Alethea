@@ -584,7 +584,17 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       :ok
     end
 
-    test "broadcasts :crisis_queue_full on 'ops:alerts' with chat_id_hash, text, at" do
+    test "broadcasts :crisis_queue_full on 'ops:alerts' AFTER perform_now with chat_id_hash, body_length, delivered, at" do
+      # Round 1 (judgment-day, WARNING-6): the broadcast fires AFTER
+      # `perform_now/1` and reflects the post-send outcome via the
+      # `delivered` boolean — operator dashboards must NOT see a
+      # "queue full" event for a send that ALREADY succeeded (they
+      # would try to replay it and double-send to the patient).
+      #
+      # The payload intentionally omits `text: body` (PHI hygiene —
+      # the outbound body is the psychologist's preconfigured
+      # `crisis_message`; operators don't need it in an alert). Only
+      # `body_length` is included as a diagnostic signal.
       args = %{
         chat_id_hash: @chat_id_hash,
         chat_id: 987_654_321,
@@ -597,12 +607,54 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       assert :ok = TelegramMessageWorker.escalate_to_perform_now(args, hash_prefix)
 
-      assert_receive {:crisis_queue_full, %{chat_id_hash: chat_id_hash, text: text, at: at}},
+      assert_receive {:crisis_queue_full,
+                      %{
+                        chat_id_hash: chat_id_hash,
+                        body_length: body_length,
+                        delivered: delivered,
+                        at: at
+                      }},
                      1_000
 
       assert chat_id_hash == @chat_id_hash
-      assert text == "hola, buen día"
+      assert body_length == byte_size("hola, buen día")
+      assert delivered == true, "the inline send succeeded — delivered: true"
       assert is_struct(at, DateTime)
+    end
+
+    test "broadcasts delivered: false when perform_now dead-letters (operator replays manually)" do
+      # Companion test for WARNING-6: when perform_now itself fails
+      # (e.g., the Fake queue is exhausted), the broadcast must carry
+      # `delivered: false` so the operator knows to replay manually
+      # instead of reacting to a "queue full" event as if the send
+      # were still pending.
+      args = %{
+        chat_id_hash: @chat_id_hash,
+        chat_id: 987_654_321,
+        message_id: nil,
+        body: "crisis message that will fail",
+        lane: :crisis,
+        patient_id: nil
+      }
+
+      # Queue a permanent failure for the Fake.
+      Fake.queue_responses([{:error, :network}])
+
+      hash_prefix = String.slice(@chat_id_hash, 0, 8)
+
+      assert :ok = TelegramMessageWorker.escalate_to_perform_now(args, hash_prefix)
+
+      assert_receive {:crisis_queue_full,
+                      %{
+                        chat_id_hash: _,
+                        body_length: _,
+                        delivered: delivered,
+                        at: _
+                      }},
+                     1_000
+
+      assert delivered == false,
+             "perform_now dead-lettered (no queue to retry through); delivered: false"
     end
 
     test "the spawned perform_now/1 still calls Pacer.acquire/1 before sending (REQ-C7-crisis-queue-full-escalation scenario 'Pacer safety net')" do
@@ -666,7 +718,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
                })
 
       # The escalation broadcast fires.
-      assert_receive {:crisis_queue_full, %{chat_id_hash: _, text: _, at: _}}, 1_000
+      assert_receive {:crisis_queue_full, %{chat_id_hash: _, delivered: _, at: _}}, 1_000
 
       # The inbound message was persisted (the inbound step succeeds
       # before the outbound enqueue).
