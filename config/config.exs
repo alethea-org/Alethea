@@ -58,13 +58,34 @@ config :alethea, Oban,
     telegram_inbound: 10,
     telegram_outbound: 10,
     # `telegram_outbound_crisis` (REQ-C7-crisis-priority-lane; PR #3b /
-    # TASK-3b-2) is a dedicated priority lane for crisis-bypass
-    # replies. `max_demand: 2` caps concurrency at 2 jobs — the
-    # bottleneck is the Pacer (1 msg/s/chat × N active patients), not
-    # Oban throughput. `priority: 1` ensures the crisis queue is
-    # processed before the safe `telegram_outbound` queue (priority
-    # 0) when both have pending jobs.
-    telegram_outbound_crisis: [max_demand: 2, priority: 1]
+    # TASK-3b-2) is a dedicated queue for crisis-bypass replies. Two
+    # notes about its priority semantics:
+    #
+    # 1. **Open-source Oban 2.x does NOT honor `max_demand` or
+    #    `priority` at the queue level** — these options are silently
+    #    absorbed into the queue meta dict but never consulted by
+    #    `Oban.Engines.Basic` (`deps/oban/lib/oban/engines/basic.ex`).
+    #    Honoring them requires `Oban.Pro` (not in `mix.lock`). The
+    #    `limit: 10` value below caps total concurrency for the
+    #    crisis queue; for true per-lane throttling or priority
+    #    weighting, plan an Oban Pro migration (follow-up issue).
+    #
+    # 2. **In Oban's job-level priority, lower numbers = higher
+    #    priority** (0 is highest, 9 is lowest — see
+    #    `deps/oban/lib/oban/worker.ex`). The inbound worker
+    #    (`TelegramMessageWorker.enqueue_outbound/6`) sets
+    #    `priority: 0` on crisis jobs so they outrank the safe
+    #    queue's default `priority: 9` (set at the worker level via
+    #    `use Oban.Worker, queue: :telegram_outbound`).
+    #
+    # Until Oban Pro lands, the "crisis priority lane" contract is
+    # enforced at the **job-level priority** (set in
+    # `TelegramMessageWorker.enqueue_outbound/6`), not the queue
+    # level. The crisis queue is throttled to `5` (vs the safe
+    # queue's `10`) as a soft pre-Oban-Pro approximation of the
+    # spec's "dedicated priority lane" — the real isolation comes
+    # from job-level priority (0 vs 9), not queue-level limits.
+    telegram_outbound_crisis: 5
   ],
   repo: Alethea.Repo,
   plugins: [

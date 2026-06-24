@@ -253,29 +253,44 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     # queues in `config/config.exs`.
     queue = if lane == :crisis, do: :telegram_outbound_crisis, else: :telegram_outbound
 
+    # Job-level priority (REQ-C7-crisis-priority-lane). In Oban,
+    # lower numbers = higher priority (0 is highest). The crisis lane
+    # uses `0` to outrank the safe lane's default `9` (set at the
+    # worker level via `use Oban.Worker`). Until Oban Pro lands
+    # (queue-level priority weighting), the priority lane is enforced
+    # here, NOT in `config/config.exs`. See `config/config.exs` for
+    # the full rationale.
+    priority = if lane == :crisis, do: 0, else: 9
+
     new_args = %{
       chat_id_hash: chat_id_hash,
       chat_id: chat_id,
       message_id: message_id,
       body: body,
       lane: lane,
+      priority: priority,
       patient_id: patient_id
     }
 
     new_args
-    |> TelegramOutboundWorker.new(queue: queue)
+    |> TelegramOutboundWorker.new(queue: queue, priority: priority)
     |> out_enqueue().insert()
     |> case do
       {:ok, _job} ->
         :ok
 
       # Crisis lane queue-full escalation (REQ-C7-crisis-queue-full-escalation).
-      # When the crisis queue is at capacity (max_demand: 2), Oban returns
-      # `{:error, :queue_full}` (or similar) on insert. We bypass the queue
-      # by invoking `TelegramOutboundWorker.perform_now/1` inline. The Pacer
-      # is still acquired (the rate-limit is the safety net), and an
-      # `:crisis_queue_full` event is broadcast on `"ops:alerts"` for
-      # operator visibility.
+      # The escalation path is exercised only by Mox-stubbed tests today
+      # because Oban 2.x open-source does NOT return `{:error, :queue_full}`
+      # from `Oban.insert/1` — queue saturation in `Oban.Engines.Basic` is
+      # enforced at FETCH time (when `map_size(running) >= limit`),
+      # not insert time. The catch clause below is kept as a defensive
+      # guard for: (a) future Oban engines / versions that DO emit
+      # `:queue_full`; (b) the Mox-stubbed crisis-lane escalation test.
+      # A real production queue-full detector is a follow-up issue
+      # (pre-insert `Oban.check_queue/2` or telemetry-driven escalation).
+      # See `openspec/sdd/telegram-paciente-foundation/apply-progress.md`
+      # for the gap documentation.
       {:error, :queue_full} when lane == :crisis ->
         escalate_to_perform_now(new_args, hash_prefix)
 
