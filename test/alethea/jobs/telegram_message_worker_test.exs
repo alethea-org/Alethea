@@ -39,7 +39,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Clinical.Message
   alias Alethea.Repo
-  alias Alethea.Telegram.{ChatIdHash, Pacer}
+  alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
   alias AletheaJobs.EmotionAnalysisWorker
 
   import Alethea.FoundationTestHelper
@@ -677,6 +677,245 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # real `Oban.insert/1`, not the stubbed OutboundEnqueue — only
       # the crisis outbound is mocked).
       assert_enqueued(worker: EmotionAnalysisWorker)
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Crisis end-to-end integration scenarios (REQ-C5 + REQ-C7;
+  #                                     PR #3b / TASK-3b-6)
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — crisis end-to-end integration scenarios (REQ-C5 + REQ-C7)" do
+    # Use the existing wrapper that sets up a bound patient with a
+    # customized crisis_message ("Custom reply from Dr. Test"). The
+    # integration tests don't need a specific message string — they
+    # assert on whatever was configured.
+    setup :setup_bound_patient_with_custom_crisis_message
+
+    setup do
+      # Subscribe to BOTH pubsub topics: "psychologist:alerts" (per-spec
+      # REQ-C5-crisis-broadcasts-alert) and "ops:alerts" (TASK-3b-3 +
+      # TASK-3b-4 dead-letter broadcasts).
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+
+      # Reset the OutboundEnqueue adapter to the default (real
+      # Oban.insert). Other tests in this module may have set it to a
+      # Mox stub via `Application.put_env(:alethea,
+      # :telegram_outbound_enqueue, ...)`; we don't want that to leak
+      # into these integration scenarios.
+      Application.delete_env(:alethea, :telegram_outbound_enqueue)
+
+      :ok
+    end
+
+    test "happy path: inbound crisis → outbound enqueued on crisis queue → perform_now-like execution records the send via Fake (REQ-C5 + REQ-C7 end-to-end story)",
+         ctx do
+      _ = ctx
+
+      # 1. The Fake returns a successful send (no queue_responses set → default).
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a suicidar",
+                     telegram_message_id: 1000,
+                     telegram_update_id: 100
+                   )
+               })
+
+      # 2. Verify the outbound was enqueued on the crisis lane.
+      [job] =
+        Repo.all(
+          from j in Oban.Job,
+            where:
+              j.worker == "Alethea.Jobs.TelegramOutboundWorker" and
+                j.queue == "telegram_outbound_crisis",
+            limit: 1
+        )
+
+      assert job.args["lane"] == "crisis",
+             "outbound was enqueued on the crisis queue with lane: :crisis"
+
+      assert job.args["patient_id"] == ctx.legacy_patient.id,
+             "patient_id is forwarded in args (TASK-3b-4 prerequisite for :crisis_dead_letter)"
+
+      # 3. Simulate Oban dequeueing the job and the OutboundWorker
+      # performing it. This is what Oban does at runtime — the test
+      # exercises the same code path.
+      before_snapshot = Pacer.inspect_per_chat()
+
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: job.args,
+                 attempt: 1,
+                 priority: 1
+               })
+
+      # 4. Pacer was acquired (rate-limit safety net preserved end-to-end).
+      after_snapshot = Pacer.inspect_per_chat()
+      before_tokens = Map.get(before_snapshot, @chat_id_hash, %{tokens: 1}).tokens
+      after_tokens = Map.get(after_snapshot, @chat_id_hash, %{tokens: 0}).tokens
+
+      assert before_tokens == 1, "Pacer should start full for #{@chat_id_hash}"
+      assert after_tokens == 0, "Pacer should be drained after the crisis send"
+
+      # 5. The Fake recorded the send with the crisis-bypass body.
+      sends = Fake.sends()
+      assert length(sends) == 1
+      assert hd(sends).chat_id == @chat_id
+      assert hd(sends).text == ctx.legacy_patient.professional.crisis_message
+
+      # 6. No emotion analysis was blocked — the inbound worker enqueued
+      # it BEFORE the crisis branch fired (REQ-C5-trigger-emotion-analysis).
+      assert_enqueued(worker: EmotionAnalysisWorker)
+    end
+
+    test "crisis retry: error → reschedule on the crisis lane → success on 2nd attempt (REQ-C7-crisis-priority-lane: lane preserved across retries)",
+         ctx do
+      _ = ctx
+
+      Fake.queue_responses([{:error, {:rate_limited, 1}}, {:ok, 1_234_567}])
+
+      # 1. Inbound worker enqueues the crisis outbound.
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a matar",
+                     telegram_message_id: 1001,
+                     telegram_update_id: 101
+                   )
+               })
+
+      # 2. First perform attempt: error → reschedule.
+      [first_job] =
+        Repo.all(
+          from j in Oban.Job,
+            where:
+              j.worker == "Alethea.Jobs.TelegramOutboundWorker" and
+                j.queue == "telegram_outbound_crisis",
+            limit: 1
+        )
+
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: first_job.args,
+                 attempt: 1,
+                 priority: 1
+               })
+
+      # 3. Rescheduled job stays on the crisis lane (lane preserved).
+      # The rescheduled job is in state "scheduled" (scheduled_at is in
+      # the future) and has a higher id than the original (which was
+      # marked completed by perform/1).
+      [second_job] =
+        Repo.all(
+          from j in Oban.Job,
+            where:
+              j.worker == "Alethea.Jobs.TelegramOutboundWorker" and
+                j.state == "scheduled",
+            order_by: [desc: :id],
+            limit: 1
+        )
+
+      assert second_job.args["lane"] == "crisis",
+             "the retry was re-enqueued on the crisis lane (not the safe lane)"
+
+      assert second_job.args["_attempt"] == 2
+
+      # 4. Second perform attempt: success.
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: second_job.args,
+                 attempt: 2,
+                 priority: 1
+               })
+
+      # 5. The send happened exactly once (the error didn't record).
+      sends = Fake.sends()
+      assert length(sends) == 1
+      assert hd(sends).text == ctx.legacy_patient.professional.crisis_message
+    end
+
+    test "crisis exhaustion: 5 failures → :crisis_dead_letter broadcast (TASK-3b-4 clinical-incident signal) with patient_id from args",
+         ctx do
+      _ = ctx
+
+      # Queue 5 consecutive errors. Each perform call consumes one
+      # from the head.
+      Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:rate_limited, 1}} end))
+
+      # Inbound worker enqueues the crisis outbound.
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a quitar la vida",
+                     telegram_message_id: 1002,
+                     telegram_update_id: 102
+                   )
+               })
+
+      # Drive the 5 attempts: attempts 1-4 reschedule; attempt 5 hits
+      # the exhaustion branch (dead-letter + :crisis_dead_letter broadcast).
+      # We track the latest rescheduled job's args by id (desc) — the
+      # original outbound job stays in state "scheduled" because we
+      # call perform/1 directly (Oban doesn't transition state in
+      # direct calls), so a naive "oldest scheduled" query would
+      # repeatedly pick up the original.
+      Enum.each(1..5, fn attempt ->
+        job =
+          Repo.one!(
+            from j in Oban.Job,
+              where: j.worker == "Alethea.Jobs.TelegramOutboundWorker",
+              order_by: [desc: :id],
+              limit: 1
+          )
+
+        TelegramOutboundWorker.perform(%Oban.Job{
+          args: job.args,
+          attempt: attempt,
+          priority: 1
+        })
+      end)
+
+      # 6. The clinical-incident broadcast fires with the patient_id
+      # (TASK-3b-4 operator-visibility surface).
+      assert_receive {:crisis_dead_letter,
+                      %{
+                        patient_id: patient_id,
+                        chat_id_hash: chat_id_hash,
+                        text: _,
+                        error: _,
+                        attempts: 5,
+                        at: _
+                      }},
+                     1_000
+
+      assert patient_id == ctx.legacy_patient.id,
+             "the crisis dead-letter broadcast carries the foundation patient_id"
+
+      assert chat_id_hash == @chat_id_hash
+
+      # 7. A dead-letter row was written with attempts: 5.
+      dl = Repo.one(Alethea.Foundation.Accounts.OutboundDeadLetter)
+      assert dl
+      assert dl.attempts == 5
+      assert dl.chat_id_hash == @chat_id_hash
+
+      # 8. The generic :outbound_dead_letter also fires (existing PR #3a
+      # behavior — both events coexist on crisis dead-letter). The
+      # `lane` field comes back as a string ("crisis") after the JSON
+      # round-trip through Oban args (Oban serializes args to JSONB and
+      # atoms → strings on read-back).
+      assert_receive {:outbound_dead_letter, %{lane: lane, attempts: 5}}, 1_000
+      assert lane in [:crisis, "crisis"]
+
+      # 9. The dead-letter row's `attempts: 5` (verified above) confirms
+      # the worker stopped retrying after @max_attempts — no further
+      # Oban job was inserted in the dead-letter branch. (We don't
+      # assert on `Oban.Job` row counts because direct `perform/1`
+      # calls don't transition state — the rescheduled jobs from
+      # iterations 1-4 stay in state "scheduled", which is an Oban
+      # testing-mode artifact, not a behavior assertion.)
     end
   end
 

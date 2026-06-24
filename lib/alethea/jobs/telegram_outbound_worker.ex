@@ -205,8 +205,17 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
     # The queue is selected by the lane. Crisis retries stay on the
     # crisis lane (REQ-C7-crisis-priority-lane); safe retries stay on
-    # the safe lane.
-    queue = if lane == :crisis, do: :telegram_outbound_crisis, else: :telegram_outbound
+    # the safe lane. The `lane` value can be either the atom (`:crisis`
+    # | `:safe`) when the inbound worker passes it in-process, or the
+    # string (`"crisis"` | `"safe"`) when JSON-decoded from `oban_jobs.args`
+    # after a round-trip — both forms must be accepted so retries stay
+    # on their lane.
+    queue =
+      case lane do
+        :crisis -> :telegram_outbound_crisis
+        "crisis" -> :telegram_outbound_crisis
+        _ -> :telegram_outbound
+      end
 
     new_args
     |> new(scheduled_at: scheduled_at, queue: queue, priority: priority)
@@ -270,7 +279,11 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     # Both events fire for crisis lane dead-letters. The generic event
     # is for unified dead-letter views; the crisis event is for the
     # clinical-incident dashboard.
-    if lane == :crisis do
+    # The lane may be `:crisis` (atom, set in-process) or `"crisis"`
+    # (string, after a JSON round-trip via Oban args) — both forms are
+    # accepted so a crisis dead-letter always broadcasts the
+    # clinical-incident signal (TASK-3b-4).
+    if lane == :crisis or lane == "crisis" do
       Phoenix.PubSub.broadcast(
         Alethea.PubSub,
         "ops:alerts",
