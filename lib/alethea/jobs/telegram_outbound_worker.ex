@@ -108,6 +108,57 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     end
   end
 
+  @doc """
+  Inline, queue-bypassing send invoked by the inbound worker's
+  queue-full escalation (REQ-C7-crisis-queue-full-escalation).
+
+  Runs the same body as `perform/1` — `Pacer.acquire/1` then
+  `Client.send_message/2` — but inline in the caller process (no Oban
+  queue). On send failure, **dead-letters immediately** because the
+  queue is full by definition (that's why we're inline); a retry
+  would just hit the same `queue_full` error.
+
+  ## Why not retry inline?
+
+  Retrying inline (sleep + retry) would block the inbound worker for
+  up to `@max_backoff_ms` (5 min). The whole point of the crisis
+  lane is to move fast — the queue is full because the system is
+  under load, and the right thing to do is fall back to the
+  dead-letter + `ops:alerts` broadcast so an operator can replay
+  manually. A `Logger.warning` documents the path.
+
+  ## Args shape
+
+  Same args shape as `perform/1`'s `args` field — `%{chat_id_hash,
+  chat_id, message_id, body, lane, priority, _attempt}`. `_attempt` is
+  unused in inline mode (no retry).
+  """
+  @spec perform_now(map()) :: :ok
+  def perform_now(args) do
+    # String keys (matches the Oban Job contract — args come from
+    # JSON-decoded oban_jobs.args after Oban re-hydrates the job).
+    # The inbound worker converts its in-process atom-keyed args to
+    # string keys before calling this function (see
+    # `escalate_to_perform_now/2` in `TelegramMessageWorker`).
+    chat_id = Map.fetch!(args, "chat_id")
+    chat_id_hash = Map.fetch!(args, "chat_id_hash")
+    body = Map.fetch!(args, "body")
+    lane = Map.get(args, "lane", :safe)
+
+    Pacer.acquire(chat_id_hash)
+
+    case telegram_client().send_message(chat_id, body) do
+      {:ok, _message_id} ->
+        :ok
+
+      {:error, reason} ->
+        # Inline mode: no queue to reschedule to → dead-letter
+        # immediately. attempt is 1 because the inline call ran once.
+        dead_letter_and_broadcast(chat_id_hash, body, reason, 1, lane)
+        :ok
+    end
+  end
+
   # ----------------------------------------------------------------
   # Backoff computation
   # ----------------------------------------------------------------

@@ -34,12 +34,13 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
   use Alethea.DataCase, async: false
   use Oban.Testing, repo: Alethea.Repo
+  import Mox
 
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Clinical.Message
   alias Alethea.Repo
+  alias Alethea.Telegram.{ChatIdHash, Pacer}
   alias AletheaJobs.EmotionAnalysisWorker
-  alias Alethea.Telegram.ChatIdHash
 
   import Alethea.FoundationTestHelper
   import Ecto.Query
@@ -81,8 +82,55 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     # `oban_jobs` table so `assert_enqueued` does not pick up jobs from
     # other tests.
     Repo.delete_all(Oban.Job)
+
+    # Pacer: hermetic per-test state, fast refill. The MessageWorkerTest
+    # exercises the crisis lane queue-full escalation which calls
+    # `TelegramOutboundWorker.perform_now/1` inline — that path
+    # acquires a Pacer token. We start the Pacer here per test so the
+    # acquire call does not exit with `noproc`.
+    Application.put_env(
+      :alethea,
+      Alethea.Telegram.Pacer,
+      Keyword.merge(
+        Application.get_env(:alethea, Alethea.Telegram.Pacer, []),
+        per_chat_capacity: 1,
+        per_chat_refill_per_sec: 1.0,
+        global_capacity: 30,
+        global_refill_per_sec: 30.0,
+        cleanup_interval_ms: 60_000,
+        idle_threshold_ms: 60_000
+      )
+    )
+
+    case Process.whereis(Pacer) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.stop(pid, :normal, 5_000)
+        catch
+          :exit, _ -> :ok
+        end
+    end
+
+    {:ok, _} = Pacer.start_link([])
+
+    # Start the Telegram Client.Fake so the crisis escalation's
+    # `TelegramOutboundWorker.perform_now/1` path can record the send.
+    # The message worker test exercises the queue-full escalation
+    # which invokes perform_now inline; that path calls `Fake.send_message/2`
+    # via the configured `:telegram_client` adapter.
+    start_supervised!(Alethea.Telegram.Client.Fake)
+    Alethea.Telegram.Client.Fake.reset()
+    Application.put_env(:alethea, :telegram_client, Alethea.Telegram.Client.Fake)
+
+    # Mox setup for tests that stub `OutboundEnqueue.insert/1` to
+    # simulate `:queue_full`.
     :ok
   end
+
+  setup :verify_on_exit!
 
   # ----------------------------------------------------------------
   # Oban.Worker contract (REQ-C3-idempotent-by-update-id)
@@ -520,6 +568,115 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       inbound = Repo.one(from m in Message, where: m.direction == "inbound")
       diagnosis = Repo.one(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
       assert diagnosis.ai_response == "Custom reply from Dr. Test"
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Crisis queue-full escalation (REQ-C7-crisis-queue-full-escalation;
+  #                              PR #3b / TASK-3b-3)
+  # ----------------------------------------------------------------
+
+  describe "escalate_to_perform_now/2 — queue-full escalation (REQ-C7-crisis-queue-full-escalation)" do
+    setup :setup_bound_patient
+
+    setup do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+      :ok
+    end
+
+    test "broadcasts :crisis_queue_full on 'ops:alerts' with chat_id_hash, text, at" do
+      args = %{
+        chat_id_hash: @chat_id_hash,
+        chat_id: 987_654_321,
+        message_id: nil,
+        body: "hola, buen día",
+        lane: :crisis
+      }
+
+      hash_prefix = String.slice(@chat_id_hash, 0, 8)
+
+      assert :ok = TelegramMessageWorker.escalate_to_perform_now(args, hash_prefix)
+
+      assert_receive {:crisis_queue_full, %{chat_id_hash: chat_id_hash, text: text, at: at}},
+                     1_000
+
+      assert chat_id_hash == @chat_id_hash
+      assert text == "hola, buen día"
+      assert is_struct(at, DateTime)
+    end
+
+    test "the spawned perform_now/1 still calls Pacer.acquire/1 before sending (REQ-C7-crisis-queue-full-escalation scenario 'Pacer safety net')" do
+      # Use a unique chat hash so we can inspect its Pacer bucket
+      # without interference from other tests.
+      unique_chat_hash = "9" |> String.duplicate(64)
+
+      args = %{
+        chat_id_hash: unique_chat_hash,
+        chat_id: 123_456_789,
+        message_id: nil,
+        body: "hola",
+        lane: :crisis
+      }
+
+      pacer_before = Pacer.inspect_per_chat()
+
+      assert :ok = TelegramMessageWorker.escalate_to_perform_now(args, "9" |> String.duplicate(8))
+
+      pacer_after = Pacer.inspect_per_chat()
+
+      # The Pacer per-chat bucket drained during perform_now.
+      before_tokens = Map.get(pacer_before, unique_chat_hash, %{tokens: 1}).tokens
+      after_tokens = Map.get(pacer_after, unique_chat_hash, %{tokens: 0}).tokens
+
+      assert before_tokens == 1, "Pacer should start full for #{unique_chat_hash}"
+      assert after_tokens == 0, "Pacer should be drained after perform_now (rate-limit bypass)"
+    end
+
+    test "on crisis lane queue_full from Oban.insert, the worker escalates to perform_now and broadcasts :crisis_queue_full (integration)" do
+      # Stub the OutboundEnqueue adapter to return `:queue_full` for
+      # crisis outbound. The emotion analysis enqueue still goes
+      # through `Oban.insert/1` directly (unaffected by this stub),
+      # so we can assert it lands.
+      Mox.defmock(
+        FailingQueueEnqueue,
+        for: Alethea.Telegram.OutboundEnqueue
+      )
+
+      Mox.stub(FailingQueueEnqueue, :insert, fn _ ->
+        {:error, :queue_full}
+      end)
+
+      Application.put_env(
+        :alethea,
+        :telegram_outbound_enqueue,
+        FailingQueueEnqueue
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:alethea, :telegram_outbound_enqueue)
+      end)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a suicidar",
+                     telegram_message_id: 900,
+                     telegram_update_id: 90
+                   )
+               })
+
+      # The escalation broadcast fires.
+      assert_receive {:crisis_queue_full, %{chat_id_hash: _, text: _, at: _}}, 1_000
+
+      # The inbound message was persisted (the inbound step succeeds
+      # before the outbound enqueue).
+      inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+      assert inbound
+
+      # The emotion worker IS enqueued (this insert goes through the
+      # real `Oban.insert/1`, not the stubbed OutboundEnqueue — only
+      # the crisis outbound is mocked).
+      assert_enqueued(worker: EmotionAnalysisWorker)
     end
   end
 

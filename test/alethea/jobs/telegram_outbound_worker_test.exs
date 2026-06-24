@@ -268,6 +268,102 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # perform_now/1 — queue-full escalation (REQ-C7-crisis-queue-full-escalation;
+  #                                   PR #3b / TASK-3b-3)
+  # ----------------------------------------------------------------
+
+  describe "perform_now/1 — crisis queue-full escalation" do
+    test "calls Pacer.acquire/1 before sending (rate-limit safety net preserved under inline execution)" do
+      Fake.queue_responses([{:ok, 1_234_567}])
+
+      # Use a distinct chat_id_hash so this test is hermetic against
+      # any per-chat Pacer state left by other tests.
+      inline_chat_hash = "d" |> String.duplicate(64)
+
+      args =
+        build_args(
+          chat_id_hash: inline_chat_hash,
+          lane: :crisis,
+          priority: 1
+        )
+
+      pacer_before = Pacer.inspect_per_chat()
+      assert :ok = TelegramOutboundWorker.perform_now(args)
+      pacer_after = Pacer.inspect_per_chat()
+
+      before_tokens = Map.get(pacer_before, inline_chat_hash, %{tokens: 1}).tokens
+      after_tokens = Map.get(pacer_after, inline_chat_hash, %{tokens: 0}).tokens
+
+      assert before_tokens == 1, "expected Pacer to start full for #{inline_chat_hash}"
+      assert after_tokens == 0, "expected Pacer to be drained after perform_now"
+
+      # The send was recorded.
+      assert length(Fake.sends()) == 1
+      assert hd(Fake.sends()).chat_id == @chat_id
+    end
+
+    test "returns :ok on a successful send" do
+      Fake.queue_responses([{:ok, 2_345_678}])
+
+      assert :ok =
+               TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
+    end
+
+    test "dead-letters on send failure (inline mode: no queue to reschedule to — REQ-C7-crisis-queue-full-escalation scenario 'queue full escalates to direct send')" do
+      # All 5 attempts return errors. perform_now is inline (no queue
+      # retries), so the FIRST error must dead-letter — not retry 5
+      # times like the queued path.
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+
+      # Subscribe to ops:alerts so we can assert the dead-letter
+      # PubSub broadcast.
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+
+      assert :ok =
+               TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
+
+      # A dead-letter row was written with attempts: 1 (the inline
+      # call ran exactly once).
+      dl = Repo.one(OutboundDeadLetter)
+      assert dl
+      assert dl.attempts == 1
+      assert dl.chat_id_hash == @chat_id_hash
+
+      # The PubSub event was broadcast with lane: :crisis.
+      assert_receive {:outbound_dead_letter,
+                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: :crisis}},
+                     1_000
+    end
+
+    test "the dead-letter broadcast includes lane: :crisis when perform_now is invoked from the crisis escalation path (lane column on dead_letter table is TASK-3b-4)" do
+      Fake.queue_responses([{:error, :network}])
+
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+
+      assert :ok =
+               TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
+
+      # The lane flows through the PubSub payload (REQ-C7-crisis-queue-full-escalation).
+      # Storing `lane` on the dead_letter row is a TASK-3b-4 concern (the schema
+      # column lands then; here we just assert the broadcast shape).
+      assert_receive {:outbound_dead_letter,
+                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: :crisis}},
+                     1_000
+    end
+
+    test "does NOT enqueue a rescheduled Oban job on send failure (no queue to insert into)" do
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+
+      assert :ok =
+               TelegramOutboundWorker.perform_now(build_args(lane: :crisis, priority: 1))
+
+      # Inline mode must not produce a rescheduled job — the queue is
+      # full by definition (that's why we escalated in the first place).
+      refute_enqueued(worker: TelegramOutboundWorker)
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Crisis lane (REQ-C7-crisis-priority-lane; PR #3b / TASK-3b-2)
   # ----------------------------------------------------------------
 

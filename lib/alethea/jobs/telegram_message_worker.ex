@@ -242,25 +242,99 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     # queues in `config/config.exs`.
     queue = if lane == :crisis, do: :telegram_outbound_crisis, else: :telegram_outbound
 
-    TelegramOutboundWorker.new(
-      %{
-        chat_id_hash: chat_id_hash,
-        chat_id: chat_id,
-        message_id: message_id,
-        body: body,
-        lane: lane
-      },
-      queue: queue
-    )
-    |> Oban.insert()
+    new_args = %{
+      chat_id_hash: chat_id_hash,
+      chat_id: chat_id,
+      message_id: message_id,
+      body: body,
+      lane: lane
+    }
+
+    new_args
+    |> TelegramOutboundWorker.new(queue: queue)
+    |> out_enqueue().insert()
     |> case do
       {:ok, _job} ->
         :ok
+
+      # Crisis lane queue-full escalation (REQ-C7-crisis-queue-full-escalation).
+      # When the crisis queue is at capacity (max_demand: 2), Oban returns
+      # `{:error, :queue_full}` (or similar) on insert. We bypass the queue
+      # by invoking `TelegramOutboundWorker.perform_now/1` inline. The Pacer
+      # is still acquired (the rate-limit is the safety net), and an
+      # `:crisis_queue_full` event is broadcast on `"ops:alerts"` for
+      # operator visibility.
+      {:error, :queue_full} when lane == :crisis ->
+        escalate_to_perform_now(new_args, hash_prefix)
 
       {:error, reason} ->
         raise "TelegramMessageWorker: failed to enqueue TelegramOutboundWorker " <>
                 "(reason=#{inspect(reason)}, hash_prefix=#{hash_prefix}, lane=#{lane})"
     end
+  end
+
+  # Reads the outbound enqueue adapter from Application env at call-time.
+  # Production uses the real `Alethea.Telegram.OutboundEnqueue` (which
+  # delegates to `Oban.insert/1`); tests can override via Mox to stub
+  # insert failures (e.g., queue_full for the crisis-lane escalation test).
+  defp out_enqueue do
+    Application.get_env(
+      :alethea,
+      :telegram_outbound_enqueue,
+      Alethea.Telegram.OutboundEnqueue
+    )
+  end
+
+  @doc """
+  Escalation path invoked when the crisis Oban queue is at capacity
+  (REQ-C7-crisis-queue-full-escalation).
+
+  Public so tests can drive the escalation directly (the `enqueue_outbound/6`
+  catch path is also exercised via Mox-stubbed `Oban.insert/1`).
+
+  Steps:
+    1. Log a `Logger.warning` documenting the escalation (the
+       `hash_prefix` is the only PHI surface logged).
+    2. Broadcast `:crisis_queue_full` on `"ops:alerts"` PubSub with
+       `chat_id_hash`, `text`, `at`. Operator dashboards subscribe to
+       `"ops:alerts"` and react.
+    3. Invoke `TelegramOutboundWorker.perform_now/1` inline. The
+       Pacer is acquired (the rate-limit is preserved) and the send
+       runs synchronously. If the inline send fails, perform_now
+       dead-letters immediately (no queue to retry through).
+
+  Returns `:ok` always — escalation is the success path; per-call
+  failures are surfaced via dead-letter + ops broadcast, not by
+  raising from this function.
+  """
+  @spec escalate_to_perform_now(map(), String.t()) :: :ok
+  def escalate_to_perform_now(args, hash_prefix) do
+    chat_id_hash = Map.fetch!(args, :chat_id_hash)
+    body = Map.fetch!(args, :body)
+
+    Logger.warning(
+      "TelegramMessageWorker: crisis queue full, escalating to perform_now " <>
+        "(hash_prefix=#{hash_prefix})"
+    )
+
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "ops:alerts",
+      {:crisis_queue_full,
+       %{
+         chat_id_hash: chat_id_hash,
+         text: body,
+         at: DateTime.utc_now()
+       }}
+    )
+
+    # The in-process `args` map uses atom keys (the worker's own
+    # convention for the pre-insert step). `TelegramOutboundWorker.perform_now/1`
+    # expects string keys (the Oban re-hydrated contract). Convert
+    # atomically before delegating so the callee reads the same
+    # shape it would read from `oban_jobs.args`.
+    string_args = Map.new(args, fn {k, v} -> {to_string(k), v} end)
+    TelegramOutboundWorker.perform_now(string_args)
   end
 
   defp enqueue_unregistered_reply(chat_id, chat_id_hash, hash_prefix) do
