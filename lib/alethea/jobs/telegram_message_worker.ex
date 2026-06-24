@@ -172,6 +172,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       {:ok, %{content: reply}} when is_binary(reply) and reply != "" ->
         persist_and_enqueue_outbound(
           foundation_patient,
+          legacy_patient,
           chat_id,
           chat_id_hash,
           hash_prefix,
@@ -190,6 +191,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   defp persist_and_enqueue_outbound(
          foundation_patient,
+         legacy_patient,
          chat_id,
          chat_id_hash,
          hash_prefix,
@@ -211,7 +213,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     # can persist the `reply_to_message_id` directly.
     _ = inbound_message_id
 
-    enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix)
+    enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix,
+      patient_id: legacy_patient.id
+    )
+
     :ok
   end
 
@@ -234,6 +239,12 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix, opts \\ []) do
     lane = Keyword.get(opts, :lane, :safe)
+    # `patient_id` is the foundation Patient's id (UUID). It flows to
+    # the outbound worker so a crisis dead-letter broadcast can carry
+    # the operator-visible identifier (REQ-C7-crisis-priority-lane +
+    # TASK-3b-4 crisis clinical-incident signal). Nil-safe: the
+    # unregistered-chat reply (no patient) passes nil.
+    patient_id = Keyword.get(opts, :patient_id)
     # Crisis lane is the dedicated `telegram_outbound_crisis` Oban
     # queue (REQ-C7-crisis-priority-lane). The safe lane stays on
     # `telegram_outbound`. The Oban queue name is the Oban worker's
@@ -247,7 +258,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       chat_id: chat_id,
       message_id: message_id,
       body: body,
-      lane: lane
+      lane: lane,
+      patient_id: patient_id
     }
 
     new_args
@@ -423,7 +435,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       )
 
     # 5. Enqueue on the :telegram_outbound_crisis lane.
-    enqueue_outbound(chat_id_hash, chat_id, outbound.id, crisis_text, hash_prefix, lane: :crisis)
+    enqueue_outbound(chat_id_hash, chat_id, outbound.id, crisis_text, hash_prefix,
+      lane: :crisis,
+      patient_id: legacy_patient.id
+    )
 
     Logger.warning(
       "TelegramMessageWorker: crisis branch (hash_prefix=#{hash_prefix}, " <>

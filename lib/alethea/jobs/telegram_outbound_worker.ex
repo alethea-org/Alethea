@@ -84,6 +84,14 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     # Prefer the in-args `priority` (the Oban job's `priority:` is the
     # authoritative value when the worker re-inserts via `new/2`).
     priority = Map.get(args, "priority", oban_priority)
+    # `patient_id` is the foundation Patient's id (UUID). It is
+    # forwarded from `TelegramMessageWorker` so the crisis dead-letter
+    # PubSub broadcast can carry the operator-visible identifier
+    # (REQ-C7-crisis-priority-lane + TASK-3b-4 crisis clinical-incident
+    # signal). Nil when the worker is invoked without the patient
+    # context (e.g., a direct test invocation, or a future admin
+    # retry path that doesn't have the patient in scope).
+    patient_id = Map.get(args, "patient_id")
 
     # 1. Pacer acquire. Blocks until tokens are available (1 msg/s/chat
     #    AND 30 msg/s global). The Pacer does NOT raise — it sleeps
@@ -99,7 +107,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         :ok
 
       {:error, reason} when attempt >= @max_attempts ->
-        dead_letter_and_broadcast(chat_id_hash, body, reason, attempt, lane)
+        dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, attempt, lane)
         :ok
 
       {:error, reason} ->
@@ -144,6 +152,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     chat_id_hash = Map.fetch!(args, "chat_id_hash")
     body = Map.fetch!(args, "body")
     lane = Map.get(args, "lane", :safe)
+    patient_id = Map.get(args, "patient_id")
 
     Pacer.acquire(chat_id_hash)
 
@@ -154,7 +163,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
       {:error, reason} ->
         # Inline mode: no queue to reschedule to → dead-letter
         # immediately. attempt is 1 because the inline call ran once.
-        dead_letter_and_broadcast(chat_id_hash, body, reason, 1, lane)
+        dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, 1, lane)
         :ok
     end
   end
@@ -217,7 +226,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # Dead-letter + PubSub broadcast
   # ----------------------------------------------------------------
 
-  defp dead_letter_and_broadcast(chat_id_hash, body, reason, attempt, lane) do
+  defp dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, attempt, lane) do
     last_error = inspect(reason)
 
     {:ok, _row} =
@@ -231,6 +240,10 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
       })
       |> Repo.insert()
 
+    now = DateTime.utc_now()
+
+    # Generic dead-letter event (PR #3a — every dead-letter, regardless
+    # of lane). Dashboards use this to show a unified "what failed" view.
     Phoenix.PubSub.broadcast(
       Alethea.PubSub,
       "ops:alerts",
@@ -241,9 +254,37 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
          error: last_error,
          attempts: attempt,
          lane: lane,
-         at: DateTime.utc_now()
+         at: now
        }}
     )
+
+    # Crisis-specific clinical-incident event (TASK-3b-4). Crisis
+    # dead-letters are clinical incidents (the patient is in distress
+    # and the support message couldn't reach them) and warrant a
+    # DISTINCT signal so operator dashboards can prioritize them over
+    # safe-lane failures. The `:crisis_dead_letter` event carries the
+    # foundation `patient_id` so the dashboard can correlate to the
+    # patient record (the chat_id_hash alone is the rate-limit key —
+    # it correlates to a patient but the operator wants the UUID).
+    #
+    # Both events fire for crisis lane dead-letters. The generic event
+    # is for unified dead-letter views; the crisis event is for the
+    # clinical-incident dashboard.
+    if lane == :crisis do
+      Phoenix.PubSub.broadcast(
+        Alethea.PubSub,
+        "ops:alerts",
+        {:crisis_dead_letter,
+         %{
+           patient_id: patient_id,
+           chat_id_hash: chat_id_hash,
+           text: body,
+           error: last_error,
+           attempts: attempt,
+           at: now
+         }}
+      )
+    end
 
     Logger.error(
       "TelegramOutboundWorker: exhausted retries, dead-letter written " <>

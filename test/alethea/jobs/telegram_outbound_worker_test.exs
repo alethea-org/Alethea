@@ -268,6 +268,124 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # :crisis_dead_letter broadcast (PR #3b / TASK-3b-4 — operator
+  # visibility for crisis message loss, the only message type where
+  # dead-letter is a clinical incident)
+  # ----------------------------------------------------------------
+
+  describe ":crisis_dead_letter broadcast (REQ-C7 — crisis dead-letter is a clinical incident)" do
+    setup do
+      # Each crisis dead-letter test subscribes to ops:alerts so it
+      # can assert both events fired (generic + crisis-specific).
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+      :ok
+    end
+
+    test "publishes :crisis_dead_letter on ops:alerts when a crisis job exhausts retries (perform/1 path)" do
+      # Queue 5 consecutive errors so the 5th attempt is the exhaustion.
+      Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:rate_limited, 1}} end))
+
+      # Simulate the worker being invoked 5 times — each invocation
+      # reads one queued response. Attempts 1-4 reschedule; attempt
+      # 5 hits the exhaustion branch and broadcasts the dead-letter.
+      result =
+        Enum.reduce_while(1..5, :ok, fn attempt, _acc ->
+          args =
+            Map.put(build_args(lane: :crisis, priority: 1, patient_id: 1234), "_attempt", attempt)
+
+          case perform(args) do
+            :ok -> {:cont, :ok}
+            other -> {:halt, other}
+          end
+        end)
+
+      assert result == :ok
+
+      # Both events fire — the generic :outbound_dead_letter (existing
+      # behavior from PR #3a) AND the crisis-specific :crisis_dead_letter
+      # (the TASK-3b-4 clinical-incident signal).
+      assert_receive {:outbound_dead_letter, _generic_payload}, 1_000
+
+      assert_receive {:crisis_dead_letter,
+                      %{
+                        patient_id: patient_id,
+                        chat_id_hash: chat_id_hash,
+                        text: text,
+                        error: _,
+                        attempts: 5,
+                        at: at
+                      }},
+                     1_000
+
+      assert patient_id == 1234
+      assert chat_id_hash == @chat_id_hash
+      assert text == @body
+      assert is_struct(at, DateTime)
+    end
+
+    test "publishes :crisis_dead_letter when a crisis lane fails inline (perform_now/1 path — TASK-3b-3 escalation)" do
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+
+      assert :ok =
+               TelegramOutboundWorker.perform_now(
+                 build_args(lane: :crisis, priority: 1, patient_id: 5678)
+               )
+
+      assert_receive {:crisis_dead_letter,
+                      %{patient_id: 5678, chat_id_hash: _, text: _, error: _, attempts: 1}},
+                     1_000
+
+      # The generic event also fires (existing behavior).
+      assert_receive {:outbound_dead_letter, _}, 1_000
+    end
+
+    test "does NOT publish :crisis_dead_letter on a safe lane dead-letter (only :outbound_dead_letter fires)" do
+      # Drive safe-lane exhaustion.
+      Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:rate_limited, 1}} end))
+
+      result =
+        Enum.reduce_while(1..5, :ok, fn attempt, _acc ->
+          args = Map.put(build_args(lane: :safe, patient_id: 9999), "_attempt", attempt)
+
+          case perform(args) do
+            :ok -> {:cont, :ok}
+            other -> {:halt, other}
+          end
+        end)
+
+      assert result == :ok
+
+      # Generic event fires.
+      assert_receive {:outbound_dead_letter, %{lane: :safe}}, 1_000
+
+      # No crisis event — the safe lane is a normal outbound flow.
+      refute_receive {:crisis_dead_letter, _}, 200
+    end
+
+    test "the :crisis_dead_letter payload includes patient_id (the foundation patient that owns the chat_id_hash)" do
+      Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:server_error, 503}} end))
+
+      Enum.each(1..5, fn attempt ->
+        perform(Map.put(build_args(lane: :crisis, patient_id: "abc-123"), "_attempt", attempt))
+      end)
+
+      assert_receive {:crisis_dead_letter, %{patient_id: "abc-123"}}, 1_000
+    end
+
+    test "missing patient_id in args does not crash the worker (backward compat: the crisis event fires with patient_id: nil)" do
+      Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:rate_limited, 1}} end))
+
+      # No `patient_id` in build_args (defaults to nil).
+      Enum.each(1..5, fn attempt ->
+        perform(Map.put(build_args(lane: :crisis), "_attempt", attempt))
+      end)
+
+      # The crisis broadcast still fires — with patient_id: nil.
+      assert_receive {:crisis_dead_letter, %{patient_id: nil, chat_id_hash: _}}, 1_000
+    end
+  end
+
+  # ----------------------------------------------------------------
   # perform_now/1 — queue-full escalation (REQ-C7-crisis-queue-full-escalation;
   #                                   PR #3b / TASK-3b-3)
   # ----------------------------------------------------------------
@@ -523,7 +641,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       "body" => Keyword.get(opts, :body, @body),
       "_attempt" => Keyword.get(opts, :attempt, 1),
       "lane" => Keyword.get(opts, :lane, :safe),
-      "priority" => Keyword.get(opts, :priority, 0)
+      "priority" => Keyword.get(opts, :priority, 0),
+      "patient_id" => Keyword.get(opts, :patient_id)
     }
   end
 end
