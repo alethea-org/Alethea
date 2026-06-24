@@ -943,3 +943,84 @@ ddee681 feat(telegram): crisis lane escalates on queue full via perform now
 Cumulative after TASK-3b-3: ~1,028 lines. `tasks.md` total estimate for PR #3b: 585 lines. **Already 76% over budget** with 3 of 6 tasks remaining. The remaining tasks are smaller (45 + 50 + 80 = 175 lines), so final estimate is ~1,200 lines (~2× the soft 800 budget).
 
 The overshoot is concentrated in TASK-3b-3's integration testability (the OutboundEnqueue wrapper) and TASK-3b-1's migration widening. Both were required by the spec's deeper requirements (the crisis branch persists `behavior_type: "crisis_bypass"`, the catch path needs to be testable). The wrapper is justified: the alternative was untested integration code.
+
+---
+
+# PR #3b / TASK-3b-4 — `:crisis_dead_letter` PubSub broadcast on ops:alerts
+
+**Commit:** `c4c8493 feat(telegram): broadcast crisis dead letter on ops alerts` (on `feat/telegram-paciente-foundation/pr-3b-clinical-crisis`, pushed).
+**Strict TDD:** active.
+**Status:** ✅ TASK-3b-4 done.
+
+## TDD cycle evidence (TASK-3b-4)
+
+### RED (pre-implementation)
+
+Extended `test/alethea/jobs/telegram_outbound_worker_test.exs` with `describe ":crisis_dead_letter broadcast"` (5 tests):
+
+- `:crisis_dead_letter` fires on crisis lane exhaustion (`perform/1` path)
+- `:crisis_dead_letter` fires on crisis lane inline failure (`perform_now/1` path — TASK-3b-3 escalation)
+- `:crisis_dead_letter` does NOT fire on safe lane dead-letter (regression check)
+- The payload includes `patient_id` (the foundation Patient's UUID)
+- Missing `patient_id` doesn't crash the worker (backward compat: payload has `patient_id: nil`)
+
+Initial RED state: 4/5 failures — `dead_letter_and_broadcast/5` did not include the crisis-specific broadcast.
+
+### GREEN (implementation)
+
+1. **`TelegramOutboundWorker.dead_letter_and_broadcast/6`** — new arity (added `patient_id` parameter). Always broadcasts `:outbound_dead_letter` on `"ops:alerts"` (existing behavior). If `lane == :crisis`, ALSO broadcasts `:crisis_dead_letter` on `"ops:alerts"` with `patient_id, chat_id_hash, text, error, attempts, at`. Both events fire for crisis dead-letters; only the generic event fires for safe dead-letters.
+2. **`TelegramOutboundWorker.perform/1`** and **`perform_now/1`** — extract `patient_id` from args (default `nil` for backward compat) and pass to `dead_letter_and_broadcast/6`.
+3. **`TelegramMessageWorker.enqueue_outbound/6`** — accept `:patient_id` in opts; pass through to the outbound args map.
+4. **`TelegramMessageWorker.persist_and_enqueue_outbound/7`** (new arity) — takes `legacy_patient` and passes `legacy_patient.id` as `patient_id` to `enqueue_outbound/6`. Callers in `handle_safe_path/6` updated to pass the legacy patient.
+5. **`TelegramMessageWorker.handle_crisis_path/9`** — passes `legacy_patient.id` to `enqueue_outbound/6`.
+
+### Final commit
+
+```
+c4c8493 feat(telegram): broadcast crisis dead letter on ops alerts
+```
+
+## Test counts (delta)
+
+- After TASK-3b-3: 486 tests, 0 failures, 5 skipped.
+- After TASK-3b-4: **491 tests, 0 failures, 5 skipped** (delta: **+5 new tests** in the crisis_dead_letter describe block).
+
+## `mix precommit` result (on commit `c4c8493`)
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass.
+- `format --check-formatted`: pass.
+- `test`: 491 tests, 0 failures, 5 skipped.
+
+## Lines changed (TASK-3b-4)
+
+| File | Net delta | Notes |
+|---|---|---|
+| `lib/alethea/jobs/telegram_outbound_worker.ex` | +44 / -5 | `dead_letter_and_broadcast/6` (added patient_id arg, crisis-specific broadcast branch); `perform/1` + `perform_now/1` extract patient_id |
+| `lib/alethea/jobs/telegram_message_worker.ex` | +13 / -8 | `enqueue_outbound/6` reads `:patient_id` from opts; `persist_and_enqueue_outbound/7` threads `legacy_patient`; `handle_safe_path/6` passes legacy_patient; `handle_crisis_path/9` passes legacy_patient.id |
+| `test/alethea/jobs/telegram_outbound_worker_test.exs` | +118 / -3 | 5 new tests in `describe ":crisis_dead_letter broadcast"`; `build_args/1` accepts `:patient_id` kwarg |
+| **Total** | **+175 / -16** in 3 files | est. **45** in `tasks.md` → actual **+159 net** (3.5× the budget) |
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/`)
+
+| Requirement | Spec | Status |
+|---|---|---|
+| Crisis dead-letter = clinical incident (operator visibility) | C-7 (TASK-3b-4 narrative) | ✅ The `:crisis_dead_letter` PubSub event fires on `"ops:alerts"` whenever a crisis lane dead-letters (queued exhaustion OR inline failure). The payload includes `patient_id` so dashboards can correlate to the patient record, plus `chat_id_hash`, `text`, `error`, `attempts`, `at`. The generic `:outbound_dead_letter` event STILL fires (no behavioral change for existing dashboards). |
+
+## Deviations from `tasks.md`
+
+- **`patient_id` arg threading:** `tasks.md` listed `TelegramOutboundWorker.ex` as the only file to modify. The implementation also required threading `legacy_patient` (or its id) from `TelegramMessageWorker` to `enqueue_outbound`. The fix is small (~13 lines: thread legacy_patient through `persist_and_enqueue_outbound/7` and add `patient_id` to the new_args map) but necessary — the outbound worker doesn't have its own access to the foundation Patient identity.
+- **Both events fire on crisis (not exclusive):** `tasks.md` says "broadcast `:crisis_dead_letter` ... when a crisis job exhausts retries". I interpreted this as ADDITIONAL (not replacement) — the generic `:outbound_dead_letter` still fires. Rationale: existing dashboards that listen for `:outbound_dead_letter` should keep working. The new `:crisis_dead_letter` is a SIGNAL ADDED for the crisis-specific dashboard. The test "the generic event also fires (existing behavior)" asserts this explicitly.
+- **3.5× budget overshoot:** `tasks.md` estimated "15 impl + 30 test = 45". Actual delta is **+159 net** (~3.5×). The overshoot is because (a) `patient_id` threading wasn't enumerated; (b) the tests are more comprehensive (5 scenarios vs 1 in the spec's "crisis dead-letter scenario").
+
+## PR #3b cumulative progress (after TASK-3b-4)
+
+- TASK-3b-1 ✅ (commit `007eca9`, +468 net)
+- TASK-3b-2 ✅ (commit `2ad51b1`, +157 net)
+- TASK-3b-3 ✅ (commit `ddee681`, +403 net)
+- TASK-3b-4 ✅ (commit `c4c8493`, +159 net)
+- TASK-3b-5 ⏳ pending — Crisis-path log redaction (R-1 hygiene)
+- TASK-3b-6 ⏳ pending — Crisis integration scenarios (end-to-end)
+
+Cumulative after TASK-3b-4: ~1,187 lines. `tasks.md` total estimate for PR #3b: 585 lines. **2× the soft budget** with 2 of 6 tasks remaining (TASK-3b-5 ≈ 50 lines, TASK-3b-6 ≈ 80 lines). Final estimate: ~1,317 lines (~2.2× the soft budget).
