@@ -60,7 +60,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   require Logger
 
-  alias Alethea.Telegram.{Pacer, Client}
+  alias Alethea.Telegram.{Pacer, Client, LogRedactor}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Repo
 
@@ -288,7 +288,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
     Logger.error(
       "TelegramOutboundWorker: exhausted retries, dead-letter written " <>
-        "(chat_id_hash_prefix=#{String.slice(chat_id_hash, 0, 8)}, " <>
+        "(chat_id_hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, " <>
         "attempts=#{attempt}, lane=#{lane}, error=#{last_error})"
     )
 

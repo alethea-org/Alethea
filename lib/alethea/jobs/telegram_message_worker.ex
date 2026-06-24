@@ -70,7 +70,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.AI
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
-  alias Alethea.Telegram.ChatIdHash
+  alias Alethea.Telegram.{ChatIdHash, LogRedactor}
   alias Alethea.Jobs.TelegramOutboundWorker
   alias AletheaJobs.EmotionAnalysisWorker
 
@@ -82,7 +82,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     %{"chat" => %{"id" => chat_id}, "message_id" => telegram_message_id, "text" => text} = message
 
     chat_id_hash = ChatIdHash.hash(chat_id, pepper!())
-    hash_prefix = String.slice(chat_id_hash, 0, 8)
+    hash_prefix = LogRedactor.prefix(chat_id_hash)
 
     case FoundationAccounts.lookup_patient_by_chat_hash(chat_id_hash) do
       {:ok, foundation_patient} ->
