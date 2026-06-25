@@ -29,6 +29,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   alias Alethea.Telegram.{Pacer, Client.Fake}
 
   import Ecto.Query
+  import Alethea.FoundationTestHelper
 
   @chat_id 987_654_321
   @chat_id_hash String.duplicate("a", 64)
@@ -285,13 +286,19 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       # Queue 5 consecutive errors so the 5th attempt is the exhaustion.
       Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:rate_limited, 1}} end))
 
+      # Round 1 (WARNING-5): the persisted dead-letter row carries
+      # patient_id (UUID) and lane. The UUID matches a fixture
+      # foundation patient; the FK constraint enforces the link.
+      fixture_patient_id = insert_foundation_patient_with_chat_id_hash(@chat_id_hash)
+      uuid = fixture_patient_id.id
+
       # Simulate the worker being invoked 5 times — each invocation
       # reads one queued response. Attempts 1-4 reschedule; attempt
       # 5 hits the exhaustion branch and broadcasts the dead-letter.
       result =
         Enum.reduce_while(1..5, :ok, fn attempt, _acc ->
           args =
-            Map.put(build_args(lane: :crisis, priority: 1, patient_id: 1234), "_attempt", attempt)
+            Map.put(build_args(lane: :crisis, priority: 1, patient_id: uuid), "_attempt", attempt)
 
           case perform(args) do
             :ok -> {:cont, :ok}
@@ -317,27 +324,40 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
                       }},
                      1_000
 
-      assert patient_id == 1234
+      assert patient_id == uuid
       assert chat_id_hash == @chat_id_hash
       assert text == @body
       assert is_struct(at, DateTime)
+
+      # Round 1 (WARNING-5): the persisted dead-letter row carries
+      # patient_id (the foundation UUID) and lane: "crisis". Verify
+      # the row matches the broadcast shape.
+      dl = Repo.one(OutboundDeadLetter)
+      assert dl.patient_id == uuid
+      assert dl.lane == "crisis"
+      assert dl.attempts == 5
     end
 
     test "publishes :crisis_dead_letter when a crisis lane fails inline (perform_now/1 path — TASK-3b-3 escalation)" do
       Fake.queue_responses([{:error, {:rate_limited, 1}}])
 
-      # Round 1 (judgment-day, WARNING-6): perform_now returns
-      # {:error, reason} on send failure so the caller can
-      # distinguish a successful inline send from a dead-lettered
-      # failure. The :crisis_queue_full PubSub broadcast (TASK-3b-3)
-      # uses this to populate its `delivered` field.
+      # Round 1 (judgment-day, WARNING-5 + WARNING-6):
+      # - Insert a foundation patient whose chat_id_hash matches the
+      #   fixture so the FK on foundation_outbound_dead_letters.patient_id
+      #   resolves.
+      # - perform_now returns {:error, reason} on send failure so the
+      #   caller can distinguish a successful inline send from a
+      #   dead-lettered failure.
+      fixture_patient = insert_foundation_patient_with_chat_id_hash(@chat_id_hash)
+      uuid = fixture_patient.id
+
       assert {:error, {:rate_limited, 1}} =
                TelegramOutboundWorker.perform_now(
-                 build_args(lane: :crisis, priority: 1, patient_id: 5678)
+                 build_args(lane: :crisis, priority: 1, patient_id: uuid)
                )
 
       assert_receive {:crisis_dead_letter,
-                      %{patient_id: 5678, chat_id_hash: _, text: _, error: _, attempts: 1}},
+                      %{patient_id: ^uuid, chat_id_hash: _, text: _, error: _, attempts: 1}},
                      1_000
 
       # The generic event also fires (existing behavior).
@@ -350,7 +370,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
 
       result =
         Enum.reduce_while(1..5, :ok, fn attempt, _acc ->
-          args = Map.put(build_args(lane: :safe, patient_id: 9999), "_attempt", attempt)
+          # safe lane; nil patient is fine
+          args = Map.put(build_args(lane: :safe, patient_id: nil), "_attempt", attempt)
 
           case perform(args) do
             :ok -> {:cont, :ok}
@@ -361,7 +382,10 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       assert result == :ok
 
       # Generic event fires.
-      assert_receive {:outbound_dead_letter, %{lane: :safe}}, 1_000
+      # Round 1 (WARNING-5): the lane is a string ("safe" / "crisis")
+      # in the broadcast payload — matches the persisted
+      # foundation_outbound_dead_letters.lane column.
+      assert_receive {:outbound_dead_letter, %{lane: "safe"}}, 1_000
 
       # No crisis event — the safe lane is a normal outbound flow.
       refute_receive {:crisis_dead_letter, _}, 200
@@ -370,11 +394,14 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     test "the :crisis_dead_letter payload includes patient_id (the foundation patient that owns the chat_id_hash)" do
       Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:server_error, 503}} end))
 
+      fixture_patient_id = insert_foundation_patient_with_chat_id_hash(@chat_id_hash)
+      uuid = fixture_patient_id.id
+
       Enum.each(1..5, fn attempt ->
-        perform(Map.put(build_args(lane: :crisis, patient_id: "abc-123"), "_attempt", attempt))
+        perform(Map.put(build_args(lane: :crisis, patient_id: uuid), "_attempt", attempt))
       end)
 
-      assert_receive {:crisis_dead_letter, %{patient_id: "abc-123"}}, 1_000
+      assert_receive {:crisis_dead_letter, %{patient_id: ^uuid}}, 1_000
     end
 
     test "missing patient_id in args does not crash the worker (backward compat: the crisis event fires with patient_id: nil)" do
@@ -456,7 +483,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
 
       # The PubSub event was broadcast with lane: :crisis.
       assert_receive {:outbound_dead_letter,
-                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: :crisis}},
+                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: "crisis"}},
                      1_000
     end
 
@@ -472,7 +499,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       # Storing `lane` on the dead_letter row is a TASK-3b-4 concern (the schema
       # column lands then; here we just assert the broadcast shape).
       assert_receive {:outbound_dead_letter,
-                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: :crisis}},
+                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: "crisis"}},
                      1_000
     end
 
@@ -619,6 +646,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
 
       assert lane_priority.(:crisis) == 0
       assert lane_priority.(:safe) == 9
+
       assert lane_priority.(:crisis) < lane_priority.(:safe),
              "in Oban, lower priority numbers = higher priority; the crisis " <>
                "lane must have a lower numeric priority than the safe lane"
@@ -663,5 +691,19 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       "priority" => Keyword.get(opts, :priority, 0),
       "patient_id" => Keyword.get(opts, :patient_id)
     }
+  end
+
+  # Round 1 (WARNING-5): inserts a foundation patient whose
+  # `telegram_chat_id_hash` matches the test fixture so the FK from
+  # `foundation_outbound_dead_letters.patient_id` resolves. The helper
+  # accepts `telegram_chat_id_hash` as an attribute (it's in the
+  # patient changeset cast list).
+  defp insert_foundation_patient_with_chat_id_hash(chat_id_hash) do
+    professional = professional_fixture()
+
+    patient_fixture(professional, %{
+      alias: "Pat#{System.unique_integer([:positive])}",
+      telegram_chat_id_hash: chat_id_hash
+    })
   end
 end

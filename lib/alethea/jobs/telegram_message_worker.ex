@@ -172,7 +172,6 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       {:ok, %{content: reply}} when is_binary(reply) and reply != "" ->
         persist_and_enqueue_outbound(
           foundation_patient,
-          legacy_patient,
           chat_id,
           chat_id_hash,
           hash_prefix,
@@ -191,7 +190,6 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   defp persist_and_enqueue_outbound(
          foundation_patient,
-         legacy_patient,
          chat_id,
          chat_id_hash,
          hash_prefix,
@@ -214,7 +212,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     _ = inbound_message_id
 
     enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix,
-      patient_id: legacy_patient.id
+      # Round 1 (WARNING-5): foundation UUID, not legacy integer.
+      patient_id: foundation_patient.id
     )
 
     :ok
@@ -452,12 +451,19 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       })
 
     # 3. Broadcast on psychologist:alerts.
+    # Round 1 (WARNING-5): the operator-visible patient_id is the
+    # foundation Patient's UUID (the foundation row is the identity
+    # surface per the foundation/legacy split; the legacy `patients`
+    # table is the clinical-state surface — `urgent_intervention`
+    # lives there). The PubSub broadcast and the dead-letter row
+    # MUST use the foundation UUID so the FK resolves and operator
+    # dashboards correlate to the foundation patient record.
     Phoenix.PubSub.broadcast(
       Alethea.PubSub,
       "psychologist:alerts",
       {:crisis_detected,
        %{
-         patient_id: legacy_patient.id,
+         patient_id: foundation_patient.id,
          chat_id_hash: chat_id_hash,
          level: level,
          triggers: triggers,
@@ -476,9 +482,15 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       )
 
     # 5. Enqueue on the :telegram_outbound_crisis lane.
+    # Round 1 (WARNING-5): same fix as the broadcast — pass
+    # `foundation_patient.id` (the foundation UUID), not
+    # `legacy_patient.id` (the legacy integer). The FK on
+    # `foundation_outbound_dead_letters.patient_id` requires the
+    # foundation UUID; previously the worker passed the legacy
+    # integer and the FK silently didn't exist.
     enqueue_outbound(chat_id_hash, chat_id, outbound.id, crisis_text, hash_prefix,
       lane: :crisis,
-      patient_id: legacy_patient.id
+      patient_id: foundation_patient.id
     )
 
     Logger.warning(

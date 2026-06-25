@@ -448,7 +448,11 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
                       }},
                      1_000
 
-      assert patient_id == ctx.legacy_patient.id
+      assert patient_id == ctx.foundation_patient.id,
+             "Round 1 (WARNING-5): the :crisis_detected broadcast and the dead-letter " <>
+               "row must carry the foundation patient UUID (the FK on " <>
+               "foundation_outbound_dead_letters.patient_id requires the UUID)"
+
       assert chat_id_hash == @chat_id_hash
       assert level in [:immediate, :high, :low]
       assert is_list(triggers)
@@ -788,8 +792,9 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert job.args["lane"] == "crisis",
              "outbound was enqueued on the crisis queue with lane: :crisis"
 
-      assert job.args["patient_id"] == ctx.legacy_patient.id,
-             "patient_id is forwarded in args (TASK-3b-4 prerequisite for :crisis_dead_letter)"
+      assert job.args["patient_id"] == ctx.foundation_patient.id,
+             "patient_id is forwarded in args (TASK-3b-4 prerequisite for :crisis_dead_letter; " <>
+               "Round 1 WARNING-5: the FK on foundation_outbound_dead_letters.patient_id requires the foundation UUID)"
 
       # 3. Simulate Oban dequeueing the job and the OutboundWorker
       # performing it. This is what Oban does at runtime — the test
@@ -896,6 +901,10 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # from the head.
       Fake.queue_responses(Enum.map(1..5, fn _ -> {:error, {:rate_limited, 1}} end))
 
+      # Round 1 (WARNING-5): the `ctx.foundation_patient` is already
+      # inserted by `setup_bound_patient/0`. The dead-letter FK to
+      # `foundation_patients.id` resolves. No extra setup needed.
+
       # Inbound worker enqueues the crisis outbound.
       assert :ok =
                TelegramMessageWorker.perform(%Oban.Job{
@@ -914,6 +923,15 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # direct calls), so a naive "oldest scheduled" query would
       # repeatedly pick up the original.
       Enum.each(1..5, fn attempt ->
+        all_jobs = Repo.all(from j in Oban.Job, order_by: [desc: :id])
+
+        IO.inspect(
+          {:iteration, attempt, :jobs,
+           Enum.map(
+             all_jobs,
+             &%{id: &1.id, worker: &1.worker, queue: &1.queue, state: &1.state, args: &1.args}
+           )}, label: "DEBUG")
+
         job =
           Repo.one!(
             from j in Oban.Job,
@@ -942,7 +960,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
                       }},
                      1_000
 
-      assert patient_id == ctx.legacy_patient.id,
+      assert patient_id == ctx.foundation_patient.id,
              "the crisis dead-letter broadcast carries the foundation patient_id"
 
       assert chat_id_hash == @chat_id_hash

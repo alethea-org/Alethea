@@ -29,7 +29,13 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetterTest do
     text: "hola, buen día",
     last_error: "{:rate_limited, 2}",
     attempts: 5,
-    failed_at: ~U[2026-06-20 22:00:00Z]
+    failed_at: ~U[2026-06-20 22:00:00Z],
+    # Round 1 (WARNING-5): lane is required (validate_inclusion
+    # enforces "safe" or "crisis"; default backfill applied via
+    # migration 20260624193001). patient_id is optional — unbound
+    # chat dead-letters have no patient.
+    lane: "safe",
+    patient_id: nil
   }
 
   describe "changeset/2 — happy path" do

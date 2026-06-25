@@ -243,6 +243,19 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   defp dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, attempt, lane) do
     last_error = inspect(reason)
 
+    # Normalize the lane to a string for the persisted column. The
+    # function accepts both atom (`:crisis` | `:safe`) and string
+    # (`"crisis"` | `"safe"`) values — see the rationale in the
+    # `:crisis_dead_letter` broadcast block below.
+    lane_str =
+      case lane do
+        :crisis -> "crisis"
+        "crisis" -> "crisis"
+        :safe -> "safe"
+        "safe" -> "safe"
+        _ -> "safe"
+      end
+
     # The persisted audit row keeps the raw `inspect(reason)` so an
     # operator can replay failures with full diagnostic context. The
     # `LogRedactor.redact/1` wrappers on the broadcast + log
@@ -261,7 +274,13 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         text: body,
         last_error: last_error,
         attempts: attempt,
-        failed_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        failed_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        # Round 1 (judgment-day, WARNING-5): persist the lane and
+        # patient_id so the operator query surface mirrors the
+        # PubSub event. `patient_id` is nil for unbound-chat
+        # dead-letters (the "unregistered" copy path).
+        lane: lane_str,
+        patient_id: patient_id
       })
       |> Repo.insert()
 
@@ -278,7 +297,12 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
          text: body,
          error: safe_error,
          attempts: attempt,
-         lane: lane,
+         # Round 1 (WARNING-5): the lane is normalized to a string
+         # here so the broadcast matches the persisted column. The
+         # function-internal `lane` (atom or string) is normalized
+         # once into `lane_str` for both the DB insert and the
+         # broadcast.
+         lane: lane_str,
          at: now
        }}
     )
