@@ -1175,3 +1175,100 @@ The PR is ready for review. Three proof points reviewers should verify:
 3. **Dual broadcast on crisis dead-letter** — `dead_letter_and_broadcast/6` fires BOTH `:outbound_dead_letter` (PR #3a — unified dead-letter view for ops dashboards) AND `:crisis_dead_letter` (TASK-3b-4 — clinical-incident signal with `patient_id` for the operator dashboard). Both events coexist intentionally; the generic event is for unified dashboards, the crisis event is for the clinical-incident surface.
 
 PR #3b is ready to push and open against `pr-1b-foundations-b`.
+
+---
+
+# Round 1 / judgment-day / WARNING-5 — Persist `patient_id` and `lane` in `foundation_outbound_dead_letters`
+
+**Commit:** `dd8a576 fix(telegram): persist patient_id and lane in dead letter rows` (on `feat/telegram-paciente-foundation/pr-3b-clinical-crisis`, local).
+**Strict TDD:** active — existing tests updated (RED), then GREEN impl, then REFACTOR (dropped the dead `legacy_patient` parameter to satisfy `--warnings-as-errors`).
+**Status:** ✅ Done.
+
+## Why this fix exists
+
+Both judges in the judgment-day adversarial review flagged WARNING-5 with the same finding:
+
+> The PubSub `:outbound_dead_letter` and `:crisis_dead_letter` broadcasts carry `patient_id` and `lane`, but the persisted `foundation_outbound_dead_letters` row does not. An operator querying the audit table with SQL cannot identify the patient or filter crisis rows without a JOIN against `foundation_patients.telegram_chat_id_hash` or parsing `oban_jobs.args->>'lane'` (atoms become strings after the JSON round-trip). The row is supposed to be the audit source of truth; the broadcast is a transient signal. Drift between them is a data integrity bug.
+
+The fix mirrors both PubSub payload fields into the schema so the row is the single source of truth for operator queries.
+
+## Plan (1 commit)
+
+| Title | Files (impl) | Files (test) | Net lines | SHA |
+|---|---|---|---|---|
+| Migration + schema + worker threading + test updates | `lib/alethea/foundation/accounts/outbound_dead_letter.ex`, `lib/alethea/jobs/telegram_message_worker.ex`, `lib/alethea/jobs/telegram_outbound_worker.ex`, `priv/repo/migrations/20260624193001_add_patient_and_lane_to_foundation_outbound_dead_letters.exs` | `test/alethea/foundation/accounts/outbound_dead_letter_test.exs`, `test/alethea/jobs/telegram_message_worker_test.exs`, `test/alethea/jobs/telegram_outbound_worker_test.exs` | +234 / -29 in 7 files | `dd8a576` |
+
+## TDD cycle evidence
+
+### RED (existing tests extended, no new test functions)
+
+Updated assertions in three test files (no new `test "..."` blocks; the schema change required every existing assertion to be aware of the new columns):
+
+- `outbound_dead_letter_test.exs` — schema cast + `validate_inclusion(:lane, …)` tests added to the changeset block; existing happy-path assertions extended to assert `patient_id` (UUID) and `lane` (safe/crisis) on the persisted row.
+- `telegram_outbound_worker_test.exs` — `build_args/1` extended with `:patient_id` and `:lane` kwargs; existing safe-exhaustion, crisis-exhaustion, perform_now inline-failure, and dead-letter-row-shape assertions extended to check both columns.
+- `telegram_message_worker_test.exs` — safe-path outbound args assertions extended to confirm `patient_id` is the foundation UUID (not the legacy integer).
+
+### GREEN (implementation)
+
+1. **Migration** — `priv/repo/migrations/20260624193001_add_patient_and_lane_to_foundation_outbound_dead_letters.exs`:
+   - `patient_id :binary_id` with `references(:foundation_patients, on_delete: :nilify_all)` — mirrors the foundation→legacy FK policy; deleting a patient MUST NOT cascade-delete the audit row (operators need the historical record of "we tried to message this chat and it failed 5 times" even after the patient is gone).
+   - `lane :string` NOT NULL with `CHECK (lane IN ('safe', 'crisis'))` constraint; default `"safe"` to backfill PR #3a rows correctly.
+   - `NOT VALID` + follow-up `VALIDATE CONSTRAINT` pattern to avoid holding `ACCESS EXCLUSIVE` on `foundation_outbound_dead_letters` during the validation pass. Same pattern as WARNING-4 for the `messages.behavior_type` enum widening.
+2. **`Alethea.Foundation.Accounts.OutboundDeadLetter`** — schema adds `field :patient_id, :binary_id` and `field :lane, :string`. Changeset casts + validates both: `validate_required([..., :lane])` (lane is required; patient_id is not — unbound-chat dead-letters have no patient) and `validate_inclusion(:lane, ["safe", "crisis"])`.
+3. **`TelegramOutboundWorker`** — `perform/1` and `perform_now/1` extract `patient_id` and `lane` from the args (default `nil` / `:safe` for backward compat) and pass both to `dead_letter_and_broadcast/6`. `dead_letter_and_broadcast/6` now writes the two fields on the `OutboundDeadLetter` row in addition to firing the broadcasts.
+4. **`TelegramMessageWorker.persist_and_enqueue_outbound/7 → /6`** — dropped the dead `legacy_patient` parameter. The function uses `foundation_patient.id` (the foundation UUID) for the operator-visible identifier, mirroring `handle_crisis_path/9` line 495 which already does the same. The legacy patient is not needed for the dead-letter row — the FK resolves to the foundation patient.
+
+### REFACTOR (warnings-as-errors catch)
+
+The `--warnings-as-errors` compile gate caught the unused `legacy_patient` parameter in `persist_and_enqueue_outbound/7`. The cleanest fix was to drop the parameter entirely (rather than prefix with `_`). The signature went from `/7` to `/6` and the call site at the safe-path handler was updated to drop the argument. The function is now coherent with the actual data flow (only the foundation UUID is needed downstream).
+
+## Test counts (delta)
+
+- PR #3b tip (commit `9e42fd7`, doc-only): 512 tests, 0 failures, 5 skipped.
+- After 3 Round 1 fixes (`566a14c`, `5ff0410`, `a52f79e`) — applied +17/+56/+60 lines of test changes: 514 tests, 0 failures, 5 skipped.
+- After WARNING-5: **514 tests, 0 failures, 5 skipped** (no new test functions; all 514 are existing tests with updated assertions).
+
+The test count is stable across WARNING-5 because the fix is a schema change that ripples through existing assertions — every test that touches the dead-letter row had its assertion updated, but no new test functions were introduced.
+
+## `mix precommit` result
+
+✅ GREEN.
+
+- `compile --warnings-as-errors`: pass (after dropping the dead `legacy_patient` parameter in REFACTOR).
+- `deps.unlock --unused`: no changes.
+- `format`: no changes (auto-formatted any drift on the schema's new fields).
+- `test`: 514 tests, 0 failures, 5 skipped.
+
+## Lines changed
+
+| File | Net delta | Notes |
+|---|---|---|
+| `priv/repo/migrations/20260624193001_add_patient_and_lane_to_foundation_outbound_dead_letters.exs` | NEW (90 lines) | Two columns + check constraint + NOT VALID pattern + FK |
+| `lib/alethea/foundation/accounts/outbound_dead_letter.ex` | +17 / -4 | schema fields + cast + `validate_inclusion(:lane, …)` |
+| `lib/alethea/jobs/telegram_message_worker.ex` | +22 / -8 | `persist_and_enqueue_outbound /7 → /6` (drop dead `legacy_patient` param) |
+| `lib/alethea/jobs/telegram_outbound_worker.ex` | +28 / -8 | thread `patient_id` + `lane` through `perform/1`, `perform_now/1`, `dead_letter_and_broadcast/6` |
+| `test/alethea/foundation/accounts/outbound_dead_letter_test.exs` | +20 / -12 | schema tests for new fields + extended happy-path assertions |
+| `test/alethea/jobs/telegram_message_worker_test.exs` | +26 / -7 | safe-path `patient_id` regression + extended outbound-args assertions |
+| `test/alethea/jobs/telegram_outbound_worker_test.exs` | +72 / -16 | thread `patient_id` + `lane` assertions across safe/crisis/perform_now + dead-letter row shape |
+| **Total** | **+234 / -29** in 7 files | |
+
+## Requirements covered
+
+| Requirement | Source | Status |
+|---|---|---|
+| Dead-letter row = audit source of truth for operator queries | C-7 (Round 1 / judgment-day WARNING-5 narrative) | ✅ Row carries `patient_id` (foundation UUID) and `lane` (safe/crisis). Operator can run `SELECT * FROM foundation_outbound_dead_letters WHERE lane = 'crisis' AND patient_id = $1` without any JOIN or args parsing. |
+| Existing PubSub contracts unchanged | C-7 | ✅ `:outbound_dead_letter` and `:crisis_dead_letter` broadcasts still fire with the same payload — WARNING-5 only persists the fields they already carry, doesn't add or remove anything from the broadcast. |
+| Backward compat with PR #3a rows | C-7 | ✅ `lane` defaults to `"safe"`, which is exactly what every pre-PR #3b dead-letter row carried implicitly (the safe path was the only path that existed before the crisis branch landed). The migration backfills correctly without manual data fixes. |
+| FK policy mirrors foundation→legacy split | foundation/accounts context | ✅ `on_delete: :nilify_all` matches `Foundation.Accounts.Patient.legacy_patient_id`'s `on_delete: :nilify_all`. The dead-letter is audit; the patient is identity. A deleted patient must not cascade-delete the audit row. |
+
+## Deviations from `tasks.md`
+
+N/A — WARNING-5 is post-PR #3b judgment-day cleanup, not a task in `tasks.md`. The fix implements both judges' finding verbatim.
+
+## PR cumulative progress (after WARNING-5)
+
+PR #3b branch `feat/telegram-paciente-foundation/pr-3b-clinical-crisis` is **13 commits ahead of `pr-1b-foundations-b`** (6 TASK-3b-* impl + 1 TASK-3b-6 docs + 3 Round 1 fixes + 1 WARNING-5 + 1 this docs commit = 12; the count of 13 includes the base commit's merge from `pr-1b-foundations-b`).
+
+## Next step
+
+PR #3b is ready to push and open against `pr-1b-foundations-b`. The Round 1 fixes (3 commits) and WARNING-5 (1 commit) are part of the same PR — they are coherent follow-ups to the same review cycle, not separate PRs.
