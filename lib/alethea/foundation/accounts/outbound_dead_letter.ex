@@ -38,6 +38,18 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
     field :attempts, :integer
     field :failed_at, :utc_datetime
 
+    # Foundation patient UUID. Round 1 (judgment-day, WARNING-5):
+    # mirrors the PubSub event so operator queries can correlate the
+    # dead-letter to the patient record without joining on the rate
+    # limit key (`chat_id_hash`). Nullable — unbound-chat dead-letters
+    # (the "unregistered" copy path) have no patient.
+    field :patient_id, :binary_id
+
+    # Lane discriminator. `"safe"` (the pre-PR-3b path) or `"crisis"`
+    # (the PR #3b clinical-incident path). Mirrors the PubSub event's
+    # `lane` field. DB check constraint enforces the two values.
+    field :lane, :string
+
     timestamps(type: :utc_datetime)
   end
 
@@ -46,9 +58,10 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
   """
   def changeset(dead_letter, attrs) do
     dead_letter
-    |> cast(attrs, [:chat_id_hash, :text, :last_error, :attempts, :failed_at])
-    |> validate_required([:chat_id_hash, :text, :last_error, :attempts, :failed_at])
+    |> cast(attrs, [:chat_id_hash, :text, :last_error, :attempts, :failed_at, :patient_id, :lane])
+    |> validate_required([:chat_id_hash, :text, :last_error, :attempts, :failed_at, :lane])
     |> validate_length(:chat_id_hash, is: 64)
     |> validate_number(:attempts, greater_than: 0)
+    |> validate_inclusion(:lane, ["safe", "crisis"])
   end
 end
