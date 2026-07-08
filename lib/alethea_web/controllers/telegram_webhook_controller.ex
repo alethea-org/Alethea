@@ -60,9 +60,16 @@ defmodule AletheaWeb.TelegramWebhookController do
   """
   # 1) `/start` (with or without a token) → TelegramOnboardingWorker.
   #    Pattern match is case-sensitive on `/start` (Telegram convention).
+  #    `chat.id` is required here (PR #4) — the onboarding worker cannot
+  #    bind a chat without it. If `chat.id` is absent, the pattern falls
+  #    through to clause 2 (ack-and-drop under the generic message
+  #    branch) rather than crashing.
   def update(
         conn,
-        %{"update_id" => update_id, "message" => %{"text" => "/start" <> rest}}
+        %{
+          "update_id" => update_id,
+          "message" => %{"chat" => %{"id" => chat_id}, "text" => "/start" <> rest}
+        }
       )
       when is_integer(update_id) do
     token =
@@ -70,7 +77,7 @@ defmodule AletheaWeb.TelegramWebhookController do
       |> String.trim_leading()
       |> empty_to_nil()
 
-    enqueue_onboarding(update_id, token)
+    enqueue_onboarding(update_id, token, chat_id)
     send_resp(conn, 200, "")
   end
 
@@ -98,8 +105,8 @@ defmodule AletheaWeb.TelegramWebhookController do
     |> Oban.insert()
   end
 
-  defp enqueue_onboarding(update_id, token) do
-    %{telegram_update_id: update_id, token: token}
+  defp enqueue_onboarding(update_id, token, chat_id) do
+    %{telegram_update_id: update_id, token: token, chat_id: chat_id}
     |> TelegramOnboardingWorker.new()
     |> Oban.insert()
   end
