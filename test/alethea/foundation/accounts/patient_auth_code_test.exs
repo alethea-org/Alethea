@@ -6,14 +6,16 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
   TASK-4-1 covers the persistence half of `REQ-C4-mint-deep-link-token`
   (`create_patient_auth_code/2`) and the schema/migration shape.
   TASK-4-2 extends this file with `verify_patient_auth_code/3` and
-  `consume_patient_auth_code/2` (a later commit in the same PR).
+  `consume_patient_auth_code/2` (see the second `describe` block group
+  below, added in the same PR).
   """
 
   use Alethea.DataCase, async: true
 
   import Alethea.FoundationTestHelper
+  import Ecto.Query
 
-  alias Alethea.Foundation.Accounts.PatientAuthCode
+  alias Alethea.Foundation.Accounts.{Patient, PatientAuthCode}
   alias Alethea.Repo
 
   # ----------------------------------------------------------------
@@ -75,5 +77,226 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       assert String.length(auth_code.code) == 6
       assert Regex.match?(~r/^[0-9]{6}$/, auth_code.code)
     end
+  end
+
+  # ----------------------------------------------------------------
+  # TASK-4-2 — verify_patient_auth_code/3 (REQ-C4-reject-expired-token,
+  # REQ-C4-reject-already-used-token, REQ-C4-reject-rate-limited)
+  # ----------------------------------------------------------------
+
+  describe "verify_patient_auth_code/3" do
+    setup do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+      %{patient: patient, auth_code: auth_code}
+    end
+
+    test "fresh unexpired unused code returns :ok", %{auth_code: auth_code} do
+      assert :ok =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.2.3.4",
+                 kind: "deep_link"
+               )
+    end
+
+    test "code past its TTL is expired and the row is not mutated", %{auth_code: auth_code} do
+      past = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+      set_expires_at(auth_code, past)
+
+      assert :expired =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.2.3.4",
+                 kind: "deep_link"
+               )
+
+      reloaded = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded.attempt_count == 0
+      assert reloaded.used_at == nil
+      assert reloaded.last_attempt_ip == nil
+    end
+
+    test "code at the +1s boundary is still valid (TTL exclusive of the boundary)", %{
+      auth_code: auth_code
+    } do
+      future = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.truncate(:second)
+      set_expires_at(auth_code, future)
+
+      assert :ok =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.2.3.4",
+                 kind: "deep_link"
+               )
+    end
+
+    test "consumed token is rejected on re-use as :already_used", %{auth_code: auth_code} do
+      used_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      auth_code
+      |> PatientAuthCode.changeset(%{used_at: used_at})
+      |> Repo.update!()
+
+      assert :already_used =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.2.3.4",
+                 kind: "deep_link"
+               )
+    end
+
+    test "5th attempt in the window from the same IP returns :rate_limited", %{
+      auth_code: auth_code
+    } do
+      ip = "9.9.9.9"
+
+      for _ <- 1..4 do
+        assert :ok =
+                 PatientAuthCode.verify_patient_auth_code(auth_code.code, ip, kind: "deep_link")
+      end
+
+      assert :rate_limited =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, ip, kind: "deep_link")
+
+      reloaded = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded.attempt_count == 5
+      assert reloaded.last_attempt_ip == ip
+    end
+
+    test "a 6th attempt keeps incrementing attempt_count even while blocked", %{
+      auth_code: auth_code
+    } do
+      ip = "9.9.9.9"
+
+      for _ <- 1..5 do
+        PatientAuthCode.verify_patient_auth_code(auth_code.code, ip, kind: "deep_link")
+      end
+
+      assert :rate_limited =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, ip, kind: "deep_link")
+
+      reloaded = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded.attempt_count == 6
+    end
+
+    test "5th attempt across a different IP is allowed (rate-limit is per-IP, not global)", %{
+      auth_code: auth_code
+    } do
+      for _ <- 1..4 do
+        PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.1.1.1", kind: "deep_link")
+      end
+
+      assert :ok =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "2.2.2.2",
+                 kind: "deep_link"
+               )
+    end
+
+    test "attempts older than 1h do not count (rolling window rolled off)", %{
+      auth_code: auth_code
+    } do
+      for _ <- 1..4 do
+        PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.1.1.1", kind: "deep_link")
+      end
+
+      two_hours_ago =
+        DateTime.utc_now() |> DateTime.add(-7200, :second) |> DateTime.truncate(:second)
+
+      from(a in PatientAuthCode, where: a.id == ^auth_code.id)
+      |> Repo.update_all(set: [updated_at: two_hours_ago])
+
+      assert :ok =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.1.1.1",
+                 kind: "deep_link"
+               )
+    end
+
+    test "an unknown code is treated the same as expired", %{} do
+      assert :expired =
+               PatientAuthCode.verify_patient_auth_code("does-not-exist", "1.2.3.4",
+                 kind: "deep_link"
+               )
+    end
+
+    test "a code minted as six_digit is not found under kind: deep_link", %{patient: patient} do
+      {:ok, six_digit} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "six_digit")
+
+      assert :expired =
+               PatientAuthCode.verify_patient_auth_code(six_digit.code, "1.2.3.4",
+                 kind: "deep_link"
+               )
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # TASK-4-2 — consume_patient_auth_code/2 (REQ-C4-bind-chat-on-success,
+  # REQ-C4-reject-chat-bound-to-other-patient)
+  # ----------------------------------------------------------------
+
+  describe "consume_patient_auth_code/2" do
+    setup do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+      %{patient: patient, auth_code: auth_code}
+    end
+
+    test "binds the patient's telegram_chat_id_hash and marks the code used", %{
+      patient: patient,
+      auth_code: auth_code
+    } do
+      hash = String.duplicate("a", 64)
+
+      assert {:ok, bound_patient} =
+               PatientAuthCode.consume_patient_auth_code(auth_code.code, hash)
+
+      assert bound_patient.id == patient.id
+      assert bound_patient.telegram_chat_id_hash == hash
+
+      reloaded_code = Repo.get!(PatientAuthCode, auth_code.id)
+      assert %DateTime{} = reloaded_code.used_at
+    end
+
+    test "second consume attempt fails because the code is already used", %{
+      auth_code: auth_code
+    } do
+      hash = String.duplicate("a", 64)
+      {:ok, _} = PatientAuthCode.consume_patient_auth_code(auth_code.code, hash)
+
+      assert {:error, :already_used} =
+               PatientAuthCode.consume_patient_auth_code(auth_code.code, hash)
+    end
+
+    test "chat_id_hash already bound to a different patient is rejected", %{
+      auth_code: auth_code_b
+    } do
+      professional = professional_fixture()
+      patient_a = patient_fixture(professional)
+      hash = String.duplicate("b", 64)
+      {:ok, _} = Patient.update_patient(patient_a, %{telegram_chat_id_hash: hash})
+
+      assert {:error, :chat_bound_to_other_patient} =
+               PatientAuthCode.consume_patient_auth_code(auth_code_b.code, hash)
+
+      reloaded_a = Repo.get!(Patient, patient_a.id)
+      assert reloaded_a.telegram_chat_id_hash == hash
+
+      reloaded_code_b = Repo.get!(PatientAuthCode, auth_code_b.id)
+      assert reloaded_code_b.used_at == nil
+    end
+
+    test "same patient rebinding their own chat is allowed", %{
+      patient: patient,
+      auth_code: auth_code
+    } do
+      h1 = String.duplicate("c", 64)
+      {:ok, _} = Patient.update_patient(patient, %{telegram_chat_id_hash: h1})
+
+      h2 = String.duplicate("d", 64)
+
+      assert {:ok, rebound} = PatientAuthCode.consume_patient_auth_code(auth_code.code, h2)
+      assert rebound.telegram_chat_id_hash == h2
+    end
+  end
+
+  # --- helpers ---
+
+  defp set_expires_at(auth_code, expires_at) do
+    from(a in PatientAuthCode, where: a.id == ^auth_code.id)
+    |> Repo.update_all(set: [expires_at: expires_at])
   end
 end
