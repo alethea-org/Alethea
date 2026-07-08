@@ -733,14 +733,16 @@ see rationale at end of file.
   `lib/alethea/foundation/accounts.ex` (re-export)
 - **Files (test):** `test/alethea/foundation/accounts/patient_auth_code_test.exs` (extend
   with the verify/consume scenarios: `:ok`, `:expired`, `:already_used`, `:rate_limited`,
-  per-IP isolation, TTL boundary)
+  per-IP isolation, TTL boundary, `:chat_bound_to_other_patient`, same-patient rebind)
 - **Requirements:** `REQ-C4-reject-expired-token`, `REQ-C4-reject-already-used-token`,
-  `REQ-C4-reject-rate-limited`
+  `REQ-C4-reject-rate-limited`, `REQ-C4-reject-chat-bound-to-other-patient`
 - **Risks:** R-1 (rate-limit audit trail must persist — `last_attempt_ip` + `attempt_count`
   fields are the audit row)
 - **Verify:** `mix test test/alethea/foundation/accounts/patient_auth_code_test.exs`
 - **Commit:** `feat(telegram): auth code verify and consume with rate limit and ttl`
-- **Est. lines:** 80 impl + 150 test = **230**
+- **Est. lines:** 95 impl + 170 test = **265** (was 230; +35 for the
+  `:chat_bound_to_other_patient` changeset-error translation + same-patient-rebind
+  regression test — REQ-C4-reject-chat-bound-to-other-patient)
 
 ### TASK-4-3 — TelegramOnboardingWorker (C-4)
 - **Type:** impl
@@ -751,13 +753,15 @@ see rationale at end of file.
   `verify_patient_auth_code/3` for the worker)
 - **Files (test):** `test/alethea_jobs/telegram_onboarding_worker_test.exs` (extend with
   the full scenario set: bind on success, reject expired, reject already-used, reject
-  rate-limited, send welcome reply)
+  rate-limited, reject chat-bound-to-other-patient, same-patient rebind, send welcome reply)
 - **Requirements:** `REQ-C4-bind-chat-on-success`, `REQ-C4-reject-expired-token`,
-  `REQ-C4-reject-already-used-token`, `REQ-C4-reject-rate-limited`, `REQ-C4-send-welcome-reply`
+  `REQ-C4-reject-already-used-token`, `REQ-C4-reject-rate-limited`,
+  `REQ-C4-reject-chat-bound-to-other-patient`, `REQ-C4-send-welcome-reply`
 - **Risks:** R-1 (PHI: log redaction on the worker — reuses the `LogRedactor` from #3b)
 - **Verify:** `mix test test/alethea_jobs/telegram_onboarding_worker_test.exs`
 - **Commit:** `feat(telegram): onboarding worker binds chat and emits welcome`
-- **Est. lines:** 110 impl + 180 test = **290**
+- **Est. lines:** 115 impl + 195 test = **310** (was 290; +20 for the
+  `:chat_bound_to_other_patient` localized-message branch)
 
 ### TASK-4-4 — TelegramAuthController (full): `consume/2` for deep-link + 6-digit (C-4)
 - **Type:** impl
@@ -776,7 +780,8 @@ see rationale at end of file.
 
 ### PR #4 totals
 - **Tasks:** 4
-- **Est. lines:** 240 + 230 + 290 + 230 = **990**
+- **Est. lines:** 240 + 265 + 310 + 230 = **1045** (was 990; +55 for
+  `REQ-C4-reject-chat-bound-to-other-patient`, added after product Q&A round)
   - Net-new code: ~330; tests: ~610; migration: ~50
   - **Budget risk: HIGH by raw line count** (190 over the 800 target).
   - **Honest call:** the 800-line review budget is exceeded by raw diff. The chain
@@ -899,6 +904,7 @@ to PR #4's tip and the single tracker PR is marked ready-for-review for the inte
 | `REQ-C4-reject-rate-limited` | PR #4 (TASK-4-2, TASK-4-3) |
 | `REQ-C4-send-welcome-reply` | PR #4 (TASK-4-3) |
 | `REQ-C4-six-digit-fallback` | PR #4 (TASK-4-4) |
+| `REQ-C4-reject-chat-bound-to-other-patient` | PR #4 (TASK-4-2, TASK-4-3) |
 | `REQ-C5-persist-inbound-message` | PR #3a (TASK-3a-1) |
 | `REQ-C5-trigger-emotion-analysis` | PR #3a (TASK-3a-1) |
 | `REQ-C5-llm-reply-on-safe` | PR #3a (TASK-3a-1) |

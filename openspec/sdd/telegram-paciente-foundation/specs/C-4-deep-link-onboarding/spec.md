@@ -200,3 +200,44 @@ text configured for that patient.
 - THEN only the localized error message is enqueued
 - AND the patient is NOT bound
 - AND no welcome message is enqueued
+
+---
+
+## REQ-C4-reject-chat-bound-to-other-patient
+
+The system shall, when a valid (unexpired, unused, not rate-limited) auth
+code's `telegram_chat_id_hash` collision resolves to a patient row other than
+the auth code's own `patient_id`, reject the bind, leave both patient rows
+unmodified, NOT mark the auth code as used, and send a localized "este
+Telegram ya está vinculado a otro paciente, contactá a tu psicólogo" message
+via the outbound queue. The bind relies on the existing
+`foundation_patients_telegram_chat_id_hash_unique` partial index
+(`Alethea.Foundation.Accounts.Patient.changeset/2`); this requirement defines
+the application-level handling of that constraint violation, not a new DB
+constraint.
+
+A patient rebinding their own prior `telegram_chat_id_hash` (e.g. a new phone)
+is not this scenario — that update targets the same patient row and never
+hits the unique index, so it is unaffected by this requirement.
+
+#### Scenario: chat_id_hash already bound to a different patient is rejected
+
+- GIVEN patient A is already bound to `telegram_chat_id_hash = H`
+- AND patient B has a valid, unexpired, unused auth code
+- WHEN patient B's chat sends `/start <token>` from the chat that hashes to `H`
+- THEN the bind attempt returns `{:error, :chat_bound_to_other_patient}`
+- AND patient A's row is unchanged
+- AND patient B's row is NOT bound
+- AND patient B's auth code `used_at` remains `nil` (not consumed — the
+  professional can issue a fresh token once the collision is resolved)
+- AND a localized "already bound to another patient" message is enqueued on
+  `:telegram_outbound`
+
+#### Scenario: same patient rebinding their own chat is allowed
+
+- GIVEN patient A is already bound to `telegram_chat_id_hash = H1`
+- AND patient A has a valid, unexpired, unused auth code minted for a new chat
+- WHEN patient A's new chat (hash `H2`) consumes the auth code
+- THEN patient A's row is updated to `telegram_chat_id_hash = H2`
+- AND the auth code's `used_at` is set
+- AND a welcome message is enqueued as in the standard success case
