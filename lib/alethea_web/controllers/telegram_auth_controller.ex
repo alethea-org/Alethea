@@ -97,12 +97,20 @@ defmodule AletheaWeb.TelegramAuthController do
       {:error, reason} ->
         Logger.error(
           "TelegramAuthController: failed to enqueue onboarding worker " <>
-            "(reason=#{inspect(reason)})"
+            "(reason=#{safe_error_reason(reason)})"
         )
 
         :ok
     end
   end
+
+  # PHI hygiene (R-1): never `inspect(reason)` wholesale — on an
+  # `Oban.insert/1` failure `reason` is typically an `%Ecto.Changeset{}`
+  # whose `changes.args` carries the raw `chat_id` and `token`. Only
+  # the changeset's own validation errors (safe, structural) are
+  # logged.
+  defp safe_error_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)
+  defp safe_error_reason(_other), do: "unknown reason"
 
   defp parse_chat_id(chat_id) when is_integer(chat_id) and chat_id > 0, do: {:ok, chat_id}
 

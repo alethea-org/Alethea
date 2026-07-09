@@ -111,9 +111,9 @@ defmodule Alethea.Foundation.Accounts do
   @doc """
   Atomically binds a chat and consumes an onboarding auth code.
   Delegates to
-  `Alethea.Foundation.Accounts.PatientAuthCode.consume_patient_auth_code/2`.
+  `Alethea.Foundation.Accounts.PatientAuthCode.consume_patient_auth_code/3`.
   """
-  defdelegate consume_patient_auth_code(code, chat_id_hash), to: PatientAuthCode
+  defdelegate consume_patient_auth_code(code, chat_id_hash, opts), to: PatientAuthCode
 
   @doc """
   Resolves the legacy `Alethea.Accounts.Patient` row that the given

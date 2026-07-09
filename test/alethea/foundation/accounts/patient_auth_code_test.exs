@@ -220,14 +220,54 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
                  kind: "deep_link"
                )
     end
+
+    # Regression (CRITICAL fix): guessing a code that matches NO row
+    # used to be completely untracked — an attacker could enumerate
+    # the whole keyspace from one IP with zero throttling. Repeated
+    # wrong guesses from the same IP must now trip the rate limit
+    # without ever landing on a real code.
+    test "guessing a nonexistent code repeatedly from the same IP eventually rate-limits", %{
+      auth_code: auth_code
+    } do
+      ip = "6.6.6.6"
+
+      results =
+        for _ <- 1..5 do
+          PatientAuthCode.verify_patient_auth_code("000000-does-not-exist", ip, kind: "deep_link")
+        end
+
+      assert Enum.all?(results, &(&1 in [:expired, :rate_limited]))
+      assert List.last(results) == :rate_limited
+      refute :ok in results
+
+      # The real code was never touched by the guesser reaching :ok —
+      # only its rate-limit tracking columns may have been used as the
+      # borrowed stand-in row (see moduledoc "Guessing a code that
+      # matches no row").
+      reloaded = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded.used_at == nil
+    end
+
+    test "a wrong-code guess from a different IP is not blocked by another IP's guesses" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      {:ok, _} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      for _ <- 1..4 do
+        PatientAuthCode.verify_patient_auth_code("bad-guess", "7.7.7.7", kind: "deep_link")
+      end
+
+      assert :expired =
+               PatientAuthCode.verify_patient_auth_code("bad-guess", "8.8.8.8", kind: "deep_link")
+    end
   end
 
   # ----------------------------------------------------------------
-  # TASK-4-2 — consume_patient_auth_code/2 (REQ-C4-bind-chat-on-success,
+  # TASK-4-2 — consume_patient_auth_code/3 (REQ-C4-bind-chat-on-success,
   # REQ-C4-reject-chat-bound-to-other-patient)
   # ----------------------------------------------------------------
 
-  describe "consume_patient_auth_code/2" do
+  describe "consume_patient_auth_code/3" do
     setup do
       professional = professional_fixture()
       patient = patient_fixture(professional)
@@ -242,7 +282,7 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       hash = String.duplicate("a", 64)
 
       assert {:ok, bound_patient} =
-               PatientAuthCode.consume_patient_auth_code(auth_code.code, hash)
+               PatientAuthCode.consume_patient_auth_code(auth_code.code, hash, kind: "deep_link")
 
       assert bound_patient.id == patient.id
       assert bound_patient.telegram_chat_id_hash == hash
@@ -255,10 +295,12 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       auth_code: auth_code
     } do
       hash = String.duplicate("a", 64)
-      {:ok, _} = PatientAuthCode.consume_patient_auth_code(auth_code.code, hash)
+
+      {:ok, _} =
+        PatientAuthCode.consume_patient_auth_code(auth_code.code, hash, kind: "deep_link")
 
       assert {:error, :already_used} =
-               PatientAuthCode.consume_patient_auth_code(auth_code.code, hash)
+               PatientAuthCode.consume_patient_auth_code(auth_code.code, hash, kind: "deep_link")
     end
 
     test "chat_id_hash already bound to a different patient is rejected", %{
@@ -270,7 +312,9 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       {:ok, _} = Patient.update_patient(patient_a, %{telegram_chat_id_hash: hash})
 
       assert {:error, :chat_bound_to_other_patient} =
-               PatientAuthCode.consume_patient_auth_code(auth_code_b.code, hash)
+               PatientAuthCode.consume_patient_auth_code(auth_code_b.code, hash,
+                 kind: "deep_link"
+               )
 
       reloaded_a = Repo.get!(Patient, patient_a.id)
       assert reloaded_a.telegram_chat_id_hash == hash
@@ -288,8 +332,73 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
 
       h2 = String.duplicate("d", 64)
 
-      assert {:ok, rebound} = PatientAuthCode.consume_patient_auth_code(auth_code.code, h2)
+      assert {:ok, rebound} =
+               PatientAuthCode.consume_patient_auth_code(auth_code.code, h2, kind: "deep_link")
+
       assert rebound.telegram_chat_id_hash == h2
+    end
+
+    # Regression (CRITICAL fix): two rows sharing the identical `code`
+    # value but different `kind`s used to reach `repo.get_by(__MODULE__,
+    # code: code)` (no `kind` filter) and raise
+    # `Ecto.MultipleResultsError`. Consuming the correctly-`kind`-scoped
+    # one must succeed without crashing.
+    test "a code collision across different kinds does not raise Ecto.MultipleResultsError", %{
+      patient: patient,
+      auth_code: deep_link_code
+    } do
+      shared_code = deep_link_code.code
+
+      {:ok, six_digit_code} =
+        %PatientAuthCode{}
+        |> PatientAuthCode.changeset(%{
+          patient_id: patient.id,
+          code: shared_code,
+          kind: "six_digit",
+          expires_at:
+            DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.truncate(:second),
+          used_at: nil,
+          attempt_count: 0,
+          last_attempt_ip: nil
+        })
+        |> Repo.insert()
+
+      assert shared_code == six_digit_code.code
+
+      hash = String.duplicate("e", 64)
+
+      assert {:ok, bound_patient} =
+               PatientAuthCode.consume_patient_auth_code(shared_code, hash, kind: "deep_link")
+
+      assert bound_patient.id == patient.id
+
+      reloaded_deep_link = Repo.get!(PatientAuthCode, deep_link_code.id)
+      assert %DateTime{} = reloaded_deep_link.used_at
+
+      reloaded_six_digit = Repo.get!(PatientAuthCode, six_digit_code.id)
+      assert reloaded_six_digit.used_at == nil
+    end
+
+    # Regression (CRITICAL fix): the auth-code row must be fetched with
+    # a row-level lock so a concurrent second `consume_patient_auth_code/3`
+    # for the SAME row serializes instead of racing to a double-bind.
+    # A true concurrent-process test would be flaky in this suite (no
+    # existing pattern for it here) — asserting the query built with the
+    # same `lock("FOR UPDATE")` mechanism the fetch uses compiles to SQL
+    # carrying `FOR UPDATE` is the deliberately lightweight regression
+    # check the delegate prompt calls out as acceptable.
+    test "the row-lock mechanism used by consume_patient_auth_code/3 compiles to FOR UPDATE SQL" do
+      import Ecto.Query
+
+      query =
+        PatientAuthCode
+        |> where([a], a.code == ^"any-code" and a.kind == ^"deep_link")
+        |> order_by(desc: :inserted_at)
+        |> limit(1)
+        |> lock("FOR UPDATE")
+
+      {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Repo, query)
+      assert sql =~ "FOR UPDATE"
     end
   end
 

@@ -25,7 +25,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
        without a professional pre-minted link), skip straight to the
        `:expired`-style rejection reply. There is nothing to verify.
     2. `Accounts.verify_patient_auth_code(token, ip, kind: kind)`:
-       - `:ok` → `Accounts.consume_patient_auth_code(token, chat_id_hash)`
+       - `:ok` → `Accounts.consume_patient_auth_code(token, chat_id_hash, kind: kind)`
          atomically binds the patient and marks the code used.
          - `{:ok, patient}` → enqueue the personality-aware welcome.
          - `{:error, :chat_bound_to_other_patient}` → enqueue the
@@ -108,7 +108,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   defp handle_token(token, kind, ip, chat_id, chat_id_hash, hash_prefix) do
     case Accounts.verify_patient_auth_code(token, ip, kind: kind) do
       :ok ->
-        handle_verified(token, chat_id, chat_id_hash, hash_prefix)
+        handle_verified(token, kind, chat_id, chat_id_hash, hash_prefix)
 
       failure ->
         Logger.info("TelegramOnboardingWorker: rejected (#{failure}, hash_prefix=#{hash_prefix})")
@@ -117,15 +117,15 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     end
   end
 
-  defp handle_verified(token, chat_id, chat_id_hash, hash_prefix) do
-    case Accounts.consume_patient_auth_code(token, chat_id_hash) do
+  defp handle_verified(token, kind, chat_id, chat_id_hash, hash_prefix) do
+    case Accounts.consume_patient_auth_code(token, chat_id_hash, kind: kind) do
       {:ok, patient} ->
         Logger.info("TelegramOnboardingWorker: bound chat (hash_prefix=#{hash_prefix})")
-        enqueue_reply(chat_id, chat_id_hash, welcome_text(patient))
+        enqueue_reply(chat_id, chat_id_hash, welcome_text(patient), patient.id)
 
       {:error, reason} ->
         Logger.info(
-          "TelegramOnboardingWorker: consume rejected (#{reason}, hash_prefix=#{hash_prefix})"
+          "TelegramOnboardingWorker: consume rejected (#{inspect(reason)}, hash_prefix=#{hash_prefix})"
         )
 
         enqueue_reply(chat_id, chat_id_hash, failure_text(reason))
@@ -136,8 +136,14 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   # Outbound enqueue (REQ-C4-send-welcome-reply)
   # ----------------------------------------------------------------
 
-  defp enqueue_reply(chat_id, chat_id_hash, body) do
-    %{chat_id: chat_id, chat_id_hash: chat_id_hash, body: body, lane: :safe}
+  defp enqueue_reply(chat_id, chat_id_hash, body, patient_id \\ nil) do
+    %{
+      chat_id: chat_id,
+      chat_id_hash: chat_id_hash,
+      body: body,
+      lane: :safe,
+      patient_id: patient_id
+    }
     |> TelegramOutboundWorker.new(queue: :telegram_outbound)
     |> Oban.insert()
     |> case do
@@ -147,19 +153,27 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
       {:error, reason} ->
         Logger.error(
           "TelegramOnboardingWorker: failed to enqueue welcome/reply " <>
-            "(reason=#{inspect(reason)})"
+            "(reason=#{safe_error_reason(reason)})"
         )
 
         :ok
     end
   end
 
+  # PHI hygiene (R-1): never `inspect(reason)` wholesale — on an
+  # `Oban.insert/1` failure `reason` is typically an `%Ecto.Changeset{}`
+  # whose `changes.args` carries the raw `chat_id`, full
+  # `chat_id_hash`, and message `body`. Only the changeset's own
+  # validation errors (safe, structural) are logged.
+  defp safe_error_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)
+  defp safe_error_reason(_other), do: "unknown reason"
+
   # ----------------------------------------------------------------
   # Copy (localized Spanish, per REQ-C4-* scenarios)
   # ----------------------------------------------------------------
 
   defp welcome_text(patient) do
-    case first_name(Map.get(patient, :profile_name)) do
+    case first_name(patient.profile_name) do
       nil ->
         "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
 
@@ -179,6 +193,14 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
 
   defp failure_text(:chat_bound_to_other_patient),
     do: "Este Telegram ya está vinculado a otro paciente, contactá a tu psicólogo."
+
+  # Catch-all: an unexpected/non-collision changeset error (or any
+  # other unhandled shape) from `consume_patient_auth_code/3` falls
+  # through to `{:error, changeset}` — currently unreachable in
+  # practice, but without this clause it would crash with
+  # `FunctionClauseError` instead of replying gracefully.
+  defp failure_text(_other),
+    do: "Ocurrió un error. Intentá de nuevo más tarde."
 
   # ----------------------------------------------------------------
   # Pure helpers

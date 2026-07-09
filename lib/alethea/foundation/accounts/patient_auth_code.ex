@@ -12,7 +12,7 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
     2. `verify_patient_auth_code/3` — checks eligibility (not expired, not
        used, not rate-limited) WITHOUT mutating the patient. Tracks the
        rate-limit audit trail on the row itself.
-    3. `consume_patient_auth_code/2` — atomically binds the patient's
+    3. `consume_patient_auth_code/3` — atomically binds the patient's
        `telegram_chat_id_hash` AND marks the code used, in a single
        `Ecto.Multi` transaction. If the chat is already bound to a
        DIFFERENT patient, the whole transaction rolls back — the code
@@ -41,20 +41,50 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   only the columns the migration already provides, with no separate
   ETS table or ledger.
 
+  ### Guessing a code that matches no row
+
+  A code that matches NO row (a wrong six-digit guess, or a garbled
+  token) has no row of its own to carry `attempt_count` /
+  `last_attempt_ip` — left untracked, this would let an attacker
+  enumerate the six-digit keyspace from one IP with zero throttling.
+  `verify_patient_auth_code/3` closes this gap by tracking the attempt
+  against a stand-in row of the SAME `kind`: it prefers a row this IP
+  has already been tracked against (`kind` + `last_attempt_ip` — the
+  same columns the migration's `(last_attempt_ip, inserted_at)` index
+  targets), so repeated wrong guesses from one IP accumulate on the
+  SAME row; failing that (a brand-new attacking IP), it falls back to
+  the most recently minted still-live (`used_at: nil`) row of that
+  `kind` to bootstrap tracking. The SAME reactive threshold as above
+  (5 attempts / rolling hour) then applies.
+
+  Accepted limitation: this can bump `attempt_count` /
+  `last_attempt_ip` on a row that belongs to an unrelated, legitimate
+  patient (the stand-in is borrowed, not owned by the attacker) — a
+  deliberate, documented tradeoff to avoid a new table, matching this
+  module's existing risk-acceptance style (see "Six-digit collision
+  probability" below). If NO row of the given `kind` exists at all,
+  the attempt is not trackable — but there is also nothing to attack.
+
   ## Six-digit collision probability (accepted risk)
 
   Per the `(patient_id, code, kind)` unique index (not a GLOBAL unique
   on `(code, kind)`), two different patients could theoretically be
   minted the identical 6-digit code within the same 10-minute window
   (1-in-1,000,000 chance per pair). `verify_patient_auth_code/3` and
-  `consume_patient_auth_code/2` resolve this by taking the
-  most-recently-inserted matching row (`order_by: [desc: :inserted_at],
-  limit: 1`) rather than raising on an ambiguous match. This mirrors the
+  `consume_patient_auth_code/3` resolve this by taking the
+  most-recently-inserted matching row SCOPED BY `kind` (`where: code
+  == ^code and kind == ^kind`, `order_by: [desc: :inserted_at], limit:
+  1`) rather than raising on an ambiguous match. Both functions share
+  the exact same resolution query so they always agree on which row a
+  given `(code, kind)` pair refers to — a `code` collision across two
+  DIFFERENT `kind`s (e.g. a deep-link token that happens to equal
+  another patient's six-digit code as a raw string) can never be
+  ambiguous, since `kind` is part of the match. This mirrors the
   design's chosen index scope; a stricter global-unique constraint on
   six-digit codes is a follow-up if the collision risk becomes material
   at scale.
 
-  ## `consume_patient_auth_code/2` — why arity 2, not `/1`
+  ## `consume_patient_auth_code/3` — why the extra `kind` argument
 
   `tasks.md` names this function `consume_patient_auth_code/1`. The
   bind step needs the caller-supplied `chat_id_hash` to write onto the
@@ -66,7 +96,26 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   two separate writes — a window where a crash between the two leaves
   the patient bound but the code still marked unused (double-bind risk
   on retry). The atomic `Ecto.Multi` requires `chat_id_hash` as an
-  argument, hence arity 2.
+  argument, hence arity > 1.
+
+  `kind` is required (as `opts[:kind]`, mirroring
+  `verify_patient_auth_code/3`'s own signature) because a bare
+  `code` alone is not guaranteed to resolve to a single row — see
+  "Six-digit collision probability" above. Fetching by `code` alone
+  (no `kind` filter) can raise `Ecto.MultipleResultsError` when two
+  rows share the same `code` value across different `kind`s or
+  patients; scoping by `(code, kind)` — the same scope
+  `fetch_by_code_and_kind/2` already uses — keeps the two functions in
+  agreement and removes the crash risk entirely.
+
+  ## Row locking
+
+  The auth-code row is fetched with `lock: "FOR UPDATE"` inside the
+  `Ecto.Multi` transaction, so two concurrent `consume_patient_auth_code/3`
+  calls for the SAME row serialize: the second call blocks until the
+  first transaction commits (or rolls back), then re-reads the row —
+  by then `used_at` is set, so it correctly returns `{:error,
+  :already_used}` instead of racing the first call to a double-bind.
   """
 
   use Ecto.Schema
@@ -179,7 +228,7 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
 
     case fetch_by_code_and_kind(code, kind) do
       nil ->
-        :expired
+        check_unmatched_rate_limit(ip, kind)
 
       %__MODULE__{used_at: %DateTime{}} ->
         :already_used
@@ -211,14 +260,15 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   `telegram_chat_id_hash` to a new value) never hits the unique index
   and succeeds normally.
   """
-  @spec consume_patient_auth_code(String.t(), String.t()) ::
+  @spec consume_patient_auth_code(String.t(), String.t(), keyword()) ::
           {:ok, Patient.t()} | {:error, :already_used | :chat_bound_to_other_patient}
-  def consume_patient_auth_code(code, chat_id_hash) do
+  def consume_patient_auth_code(code, chat_id_hash, opts) do
+    kind = Keyword.fetch!(opts, :kind)
     used_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
     Ecto.Multi.new()
     |> Ecto.Multi.run(:auth_code, fn repo, _changes ->
-      case repo.get_by(__MODULE__, code: code) do
+      case fetch_by_code_and_kind_for_update(repo, code, kind) do
         nil -> {:error, :already_used}
         %__MODULE__{used_at: %DateTime{}} -> {:error, :already_used}
         auth_code -> {:ok, auth_code}
@@ -275,6 +325,69 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
     end
   end
 
+  # Rate-limit guard for a `code` that matches NO row — see moduledoc
+  # "Guessing a code that matches no row". Tracks the attempt against a
+  # borrowed stand-in row of the same `kind` (preferring one this `ip`
+  # already touched) using the identical reactive threshold as
+  # `check_rate_limit/2`.
+  defp check_unmatched_rate_limit(ip, kind) when is_binary(ip) do
+    case unmatched_tracking_row(ip, kind) do
+      nil ->
+        :expired
+
+      auth_code ->
+        now = DateTime.utc_now()
+
+        same_window? =
+          not is_nil(auth_code.last_attempt_ip) and auth_code.last_attempt_ip == ip and
+            DateTime.diff(now, auth_code.updated_at, :second) < @rate_limit_window_seconds
+
+        new_count = if same_window?, do: auth_code.attempt_count + 1, else: 1
+
+        {:ok, _updated} =
+          auth_code
+          |> changeset(%{attempt_count: new_count, last_attempt_ip: ip})
+          |> Repo.update()
+
+        if new_count >= @rate_limit_max_attempts do
+          :rate_limited
+        else
+          :expired
+        end
+    end
+  end
+
+  defp check_unmatched_rate_limit(_ip, _kind), do: :expired
+
+  # Prefers a still-live row of this `kind` already tagged with `ip`
+  # (so repeated wrong guesses from one IP accumulate on the SAME
+  # row — this is the aggregate, IP+kind-scoped lookup that leans on
+  # the same `(last_attempt_ip, ...)` shape the migration's index
+  # targets). Falls back to the most recently minted still-live row of
+  # the `kind` to bootstrap tracking for a brand-new attacking IP.
+  defp unmatched_tracking_row(ip, kind) do
+    case owned_tracking_row(ip, kind) do
+      nil -> most_recent_live_row(kind)
+      row -> row
+    end
+  end
+
+  defp owned_tracking_row(ip, kind) do
+    __MODULE__
+    |> where([a], a.kind == ^kind and a.last_attempt_ip == ^ip and is_nil(a.used_at))
+    |> order_by(desc: :inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp most_recent_live_row(kind) do
+    __MODULE__
+    |> where([a], a.kind == ^kind and is_nil(a.used_at))
+    |> order_by(desc: :inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
   # ----------------------------------------------------------------
   # Lookup + eligibility helpers
   # ----------------------------------------------------------------
@@ -285,6 +398,20 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
     |> order_by(desc: :inserted_at)
     |> limit(1)
     |> Repo.one()
+  end
+
+  # Same (code, kind) resolution as `fetch_by_code_and_kind/2`, but
+  # with `FOR UPDATE` so two concurrent `consume_patient_auth_code/3`
+  # calls for the same row serialize instead of racing — see moduledoc
+  # "Row locking". Must run inside the enclosing `Ecto.Multi`
+  # transaction for the lock to have any effect.
+  defp fetch_by_code_and_kind_for_update(repo, code, kind) do
+    __MODULE__
+    |> where([a], a.code == ^code and a.kind == ^kind)
+    |> order_by(desc: :inserted_at)
+    |> limit(1)
+    |> lock("FOR UPDATE")
+    |> repo.one()
   end
 
   defp expired?(%__MODULE__{expires_at: expires_at}) do

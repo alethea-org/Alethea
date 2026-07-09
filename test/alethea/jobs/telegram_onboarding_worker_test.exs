@@ -94,6 +94,11 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert job.args["chat_id"] == @chat_id
       assert job.args["chat_id_hash"] == @chat_id_hash
       assert job.args["body"] =~ "Ana"
+      # Regression (WARNING fix): the bound patient's id must be
+      # threaded onto the outbound job args — `TelegramOutboundWorker`
+      # reads `patient_id` to attribute dead-letter rows / `ops:alerts`
+      # broadcasts on a later delivery failure.
+      assert job.args["patient_id"] == patient.id
     end
 
     test "does not log the raw chat_id or the full chat_id_hash", %{auth_code: auth_code} do
