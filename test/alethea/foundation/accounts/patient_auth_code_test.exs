@@ -6,7 +6,7 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
   TASK-4-1 covers the persistence half of `REQ-C4-mint-deep-link-token`
   (`create_patient_auth_code/2`) and the schema/migration shape.
   TASK-4-2 extends this file with `verify_patient_auth_code/3` and
-  `consume_patient_auth_code/2` (see the second `describe` block group
+  `consume_patient_auth_code/3` (see the second `describe` block group
   below, added in the same PR).
   """
 
@@ -260,6 +260,57 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       assert :expired =
                PatientAuthCode.verify_patient_auth_code("bad-guess", "8.8.8.8", kind: "deep_link")
     end
+
+    # Regression (WARNING fix, Round 2): the rate-limit read-then-write
+    # used to read the auth-code struct fetched earlier (no lock) and
+    # then `Repo.update()` unlocked — two concurrent requests against
+    # the SAME row could both compute `new_count` from the same stale
+    # `attempt_count`, losing an update and under-counting a
+    # brute-force burst. `check_rate_limit/2` and
+    # `check_unmatched_rate_limit/2` now share
+    # `apply_rate_limit_increment/3`, which re-fetches the row via
+    # `fetch_by_code_and_kind_for_update/3` (the SAME
+    # `for_update_query/2` already proven to compile to `FOR UPDATE`
+    # SQL below) inside a `Repo.transaction/1`, mirroring
+    # `consume_patient_auth_code/3`'s existing lock. A log-capture
+    # assertion was tried here but this app's test env pins
+    # `config :logger, level: :warning` (config/test.exs), which
+    # suppresses Ecto's `:debug`-level query logging before
+    # `ExUnit.CaptureLog` ever sees it — so instead this asserts the
+    # functional behavior the lock protects: the counter still
+    # increments correctly across both paths (proving the refactor to
+    # the locked fetch didn't change observable behavior), while the
+    # "compiles to FOR UPDATE SQL" test below proves the query itself
+    # is locked.
+    test "check_rate_limit/2 (known code) still increments attempt_count after the locked refetch",
+         %{auth_code: auth_code} do
+      assert :ok =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "3.3.3.3",
+                 kind: "deep_link"
+               )
+
+      reloaded = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded.attempt_count == 1
+      assert reloaded.last_attempt_ip == "3.3.3.3"
+    end
+
+    # Same race shape, unmatched-code path — see moduledoc "Guessing a
+    # code that matches no row". `check_unmatched_rate_limit/2` shares
+    # `apply_rate_limit_increment/3` with `check_rate_limit/2`, so the
+    # same lock must be exercised here too; the borrowed stand-in row
+    # (the only live row of this `kind`) must still show the
+    # incremented counter after the locked refetch.
+    test "check_unmatched_rate_limit/2 (unmatched code) still increments the borrowed row's attempt_count",
+         %{auth_code: auth_code} do
+      assert :expired =
+               PatientAuthCode.verify_patient_auth_code("000000-does-not-exist", "4.4.4.4",
+                 kind: "deep_link"
+               )
+
+      reloaded = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded.attempt_count == 1
+      assert reloaded.last_attempt_ip == "4.4.4.4"
+    end
   end
 
   # ----------------------------------------------------------------
@@ -383,19 +434,13 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
     # a row-level lock so a concurrent second `consume_patient_auth_code/3`
     # for the SAME row serializes instead of racing to a double-bind.
     # A true concurrent-process test would be flaky in this suite (no
-    # existing pattern for it here) — asserting the query built with the
-    # same `lock("FOR UPDATE")` mechanism the fetch uses compiles to SQL
-    # carrying `FOR UPDATE` is the deliberately lightweight regression
-    # check the delegate prompt calls out as acceptable.
+    # existing pattern for it here) — instead this calls the REAL
+    # production query builder (`PatientAuthCode.for_update_query/2`,
+    # exposed `@doc false` for exactly this) rather than an inline
+    # duplicate, so the test would fail if the lock were ever removed
+    # from the actual function.
     test "the row-lock mechanism used by consume_patient_auth_code/3 compiles to FOR UPDATE SQL" do
-      import Ecto.Query
-
-      query =
-        PatientAuthCode
-        |> where([a], a.code == ^"any-code" and a.kind == ^"deep_link")
-        |> order_by(desc: :inserted_at)
-        |> limit(1)
-        |> lock("FOR UPDATE")
+      query = PatientAuthCode.for_update_query("any-code", "deep_link")
 
       {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Repo, query)
       assert sql =~ "FOR UPDATE"

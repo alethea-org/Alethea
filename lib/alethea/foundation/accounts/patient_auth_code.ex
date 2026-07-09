@@ -62,8 +62,18 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   patient (the stand-in is borrowed, not owned by the attacker) — a
   deliberate, documented tradeoff to avoid a new table, matching this
   module's existing risk-acceptance style (see "Six-digit collision
-  probability" below). If NO row of the given `kind` exists at all,
-  the attempt is not trackable — but there is also nothing to attack.
+  probability" below). This is NOT an account-lockout risk: the
+  legitimate owner calling `verify_patient_auth_code/3` with their own
+  real code and their own real IP hits `check_rate_limit/2`, whose
+  `same_window?` check resets the counter to 1 the moment the calling
+  IP differs from the row's `last_attempt_ip` — so a prior unrelated
+  guesser's poisoning of the row never blocks the owner's own attempt.
+  The residual risk is purely **audit-column attribution noise**: the
+  unrelated patient's `last_attempt_ip` / `attempt_count` are
+  temporarily overwritten by a stranger's guess, which could confuse
+  any future admin tooling keying off those columns for that patient.
+  If NO row of the given `kind` exists at all, the attempt is not
+  trackable — but there is also nothing to attack.
 
   ## Six-digit collision probability (accepted risk)
 
@@ -116,6 +126,15 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   first transaction commits (or rolls back), then re-reads the row —
   by then `used_at` is set, so it correctly returns `{:error,
   :already_used}` instead of racing the first call to a double-bind.
+
+  The SAME `lock: "FOR UPDATE"` pattern protects the rate-limit
+  read-then-write in `check_rate_limit/2` and
+  `check_unmatched_rate_limit/2` (via the shared
+  `apply_rate_limit_increment/3`): both re-fetch the row inside a
+  `Repo.transaction/1` immediately before computing `new_count`, so two
+  concurrent callers racing the same row serialize instead of both
+  computing `new_count` from the same stale `attempt_count` (a lost
+  update that would under-count a brute-force burst).
   """
 
   use Ecto.Schema
@@ -261,7 +280,8 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   and succeeds normally.
   """
   @spec consume_patient_auth_code(String.t(), String.t(), keyword()) ::
-          {:ok, Patient.t()} | {:error, :already_used | :chat_bound_to_other_patient}
+          {:ok, Patient.t()}
+          | {:error, :already_used | :chat_bound_to_other_patient | Ecto.Changeset.t()}
   def consume_patient_auth_code(code, chat_id_hash, opts) do
     kind = Keyword.fetch!(opts, :kind)
     used_at = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -305,24 +325,41 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   # ----------------------------------------------------------------
 
   defp check_rate_limit(auth_code, ip) do
-    now = DateTime.utc_now()
-
-    same_window? =
-      not is_nil(auth_code.last_attempt_ip) and auth_code.last_attempt_ip == ip and
-        DateTime.diff(now, auth_code.updated_at, :second) < @rate_limit_window_seconds
-
-    new_count = if same_window?, do: auth_code.attempt_count + 1, else: 1
-
-    {:ok, _updated} =
-      auth_code
-      |> changeset(%{attempt_count: new_count, last_attempt_ip: ip})
-      |> Repo.update()
+    {:ok, new_count} =
+      Repo.transaction(fn -> apply_rate_limit_increment(Repo, auth_code, ip) end)
 
     if new_count >= @rate_limit_max_attempts do
       :rate_limited
     else
       :ok
     end
+  end
+
+  # Re-fetches `auth_code` with `lock: "FOR UPDATE"` and recomputes +
+  # writes the new count inside the enclosing transaction, so two
+  # concurrent callers racing the SAME row serialize instead of both
+  # computing `new_count` from the same stale `attempt_count` (a lost
+  # update that would under-count a brute-force burst). Mirrors the
+  # `FOR UPDATE` pattern `consume_patient_auth_code/3` already uses —
+  # see moduledoc "Row locking". Shared by `check_rate_limit/2` and
+  # `check_unmatched_rate_limit/2`, which have the identical race
+  # shape.
+  defp apply_rate_limit_increment(repo, auth_code, ip) do
+    locked = fetch_by_code_and_kind_for_update(repo, auth_code.code, auth_code.kind)
+    now = DateTime.utc_now()
+
+    same_window? =
+      not is_nil(locked.last_attempt_ip) and locked.last_attempt_ip == ip and
+        DateTime.diff(now, locked.updated_at, :second) < @rate_limit_window_seconds
+
+    new_count = if same_window?, do: locked.attempt_count + 1, else: 1
+
+    {:ok, _updated} =
+      locked
+      |> changeset(%{attempt_count: new_count, last_attempt_ip: ip})
+      |> repo.update()
+
+    new_count
   end
 
   # Rate-limit guard for a `code` that matches NO row — see moduledoc
@@ -336,18 +373,8 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
         :expired
 
       auth_code ->
-        now = DateTime.utc_now()
-
-        same_window? =
-          not is_nil(auth_code.last_attempt_ip) and auth_code.last_attempt_ip == ip and
-            DateTime.diff(now, auth_code.updated_at, :second) < @rate_limit_window_seconds
-
-        new_count = if same_window?, do: auth_code.attempt_count + 1, else: 1
-
-        {:ok, _updated} =
-          auth_code
-          |> changeset(%{attempt_count: new_count, last_attempt_ip: ip})
-          |> Repo.update()
+        {:ok, new_count} =
+          Repo.transaction(fn -> apply_rate_limit_increment(Repo, auth_code, ip) end)
 
         if new_count >= @rate_limit_max_attempts do
           :rate_limited
@@ -401,17 +428,29 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   end
 
   # Same (code, kind) resolution as `fetch_by_code_and_kind/2`, but
-  # with `FOR UPDATE` so two concurrent `consume_patient_auth_code/3`
-  # calls for the same row serialize instead of racing — see moduledoc
-  # "Row locking". Must run inside the enclosing `Ecto.Multi`
-  # transaction for the lock to have any effect.
+  # with `FOR UPDATE` so two concurrent callers for the same row
+  # serialize instead of racing — see moduledoc "Row locking". Used by
+  # `consume_patient_auth_code/3` (inside its `Ecto.Multi`) and by
+  # `apply_rate_limit_increment/3` (inside a `Repo.transaction/1`).
+  # Must run inside an enclosing transaction for the lock to have any
+  # effect.
   defp fetch_by_code_and_kind_for_update(repo, code, kind) do
+    code
+    |> for_update_query(kind)
+    |> repo.one()
+  end
+
+  @doc false
+  # Exposed (not `defp`) so the regression test can assert the REAL
+  # production query compiles to `FOR UPDATE` SQL, instead of an
+  # inline duplicate that would keep passing even if the lock were
+  # removed from `fetch_by_code_and_kind_for_update/3`.
+  def for_update_query(code, kind) do
     __MODULE__
     |> where([a], a.code == ^code and a.kind == ^kind)
     |> order_by(desc: :inserted_at)
     |> limit(1)
     |> lock("FOR UPDATE")
-    |> repo.one()
   end
 
   defp expired?(%__MODULE__{expires_at: expires_at}) do

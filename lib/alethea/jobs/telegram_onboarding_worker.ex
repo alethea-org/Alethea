@@ -125,7 +125,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
 
       {:error, reason} ->
         Logger.info(
-          "TelegramOnboardingWorker: consume rejected (#{inspect(reason)}, hash_prefix=#{hash_prefix})"
+          "TelegramOnboardingWorker: consume rejected (#{safe_error_reason(reason)}, hash_prefix=#{hash_prefix})"
         )
 
         enqueue_reply(chat_id, chat_id_hash, failure_text(reason))
@@ -160,12 +160,21 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     end
   end
 
-  # PHI hygiene (R-1): never `inspect(reason)` wholesale — on an
-  # `Oban.insert/1` failure `reason` is typically an `%Ecto.Changeset{}`
-  # whose `changes.args` carries the raw `chat_id`, full
-  # `chat_id_hash`, and message `body`. Only the changeset's own
-  # validation errors (safe, structural) are logged.
+  # PHI hygiene (R-1): never `inspect(reason)` wholesale.
+  #   - On an `Oban.insert/1` failure `reason` is typically an
+  #     `%Ecto.Changeset{}` whose `changes.args` carries the raw
+  #     `chat_id`, full `chat_id_hash`, and message `body` — only the
+  #     changeset's own validation errors (safe, structural) are
+  #     logged.
+  #   - On a `consume_patient_auth_code/3` failure `reason` can ALSO be
+  #     a `%Ecto.Changeset{}` (the non-collision `:bind` failure
+  #     branch), whose `changes` carries the full
+  #     `telegram_chat_id_hash` in the clear — `inspect/1` on that
+  #     changeset would leak it. Plain atom reasons (`:already_used`,
+  #     `:chat_bound_to_other_patient`, etc.) carry no PHI and pass
+  #     through unchanged.
   defp safe_error_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)
+  defp safe_error_reason(reason) when is_atom(reason), do: reason
   defp safe_error_reason(_other), do: "unknown reason"
 
   # ----------------------------------------------------------------
