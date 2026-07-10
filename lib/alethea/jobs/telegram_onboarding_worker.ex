@@ -175,6 +175,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   #     `:chat_bound_to_other_patient`, etc.) carry no PHI and pass
   #     through unchanged.
   defp safe_error_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)
+  defp safe_error_reason({:error, reason}) when is_atom(reason), do: reason
   defp safe_error_reason(reason) when is_atom(reason), do: reason
   defp safe_error_reason(_other), do: "unknown reason"
 
@@ -218,7 +219,24 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
            LegacyAccounts.get_patient_with_professional(legacy_patient.id) do
       message
     else
-      _ -> nil
+      # `:not_linked` is an EXPECTED state — not every foundation
+      # patient has a legacy bridge yet — so it stays silent.
+      :not_linked ->
+        nil
+
+      # Anything else (`{:error, :legacy_not_found}`, a missing/shape
+      # mismatch on the legacy preload, etc.) means this patient IS
+      # bound to a Telegram chat but the legacy bridge is broken —
+      # that deserves operational visibility instead of a silent
+      # fallback to the generic welcome copy. `patient.id` is an
+      # internal identifier (UUID), not PHI.
+      other ->
+        Logger.warning(
+          "TelegramOnboardingWorker: unexpected failure resolving custom welcome_message " <>
+            "(patient_id=#{patient.id}, result=#{safe_error_reason(other)})"
+        )
+
+        nil
     end
   end
 
@@ -233,22 +251,30 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     "¡Hola, #{name}! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
   end
 
-  defp interpolate_welcome_name(template, name) do
+  # When the name is unknown, every "%{name}" occurrence (there may be
+  # more than one) is dropped along with its immediately adjacent
+  # whitespace in a single regex pass, then the result is trimmed at
+  # the edges only. This scopes the whitespace cleanup to the
+  # placeholder's own vicinity — it must NEVER touch an unrelated
+  # double space elsewhere in the professional's template, and it must
+  # correctly collapse 0, 1, or multiple placeholder occurrences
+  # without leaving a run of leftover spaces.
+  defp interpolate_welcome_name(template, nil) do
     if template =~ "%{name}" do
-      template
-      |> String.replace("%{name}", name || "")
-      |> collapse_placeholder_gap(name)
+      ~r/\s*%\{name\}\s*/
+      |> Regex.replace(template, " ")
+      |> String.trim()
     else
       template
     end
   end
 
-  # When the name is unknown, replacing "%{name}" with "" can leave a
-  # double space behind (e.g. "Hola %{name} bienvenido" -> "Hola  bienvenido").
-  # Collapse it back to one space; a professional writing a name-known
-  # template is unaffected.
-  defp collapse_placeholder_gap(text, nil), do: String.replace(text, "  ", " ")
-  defp collapse_placeholder_gap(text, _name), do: text
+  # A known name is being inserted, not removed, so no whitespace
+  # scoping is needed — a plain substitution is safe (and a no-op when
+  # the template has no placeholder).
+  defp interpolate_welcome_name(template, name) do
+    String.replace(template, "%{name}", name)
+  end
 
   defp failure_text(:expired),
     do: "Tu link venció. Pedile a tu terapeuta uno nuevo."

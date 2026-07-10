@@ -296,6 +296,76 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert outbound_job.args["body"] == "Hola bienvenido."
     end
 
+    test "collapses multiple %{name} occurrences with no known patient name and leaves no double/triple spaces" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "Hola %{name}, ¿cómo estás %{name}?")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      refute outbound_job.args["body"] =~ "  "
+      refute outbound_job.args["body"] =~ "   "
+    end
+
+    test "preserves an unrelated pre-existing double space elsewhere in the template when the patient has no known name" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+
+      bind_patient_to_legacy_professional(
+        patient,
+        "Bienvenido!!  Espero que estés bien %{name}."
+      )
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] =~ "Bienvenido!!  Espero"
+    end
+
+    test "does not log a warning when the patient simply has no legacy bridge yet (:not_linked)" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      log =
+        capture_log(fn ->
+          assert :ok = TelegramOnboardingWorker.perform(job)
+        end)
+
+      refute log =~ "unexpected failure resolving custom welcome_message"
+    end
+
+    # No integration test constructs the "unexpected failure" branch
+    # itself (`{:error, :legacy_not_found}` or a nil-preloaded
+    # `:professional`): both `foundation_patients.legacy_patient_id`
+    # (`on_delete: :nilify_all`) and `patients.professional_id`
+    # (`on_delete: :delete_all`, `null: false`) are real DB foreign
+    # keys, so a dangling/orphaned reference cannot be produced
+    # through ordinary Ecto writes — the schema's own referential
+    # integrity keeps this branch defensive-only, the same way
+    # `failure_text/1`'s catch-all clause is documented as
+    # "currently unreachable in practice" above. The branch split
+    # itself (silent for `:not_linked`, logged otherwise) is verified
+    # by the "does not log" test above staying green together with
+    # the code review of `custom_welcome_message/1`.
+
     test "an empty-string welcome_message is sent verbatim, not falling back to the default" do
       professional = professional_fixture()
       patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})

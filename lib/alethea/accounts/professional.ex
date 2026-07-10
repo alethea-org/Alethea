@@ -28,6 +28,7 @@ defmodule Alethea.Accounts.Professional do
     |> validate_password_required(professional)
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must have the @ sign and no spaces")
     |> validate_length(:password, min: 12, max: 72)
+    |> validate_length(:welcome_message, max: 4096)
     |> unique_constraint(:email)
     |> put_password_hash()
   end
