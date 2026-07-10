@@ -29,10 +29,21 @@ alethea-*.tar
 # Claude Code local settings
 .claude/settings.local.json
 
-# Environment variables
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
 
-# Node dependencies
-/assets/node_modules/
-# Local Pi runtime state
-.atl/
+# macOS
+.DS_Store
+
+# Node.js dependencies
+node_modules/
+
+# Elixir LS / IDEs
+/.elixir_ls/
+/.lexical/
+
+# Agent/runner state and local caches
+/.atl/
+/.pi/
