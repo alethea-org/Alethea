@@ -71,6 +71,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
 
   require Logger
 
+  alias Alethea.Accounts, as: LegacyAccounts
   alias Alethea.Foundation.Accounts
   alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
@@ -181,15 +182,73 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   # Copy (localized Spanish, per REQ-C4-* scenarios)
   # ----------------------------------------------------------------
 
+  # REQ-W-welcome-text-resolution / REQ-W-name-interpolation: resolve
+  # `professional.welcome_message || <system default>`, interpolating
+  # the patient's first name (when known) into whichever template is
+  # active. An explicit empty-string `welcome_message` is sent verbatim
+  # (not falling back to the default) — only `nil` triggers the
+  # fallback, matching `||`'s truthiness in Elixir.
   defp welcome_text(patient) do
-    case first_name(patient.profile_name) do
-      nil ->
-        "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+    name = first_name(patient.profile_name)
 
-      name ->
-        "¡Hola, #{name}! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+    case custom_welcome_message(patient) do
+      nil -> default_welcome_text(name)
+      custom -> interpolate_welcome_name(custom, name)
     end
   end
+
+  # REQ-W-preload-professional: `consume_patient_auth_code/3`'s
+  # `{:ok, patient}` does not preload `:professional`, and even once
+  # preloaded it would point at the FOUNDATION-namespace professional,
+  # not the one a professional actually edits via `DashboardLive`'s
+  # `save_welcome_message` event (`Alethea.Accounts.Professional`,
+  # legacy table). Bridge to the legacy Patient first — the exact
+  # pattern `TelegramMessageWorker`'s crisis branch already uses for
+  # `crisis_message` — then preload `:professional` on that legacy
+  # Patient via `LegacyAccounts.get_patient_with_professional/1`.
+  #
+  # Unlike the crisis branch (which hard-matches `{:ok, legacy_patient}`
+  # because every message-pipeline patient is bound by then), a patient
+  # created outside the lockstep legacy+foundation flow may have no
+  # `legacy_patient_id` at all — fall back to the system default rather
+  # than raise.
+  defp custom_welcome_message(patient) do
+    with {:ok, legacy_patient} <- Accounts.legacy_patient(patient),
+         %{professional: %{welcome_message: message}} <-
+           LegacyAccounts.get_patient_with_professional(legacy_patient.id) do
+      message
+    else
+      _ -> nil
+    end
+  end
+
+  defp default_welcome_text(nil), do: default_welcome_template()
+  defp default_welcome_text(name), do: default_welcome_template(name)
+
+  defp default_welcome_template do
+    "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+  end
+
+  defp default_welcome_template(name) do
+    "¡Hola, #{name}! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+  end
+
+  defp interpolate_welcome_name(template, name) do
+    if template =~ "%{name}" do
+      template
+      |> String.replace("%{name}", name || "")
+      |> collapse_placeholder_gap(name)
+    else
+      template
+    end
+  end
+
+  # When the name is unknown, replacing "%{name}" with "" can leave a
+  # double space behind (e.g. "Hola %{name} bienvenido" -> "Hola  bienvenido").
+  # Collapse it back to one space; a professional writing a name-known
+  # template is unaffected.
+  defp collapse_placeholder_gap(text, nil), do: String.replace(text, "  ", " ")
+  defp collapse_placeholder_gap(text, _name), do: text
 
   defp failure_text(:expired),
     do: "Tu link venció. Pedile a tu terapeuta uno nuevo."

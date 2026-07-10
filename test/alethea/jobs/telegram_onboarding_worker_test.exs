@@ -220,6 +220,101 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # REQ-W-welcome-text-resolution / REQ-W-name-interpolation /
+  # REQ-W-preload-professional
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — welcome copy resolved from the professional's custom message" do
+    test "uses the professional's custom welcome_message with %{name} interpolated" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
+      bind_patient_to_legacy_professional(patient, "¡Hola %{name}! Este es tu espacio seguro.")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == "¡Hola Ana! Este es tu espacio seguro."
+    end
+
+    test "returns the professional's custom message verbatim when it has no %{name} placeholder" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
+      bind_patient_to_legacy_professional(patient, "Bienvenido a tu espacio.")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == "Bienvenido a tu espacio."
+    end
+
+    test "falls back to the system default when the professional's welcome_message is nil" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
+      bind_patient_to_legacy_professional(patient, nil)
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      assert outbound_job.args["body"] ==
+               "¡Hola, Ana! Tu cuenta de Telegram fue vinculada correctamente. " <>
+                 "A partir de ahora podés escribirme por acá."
+    end
+
+    test "collapses the %{name} gap to a single space when the patient has no first name" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "Hola %{name} bienvenido.")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == "Hola bienvenido."
+    end
+
+    test "an empty-string welcome_message is sent verbatim, not falling back to the default" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
+      bind_patient_to_legacy_professional(patient, "")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == ""
+    end
+  end
+
+  # ----------------------------------------------------------------
   # REQ-C4-reject-chat-bound-to-other-patient
   # ----------------------------------------------------------------
 
@@ -303,4 +398,62 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert reloaded_code.used_at == nil
     end
   end
+
+  # ----------------------------------------------------------------
+  # Fixtures for the legacy-professional bridge (REQ-W-preload-professional)
+  #
+  # `patient_fixture/2` only creates a foundation-namespace patient with
+  # no `legacy_patient_id` link. `welcome_text/1` resolves the
+  # dashboard-editable `welcome_message` from the LEGACY
+  # `Alethea.Accounts.Professional` (the same one `DashboardLive`'s
+  # `save_welcome_message` event writes to), reached via
+  # `Foundation.Accounts.legacy_patient/1` — the exact bridge
+  # `TelegramMessageWorker`'s crisis branch already uses for
+  # `crisis_message`. These helpers wire that bridge up for a test
+  # patient.
+  # ----------------------------------------------------------------
+
+  defp bind_patient_to_legacy_professional(foundation_patient, welcome_message) do
+    legacy_professional = insert_legacy_professional_with_welcome_message(welcome_message)
+    legacy_patient = insert_legacy_patient(legacy_professional, "alias-#{unique_int()}")
+
+    foundation_patient
+    |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+    |> Repo.update!()
+  end
+
+  defp insert_legacy_professional_with_welcome_message(welcome_message) do
+    {:ok, professional} =
+      Alethea.Accounts.create_professional(%{
+        email: "legacy-pro-#{unique_int()}@test.local",
+        password: "supersecret12",
+        full_name: "Legacy Pro #{unique_int()}"
+      })
+
+    # `create_professional` does not accept `welcome_message` in the
+    # first-arg attrs (the changeset only casts it via `update_professional`
+    # semantics) — set it directly, mirroring how the crisis_message
+    # fixture in `telegram_message_worker_test.exs` does it.
+    professional
+    |> Ecto.Changeset.change(%{welcome_message: welcome_message})
+    |> Repo.update!()
+  end
+
+  defp insert_legacy_patient(professional, alias_name) do
+    {:ok, kek} = Alethea.Accounts.load_professional_kek(professional)
+
+    {:ok, patient} =
+      Alethea.Accounts.create_patient(
+        %{
+          "whatsapp_number" => "+5491#{:rand.uniform(99_999_999)}",
+          "alias" => alias_name,
+          "professional_id" => professional.id
+        },
+        kek
+      )
+
+    patient
+  end
+
+  defp unique_int, do: System.unique_integer([:positive])
 end
