@@ -4,24 +4,48 @@
 
 Single capability, three touch points, no new module:
 
-1. **`Professional` schema** — add `field :welcome_message, :string`, cast in
-   `changeset/2` alongside `:crisis_message`. Migration: `add
-   :welcome_message, :string` on `professionals` (nullable, no default,
-   no backfill needed).
+1. **`Professional` schema** — CORRECTED post-apply: this project has TWO
+   parallel `Professional` schemas — `Alethea.Accounts.Professional`
+   (`lib/alethea/accounts/professional.ex`, legacy, WhatsApp-era) and
+   `Alethea.Foundation.Accounts.Professional`
+   (`lib/alethea/foundation/accounts/professional.ex`, the newer v2/Telegram
+   foundation). Both happen to have their own `crisis_message` field, which
+   is what made the wrong one easy to assume. `DashboardLive` (and its
+   `save_crisis_message`/`save_welcome_message` events) uses
+   `alias Alethea.Accounts` — the LEGACY module — via
+   `Alethea.Accounts.update_professional/2`, which only exists on the legacy
+   `Accounts` context. `welcome_message` was added to the LEGACY
+   `Alethea.Accounts.Professional`, not the foundation one. Migration:
+   `add :welcome_message, :string` on the `professionals` table (nullable,
+   no default, no backfill needed).
 
 2. **`DashboardLive`** — add `handle_event("save_welcome_message", %{"welcome_message" => message}, socket)`,
    calling `Accounts.update_professional(professional, %{welcome_message: message})`,
-   mirroring `save_crisis_message/2` exactly. Verified there is no
-   empty-string normalization anywhere in the `crisis_message` path
-   (`Professional.changeset/2` casts it as a plain string, no
-   `update_change/3`) — `welcome_message` matches that behavior as-is
-   rather than introducing a divergent nicety for one field only.
+   mirroring `save_crisis_message/2` exactly.
 
-3. **`TelegramOnboardingWorker`** —
-   - `handle_verified/5`: preload `:professional` on `patient` before calling
-     `welcome_text/1` (one `Repo.preload/2` call, mirroring
-     `TelegramMessageWorker`'s crisis-branch preload).
-   - `welcome_text/1`: resolve `template = patient.professional.welcome_message || default_welcome_template()`,
+   Empty-string handling — CORRECTED post-apply: verified empirically
+   (`Professional.changeset(existing, %{crisis_message: ""})` then
+   `Ecto.Changeset.get_change/2`) that `Ecto.Changeset.cast/4`'s default
+   `empty_values: [""]` option normalizes an incoming `""` to `nil` before
+   it reaches `changes` — this is Ecto's own default behavior, not
+   application code, and it already applied to `crisis_message` (an
+   earlier draft of this doc incorrectly claimed no such normalization
+   existed). `welcome_message` gets the same normalization for free via
+   the identical `cast/4` call — no extra code needed, and clearing the
+   field through the dashboard correctly falls back to the system default.
+
+3. **`TelegramOnboardingWorker`** — CORRECTED post-apply: a bare
+   `Repo.preload(patient, :professional)` on the FOUNDATION patient (as
+   originally planned here) would have preloaded the FOUNDATION
+   `Professional` — the wrong schema, disconnected from the one
+   `DashboardLive` actually edits (see point 1). The implemented resolution
+   bridges to the legacy Patient first (`Foundation.Accounts.legacy_patient/1`,
+   the same bridge `TelegramMessageWorker`'s crisis branch already uses for
+   `crisis_message`), then loads `:professional` on THAT legacy Patient via
+   `Alethea.Accounts.get_patient_with_professional/1`. Falls back to the
+   system default (does not raise) if the foundation patient has no
+   `legacy_patient_id` at all.
+   - `welcome_text/1`: resolve `template = custom_welcome_message(patient) || default_welcome_template()`,
      then interpolate: if `template =~ "%{name}"`, `String.replace(template, "%{name}", name || "")`
      (trim resulting double-spaces if name is nil — see Decisions below);
      else return `template` verbatim. The existing system-default templates

@@ -34,14 +34,24 @@ The system shall add a nullable `welcome_message` string field to
 
 - GIVEN a professional with a non-nil `welcome_message`
 - WHEN they submit the form with an empty string
-- THEN `professional.welcome_message == ""` (verified: `crisis_message` has
-  no empty-to-nil normalization anywhere in `Professional.changeset/2` or
-  `DashboardLive.handle_event("save_crisis_message", ...)` — this feature
-  matches that exact, existing behavior rather than inventing a divergent
-  one). Note this means an empty string does NOT fall back to the system
-  default (`"" || default` evaluates to `""` in Elixir, since only `nil`/
-  `false` are falsy) — a pre-existing quirk of the `crisis_message` pattern,
-  not something this change introduces or fixes.
+- THEN `professional.welcome_message == nil` — verified empirically (not
+  assumed) via `Ecto.Changeset.cast/4`'s default `empty_values: [""]`
+  option, which normalizes an incoming `""` param to `nil` before it ever
+  reaches `changes`. This is `Ecto`'s own default behavior, not custom
+  application code, and applies identically to `crisis_message` (confirmed
+  by running `Professional.changeset(existing, %{crisis_message: ""})` and
+  inspecting `Ecto.Changeset.get_change/2` — it returns `nil`, and the
+  applied struct's field is `nil`). `welcome_message` therefore falls back
+  to the system default correctly when cleared through the dashboard form,
+  with no extra normalization code needed.
+
+  Note: this only holds for values that pass through `Professional.changeset/2`.
+  A struct constructed directly in a test (bypassing the changeset) can
+  still hold a literal `""`, in which case `welcome_text/1`'s own `||`
+  resolution treats `""` as truthy (Elixir: only `nil`/`false` are falsy)
+  and would use it verbatim rather than falling back — this path is not
+  reachable via the dashboard save flow, only via direct/programmatic
+  writes to the field.
 
 ---
 
