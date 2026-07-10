@@ -16,8 +16,17 @@ defmodule Alethea.Telegram.ChatIdHashTest do
 
   alias Alethea.Telegram.ChatIdHash
 
-  @pepper_v1 "pepper-v1"
-  @pepper_v2 "pepper-v2"
+  # F-03: pin the moduledoc/function-head examples to the real impl.
+  # A regression in `hash/2` (algorithm swap, encoding change) would
+  # be caught by the doctest because the example output would no
+  # longer match the real HMAC-SHA256 output.
+  doctest Alethea.Telegram.ChatIdHash
+
+  # F-01: peppers MUST be at least 32 bytes (HMAC-SHA256 with a
+  # 0-byte or short key is cryptographically weak). The test peppers
+  # are 32-byte ASCII strings.
+  @pepper_v1 "pepper-v1-32-bytes-min-len-padding-pad"
+  @pepper_v2 "pepper-v2-32-bytes-min-len-padding-pad"
   @chat_id "123456789"
   @other_chat_id "987654321"
 
@@ -83,6 +92,86 @@ defmodule Alethea.Telegram.ChatIdHashTest do
       # both integer and string forms deterministically.
       assert ChatIdHash.hash(123_456_789, @pepper_v1) ==
                ChatIdHash.hash("123456789", @pepper_v1)
+    end
+  end
+
+  describe "hash/2 — pepper length guard (F-01)" do
+    test "raises ArgumentError when pepper is shorter than 32 bytes" do
+      # HMAC-SHA256 with a 0-byte or short key is cryptographically
+      # weak. The function MUST refuse to operate below 32 bytes of
+      # key material — silently accepting a short pepper is the
+      # crypto-equivalent of a `==` typo. Test: the empty string is
+      # the worst case (0 bytes).
+      assert_raise ArgumentError, ~r/pepper must be at least 32 bytes/, fn ->
+        ChatIdHash.hash(@chat_id, "")
+      end
+    end
+
+    test "raises ArgumentError when pepper is exactly 31 bytes (boundary)" do
+      # Boundary case: 31 bytes is one short of the minimum. The guard
+      # must catch it (not round up, not silently truncate).
+      short = String.duplicate("a", 31)
+
+      assert_raise ArgumentError, ~r/pepper must be at least 32 bytes/, fn ->
+        ChatIdHash.hash(@chat_id, short)
+      end
+    end
+
+    test "accepts a pepper of exactly 32 bytes (boundary)" do
+      # Boundary case: 32 bytes is the minimum. The guard must NOT
+      # reject it. The function returns a 64-char hash.
+      min_pepper = String.duplicate("a", 32)
+      hash = ChatIdHash.hash(@chat_id, min_pepper)
+
+      assert byte_size(hash) == 64
+      assert hash =~ ~r/^[0-9a-f]{64}$/
+    end
+  end
+
+  describe "hash/2 — chat_id type guard (F-02)" do
+    test "raises ArgumentError when chat_id is an atom" do
+      # Telegram chat ids are integers (or strings of digits). Atoms,
+      # floats, structs, maps, lists, and tuples are silently
+      # stringified by `to_string/1` but produce a hash that is
+      # nonsensical as a lookup key. The function MUST refuse
+      # non-canonical inputs.
+      assert_raise ArgumentError, ~r/chat_id must be an integer or a string/, fn ->
+        ChatIdHash.hash(:not_a_chat_id, @pepper_v1)
+      end
+    end
+
+    test "raises ArgumentError when chat_id is a float" do
+      assert_raise ArgumentError, ~r/chat_id must be an integer or a string/, fn ->
+        ChatIdHash.hash(123_456_789.0, @pepper_v1)
+      end
+    end
+
+    test "raises ArgumentError when chat_id is a struct" do
+      # %Date{} is a struct; the guard MUST catch it. The original
+      # implementation stringified structs silently via `to_string/1`,
+      # producing a hash that has no canonical interpretation as a
+      # chat_id lookup key.
+      assert_raise ArgumentError, ~r/chat_id must be an integer or a string/, fn ->
+        ChatIdHash.hash(~D[2026-06-17], @pepper_v1)
+      end
+    end
+
+    test "raises ArgumentError when chat_id is a map" do
+      assert_raise ArgumentError, ~r/chat_id must be an integer or a string/, fn ->
+        ChatIdHash.hash(%{id: 123_456_789}, @pepper_v1)
+      end
+    end
+
+    test "raises ArgumentError when chat_id is a list" do
+      assert_raise ArgumentError, ~r/chat_id must be an integer or a string/, fn ->
+        ChatIdHash.hash([1, 2, 3, 4, 5, 6, 7, 8, 9], @pepper_v1)
+      end
+    end
+
+    test "raises ArgumentError when chat_id is nil" do
+      assert_raise ArgumentError, ~r/chat_id must be an integer or a string/, fn ->
+        ChatIdHash.hash(nil, @pepper_v1)
+      end
     end
   end
 end

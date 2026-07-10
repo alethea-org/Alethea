@@ -23,7 +23,8 @@ defmodule Alethea.Foundation.Accounts do
   the architecture rationale.
   """
 
-  alias Alethea.Foundation.Accounts.{Admin, Patient, Professional}
+  alias Alethea.Foundation.Accounts.{Admin, Patient, PatientAuthCode, Professional}
+  alias Alethea.Repo
 
   @doc """
   Registers a new professional. Delegates to
@@ -48,4 +49,104 @@ defmodule Alethea.Foundation.Accounts do
   `Alethea.Foundation.Accounts.Admin.register_admin/1`.
   """
   defdelegate register_admin(attrs), to: Admin
+
+  @valid_hash_byte_size 64
+
+  @doc """
+  Looks up a patient by their `telegram_chat_id_hash` (the HMAC-SHA256
+  hex of the raw chat_id, 64 lowercase hex chars).
+
+  Per `REQ-C2-lookup-by-hash`: returns `{:ok, %Patient{}}` for a
+  bound hash, `:not_found` for everything else — including:
+
+    - a hash no patient is bound to;
+    - a raw chat_id (not 64 hex chars);
+    - a non-hex string of the right length;
+    - a `nil` or empty string.
+
+  The function does NOT hash the input. Callers must hash the raw
+  chat_id themselves (via `Alethea.Telegram.ChatIdHash.hash/2`) before
+  calling `lookup_patient_by_chat_hash/1`. Hashing on the caller side
+  keeps the boundary between "raw chat_id is the system's I/O surface"
+  and "hash is the DB lookup key" auditable.
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted from this function. The hash itself is a
+  PHI surface (it correlates the patient to a specific Telegram
+  chat) and must not appear in logs. Caller-side error handling
+  must NOT log the input hash.
+  """
+  @spec lookup_patient_by_chat_hash(any()) :: {:ok, Patient.t()} | :not_found
+  def lookup_patient_by_chat_hash(hash)
+      when is_binary(hash) and byte_size(hash) == @valid_hash_byte_size do
+    case Repo.get_by(Patient, telegram_chat_id_hash: hash) do
+      nil -> :not_found
+      %Patient{} = patient -> {:ok, patient}
+    end
+  end
+
+  def lookup_patient_by_chat_hash(_invalid_input) do
+    # Any non-64-char-hex input is rejected at the API boundary as
+    # `:not_found` — no false positive, no leakage of the validation
+    # rule to the caller. This is the safe default: a caller that
+    # passes a raw chat_id (the system's I/O surface) cannot trick
+    # the lookup into returning a row.
+    :not_found
+  end
+
+  @doc """
+  Mints a fresh onboarding auth code for a patient. Delegates to
+  `Alethea.Foundation.Accounts.PatientAuthCode.create_patient_auth_code/2`.
+  """
+  defdelegate create_patient_auth_code(patient_id, opts), to: PatientAuthCode
+
+  @doc """
+  Checks whether an onboarding auth code is eligible to be consumed.
+  Delegates to
+  `Alethea.Foundation.Accounts.PatientAuthCode.verify_patient_auth_code/3`.
+  """
+  defdelegate verify_patient_auth_code(code, ip, opts), to: PatientAuthCode
+
+  @doc """
+  Atomically binds a chat and consumes an onboarding auth code.
+  Delegates to
+  `Alethea.Foundation.Accounts.PatientAuthCode.consume_patient_auth_code/3`.
+  """
+  defdelegate consume_patient_auth_code(code, chat_id_hash, opts), to: PatientAuthCode
+
+  @doc """
+  Resolves the legacy `Alethea.Accounts.Patient` row that the given
+  foundation Patient is bridged to via `legacy_patient_id`.
+
+  Per REQ-C3-worker-resolves-patient + C-5, the Telegram worker
+  resolves the inbound chat via `lookup_patient_by_chat_hash/1`
+  (returns a foundation row) and then needs the legacy row to
+  persist the `Message` (the `messages.patient_id` column references
+  `patients.id`). This function is that bridge.
+
+  Returns `{:ok, %Alethea.Accounts.Patient{}}` if the foundation row
+  has `legacy_patient_id` set, `:not_linked` if it is `nil` (the
+  foundation row exists but the patient has not been onboarded to the
+  clinical pipeline), or `{:error, :legacy_not_found}` if the
+  `legacy_patient_id` is set but the referenced legacy row is gone
+  (deleted out from under the FK — possible because
+  `on_delete: :nilify_all` only fires on the next write; until then
+  the dangling FK is detectable here).
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. The legacy patient id is an internal FK;
+  the foundation Patient id is the public surface.
+  """
+  @spec legacy_patient(Patient.t()) ::
+          {:ok, Alethea.Accounts.Patient.t()} | :not_linked | {:error, :legacy_not_found}
+  def legacy_patient(%Patient{legacy_patient_id: nil}), do: :not_linked
+
+  def legacy_patient(%Patient{legacy_patient_id: legacy_id}) do
+    case Repo.get(Alethea.Accounts.Patient, legacy_id) do
+      nil -> {:error, :legacy_not_found}
+      %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
+    end
+  end
 end

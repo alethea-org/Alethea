@@ -31,9 +31,62 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 # Configure Oban
+#
+# Telegram queues (PR #2):
+#   - `telegram_inbound` (TASK-2-3) — the webhook controller enqueues
+#     `TelegramMessageWorker` + `TelegramOnboardingWorker` here. Shared
+#     queue; the routing decision (message vs onboarding) lives at the
+#     controller level, not the queue level.
+#   - `telegram_outbound` (TASK-2-6) — the safe-path outbound worker
+#     (`TelegramOutboundWorker`) consumes from this queue. The actual
+#     worker lands in PR #3a; the queue is registered here so PR #3a
+#     can `:use Oban.Worker, queue: :telegram_outbound` without a config
+#     delta.
+#   - `telegram_outbound_crisis` (PR #3b) — the crisis-bypass priority
+#     lane. Higher priority than `telegram_outbound` so a crisis message
+#     is not blocked by a backlog of safe-path replies. The worker lands
+#     in PR #3b; the queue is registered here for the same reason.
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10, whatsapp: 20, sessions: 10, schedulers: 5, reports: 5, ai_analysis: 5],
+  queues: [
+    default: 10,
+    whatsapp: 20,
+    sessions: 10,
+    schedulers: 5,
+    reports: 5,
+    ai_analysis: 5,
+    telegram_inbound: 10,
+    telegram_outbound: 10,
+    # `telegram_outbound_crisis` (REQ-C7-crisis-priority-lane; PR #3b /
+    # TASK-3b-2) is a dedicated queue for crisis-bypass replies. Two
+    # notes about its priority semantics:
+    #
+    # 1. **Open-source Oban 2.x does NOT honor `max_demand` or
+    #    `priority` at the queue level** — these options are silently
+    #    absorbed into the queue meta dict but never consulted by
+    #    `Oban.Engines.Basic` (`deps/oban/lib/oban/engines/basic.ex`).
+    #    Honoring them requires `Oban.Pro` (not in `mix.lock`). The
+    #    `limit: 10` value below caps total concurrency for the
+    #    crisis queue; for true per-lane throttling or priority
+    #    weighting, plan an Oban Pro migration (follow-up issue).
+    #
+    # 2. **In Oban's job-level priority, lower numbers = higher
+    #    priority** (0 is highest, 9 is lowest — see
+    #    `deps/oban/lib/oban/worker.ex`). The inbound worker
+    #    (`TelegramMessageWorker.enqueue_outbound/6`) sets
+    #    `priority: 0` on crisis jobs so they outrank the safe
+    #    queue's default `priority: 9` (set at the worker level via
+    #    `use Oban.Worker, queue: :telegram_outbound`).
+    #
+    # Until Oban Pro lands, the "crisis priority lane" contract is
+    # enforced at the **job-level priority** (set in
+    # `TelegramMessageWorker.enqueue_outbound/6`), not the queue
+    # level. The crisis queue is throttled to `5` (vs the safe
+    # queue's `10`) as a soft pre-Oban-Pro approximation of the
+    # spec's "dedicated priority lane" — the real isolation comes
+    # from job-level priority (0 vs 9), not queue-level limits.
+    telegram_outbound_crisis: 5
+  ],
   repo: Alethea.Repo,
   plugins: [
     {Oban.Plugins.Cron,
@@ -41,6 +94,21 @@ config :alethea, Oban,
        {"0 0 * * *", AletheaJobs.DailySchedulerWorker}
      ]}
   ]
+
+# Telegram Pacer (PR #2 TASK-2-6). The Pacer is a singleton GenServer
+# that owns the rate-limit ETS tables. It is started under the
+# application supervisor in `dev` and `prod`; in `test` it is started
+# manually per-test (mirrors the `start_bot_token` gate) so each test
+# gets a fresh bucket state.
+config :alethea, :start_telegram_pacer, true
+
+# Telegram Client adapter (PR #3a / TASK-3a-4). Defaults to the
+# Req production adapter for prod (config/config.exs); the `:test`
+# and `:dev` env configs override to the Fake (no-op accumulator
+# adapter that records sends in an ETS table). The behaviour
+# contract `Alethea.Telegram.Client` is what every consumer codes
+# against — the adapter swap is config-only.
+config :alethea, :telegram_client, Alethea.Telegram.Client.Req
 
 # --- AI & Clinical Configuration ---
 

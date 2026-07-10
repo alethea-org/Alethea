@@ -69,21 +69,40 @@ defmodule Alethea.Foundation.Accounts.BotConfig do
 
   Returns `{:ok, %BotConfig{}}` on success, or
   `{:error, %Ecto.Changeset{}}` on validation failure.
+
+  ## Atomicity (F-07)
+
+  The write is routed through Ecto's `on_conflict: [set: [...]]`
+  against `conflict_target: :env`, so two concurrent callers cannot
+  both observe the row as missing and both INSERT. Postgres resolves
+  the race atomically; the second INSERT becomes an UPDATE of the
+  freshly-inserted row.
+
+  This replaces the previous SELECT-then-INSERT-or-UPDATE form,
+  which had a TOCTOU race window between the `Repo.get_by/2` and
+  the `Repo.insert/1` and would hit the
+  `foundation_bot_configs_env_unique` index on contention.
   """
   def upsert(attrs) when is_map(attrs) do
-    env = Map.fetch!(attrs, :env)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Repo.get_by(__MODULE__, env: env) do
-      nil ->
-        %__MODULE__{}
-        |> changeset(attrs)
-        |> Repo.insert()
-
-      %__MODULE__{} = existing ->
-        existing
-        |> changeset(attrs)
-        |> Repo.update()
-    end
+    %__MODULE__{}
+    |> changeset(attrs)
+    |> Repo.insert(
+      on_conflict: [
+        set: [
+          # Schema field names, NOT column source names: Ecto's
+          # on_conflict.set goes through the same cast/type system
+          # as a regular UPDATE, so Cloak.Ecto.Binary encrypts
+          # the values on the conflict UPDATE path too.
+          bot_token: Map.get(attrs, :bot_token),
+          secret_token: Map.get(attrs, :secret_token),
+          bot_username: Map.get(attrs, :bot_username),
+          updated_at: now
+        ]
+      ],
+      conflict_target: :env
+    )
   end
 
   @doc """

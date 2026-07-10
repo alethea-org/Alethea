@@ -37,9 +37,28 @@ defmodule Alethea.Foundation.Accounts.Patient do
   schema "foundation_patients" do
     belongs_to :professional, Professional
 
+    # Bridge to the legacy `patients` table that backs the clinical
+    # message pipeline (REQ-C3-worker-resolves-patient + C-5).
+    # Nullable: a foundation row may exist before the patient is
+    # onboarded to the clinical pipeline (e.g., created by foundation
+    # admin tools). PR #4 (Telegram onboarding) populates this in
+    # lockstep with the legacy row creation.
+    # `on_delete: :nilify_all` on the FK so deleting a legacy patient
+    # (GDPR right-to-erasure, admin tooling) does NOT cascade-delete
+    # the foundation identity row — see migration
+    # `20260620000002_add_legacy_patient_id_to_foundation_patients.exs`.
+    belongs_to :legacy_patient, Alethea.Accounts.Patient, foreign_key: :legacy_patient_id
+
     field :alias, :string
     field :status, :string, default: "active"
-    field :telegram_chat_id, :string
+
+    # REQ-C2-chat-id-stored-as-hmac: the column is the HMAC-SHA256 of
+    # the raw chat_id (64-char lowercase hex), not the raw chat_id
+    # itself. The column is `null: true` because a patient may exist
+    # before they `/start` the bot. The partial unique index
+    # `foundation_patients_telegram_chat_id_hash_unique` enforces
+    # "at most one patient per hash" at the DB layer.
+    field :telegram_chat_id_hash, :string
 
     field :profile_name, :string
     field :profile_birth_date, :date
@@ -91,7 +110,8 @@ defmodule Alethea.Foundation.Accounts.Patient do
     |> cast(attrs, [
       :alias,
       :status,
-      :telegram_chat_id,
+      :telegram_chat_id_hash,
+      :legacy_patient_id,
       :profile_name,
       :profile_birth_date,
       :profile_gender,
@@ -103,5 +123,14 @@ defmodule Alethea.Foundation.Accounts.Patient do
     ])
     |> validate_required([:alias])
     |> validate_inclusion(:status, @status_values)
+    # REQ-C2-partial-unique-index: the DB layer rejects a second
+    # patient bound to the same hash. The constraint is named on
+    # the changeset so the violation is converted to a changeset
+    # error (`:telegram_chat_id_hash` already taken) rather than a
+    # raised `Ecto.ConstraintError`. This is the same pattern as
+    # the existing `BotConfig` and `Patient.professional_id` indexes.
+    |> unique_constraint(:telegram_chat_id_hash,
+      name: :foundation_patients_telegram_chat_id_hash_unique
+    )
   end
 end

@@ -4,8 +4,30 @@ defmodule Alethea.Telegram.BotToken do
 
   Loads `Alethea.Foundation.Accounts.BotConfig.for_env(Mix.env())` once at
   boot, holds the plaintext in process state, and serves it via
-  synchronous `GenServer.call/2`. Plaintext never leaves the process
-  state.
+  synchronous `GenServer.call/2`.
+
+  ## Plaintext boundary
+
+  The plaintext bot token and webhook secret token are reachable
+  through the **public API** under normal operation: callers use
+  `bot_token/0` and `secret_token/0` (both `GenServer.call/2`) to
+  read the live value, and `reload/0` to refresh it. The plaintext
+  also lives in the GenServer's process state.
+
+  **The process pid is secret-bearing.** OTP introspection paths
+  (`:sys.get_state/1`, `:sys.replace_state/3`, remote-shell
+  `Process.info/2`, the `:dictionary` slot) can reach the process
+  state and the plaintext. To prevent accidental leakage into a
+  log feed or a remote-console dump, this module implements
+  `format_status/1` to redact `:bot_token` and `:secret_token` in
+  the human-readable status. The redaction is opt-in for tooling
+  that respects `format_status/1` (the default `:sys.get_state/1`
+  path); raw state access still requires an explicit, privileged
+  call (e.g. `:sys.replace_state/3`).
+
+  Treat the BotToken pid as a secret. Do not log it; do not pass it
+  across untrusted boundaries; do not include it in error reports
+  that an operator might paste into Slack.
 
   ## Why a GenServer
 
@@ -94,9 +116,15 @@ defmodule Alethea.Telegram.BotToken do
     end
 
     :ok
-  rescue
-    # If the process is already dead or the stop call races, treat as :ok.
-    _ -> :ok
+  catch
+    # F-06: `GenServer.stop/3` raises `:exit` (not an exception)
+    # when the target process is already dead — `try/rescue` does
+    # NOT catch `:exit` signals, only raised exceptions. We must use
+    # `try/catch :exit, _` (or the equivalent `catch :exit, _` form)
+    # to swallow the link/exit case. Pattern matches the
+    # `pacer_test.exs:244-256` `safe_stop/0` helper, which already
+    # has the same race condition.
+    :exit, _ -> :ok
   end
 
   ## GenServer callbacks
@@ -111,11 +139,16 @@ defmodule Alethea.Telegram.BotToken do
         # Fail-loud: a missing row is a misconfiguration, not a default.
         # We log a clear error so the operator can see why the app failed
         # to boot, and we raise to keep the supervision tree honest.
+        #
+        # W-2 fix: never `inspect(reason)` — the whitelist match in
+        # `reason_tag/1` guarantees we never leak a future `:unexpected`
+        # payload (which could be a `%BotConfig{}` struct with
+        # ciphertext blobs, ids, etc.) into the log.
         require Logger
 
         Logger.error(
           "Alethea.Telegram.BotToken failed to boot: " <>
-            "no BotConfig row for env=#{Mix.env()} (reason: #{inspect(reason)}). " <>
+            "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag(reason)}). " <>
             "Seed a row via Alethea.Foundation.Accounts.BotConfig.upsert/1 before starting the app."
         )
 
@@ -129,23 +162,63 @@ defmodule Alethea.Telegram.BotToken do
   def handle_call(:bot_username, _from, state), do: {:reply, state.bot_username, state}
 
   @impl true
-  def handle_cast(:reload, _state) do
-    case load() do
-      {:ok, plain} -> {:noreply, plain}
-      {:error, _reason} -> {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
-    end
-  end
+  def handle_cast(:reload, _state), do: do_reload()
 
   @impl true
-  def handle_info(:reload, _state) do
-    # Same shape as the cast — support both send/2 and GenServer.cast/2.
-    case load() do
-      {:ok, plain} -> {:noreply, plain}
-      {:error, _reason} -> {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
-    end
+  def handle_info(:reload, _state), do: do_reload()
+
+  # F-04: redact :bot_token and :secret_token from the human-readable
+  # status returned by `:sys.get_state/1` and any other introspection
+  # path that respects `format_status/1`. The state struct itself
+  # still holds the plaintext (it has to — the GenServer is the
+  # secret accessor); this callback is the layer that prevents the
+  # plaintext from leaking into a log feed or a remote-console dump.
+  # See `Alethea.Telegram.BotTokenTest "format_status/1 — redaction"`
+  # for the contract.
+  @impl true
+  def format_status(_opt, [_pdict, state]) do
+    redacted = %{
+      bot_token: "[REDACTED]",
+      secret_token: "[REDACTED]",
+      bot_username: Map.get(state, :bot_username)
+    }
+
+    [data: redacted]
   end
 
+  @doc """
+  Maps a `load/0` failure reason to a safe, opaque log tag.
+
+  W-2 fix: this is a WHITELIST match — never `inspect/1` — so the
+  `init/1` and `do_reload/0` `Logger.error` calls never leak a future
+  `:unexpected` payload (which could be a `%BotConfig{}` struct with
+  ciphertext blobs, ids, etc.) into the operator's log feed. Today the
+  only realistic reasons are `:not_found` (the row is gone) and
+  `{:unexpected, other}` (the loaded struct did not match the guard).
+  Both are mapped to a safe tag; any other term is mapped to `"other"`.
+  """
+  @spec reason_tag(term()) :: String.t()
+  def reason_tag(:not_found), do: ":not_found"
+  def reason_tag({:unexpected, _}), do: ":unexpected"
+  def reason_tag(_), do: "other"
+
   ## Private
+
+  # W-1 fix + S-4 cleanup: both `handle_cast(:reload, _)` and
+  # `handle_info(:reload, _)` are wired to the same `do_reload/0` so
+  # the load + log-and-reset logic lives in exactly one place.
+  # The two callbacks exist so operators can use either
+  # `GenServer.cast/2` (the public `BotToken.reload/0` API) or
+  # `send/2` (a shell SIGHUP-style nudge) — both paths share the
+  # same handler.
+  @spec do_reload() ::
+          {:noreply, plain() | %{bot_token: nil, secret_token: nil, bot_username: nil}}
+  defp do_reload do
+    case load() do
+      {:ok, plain} -> {:noreply, plain}
+      {:error, reason} -> log_and_reset(reason)
+    end
+  end
 
   @spec load() :: {:ok, plain()} | {:error, :not_found | term()}
   defp load do
@@ -160,5 +233,30 @@ defmodule Alethea.Telegram.BotToken do
       other ->
         {:error, {:unexpected, other}}
     end
+  end
+
+  # W-1 fix: a reload that fails (e.g. the row was deleted while the
+  # GenServer was running) used to silently reset state to nil with no
+  # log. That made production webhooks 401 with no operator visibility.
+  # We now log a clear error so the operator can re-seed the row and call
+  # :reload again, while still failing closed (state reset to nil) so
+  # the system never sends traffic with stale credentials.
+  #
+  # The reason tag in the log uses `reason_tag/1` — a WHITELIST match,
+  # never `inspect(reason)` — so we never leak a future `:unexpected`
+  # payload into the logs.
+  @spec log_and_reset(term()) ::
+          {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
+  defp log_and_reset(reason) do
+    require Logger
+
+    Logger.error(
+      "Alethea.Telegram.BotToken reload failed: " <>
+        "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag(reason)}). " <>
+        "Re-seed the row via Alethea.Foundation.Accounts.BotConfig.upsert/1 and send :reload again. " <>
+        "Failing closed: bot_token/0 now returns nil until the row is restored."
+    )
+
+    {:noreply, %{bot_token: nil, secret_token: nil, bot_username: nil}}
   end
 end
