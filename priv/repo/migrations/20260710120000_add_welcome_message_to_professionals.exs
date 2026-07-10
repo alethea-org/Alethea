@@ -3,7 +3,7 @@ defmodule Alethea.Repo.Migrations.AddWelcomeMessageToProfessionals do
 
   def change do
     alter table(:professionals) do
-      add :welcome_message, :string
+      add :welcome_message, :text
     end
   end
 end

@@ -56,13 +56,6 @@ defmodule Alethea.Accounts.ProfessionalTest do
       assert cleared.welcome_message == nil
     end
 
-    # Exercised at the changeset level (not through `create_professional/1`)
-    # because `welcome_message`'s column is a plain `varchar(255)`
-    # (pre-existing migration choice, out of scope for this batch) —
-    # a real DB round-trip at 4096 chars would fail on that unrelated
-    # column-size limit before this validation is even reached. The
-    # concern in scope here is `Professional.changeset/2`'s own
-    # `validate_length(:welcome_message, max: 4096)` rule.
     test "welcome_message over 4096 chars fails changeset validation" do
       too_long = String.duplicate("a", 4097)
 
@@ -78,19 +71,29 @@ defmodule Alethea.Accounts.ProfessionalTest do
       assert "should be at most 4096 character(s)" in errors_on(changeset).welcome_message
     end
 
-    test "welcome_message with exactly 4096 chars passes changeset validation" do
+    # Judgment Day (welcome-message batch): a real DB round-trip at
+    # exactly 4096 chars used to crash with
+    # `Postgrex.Error: value too long for type character varying(255)` —
+    # the migration originally added `welcome_message` as `:string`
+    # (Ecto/Postgres default `varchar(255)`), so any value between 256
+    # and 4096 chars passed this changeset's own `validate_length` rule
+    # but still failed at the DB layer. Fixed by changing the migration
+    # to `:text` (unbounded, matching `crisis_message`'s column type).
+    # This test now goes through the real `create_professional/1` DB
+    # write, not just the in-memory changeset, so it actually proves the
+    # fix and would fail again if the column type regressed.
+    test "welcome_message with exactly 4096 chars saves through a real DB round-trip" do
       exactly_max = String.duplicate("a", 4096)
 
-      changeset =
-        Professional.changeset(%Professional{}, %{
-          email: "welcome-exactmax-#{System.unique_integer([:positive])}@alethea.com",
-          password: "supersecret12",
-          full_name: "Dr. Welcome",
-          welcome_message: exactly_max
-        })
+      assert {:ok, professional} =
+               Accounts.create_professional(%{
+                 email: "welcome-exactmax-#{System.unique_integer([:positive])}@alethea.com",
+                 password: "supersecret12",
+                 full_name: "Dr. Welcome",
+                 welcome_message: exactly_max
+               })
 
-      assert changeset.valid?
-      refute Map.has_key?(errors_on(changeset), :welcome_message)
+      assert professional.welcome_message == exactly_max
     end
   end
 
