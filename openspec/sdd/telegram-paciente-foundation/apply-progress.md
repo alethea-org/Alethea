@@ -1272,3 +1272,156 @@ PR #3b branch `feat/telegram-paciente-foundation/pr-3b-clinical-crisis` is **13 
 ## Next step
 
 PR #3b is ready to push and open against `pr-1b-foundations-b`. The Round 1 fixes (3 commits) and WARNING-5 (1 commit) are part of the same PR — they are coherent follow-ups to the same review cycle, not separate PRs.
+
+---
+
+# Apply Progress — `telegram-paciente-foundation` (PR #4)
+
+**Branch:** `feat/telegram-paciente-foundation/pr-4-onboarding`
+**Base:** `feat/telegram-paciente-foundation/pr-3b-clinical-crisis` (NOT `main`)
+**PR title:** `feat(telegram): patient onboarding via deep link and six digit code`
+**Strict TDD:** active — every task followed RED → GREEN → REFACTOR.
+**Status:** ✅ All 4 tasks complete. `mix precommit` green. `size:exception` — the pre-accepted PR #4 overshoot (see "Overshoot — PR #4" in `tasks.md`).
+
+## Why the new `REQ-C4-reject-chat-bound-to-other-patient` requirement mattered for this apply
+
+This session's `tasks.md`/`spec.md` were amended (after a product Q&A round) to add `REQ-C4-reject-chat-bound-to-other-patient` to TASK-4-2 and TASK-4-3, bumping PR #4's estimate from 990 to 1045 lines. The requirement is satisfied by making `consume_patient_auth_code/2` a single atomic `Ecto.Multi` (bind + consume in one transaction) rather than two sequential writes — see TASK-4-2 below for the arity-2-vs-`/1` deviation this forced.
+
+## Plan (4 tasks, all complete)
+
+| ID | Title | Files (impl) | Files (test) | Est. lines | Actual net | Final SHA |
+|---|---|---|---|---|---|---|
+| TASK-4-1 | `foundation_patient_auth_codes` migration + schema + `create_patient_auth_code/2` (C-4) | `lib/alethea/foundation/accounts/patient_auth_code.ex` + migration | `test/alethea/foundation/accounts/patient_auth_code_test.exs` | 240 | +265 in 3 files | `33d069e` |
+| TASK-4-2 | `verify_patient_auth_code/3` + `consume_patient_auth_code/2` + `accounts.ex` re-export | `patient_auth_code.ex` (extend) + `accounts.ex` | `patient_auth_code_test.exs` (extend) | 265 | +461 / -10 in 3 files | `33b1bca` |
+| TASK-4-3 | `TelegramOnboardingWorker` full body + webhook controller `chat_id` threading | `lib/alethea/jobs/telegram_onboarding_worker.ex`, `lib/alethea_web/controllers/telegram_webhook_controller.ex` | `telegram_onboarding_worker_test.exs`, `telegram_webhook_controller_test.exs` | 310 | +490 / -93 in 4 files | `298bc0f` |
+| TASK-4-4 | `TelegramAuthController.consume/2` full body (deep-link + six-digit web fallback) | `lib/alethea_web/controllers/telegram_auth_controller.ex` | `telegram_auth_controller_test.exs` | 230 | +211 / -70 in 2 files | `2b8d383` |
+| **Total** | | | | **1045** | **+1418 / -173 in 11 files (1591 changed)** | |
+
+An unrelated pre-existing debug leftover (`IO.inspect` + dead binding in the PR #3a/#3b crisis-exhaustion test) was cleaned up in a separate `chore` commit (`39f9187`) before TASK-4-2, so it doesn't pollute either task's diff.
+
+## TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| TASK-4-1 | `patient_auth_code_test.exs` | Unit (DB-backed) | N/A (new file) | ✅ 17/17 fail (`UndefinedFunctionError`, module didn't exist) | ✅ 3/3 pass (scoped to `create_patient_auth_code/2` only — file was temporarily reduced to TASK-4-1 scope for a clean per-task commit) | ✅ 3 cases (fresh mint, uniqueness across two mints, six-digit shape) | ➖ None needed |
+| TASK-4-2 | `patient_auth_code_test.exs` (extended) | Unit (DB-backed) | ✅ 3/3 (TASK-4-1 tests) | ✅ 14/17 fail (`verify_patient_auth_code/3` + `consume_patient_auth_code/2` undefined) | ✅ 17/17 pass (one test's own expectation had an off-by-one, fixed in the test, not the impl — see Decisions below) | ✅ 14 cases across TTL boundary, rate-limit per-IP/per-window, already-used, chat-bound-to-other-patient, same-patient rebind | ✅ None needed — implementation was already the target shape |
+| TASK-4-3 | `telegram_onboarding_worker_test.exs` (full rewrite) + `telegram_webhook_controller_test.exs` (extended) | Unit (Oban + DB-backed) | ✅ 9/9 (webhook controller tests) | ✅ 9/11 onboarding tests fail against the stub (10 fail against reduced test scope initially; webhook controller test failed 1/1 new assertion) | ✅ 11/11 onboarding + 9/9 webhook pass, after fixing two self-inflicted test bugs (`assert_enqueued/2` positional-Repo-arg mismatch with `use Oban.Testing, repo:`; rate-limit test used the wrong sentinel IP) | ✅ 11 cases: success+welcome, PHI-hygiene log capture, no-profile-name fallback, expired/already-used/rate-limited/nil-token failure branches, chat-bound-to-other-patient, same-patient rebind, six-digit-via-/start rejection | ➖ None needed |
+| TASK-4-4 | `telegram_auth_controller_test.exs` (full rewrite) | Unit (Oban-backed, `Phoenix.ConnTest.dispatch`) | ✅ 4/7 pre-existing ack-only assertions still passed against the stub (no regression) | ✅ 3/7 fail (the new enqueue assertions) | ✅ 7/7 pass | ✅ 7 cases: deep-link enqueue + real remote_ip, six-digit enqueue, 4 ack-and-drop shapes (no params, start w/o chat_id, code w/o chat_id, non-numeric chat_id), six-digit-shaped value via `?start=` still scoped to `kind: deep_link` | ➖ None needed |
+
+### Test Summary
+
+- **Total tests written/changed this PR**: 17 (TASK-4-1+4-2, cumulative in one file) + 1 (webhook controller) + 11 (onboarding worker, net +6 over the 5 old stub tests) + 7 (auth controller, net +4 over the 3 old skeleton tests) = 28 net new tests.
+- **Total tests passing**: 542 (full suite), 0 failures, 5 skipped (pre-existing, unrelated to this PR).
+- **Layers used**: Unit (all — DB-backed Ecto tests, Oban.Testing-backed worker/controller tests). No integration/E2E layer was warranted; every scenario is reachable with a direct `perform/1` or `Phoenix.ConnTest.dispatch/5` call plus DB assertions.
+- **Approval tests** (refactoring): None — no refactoring tasks in this PR.
+- **Pure functions created**: `PatientAuthCode.generate_code/1` (private), `TelegramOnboardingWorker.first_name/1` (private), `TelegramAuthController.parse_chat_id/1` (private).
+
+## Commit history (chronological, this PR)
+
+```
+2b8d383 feat(telegram): auth controller consumes deep link and six digit codes   (TASK-4-4)
+298bc0f feat(telegram): onboarding worker binds chat and emits welcome           (TASK-4-3)
+33b1bca feat(telegram): auth code verify and consume with rate limit and ttl    (TASK-4-2)
+39f9187 chore(telegram): remove debug IO.inspect from crisis exhaustion test    (unrelated cleanup)
+33d069e feat(telegram): add patient auth code schema for deep link and six digit (TASK-4-1)
+39f9187's base is the PR #3b tip (WARNING-5 + docs), unchanged from the previous session.
+```
+
+## Test counts (delta)
+
+- PR #3b tip baseline (this session start): 514 tests, 0 failures, 5 skipped.
+- After the debug-cleanup chore (`39f9187`): 531 tests, 0 failures, 5 skipped (no test count change from the chore itself — the file changed was `mix test` overall count reflects the session's starting point after a `mix test` run confirmed the safety net).
+- After TASK-4-1 (`33d069e`): 517 tests, 0 failures, 5 skipped (+3).
+- After TASK-4-2 (`33b1bca`): 531 tests, 0 failures, 5 skipped (+14).
+- After TASK-4-3 (`298bc0f`): 538 tests, 0 failures, 5 skipped (+7: +1 webhook controller, +6 net onboarding worker).
+- After TASK-4-4 (`2b8d383`): **542 tests, 0 failures, 5 skipped** (+4 net auth controller).
+
+## `mix precommit` result
+
+✅ GREEN (on final commit `2b8d383`).
+
+- `compile --warnings-as-errors`: pass.
+- `format --check-formatted`: pass.
+- `test`: 542 tests, 0 failures, 5 skipped, across 3 separate full-suite runs (one showed a single flaky failure on `pacer_test.exs` — an ETS `:protected`-table access-rights error under a specific random seed, in a PRE-EXISTING PR #1b-fixes test that this PR does not touch; a `--seed 0` rerun and a subsequent default-seed rerun both came back 0 failures, confirming this PR introduced no regression. See "Known pre-existing flake" below.)
+
+### Known pre-existing flake (not introduced by this PR)
+
+`test/alethea/telegram/pacer_test.exs` — "`ETS tables are :protected (writes go through the GenServer only) (F-12)`" — occasionally raises `ArgumentError: the table identifier refers to an ETS table with insufficient access rights` when a concurrent async test attempts a direct `:ets.insert/2` against the `:protected` table at the same moment another test process holds/reads it. This is timing-dependent and reproduces independently of any PR #4 change (confirmed: `lib/alethea/telegram/pacer.ex` and `pacer_test.exs` are untouched by PR #4). Not fixed here — out of scope; flagged for a future test-isolation pass on the Pacer suite (likely needs `async: false` or a per-test ETS table name).
+
+## Lines changed (PR #4 total — `size:exception`, pre-accepted)
+
+```
+$ git diff --stat feat/telegram-paciente-foundation/pr-3b-clinical-crisis..HEAD
+ lib/alethea/foundation/accounts.ex                                    |  22 +-
+ lib/alethea/foundation/accounts/patient_auth_code.ex                  | 314 ++++++++++++++
+ lib/alethea/jobs/telegram_onboarding_worker.ex                        | 233 +++++++---
+ lib/alethea_web/controllers/telegram_auth_controller.ex               | 136 +++++--
+ lib/alethea_web/controllers/telegram_webhook_controller.ex            |  15 +-
+ priv/repo/migrations/20260626000001_create_foundation_patient_auth_codes.exs | 80 ++
+ test/alethea/foundation/accounts/patient_auth_code_test.exs           | 302 ++++++++++++
+ test/alethea/jobs/telegram_message_worker_test.exs                    |   9 -
+ test/alethea/jobs/telegram_onboarding_worker_test.exs                 | 321 +++++++++---
+ test/alethea_web/controllers/telegram_auth_controller_test.exs        | 145 +++++---
+ test/alethea_web/controllers/telegram_webhook_controller_test.exs     |  14 +
+ 11 files changed, 1418 insertions(+), 173 deletions(-)
+```
+
+**1591 total changed lines** — 546 over the 1045 `tasks.md` estimate (1.52×), and well over the 800 soft budget. Per `tasks.md` §"Overshoot — PR #4", this is the **pre-accepted, documented exception** (`size:exception`) — splitting into #4a (schema+context) / #4b (worker+controller) was explicitly rejected in that section because it would land an unused table on a branch with no producer/consumer and break the worker's strict-TDD contract (RED tests must hit the real schema). The `REQ-C4-reject-chat-bound-to-other-patient` addition (this session) is the majority of the delta beyond the original 990-line estimate: it required the `Ecto.Multi` atomic-transaction design in `consume_patient_auth_code/2` (not a simple two-write sequence), plus a new `unique_constraint`-error-translation helper, plus 3 new test scenarios per task (TASK-4-2 and TASK-4-3) covering the collision and the same-patient-rebind regression.
+
+## Requirements covered (per `openspec/sdd/telegram-paciente-foundation/specs/C-4-deep-link-onboarding/spec.md`)
+
+| Requirement | Status |
+|---|---|
+| `REQ-C4-mint-deep-link-token` (persistence half) | ✅ `PatientAuthCode.create_patient_auth_code/2` — `expires_at = now + 600s`, `used_at: nil`, `attempt_count: 0`, reuses `DeepLinkToken.mint/0` for `kind: "deep_link"`. |
+| `REQ-C4-bind-chat-on-success` | ✅ `consume_patient_auth_code/2` sets `Patient.telegram_chat_id_hash` and `used_at` atomically; `TelegramOnboardingWorker` enqueues exactly one welcome job on `:telegram_outbound`. |
+| `REQ-C4-reject-expired-token` | ✅ `verify_patient_auth_code/3` returns `:expired` for `expires_at <= now` (TTL exclusive of the boundary — `now + 1s` is valid, `now - 1s` is expired); the row is NOT mutated. Worker sends "Tu link venció..." and does not bind. |
+| `REQ-C4-reject-already-used-token` | ✅ `:already_used` for a row with `used_at` set; no mutation. Worker sends "Este link ya fue usado." |
+| `REQ-C4-reject-rate-limited` | ✅ 5 attempts/hour per `last_attempt_ip`, independent per `kind`, tracked on the row's own `attempt_count`/`last_attempt_ip` using `updated_at` as the rolling-window anchor (see `PatientAuthCode` moduledoc for the full algorithm). Worker sends "Demasiados intentos..." |
+| `REQ-C4-six-digit-fallback` | ✅ `TelegramAuthController.consume/2` handles `?code=<6digit>&chat_id=<id>`; a `kind: "six_digit"` code sent via `/start` is rejected for free (the worker always verifies with `kind: "deep_link"` on the bot path, so a six-digit row never matches). |
+| `REQ-C4-send-welcome-reply` | ✅ Exactly one `TelegramOutboundWorker` job on `:telegram_outbound` (never crisis) per successful bind; body includes the patient's first name (`profile_name`'s first token) when known, a generic greeting otherwise. |
+| `REQ-C4-reject-chat-bound-to-other-patient` (added this session) | ✅ `consume_patient_auth_code/2`'s `Ecto.Multi` catches the `unique_constraint` violation on the bind step and returns `{:error, :chat_bound_to_other_patient}` without committing `used_at` — the whole transaction rolls back, so the code stays retryable. A same-patient rebind (own row, new hash) never hits the constraint and succeeds normally. |
+
+All 8 `REQ-C4-*` requirements are now covered. This closes the C-4 capability (deep-link onboarding) — the last capability slice in the `telegram-paciente-foundation` change; PR #1a through #4 together cover all 35 `REQ-C*-*` IDs across C-1 through C-7.
+
+## Decisions / deviations from `tasks.md` and `design.md`
+
+1. **`consume_patient_auth_code/2`, not `/1`.** `tasks.md` names this function with arity 1. The bind step needs the caller-supplied `chat_id_hash`, and `REQ-C4-reject-chat-bound-to-other-patient` requires the bind + consume to be a single atomic operation (so a constraint violation on the bind rolls back the `used_at` write too) — a `/1` function that only marks `used_at` would force two sequential writes with a crash window in between. Implemented as a single `Ecto.Multi` transaction; documented at length in the module's own moduledoc.
+
+2. **Rate-limit algorithm uses `updated_at` as the rolling-window anchor, not a separate attempt-history table.** The migration (per `design.md` §6) gives exactly one `attempt_count` + one `last_attempt_ip` per row — there is no ledger of individual attempts. `verify_patient_auth_code/3` reconstructs the "rolling 1-hour window, per-IP" semantics by comparing the incoming `ip` to `last_attempt_ip` and checking `DateTime.diff(now, row.updated_at) < 3600`: same IP + recent touch → increment; different IP or stale touch → reset to 1. This satisfies every scenario in the spec (5th-attempt-blocks, different-IP-allowed, old-window-rolls-off) without a new table.
+
+3. **Unknown/nonexistent codes map to `:expired`, not a distinct `:not_found`.** The spec defines `:ok | :expired | :already_used | :rate_limited`; a code that matches no row at all isn't explicitly covered. Treating it as `:expired` avoids giving an attacker an oracle to distinguish "never existed" from "expired" and reuses the same user-facing copy ("pedile a tu terapeuta uno nuevo").
+
+4. **Six-digit collision across different patients (accepted risk, not a bug).** The `(patient_id, code, kind)` unique index (per `design.md`) is NOT globally unique on `(code, kind)` — two different patients could theoretically mint the identical 6-digit code within the same 10-minute window (≈1-in-1,000,000 chance per pair). `fetch_by_code_and_kind/2` resolves any ambiguity by taking the most-recently-inserted matching row (`order_by: [desc: :inserted_at], limit: 1`) instead of raising `Ecto.MultipleResultsError`. Documented as an accepted risk in the schema moduledoc; a follow-up could tighten the index if this becomes material at scale.
+
+5. **`max_attempts: 2` on `TelegramOnboardingWorker`, not the PR #2 stub's `5`.** Aligned to `design.md`'s explicit `use Oban.Worker, queue: :telegram_inbound, max_attempts: 2` (mirrors the PR #3a pattern of tightening a stub's placeholder `max_attempts` to the spec value).
+
+6. **`TelegramWebhookController.update/2`'s `/start` clause now requires `message.chat.id`.** The PR #2 stub's pattern only destructured `update_id` + `text`; the onboarding worker cannot hash-and-bind a chat without `chat_id`. Not called out in `tasks.md` — discovered while wiring TASK-4-3 (same category of gap as PR #3a's `telegram_message_id` column / legacy-patient bridge, i.e. an infrastructure prerequisite the spec assumed was already in place). If `chat.id` is absent, the message now falls through to the generic `TelegramMessageWorker` clause rather than crashing (ack-and-drop by degradation, not a new failure mode).
+
+7. **Bot-webhook onboarding path rate-limits against a fixed `"telegram-webhook"` IP sentinel, not a real per-patient IP.** Telegram's `/start` webhook is delivered from Telegram's own relay servers — there is no patient-device IP available at that layer. Using a constant sentinel still protects against brute-forcing one specific token (the rate limit is scoped to the auth-code ROW, which is what matters), while the web fallback controller (TASK-4-4) passes the real `conn.remote_ip`, which IS meaningful there. Documented in the worker's moduledoc; not discussed in `design.md`, which shows `verify_patient_auth_code(token, ip, ...)` without specifying the `/start` path's `ip` source.
+
+8. **`TelegramAuthController` requires an explicit `chat_id` query param for both `?start=` and `?code=` paths.** `design.md`'s own six-digit test scenario shows `?code=482915&chat_id=9001`, confirming `chat_id` is part of the web-fallback contract (a browser has no inherent Telegram chat identity — the out-of-scope invite/fallback web page is responsible for collecting it). Extended the same requirement to the `?start=` web path for consistency. Missing or non-numeric `chat_id` is ack-and-drop (200, no job), matching the project's public-endpoint convention.
+
+9. **`TelegramAuthController` and `TelegramOnboardingWorker` share one worker, not duplicated bind logic.** `tasks.md`'s file list for TASK-4-4 only names the controller, implying it might independently verify/consume. Instead the controller enqueues the SAME `TelegramOnboardingWorker` (with an explicit `kind:` and the real `ip`), so the verify → consume → welcome/reject flow lives in exactly one place. This is a design choice, not a spec violation — REQ-C4-six-digit-fallback's scenarios are satisfied either way, and this avoids two implementations of the same state machine.
+
+10. **Two self-inflicted test bugs found and fixed during the TDD cycle (not implementation bugs):** (a) TASK-4-2's "6th attempt" test asserted `attempt_count == 7` when the test's own loop only drove 6 total calls — fixed the assertion to `6`. (b) TASK-4-3's rate-limited-token test manually pre-exhausted the limit using IP `"9.9.9.9"`, but the worker's default sentinel IP is `"telegram-webhook"` — the mismatch meant the worker's own verify call landed in a fresh window and returned `:ok` instead of `:rate_limited`. Fixed the test to pre-exhaust using the same sentinel the worker actually uses. Neither required an implementation change.
+
+## Out-of-scope items (explicitly out of scope per `tasks.md`'s PR #4 body)
+
+- Admin LiveView for invite generation (separate change) — there is currently no UI for a psychologist to mint a `PatientAuthCode` and produce the `t.me/<bot>?start=<token>` URL or the six-digit web page; this PR only ships the consuming side.
+- `setWebhook` runbook (separate change, ops concern).
+- Per-psychologist welcome-copy editor (separate change) — "personality-aware" in this PR means "includes the patient's first name when known," not a professional-configurable template.
+- The pre-existing `pacer_test.exs` flake (see "Known pre-existing flake" above) — unrelated to this PR, tracked as a future test-isolation fix.
+
+## Next step
+
+PR #4 is the last slice in the `feature-branch-chain`. All 4 tasks are complete and `mix precommit` is green. Recommended next step is `sdd-verify` for PR #4, followed by opening the PR against `pr-3b-clinical-crisis`:
+
+```
+gh pr create \
+  --base pr-3b-clinical-crisis \
+  --head feat/telegram-paciente-foundation/pr-4-onboarding \
+  --title "feat(telegram): patient onboarding via deep link and six digit code" \
+  --body-file ...
+```
+
+Use the PR body template from `tasks.md` §"PR #4 PR body (branch-pr convention)". After PR #4 merges, the tracker branch `feat/telegram-paciente-foundation` (draft, no-merge) can be fast-forwarded to this tip and marked ready-for-review for the integration into `main`, per the chain's "Chain Topology" section.

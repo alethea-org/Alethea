@@ -117,6 +117,20 @@ defmodule AletheaWeb.TelegramWebhookControllerTest do
       )
     end
 
+    test "passes the chat_id through to the onboarding worker (PR #4 — needed to bind)", %{
+      conn: conn
+    } do
+      body = build_update(%{"text" => "/start abc.def.ghi"})
+
+      conn = Phoenix.ConnTest.dispatch(conn, TelegramWebhookController, :post, :update, body)
+      assert conn.status == 200
+
+      assert_enqueued(Alethea.Repo,
+        worker: TelegramOnboardingWorker,
+        args: %{telegram_update_id: 123_456, token: "abc.def.ghi", chat_id: 987_654}
+      )
+    end
+
     test "/START (uppercase) is NOT routed to onboarding — Telegram convention is case-sensitive",
          %{conn: conn} do
       # Telegram's `/start` command is case-sensitive. A `/START` is just

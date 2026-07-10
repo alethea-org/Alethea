@@ -23,7 +23,7 @@ defmodule Alethea.Foundation.Accounts do
   the architecture rationale.
   """
 
-  alias Alethea.Foundation.Accounts.{Admin, Patient, Professional}
+  alias Alethea.Foundation.Accounts.{Admin, Patient, PatientAuthCode, Professional}
   alias Alethea.Repo
 
   @doc """
@@ -94,6 +94,26 @@ defmodule Alethea.Foundation.Accounts do
     # the lookup into returning a row.
     :not_found
   end
+
+  @doc """
+  Mints a fresh onboarding auth code for a patient. Delegates to
+  `Alethea.Foundation.Accounts.PatientAuthCode.create_patient_auth_code/2`.
+  """
+  defdelegate create_patient_auth_code(patient_id, opts), to: PatientAuthCode
+
+  @doc """
+  Checks whether an onboarding auth code is eligible to be consumed.
+  Delegates to
+  `Alethea.Foundation.Accounts.PatientAuthCode.verify_patient_auth_code/3`.
+  """
+  defdelegate verify_patient_auth_code(code, ip, opts), to: PatientAuthCode
+
+  @doc """
+  Atomically binds a chat and consumes an onboarding auth code.
+  Delegates to
+  `Alethea.Foundation.Accounts.PatientAuthCode.consume_patient_auth_code/3`.
+  """
+  defdelegate consume_patient_auth_code(code, chat_id_hash, opts), to: PatientAuthCode
 
   @doc """
   Resolves the legacy `Alethea.Accounts.Patient` row that the given

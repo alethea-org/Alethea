@@ -923,15 +923,6 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # direct calls), so a naive "oldest scheduled" query would
       # repeatedly pick up the original.
       Enum.each(1..5, fn attempt ->
-        all_jobs = Repo.all(from j in Oban.Job, order_by: [desc: :id])
-
-        IO.inspect(
-          {:iteration, attempt, :jobs,
-           Enum.map(
-             all_jobs,
-             &%{id: &1.id, worker: &1.worker, queue: &1.queue, state: &1.state, args: &1.args}
-           )}, label: "DEBUG")
-
         job =
           Repo.one!(
             from j in Oban.Job,
