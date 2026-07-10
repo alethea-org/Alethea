@@ -1,0 +1,236 @@
+# Workflow state for telegram-paciente-foundation
+
+> This file follows the orchestrator's convention (path `openspec/sdd/...`) which is
+> non-standard relative to the OpenSpec `openspec/changes/...` convention.
+> Per this project's convention, SDD planning artifacts live on a dedicated
+> `sdd/telegram-paciente-foundation` branch, decoupled from the code implementation
+> branch chain (`feat/telegram-paciente-foundation/pr-*`).
+
+change_id: telegram-paciente-foundation
+title: Telegram channel for patient journaling (bind, safe/crisis round-trip, onboarding)
+status: archived
+created: 2026-06-16
+archived: 2026-07-10
+archived_to: openspec/sdd/archive/telegram-paciente-foundation/
+verify_verdict: PASS
+author: sdd-new (interactive mode)
+
+phases:
+  propose: completed
+  spec: completed
+  design: completed
+  tasks: completed
+  apply: completed
+  verify: completed
+  archive: completed
+
+capabilities:
+  new:
+    - C-1-telegram-webhook-entrypoint
+    - C-2-hmac-chat-id-lookup
+    - C-3-async-message-processing
+    - C-4-deep-link-onboarding
+    - C-5-clinical-round-trip
+    - C-6-vault-sealed-bot-token
+    - C-7-outbound-rate-limit
+  modified: []
+
+artifacts:
+  proposal: openspec/sdd/archive/telegram-paciente-foundation/00-proposal.md
+  spec: openspec/sdd/archive/telegram-paciente-foundation/specs/
+  design: openspec/sdd/archive/telegram-paciente-foundation/02-design.md
+  tasks: openspec/sdd/archive/telegram-paciente-foundation/03-tasks.md
+  apply_progress: openspec/sdd/archive/telegram-paciente-foundation/04-apply-progress.md
+  verify_reports:
+    - openspec/sdd/archive/telegram-paciente-foundation/05-verify-report-pr-1a.md
+    - openspec/sdd/archive/telegram-paciente-foundation/06-verify-report-pr-1b.md
+    - openspec/sdd/archive/telegram-paciente-foundation/07-verify-report-pr-4.md
+
+preflight:
+  execution_mode: interactive
+  artifact_store.mode: hybrid   # engram + openspec (engram wired mid-change, PR #4 onward)
+  delivery_strategy: ask-always
+  chain_strategy: feature-branch-chain
+  review_budget_lines: 400   # initial D1; superseded by an 800-line soft budget per design's Re-Slice Justification
+  strict_tdd: true
+  test_command: mix test
+
+# ─────────────────────────────────────────────────────────────────
+# Implementation PR chain (feature-branch-chain — each PR targets the
+# previous PR's branch, not main, except PR #1a and this change's
+# final integration PR)
+# ─────────────────────────────────────────────────────────────────
+# Status legend:
+#   merged    — landed, SHA recorded
+#   pending   — opened, not yet merged (final integration PR to main)
+implementation_prs:
+  - id: PR-1a
+    pr_number: 72
+    title: "feat(telegram): bot token vault, chat id hash, encryption-vault wiring"
+    goal: BotConfig/BotToken vault, ChatIdHash pure HMAC helper, encryption-vault wiring
+    status: merged
+    base: main
+    target_branch: main
+    sha: 4d6e8cf
+    actual_lines: 797
+
+  - id: PR-1b
+    pr_number: 73
+    title: "feat(telegram): pacer GenServer with token buckets and deep link token"
+    goal: DeepLinkToken mint/verify (pure), Pacer GenServer (2 ETS TokenBuckets), ADR-0008
+    status: merged
+    base: feat/telegram-paciente-foundation/pr-1a-foundations-a
+    target_branch: feat/telegram-paciente-foundation/pr-1a-foundations-a
+    sha: 47c94d6
+    actual_lines: 462
+    verify_verdict: PASS WITH WARNINGS (0 critical, 2 warning, 4 suggestion; W-2 resolved same PR, W-1 deferred to PR #2)
+
+  - id: PR-1b-fixes
+    pr_number: 74
+    title: "fix(telegram): PR #1b follow-up fixes (F-04..F-16 + chore)"
+    goal: Hardening batch split out of PR #1b to keep it within budget (PHI hygiene, config validation, finite timeouts, ETS access rights)
+    status: merged
+    base: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    sha: 9fa4db5
+    actual_lines: 903
+
+  - id: PR-2
+    pr_number: 75
+    title: "feat(telegram): webhook entrypoint with Oban enqueue and Pacer supervision (PR #2)"
+    goal: TelegramWebhookController, TelegramSecretToken plug, Oban queue config, Pacer supervision, chat_id_hash column rename
+    status: merged
+    base: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    sha: 7470de8
+    actual_lines: 642
+
+  - id: PR-3a
+    pr_number: 76
+    title: "feat(telegram): clinical round-trip safe path with outbound pacer and dead letter"
+    goal: TelegramMessageWorker safe path, TelegramOutboundWorker (Pacer + 429 retry + dead-letter), Client.Req production adapter
+    status: merged
+    base: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    sha: 7168268
+    actual_lines: 1680
+    size_exception: true
+    forecast_lines: 700
+    delta_ratio: 2.4
+    forecast_under_delivery_cause: |
+      Full safe-path meat shipped as one cohesive unit per tasks.md (worker body +
+      outbound worker + dead-letter + production client) to avoid a half-state
+      where the worker persists clinical records but the outbound path can't send.
+
+  - id: PR-3b
+    pr_number: 78
+    title: "feat(telegram): crisis priority lane + clinical-incident broadcast (PR #3b)"
+    goal: Crisis branch bypasses LLM, crisis priority lane + queue-full escalation, psychologist alert broadcast, LogRedactor
+    status: merged
+    base: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    sha: e5036a9
+
+  - id: PR-4
+    pr_number: 79
+    title: "feat(telegram): patient onboarding via deep link and six digit code"
+    goal: PatientAuthCode schema, verify/consume context, TelegramOnboardingWorker, TelegramAuthController (deep-link + six-digit web fallback)
+    status: merged
+    base: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    sha: 9e02a6e
+    size_exception: true
+    forecast_lines: 1045   # 990 + 55 for REQ-C4-reject-chat-bound-to-other-patient, added post-Q&A
+    actual_lines: 1591
+    delta_ratio: 1.52
+    hardening: |
+      3 rounds of Judgment Day (blind adversarial dual-review) after the initial
+      apply. Round 1 closed an Ecto.MultipleResultsError crash on six-digit code
+      collisions, a rate-limiter gap with zero throttling on wrong/unmatched
+      guesses, 2 PHI-in-logs leaks via inspect(reason), a missing patient_id on
+      the welcome job's dead-letter args, and an unhandled changeset-error crash.
+      Round 2 closed a TOCTOU race the Round 1 rate-limiter fix left open, plus
+      one more inspect(reason) leak Round 1 missed. Round 3 added real
+      Task.async/Task.await_many concurrency tests (mirroring BotConfigTest's
+      F-07 pattern) replacing weaker sequential-only lock tests. Final verdict:
+      APPROVED (0 confirmed CRITICAL, 0 confirmed real WARNING).
+    verify_verdict: PASS (0 critical, 0 warning, 3 suggestion — all deferred, see risks below)
+
+  - id: integration-to-main
+    pr_number: 80
+    title: "feat(telegram): integrate telegram-paciente-foundation chain into main"
+    goal: |
+      Final integration PR merging the accumulated feature-branch-chain
+      (pr-1b-foundations-b, which now contains PR #1b through #4) into main.
+      No dedicated no-merge tracker branch was created during the chain (per
+      design's original plan) — pr-1b-foundations-b's tip serves that role
+      directly.
+    status: pending
+    base: main
+    target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+
+# ─────────────────────────────────────────────────────────────────
+# Test baseline
+# ─────────────────────────────────────────────────────────────────
+test_baseline:
+  pre_change: 292          # main, before PR #1a
+  post_pr_4: 550           # + 2 doctests
+  total_added: 258
+  failures: 0
+  skipped: 5
+  verified_command: "mix precommit"
+  verified_at: "2026-07-10 (verify phase, PR #4 tip e408fc8)"
+
+# ─────────────────────────────────────────────────────────────────
+# Requirements coverage
+# ─────────────────────────────────────────────────────────────────
+requirements_coverage:
+  total_req_ids: 35
+  covered: 35
+  capabilities: 7
+  note: |
+    C-4 (deep-link onboarding) has 8 REQ-C4-* requirements, including
+    REQ-C4-reject-chat-bound-to-other-patient, added during a product Q&A
+    round in the PR #4 session (not part of the original June spec) after
+    discovering the original spec had no requirement for the case where a
+    chat_id_hash being bound already belongs to a different patient.
+
+# ─────────────────────────────────────────────────────────────────
+# Known, accepted residual risks (not blockers; not re-litigated at archive)
+# ─────────────────────────────────────────────────────────────────
+risks:
+  - low: |
+      PHI (patient's first name, from the C-4 welcome message) can reach
+      outbound_dead_letters.text (unencrypted column) and the ops:alerts
+      PubSub broadcast verbatim if the welcome send exhausts retries.
+      Pre-existing PR #3a/#3b dead-letter infrastructure; PR #4 is the
+      first caller to route PHI through it. Deferred as a future change,
+      not fixed in PR #4 (would require encrypting the column or
+      stripping PHI from the dead-letter text).
+  - low: |
+      Per-professional welcome-message customization (mirroring the
+      crisis_message override + system-default pattern already on
+      Professional) was deliberately deferred out of PR #4 — the welcome
+      text there is a fixed template + the patient's first name only.
+      A follow-up task/session was spawned for this.
+  - low: "ip: nil silently disables the rate limiter in check_rate_limit/2 — theoretical, unreachable via any current call site (both call sites always pass a non-nil sentinel or the real remote_ip)."
+  - low: "TelegramOnboardingWorker's max_attempts: 2 has no documented rationale (cosmetic gap)."
+  - low: "No retry-on-collision when minting a six-digit code that collides with an existing (patient_id, code, kind) row — extremely low probability, accepted."
+  - low: "Pre-existing, unrelated flaky test in test/alethea/telegram/pacer_test.exs (ETS access-rights race under certain seeds) surfaced once across Judgment Day's precommit runs; file untouched by this change, not a regression."
+
+adr_respect_check:
+  adr-008-telegram-chat-id-pepper-rotation: respected (manual rotation + explicit re-onboarding, as designed in PR #1b)
+
+change_progress:
+  implementation_prs_total: 8   # 7 chain PRs + 1 final integration PR
+  implementation_prs_merged: 7
+  implementation_prs_pending: 1   # PR #80, integration to main — awaiting review/merge
+  summary: "7 of 7 chain PRs merged (#72, #73, #74, #75, #76, #78, #79). Final integration PR #80 (pr-1b-foundations-b -> main) opened, pending review."
+
+next_action: |
+  Archive complete. PR #80 (final integration to main) is open and pending
+  review/merge — this is tracked outside the SDD cycle (a repo-integration
+  step, not an SDD phase). Once #80 merges, the telegram-paciente-foundation
+  feature is live on main. No further SDD phases are recommended for this
+  change; the next SDD change is the already-spawned follow-up task for
+  per-professional welcome-message customization.
