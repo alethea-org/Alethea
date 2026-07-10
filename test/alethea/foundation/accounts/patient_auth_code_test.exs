@@ -433,12 +433,15 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
     # Regression (CRITICAL fix): the auth-code row must be fetched with
     # a row-level lock so a concurrent second `consume_patient_auth_code/3`
     # for the SAME row serializes instead of racing to a double-bind.
-    # A true concurrent-process test would be flaky in this suite (no
-    # existing pattern for it here) — instead this calls the REAL
-    # production query builder (`PatientAuthCode.for_update_query/2`,
-    # exposed `@doc false` for exactly this) rather than an inline
-    # duplicate, so the test would fail if the lock were ever removed
-    # from the actual function.
+    # This asserts the REAL production query builder
+    # (`PatientAuthCode.for_update_query/2`, exposed `@doc false` for
+    # exactly this) rather than an inline duplicate, so the test would
+    # fail if the lock were ever removed from the actual function. A
+    # true concurrent-process regression test for BOTH this lock and
+    # the rate-limit lock (Round 3, R3-001) lives in
+    # `PatientAuthCodeConcurrencyTest` (a separate `async: false`
+    # module, mirroring `BotConfigTest`'s F-07 guard) rather than here,
+    # since this whole file is `async: true`.
     test "the row-lock mechanism used by consume_patient_auth_code/3 compiles to FOR UPDATE SQL" do
       query = PatientAuthCode.for_update_query("any-code", "deep_link")
 
