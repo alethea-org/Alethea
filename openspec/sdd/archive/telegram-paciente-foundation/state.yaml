@@ -164,10 +164,17 @@ implementation_prs:
       (pr-1b-foundations-b, which now contains PR #1b through #4) into main.
       No dedicated no-merge tracker branch was created during the chain (per
       design's original plan) — pr-1b-foundations-b's tip serves that role
-      directly.
-    status: pending
+      directly. Required a manual merge-conflict resolution against main
+      (9 files: main only had the original pre-hardening PR #1a content on
+      a diverged lineage — merge-base was 7b891bf, predating PR #1a's main
+      merge at 4d6e8cf — so every PR-1a-touched file conflicted as
+      add/add; resolved by keeping this branch's strictly-superset version
+      in all 9 cases, verified file-by-file before resolving).
+    status: merged
     base: main
     target_branch: feat/telegram-paciente-foundation/pr-1b-foundations-b
+    sha: e460645
+    merged: 2026-07-10
 
 # ─────────────────────────────────────────────────────────────────
 # Test baseline
@@ -223,14 +230,12 @@ adr_respect_check:
 
 change_progress:
   implementation_prs_total: 8   # 7 chain PRs + 1 final integration PR
-  implementation_prs_merged: 7
-  implementation_prs_pending: 1   # PR #80, integration to main — awaiting review/merge
-  summary: "7 of 7 chain PRs merged (#72, #73, #74, #75, #76, #78, #79). Final integration PR #80 (pr-1b-foundations-b -> main) opened, pending review."
+  implementation_prs_merged: 8
+  implementation_prs_pending: 0
+  summary: "8 of 8 PRs merged (#72, #73, #74, #75, #76, #78, #79, #80). telegram-paciente-foundation is fully live on main as of 2026-07-10 (main @ e460645)."
 
 next_action: |
-  Archive complete. PR #80 (final integration to main) is open and pending
-  review/merge — this is tracked outside the SDD cycle (a repo-integration
-  step, not an SDD phase). Once #80 merges, the telegram-paciente-foundation
-  feature is live on main. No further SDD phases are recommended for this
-  change; the next SDD change is the already-spawned follow-up task for
-  per-professional welcome-message customization.
+  Change fully closed — code is live on main, SDD cycle archived. No further
+  SDD phases for this change. The next SDD change is the already-spawned
+  follow-up task for per-professional welcome-message customization
+  (mirroring the crisis_message override + default pattern).
