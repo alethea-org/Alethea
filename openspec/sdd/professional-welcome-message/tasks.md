@@ -6,15 +6,25 @@ standalone follow-up change, not part of that chain).
 **Strict TDD:** active — RED → GREEN → REFACTOR per task.
 **Chain strategy:** single PR (small change, no chaining needed).
 
-### TASK-1 — `Professional.welcome_message` field + migration + dashboard control (C-1)
+### TASK-1 — `Professional.welcome_message` field + migration + dashboard control (C-1) [x] Done
 
 - **Type:** impl + migration
 - **Files (impl):**
-  - `priv/repo/migrations/<timestamp>_add_welcome_message_to_professionals.exs`
-  - `lib/alethea/foundation/accounts/professional.ex` (add field + cast)
+  - `priv/repo/migrations/20260710120000_add_welcome_message_to_professionals.exs`
+  - `lib/alethea/accounts/professional.ex` (add field + cast) — **corrected
+    from the originally-listed `lib/alethea/foundation/accounts/professional.ex`**:
+    `DashboardLive` and `Accounts.update_professional/2` operate on the
+    LEGACY `Alethea.Accounts.Professional` (table `professionals`), not
+    the foundation-namespace one; the foundation module has no
+    `update_professional/2` at all. See `apply-progress.md` for the full
+    architecture discovery.
   - `lib/alethea_web/live/dashboard_live.ex` (`handle_event("save_welcome_message", ...)`)
   - `lib/alethea_web/live/dashboard_live.html.heex` (textarea + save button,
     mirroring the existing crisis-message block)
+  - `lib/alethea/accounts/professional.ex` — also fixed a discovered
+    pre-existing bug: `validate_required(:password)` rejected every
+    partial update of an existing professional (password is virtual,
+    never reloaded). See `apply-progress.md`.
 - **Files (test):** `test/alethea/foundation/accounts/professional_test.exs` (or
   wherever `crisis_message` is currently tested — extend, don't duplicate),
   `test/alethea_web/live/dashboard_live_test.exs` (extend with the
@@ -24,12 +34,19 @@ standalone follow-up change, not part of that chain).
 - **Commit:** `feat(accounts): add professional welcome_message field and dashboard control`
 - **Est. lines:** 20 migration + 10 schema + 20 LiveView + 15 heex + 60 test ≈ **125**
 
-### TASK-2 — Welcome-text resolution + professional preload (C-1)
+### TASK-2 — Welcome-text resolution + professional preload (C-1) [x] Done
 
 - **Type:** impl
-- **Files (impl):** `lib/alethea/jobs/telegram_onboarding_worker.ex` (preload
-  `:professional` in `handle_verified/5`; `welcome_text/1` resolves
-  `professional.welcome_message || default`, `%{name}` interpolation)
+- **Files (impl):** `lib/alethea/jobs/telegram_onboarding_worker.ex` — `welcome_text/1`
+  resolves the custom message via the legacy-patient bridge
+  (`Foundation.Accounts.legacy_patient/1` → `Alethea.Accounts.get_patient_with_professional/1`,
+  the same bridge `TelegramMessageWorker`'s crisis branch uses), reading
+  the LEGACY professional's `welcome_message` — not a direct
+  `Repo.preload(patient, :professional)` on the foundation patient, since
+  that would read the disconnected foundation-namespace professional
+  (never edited by the dashboard). Falls back to the system default
+  (unchanged wording) when unlinked or nil, rather than raising. See
+  `apply-progress.md` for the full rationale.
 - **Files (test):** `test/alethea/jobs/telegram_onboarding_worker_test.exs`
   (extend with: custom message + name placeholder, custom message without
   placeholder, nil message falls back to default — both with and without a
