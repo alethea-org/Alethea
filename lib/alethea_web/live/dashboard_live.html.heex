@@ -460,6 +460,33 @@
             </.form>
           </div>
 
+          <%!-- Custom welcome message --%>
+          <div style="border:1px solid #e2e8f0; border-radius:16px; padding:14px; background:#fff;">
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+              <.icon name="hero-chat-bubble-left-right" style="width:12px; height:12px; color:#6366f1;" />
+              <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#6366f1;">
+                Mensaje de Bienvenida
+              </span>
+            </div>
+            <p style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:10px;">
+              Enviado al vincular Telegram. Usá {"%{name}"} para incluir el nombre del paciente.
+            </p>
+            <.form for={%{}} id="welcome-message-form" phx-submit="save_welcome_message">
+              <textarea
+                name="welcome_message"
+                rows="4"
+                style="width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; line-height:1.5; resize:vertical; background:#fff; color:#334155; font-family:inherit;"
+                placeholder="Ej: ¡Hola %{name}! Bienvenido a tu espacio…"
+              >{@current_professional.welcome_message}</textarea>
+              <button
+                type="submit"
+                style="width:100%; margin-top:8px; padding:8px; border:1px solid rgba(99,102,241,.3); border-radius:10px; background:rgba(99,102,241,.08); color:#4338ca; font-size:12px; font-weight:600; cursor:pointer;"
+              >
+                Actualizar
+              </button>
+            </.form>
+          </div>
+
           <%!-- Decrypt chat button + history --%>
           <div style="border:1px solid #e2e8f0; border-radius:16px; padding:14px; background:#fff;">
             <h3 style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:10px;">
