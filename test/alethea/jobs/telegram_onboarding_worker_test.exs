@@ -310,8 +310,12 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      refute outbound_job.args["body"] =~ "  "
-      refute outbound_job.args["body"] =~ "   "
+      # Exact-string assertion (Judgment Day Round 2): the previous
+      # `refute body =~ "  "` assertions passed even when the fix left
+      # an orphan space before punctuation ("Hola , ¿cómo estás ?"),
+      # since a single stray space isn't a double space. Asserting the
+      # full string is what actually catches that regression.
+      assert outbound_job.args["body"] == "Hola, ¿cómo estás?"
     end
 
     test "preserves an unrelated pre-existing double space elsewhere in the template when the patient has no known name" do
@@ -332,7 +336,25 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "Bienvenido!!  Espero"
+
+      assert outbound_job.args["body"] == "Bienvenido!!  Espero que estés bien."
+    end
+
+    test "a %{name} placeholder directly adjacent to punctuation leaves no orphan space" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "Bienvenido %{name}!")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == "Bienvenido!"
     end
 
     test "does not log a warning when the patient simply has no legacy bridge yet (:not_linked)" do
@@ -367,9 +389,37 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     # the code review of `custom_welcome_message/1`.
 
     test "an empty-string welcome_message is sent verbatim, not falling back to the default" do
+      # This state is NOT reachable through the real dashboard save
+      # path: Ecto.Changeset.cast/4's default empty_values: [""]
+      # normalizes "" to nil before Professional.changeset/2 ever
+      # applies it (verified in professional_test.exs and
+      # design.md). Every OTHER test in this file uses
+      # bind_patient_to_legacy_professional/2, which now goes through
+      # the real Accounts.create_professional/1 path (Judgment Day
+      # Round 2, JD-004) — that path cannot construct welcome_message:
+      # "" at all. This one test deliberately bypasses the changeset to
+      # document welcome_text/1's own `||`-based resolution in
+      # isolation, in case a future write path (raw SQL, seeds) ever
+      # produces a literal "".
       professional = professional_fixture()
       patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
-      bind_patient_to_legacy_professional(patient, "")
+
+      {:ok, legacy_professional} =
+        Alethea.Accounts.create_professional(%{
+          email: "legacy-pro-#{unique_int()}@test.local",
+          password: "supersecret12",
+          full_name: "Legacy Pro #{unique_int()}"
+        })
+
+      legacy_professional
+      |> Ecto.Changeset.change(%{welcome_message: ""})
+      |> Repo.update!()
+
+      legacy_patient = insert_legacy_patient(legacy_professional, "alias-#{unique_int()}")
+
+      patient
+      |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+      |> Repo.update!()
 
       {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
 
@@ -493,20 +543,27 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
   end
 
   defp insert_legacy_professional_with_welcome_message(welcome_message) do
+    # Judgment Day Round 2 (JD-004): the previous version of this
+    # fixture claimed `create_professional/1` "does not accept
+    # welcome_message in the first-arg attrs" and bypassed
+    # `Professional.changeset/2` via `Ecto.Changeset.change/2` +
+    # `Repo.update!/1` instead. That claim was false — both
+    # `create_professional/1` and `update_professional/2` cast
+    # `welcome_message` through the exact same changeset (see
+    # `professional_test.exs`'s "saves through a real DB round-trip"
+    # test) — and bypassing it also silently skipped
+    # `validate_length(:welcome_message, max: 4096)`. Passing it
+    # directly in the create attrs both fixes the stale claim and
+    # exercises the real, validated write path.
     {:ok, professional} =
       Alethea.Accounts.create_professional(%{
         email: "legacy-pro-#{unique_int()}@test.local",
         password: "supersecret12",
-        full_name: "Legacy Pro #{unique_int()}"
+        full_name: "Legacy Pro #{unique_int()}",
+        welcome_message: welcome_message
       })
 
-    # `create_professional` does not accept `welcome_message` in the
-    # first-arg attrs (the changeset only casts it via `update_professional`
-    # semantics) — set it directly, mirroring how the crisis_message
-    # fixture in `telegram_message_worker_test.exs` does it.
     professional
-    |> Ecto.Changeset.change(%{welcome_message: welcome_message})
-    |> Repo.update!()
   end
 
   defp insert_legacy_patient(professional, alias_name) do

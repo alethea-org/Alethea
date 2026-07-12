@@ -251,18 +251,39 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     "¡Hola, #{name}! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
   end
 
-  # When the name is unknown, every "%{name}" occurrence (there may be
-  # more than one) is dropped along with its immediately adjacent
-  # whitespace in a single regex pass, then the result is trimmed at
-  # the edges only. This scopes the whitespace cleanup to the
-  # placeholder's own vicinity — it must NEVER touch an unrelated
-  # double space elsewhere in the professional's template, and it must
-  # correctly collapse 0, 1, or multiple placeholder occurrences
-  # without leaving a run of leftover spaces.
+  # Judgment Day Round 2/3: a blind `\s*%{name}\s*` -> " " regex left a
+  # stray space whenever "%{name}" sat directly against punctuation with
+  # whitespace on only one side (the single most common Spanish greeting
+  # shape, e.g. "Hola %{name}, bienvenido" -> "Hola , bienvenido" once
+  # the space before the comma had nowhere to go but stay).
+  #
+  # Two-pass fix: first collapse each "%{name}" (with its immediately
+  # surrounding whitespace) down to a NUL-byte marker rather than
+  # deciding the replacement inline -- a Regex.replace/3 replacement
+  # string can't see what follows the match, so the punctuation check
+  # has to happen in a second pass over the marker instead. A NUL byte
+  # cannot appear in a professional's typed message body, so it can't
+  # collide with real content. Each marker then resolves to: nothing,
+  # if immediately followed by punctuation (no space wanted there); or
+  # a single space otherwise (the normal "word word" case). This never
+  # touches whitespace anywhere else in the template -- an unrelated
+  # double space the professional wrote is never inspected, since the
+  # first-pass regex only matches whitespace directly touching a
+  # placeholder.
+  #
+  # Known accepted limitation (documented, not fixed -- see Judgment
+  # Day Round 2, low-likelihood): back-to-back placeholders with NO
+  # separator ("%{name}%{name}") still leave a double space, since each
+  # one independently resolves to its own single space. This template
+  # shape has no realistic authorial reason to exist.
   defp interpolate_welcome_name(template, nil) do
     if template =~ "%{name}" do
+      marker = <<0>>
+
       ~r/\s*%\{name\}\s*/
-      |> Regex.replace(template, " ")
+      |> Regex.replace(template, marker)
+      |> String.replace(~r/#{Regex.escape(marker)}(?=[,.!?;:])/, "")
+      |> String.replace(marker, " ")
       |> String.trim()
     else
       template
