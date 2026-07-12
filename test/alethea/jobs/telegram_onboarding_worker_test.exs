@@ -318,7 +318,19 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert outbound_job.args["body"] == "Hola, ¿cómo estás?"
     end
 
-    test "preserves an unrelated pre-existing double space elsewhere in the template when the patient has no known name" do
+    test "collapses a pre-existing double space anywhere in the template when the patient has no known name" do
+      # Judgment Day Round 3 (accepted trade-off, confirmed with the
+      # user): earlier rounds required an unrelated double space
+      # elsewhere in the template to survive untouched. Chasing every
+      # possible punctuation/quote/word-boundary shape adjacent to
+      # "%{name}" without ever touching whitespace elsewhere in the
+      # template proved to not terminate (three rounds of new edge
+      # cases). The final, simpler algorithm applies one global
+      # "collapse 2+ spaces to 1" cleanup pass instead of a
+      # placeholder-scoped one — deliberately accepting that a
+      # professional's own pre-existing double space elsewhere also
+      # gets normalized, in exchange for correctly handling every
+      # placeholder-adjacency shape found across all three rounds.
       professional = professional_fixture()
       patient = patient_fixture(professional)
 
@@ -337,7 +349,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
 
-      assert outbound_job.args["body"] == "Bienvenido!!  Espero que estés bien."
+      assert outbound_job.args["body"] == "Bienvenido!! Espero que estés bien."
     end
 
     test "a %{name} placeholder directly adjacent to punctuation leaves no orphan space" do
@@ -355,6 +367,44 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
       assert outbound_job.args["body"] == "Bienvenido!"
+    end
+
+    test "a %{name} placeholder adjacent to a non-punctuation character (quotes, parens, mid-word) leaves no orphan space" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "Hola \"%{name}\" (bienvenido)")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == "Hola \"\" (bienvenido)"
+    end
+
+    # Judgment Day Round 3 (CRITICAL, both judges): a template made up
+    # of ONLY the placeholder collapsed to an empty outbound Telegram
+    # message when the patient's name was unknown.
+    test "a template that is only the %{name} placeholder falls back to the system default, not an empty message" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "%{name}")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] =~ "vinculada correctamente"
+      refute outbound_job.args["body"] == ""
     end
 
     test "does not log a warning when the patient simply has no legacy bridge yet (:not_linked)" do

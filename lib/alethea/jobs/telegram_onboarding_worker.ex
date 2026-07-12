@@ -251,40 +251,46 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     "¡Hola, #{name}! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
   end
 
-  # Judgment Day Round 2/3: a blind `\s*%{name}\s*` -> " " regex left a
-  # stray space whenever "%{name}" sat directly against punctuation with
-  # whitespace on only one side (the single most common Spanish greeting
-  # shape, e.g. "Hola %{name}, bienvenido" -> "Hola , bienvenido" once
-  # the space before the comma had nowhere to go but stay).
+  # Judgment Day Round 2/3: a scoped, placeholder-adjacent-only
+  # whitespace fix (collapse only the whitespace directly touching
+  # "%{name}") went through two iterations and still left orphan
+  # spaces/glued punctuation for anything outside a hand-picked
+  # punctuation whitelist — closing quotes, parentheses, or a bare
+  # accented character directly against the placeholder all produced a
+  # stray inserted space that was never in the source template (e.g.
+  # "(%{name})" -> "( )", "hola%{name}ñ" -> "hola ñ"). Chasing every
+  # possible adjacent-character shape one at a time doesn't terminate.
   #
-  # Two-pass fix: first collapse each "%{name}" (with its immediately
-  # surrounding whitespace) down to a NUL-byte marker rather than
-  # deciding the replacement inline -- a Regex.replace/3 replacement
-  # string can't see what follows the match, so the punctuation check
-  # has to happen in a second pass over the marker instead. A NUL byte
-  # cannot appear in a professional's typed message body, so it can't
-  # collide with real content. Each marker then resolves to: nothing,
-  # if immediately followed by punctuation (no space wanted there); or
-  # a single space otherwise (the normal "word word" case). This never
-  # touches whitespace anywhere else in the template -- an unrelated
-  # double space the professional wrote is never inspected, since the
-  # first-pass regex only matches whitespace directly touching a
-  # placeholder.
-  #
-  # Known accepted limitation (documented, not fixed -- see Judgment
-  # Day Round 2, low-likelihood): back-to-back placeholders with NO
-  # separator ("%{name}%{name}") still leave a double space, since each
-  # one independently resolves to its own single space. This template
-  # shape has no realistic authorial reason to exist.
+  # Final approach (confirmed with the user, Judgment Day Round 3):
+  # drop the placeholder-scoped whitespace surgery entirely. Substitute
+  # "%{name}" with nothing, then apply two GLOBAL, ordinary
+  # natural-language cleanup rules — collapse any run of 2+ spaces to
+  # one, and drop a space immediately before common punctuation. This
+  # correctly handles every case found across all three rounds
+  # (multiple/back-to-back placeholders, punctuation on either side,
+  # quotes/parens, mid-word adjacency, placeholder-only templates
+  # falling back to the system default below) with one small,
+  # deliberately accepted trade-off: a professional's own PRE-EXISTING
+  # double space elsewhere in their template (unrelated to the
+  # placeholder) also gets collapsed to one, rather than being
+  # preserved untouched as Round 1 originally required. This is judged
+  # a materially better trade than continuing to special-case
+  # punctuation/quote/word-boundary shapes indefinitely for a cosmetic
+  # text-formatting feature.
   defp interpolate_welcome_name(template, nil) do
     if template =~ "%{name}" do
-      marker = <<0>>
+      result =
+        template
+        |> String.replace("%{name}", "")
+        |> String.replace(~r/ {2,}/, " ")
+        |> String.replace(~r/ +([,.!?;:])/, "\\1")
+        |> String.trim()
 
-      ~r/\s*%\{name\}\s*/
-      |> Regex.replace(template, marker)
-      |> String.replace(~r/#{Regex.escape(marker)}(?=[,.!?;:])/, "")
-      |> String.replace(marker, " ")
-      |> String.trim()
+      # A template consisting of ONLY the placeholder (or one that
+      # collapses to nothing once it's removed) would otherwise send
+      # patients a blank Telegram message — fall back to the system
+      # default instead.
+      if result == "", do: default_welcome_template(), else: result
     else
       template
     end
