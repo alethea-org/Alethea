@@ -76,6 +76,25 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
+  describe "Welcome message" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "saves a custom welcome message", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view
+      |> form("#welcome-message-form", %{welcome_message: "¡Hola! Bienvenido a tu espacio."})
+      |> render_submit()
+
+      assert render(view) =~ "Mensaje de bienvenida actualizado."
+      assert render(view) =~ "¡Hola! Bienvenido a tu espacio."
+    end
+  end
+
   describe "Authorization" do
     test "restricts access to non-existent patients in real mode", %{conn: conn} do
       Application.put_env(:alethea, :use_mock_data, false)

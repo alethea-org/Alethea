@@ -178,6 +178,23 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  def handle_event("save_welcome_message", %{"welcome_message" => message}, socket) do
+    professional = socket.assigns.current_professional
+
+    case Accounts.update_professional(professional, %{welcome_message: message}) do
+      {:ok, updated_professional} ->
+        socket =
+          socket
+          |> put_flash(:info, "Mensaje de bienvenida actualizado.")
+          |> assign(:current_professional, updated_professional)
+
+        {:noreply, socket}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Error al guardar el mensaje.")}
+    end
+  end
+
   defp decrypt_real_messages(patient, professional_kek) do
     key_record = Accounts.get_encryption_key_for_patient(patient.id)
 
