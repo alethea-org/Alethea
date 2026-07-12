@@ -57,7 +57,10 @@ preflight:
 implementation:
   base_branch: main   # telegram-paciente-foundation already merged (main @ e460645)
   head_branch: feat/professional-welcome-message
-  status: implemented, not yet PR'd
+  status: merged
+  pr_number: 81
+  merge_sha: d95b955
+  merged: 2026-07-12
   commits:
     - sha: b57b71d
       title: "feat(accounts): add professional welcome_message field and dashboard control"
@@ -143,11 +146,11 @@ adr_respect_check:
 
 change_progress:
   implementation_prs_total: 1
-  implementation_prs_merged: 0
-  implementation_prs_pending: 1
-  summary: "Implementation complete and re-verified on feat/professional-welcome-message; PR to main not yet opened."
+  implementation_prs_merged: 1
+  implementation_prs_pending: 0
+  summary: "PR #81 merged to main @ d95b955 on 2026-07-12. Change fully live."
 
 next_action: |
-  Archive complete. Open a real GitHub PR (feat/professional-welcome-message ->
-  main, single PR per tasks.md's delivery_strategy) and merge. Once merged,
-  the telegram-paciente-foundation family of follow-ups is fully closed.
+  Change fully closed — PR #81 merged to main, SDD cycle archived. No further
+  SDD phases for this change. The telegram-paciente-foundation family of
+  follow-ups (parent change + this one) is now fully closed and live on main.
