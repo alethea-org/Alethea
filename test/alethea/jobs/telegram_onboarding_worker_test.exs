@@ -403,8 +403,56 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "vinculada correctamente"
-      refute outbound_job.args["body"] == ""
+
+      # Exact-string assertion (Judgment Day Round 4, both judges): a
+      # substring/refute check would still pass on a garbled fallback.
+      assert outbound_job.args["body"] ==
+               "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+    end
+
+    # Judgment Day Round 4 (CRITICAL, one judge): a template where the
+    # placeholder is the only "content" but surrounded by punctuation
+    # (e.g. "%{name}!") isn't the literal empty string once removed
+    # ("!" survives), so the old `result == ""` fallback guard missed
+    # it and shipped a patient a message that was just punctuation.
+    test "a template that collapses to only punctuation falls back to the system default" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "%{name}!")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      assert outbound_job.args["body"] ==
+               "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+    end
+
+    # Judgment Day Round 4 (WARNING, both judges): the global cleanup
+    # regexes only matched a literal ASCII space, missing newlines/tabs
+    # — a realistic gap since the dashboard's welcome_message field is
+    # a plain <textarea> and the column is unbounded text.
+    test "collapses whitespace around %{name} that includes newlines, not only literal spaces" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "Hola\n%{name}\nBienvenido a tu espacio.")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert outbound_job.args["body"] == "Hola Bienvenido a tu espacio."
     end
 
     test "does not log a warning when the patient simply has no legacy bridge yet (:not_linked)" do

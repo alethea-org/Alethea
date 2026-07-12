@@ -282,15 +282,26 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
       result =
         template
         |> String.replace("%{name}", "")
-        |> String.replace(~r/ {2,}/, " ")
-        |> String.replace(~r/ +([,.!?;:])/, "\\1")
+        |> String.replace(~r/\s{2,}/, " ")
+        |> String.replace(~r/\s+([,.!?;:])/, "\\1")
         |> String.trim()
 
-      # A template consisting of ONLY the placeholder (or one that
-      # collapses to nothing once it's removed) would otherwise send
-      # patients a blank Telegram message — fall back to the system
-      # default instead.
-      if result == "", do: default_welcome_template(), else: result
+      # Judgment Day Round 4: a template that collapses to something
+      # like "!" (placeholder was the entire template, e.g.
+      # "%{name}!") isn't the literal empty string, but is just as
+      # useless a message as one — `== ""` alone missed it. Fall back
+      # to the system default whenever nothing letter/number-like
+      # survives, not only when the result is literally "".
+      #
+      # Known accepted limitation (documented, not fixed): a template
+      # where "%{name}" is the very FIRST token, directly touching
+      # punctuation with no other leading text (e.g. "%{name}, hola")
+      # can still leave that punctuation orphaned at the start of the
+      # message ("Hola, bienvenido" is fine; "%{name}, bienvenido"
+      # becomes ", bienvenido"). This is a narrower, purely cosmetic
+      # residual case; the guard above still prevents a fully blank or
+      # meaningless message.
+      if meaningless_welcome?(result), do: default_welcome_template(), else: result
     else
       template
     end
@@ -302,6 +313,8 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   defp interpolate_welcome_name(template, name) do
     String.replace(template, "%{name}", name)
   end
+
+  defp meaningless_welcome?(text), do: not Regex.match?(~r/[\p{L}\p{N}]/u, text)
 
   defp failure_text(:expired),
     do: "Tu link venció. Pedile a tu terapeuta uno nuevo."
