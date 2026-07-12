@@ -1,0 +1,153 @@
+# Workflow state for professional-welcome-message
+
+> This file follows the orchestrator's convention (path `openspec/sdd/...`) which is
+> non-standard relative to the OpenSpec `openspec/changes/...` convention.
+> Per this project's convention, SDD planning artifacts live on a dedicated
+> `sdd/professional-welcome-message` branch, decoupled from the code implementation
+> branch (`feat/professional-welcome-message`).
+
+change_id: professional-welcome-message
+title: Professional-configurable Telegram onboarding welcome message
+status: archived
+created: 2026-07-12
+archived: 2026-07-12
+archived_to: openspec/sdd/archive/professional-welcome-message/
+verify_verdict: PASS
+author: sdd-new (interactive mode)
+
+phases:
+  propose: completed
+  spec: completed
+  design: completed
+  tasks: completed
+  apply: completed
+  verify: completed
+  archive: completed
+
+capabilities:
+  new:
+    - C-1-professional-welcome-message
+  modified: []
+
+artifacts:
+  proposal: openspec/sdd/archive/professional-welcome-message/00-proposal.md
+  spec: openspec/sdd/archive/professional-welcome-message/specs/
+  design: openspec/sdd/archive/professional-welcome-message/02-design.md
+  tasks: openspec/sdd/archive/professional-welcome-message/03-tasks.md
+  apply_progress: openspec/sdd/archive/professional-welcome-message/04-apply-progress.md
+  verify_reports:
+    - openspec/sdd/archive/professional-welcome-message/05-verify-report.md
+    - openspec/sdd/archive/professional-welcome-message/06-verify-report-2.md
+
+preflight:
+  execution_mode: interactive
+  artifact_store.mode: openspec (file-based; engram write attempted by orchestrator
+    where sub-agent tooling allowed it, per hybrid convention from the parent change)
+  delivery_strategy: single-pr
+  chain_strategy: none (standalone change, not part of a PR chain)
+  strict_tdd: true
+  test_command: mix test
+
+# ─────────────────────────────────────────────────────────────────
+# Implementation
+# ─────────────────────────────────────────────────────────────────
+# A deliberate follow-up to telegram-paciente-foundation's PR #4,
+# which explicitly deferred per-professional welcome-message
+# customization to keep that PR within scope.
+implementation:
+  base_branch: main   # telegram-paciente-foundation already merged (main @ e460645)
+  head_branch: feat/professional-welcome-message
+  status: implemented, not yet PR'd
+  commits:
+    - sha: b57b71d
+      title: "feat(accounts): add professional welcome_message field and dashboard control"
+      task: TASK-1
+    - sha: bd1ca04
+      title: "feat(telegram): resolve welcome text from professional's custom message"
+      task: TASK-2
+    - sha: 5d9818c
+      title: "fix(accounts): change welcome_message column to text, not varchar(255)"
+      note: migration column type bug found during TASK-2 apply's own test-writing
+    - sha: c0fb308
+      title: "fix(telegram): scope %{name} whitespace collapse, cap welcome_message length"
+      note: Judgment Day Round 1 fix batch
+    - sha: ba686b5
+      title: "fix(telegram): scope %{name} whitespace collapse, cap welcome_message length"
+      note: Judgment Day Round 2 fix (superseded by 2e8643c)
+    - sha: 2e8643c
+      title: "fix(telegram): scope %{name} whitespace collapse globally, not per-site"
+      note: Judgment Day Round 3 -- full interpolation rewrite, confirmed with user
+    - sha: 0b0ebb4
+      title: "fix(telegram): scope %{name} whitespace collapse regex, cap welcome_message length"
+      note: Judgment Day Round 4 -- \s whitespace class, meaningless-message guard v1
+    - sha: f13d067
+      title: "fix(telegram): apply meaningless-message guard globally, not per-branch"
+      note: Judgment Day Round 5 -- closed the whitespace-only-no-placeholder gap
+
+judgment_day:
+  rounds: 6
+  final_verdict: APPROVED
+  summary: |
+    5 fix iterations across 6 rounds of blind dual-judge review on the
+    welcome-text interpolation logic (interpolate_welcome_name/2,
+    welcome_text/1). Round 1: multi-occurrence/unrelated-whitespace
+    bugs. Round 2: punctuation-adjacent orphan space. Round 3: quotes/
+    parens/mid-word adjacency + blank-message-from-placeholder-only
+    template -- required a full rewrite (global cleanup instead of
+    placeholder-scoped), an explicit trade-off confirmed with the user.
+    Round 4: ASCII-only whitespace class widened to \s; pure-punctuation
+    residual added a meaningless-message guard. Round 5 (CRITICAL):
+    whitespace-only welcome_message with NO placeholder bypassed the
+    guard entirely (reachable via the real dashboard save flow) --
+    fixed by moving the guard to apply once, uniformly, in
+    welcome_text/1. Round 6: CLEAN, no new findings.
+
+# ─────────────────────────────────────────────────────────────────
+# Test baseline
+# ─────────────────────────────────────────────────────────────────
+test_baseline:
+  pre_change: 550   # main, after telegram-paciente-foundation merged
+  post_change: 571
+  total_added: 21
+  failures: 0
+  skipped: 5
+  verified_command: "mix precommit"
+  verified_at: "2026-07-12 (re-verify phase, tip f13d067)"
+
+# ─────────────────────────────────────────────────────────────────
+# Requirements coverage
+# ─────────────────────────────────────────────────────────────────
+requirements_coverage:
+  total_req_ids: 4
+  covered: 4
+  capabilities: 1
+  note: |
+    REQ-W-professional-welcome-override, REQ-W-welcome-text-resolution,
+    REQ-W-name-interpolation, REQ-W-preload-professional. The last two
+    absorbed the bulk of the Judgment Day hardening (interpolation
+    correctness, meaningless-message guard).
+
+# ─────────────────────────────────────────────────────────────────
+# Known, accepted residual risks (not blockers)
+# ─────────────────────────────────────────────────────────────────
+risks:
+  - low: "NBSP / non-ASCII Unicode whitespace adjacent to %{name} is not collapsed (\\s is ASCII-only without Unicode property mode)."
+  - low: "A resolved welcome text containing only a single letter/digit (e.g. \"%{name}1\" -> \"1\") technically passes the meaningless-message guard and ships a near-useless one-character message."
+  - low: "A template where %{name} is the very first token directly touching punctuation with nothing preceding it (e.g. \"%{name}, hola\") can leave that punctuation orphaned at the start of the message once the name is unknown -- cosmetic only."
+  - low: "A professional's own pre-existing double space or blank-line paragraph break anywhere in their template is now also collapsed by the global cleanup pass -- deliberately accepted trade-off (confirmed with the user in Round 3) over indefinite punctuation/quote/word-boundary special-casing."
+  - low: "The known-name interpolation path does no whitespace trimming (pre-existing, not touched by any Judgment Day round)."
+  - low: "Post-interpolation length is not re-validated against Telegram's 4096-char hard cap (only the raw template is validated at save time) -- low-probability compound edge case."
+
+adr_respect_check:
+  none: no ADRs touched by this change
+
+change_progress:
+  implementation_prs_total: 1
+  implementation_prs_merged: 0
+  implementation_prs_pending: 1
+  summary: "Implementation complete and re-verified on feat/professional-welcome-message; PR to main not yet opened."
+
+next_action: |
+  Archive complete. Open a real GitHub PR (feat/professional-welcome-message ->
+  main, single PR per tasks.md's delivery_strategy) and merge. Once merged,
+  the telegram-paciente-foundation family of follow-ups is fully closed.
