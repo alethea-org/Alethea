@@ -193,8 +193,23 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     name = first_name(patient.profile_name)
 
     case custom_welcome_message(patient) do
-      nil -> default_welcome_text(name)
-      custom -> interpolate_welcome_name(custom, name)
+      nil ->
+        default_welcome_text(name)
+
+      custom ->
+        resolved = interpolate_welcome_name(custom, name)
+
+        # Judgment Day Round 5 (both judges, CRITICAL): a whitespace-only
+        # `welcome_message` with NO "%{name}" placeholder took the
+        # `interpolate_welcome_name/2` no-op branch untouched, bypassing
+        # the meaningless-message guard entirely (that guard used to live
+        # only inside the placeholder-present branch) — reachable through
+        # the real dashboard save flow, since Ecto's cast/4 only
+        # normalizes a literal "" to nil, not a whitespace-only string.
+        # Checking the FINAL resolved text here, regardless of which path
+        # produced it, closes that gap and supersedes the narrower
+        # in-branch check Round 4 added.
+        if meaningless_welcome?(resolved), do: default_welcome_text(name), else: resolved
     end
   end
 
@@ -268,40 +283,37 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   # one, and drop a space immediately before common punctuation. This
   # correctly handles every case found across all three rounds
   # (multiple/back-to-back placeholders, punctuation on either side,
-  # quotes/parens, mid-word adjacency, placeholder-only templates
-  # falling back to the system default below) with one small,
-  # deliberately accepted trade-off: a professional's own PRE-EXISTING
-  # double space elsewhere in their template (unrelated to the
-  # placeholder) also gets collapsed to one, rather than being
-  # preserved untouched as Round 1 originally required. This is judged
-  # a materially better trade than continuing to special-case
-  # punctuation/quote/word-boundary shapes indefinitely for a cosmetic
-  # text-formatting feature.
+  # quotes/parens, mid-word adjacency) with one small, deliberately
+  # accepted trade-off: a professional's own PRE-EXISTING double space
+  # elsewhere in their template (unrelated to the placeholder) also
+  # gets collapsed to one, rather than being preserved untouched as
+  # Round 1 originally required. This is judged a materially better
+  # trade than continuing to special-case punctuation/quote/word-
+  # boundary shapes indefinitely for a cosmetic text-formatting
+  # feature.
+  #
+  # Known accepted limitation (documented, not fixed): a template
+  # where "%{name}" is the very FIRST token, directly touching
+  # punctuation with no other leading text (e.g. "%{name}, hola") can
+  # still leave that punctuation orphaned at the start of the message
+  # ("Hola, bienvenido" is fine; "%{name}, bienvenido" becomes ",
+  # bienvenido"). Narrow and purely cosmetic; `welcome_text/1`'s
+  # meaningless-message guard (see there) still prevents the fully
+  # blank/meaningless variant of this same shape.
+  #
+  # This function no longer decides whether its own result is
+  # "meaningful enough" to send — that check now lives once in
+  # `welcome_text/1`, applied uniformly to whatever this function
+  # returns (Judgment Day Round 5: a whitespace-only `welcome_message`
+  # with NO "%{name}" placeholder took the `else` branch below
+  # untouched, bypassing an in-branch-only guard entirely).
   defp interpolate_welcome_name(template, nil) do
     if template =~ "%{name}" do
-      result =
-        template
-        |> String.replace("%{name}", "")
-        |> String.replace(~r/\s{2,}/, " ")
-        |> String.replace(~r/\s+([,.!?;:])/, "\\1")
-        |> String.trim()
-
-      # Judgment Day Round 4: a template that collapses to something
-      # like "!" (placeholder was the entire template, e.g.
-      # "%{name}!") isn't the literal empty string, but is just as
-      # useless a message as one — `== ""` alone missed it. Fall back
-      # to the system default whenever nothing letter/number-like
-      # survives, not only when the result is literally "".
-      #
-      # Known accepted limitation (documented, not fixed): a template
-      # where "%{name}" is the very FIRST token, directly touching
-      # punctuation with no other leading text (e.g. "%{name}, hola")
-      # can still leave that punctuation orphaned at the start of the
-      # message ("Hola, bienvenido" is fine; "%{name}, bienvenido"
-      # becomes ", bienvenido"). This is a narrower, purely cosmetic
-      # residual case; the guard above still prevents a fully blank or
-      # meaningless message.
-      if meaningless_welcome?(result), do: default_welcome_template(), else: result
+      template
+      |> String.replace("%{name}", "")
+      |> String.replace(~r/\s{2,}/, " ")
+      |> String.replace(~r/\s+([,.!?;:])/, "\\1")
+      |> String.trim()
     else
       template
     end

@@ -486,7 +486,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     # by the "does not log" test above staying green together with
     # the code review of `custom_welcome_message/1`.
 
-    test "an empty-string welcome_message is sent verbatim, not falling back to the default" do
+    test "an empty-string welcome_message falls back to the system default" do
       # This state is NOT reachable through the real dashboard save
       # path: Ecto.Changeset.cast/4's default empty_values: [""]
       # normalizes "" to nil before Professional.changeset/2 ever
@@ -496,9 +496,13 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       # the real Accounts.create_professional/1 path (Judgment Day
       # Round 2, JD-004) — that path cannot construct welcome_message:
       # "" at all. This one test deliberately bypasses the changeset to
-      # document welcome_text/1's own `||`-based resolution in
-      # isolation, in case a future write path (raw SQL, seeds) ever
-      # produces a literal "".
+      # document welcome_text/1's own resolution in isolation, in case
+      # a future write path (raw SQL, seeds) ever produces a literal
+      # "". Judgment Day Round 5: welcome_text/1's meaningless-message
+      # guard now applies uniformly to any resolved custom message, so
+      # this now falls back to the system default rather than being
+      # sent verbatim as "" (superseding the Round 1-4 behavior, which
+      # only guarded the placeholder-present branch).
       professional = professional_fixture()
       patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
 
@@ -528,7 +532,38 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == ""
+
+      assert outbound_job.args["body"] ==
+               "¡Hola, Ana! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
+    end
+
+    # Judgment Day Round 5 (CRITICAL, both judges): a welcome_message
+    # that is non-nil, non-empty, but only whitespace and has NO
+    # "%{name}" placeholder took interpolate_welcome_name/2's no-op
+    # `else` branch untouched — the meaningless-message guard used to
+    # live only inside the placeholder-present branch, so this state
+    # bypassed it entirely. Unlike the literal "" case above, this IS
+    # reachable through the real dashboard save flow: Ecto's cast/4
+    # only normalizes a literal "" to nil, not a whitespace-only string
+    # like "   \n" (e.g. a professional selects all the text and
+    # deletes it but a trailing newline survives).
+    test "a whitespace-only welcome_message with no %{name} placeholder falls back to the system default" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional)
+      bind_patient_to_legacy_professional(patient, "   \n\t  ")
+
+      {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      job = %Oban.Job{
+        args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      assert outbound_job.args["body"] ==
+               "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá."
     end
   end
 
