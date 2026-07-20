@@ -23,10 +23,6 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
       {:error, :not_found} ->
         Logger.warning("EmotionAnalysisWorker: mensaje no encontrado #{message_id}")
         :ok
-
-      {:error, reason} ->
-        Logger.error("EmotionAnalysisWorker: error obteniendo mensaje: #{inspect(reason)}")
-        {:error, reason}
     end
   end
 

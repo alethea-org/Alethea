@@ -135,7 +135,7 @@ defmodule Alethea.Foundation.Encryption.KEK do
 
   def unwrap(<<@version_v1, iv::binary-size(@iv_length), rest::binary>>, kek) do
     ciphertext_length = byte_size(rest) - @tag_length
-    <<ciphertext::binary-size(ciphertext_length), tag::binary-size(@tag_length)>> = rest
+    <<ciphertext::binary-size(^ciphertext_length), tag::binary-size(@tag_length)>> = rest
 
     case :crypto.crypto_one_time_aead(:aes_256_gcm, kek, iv, ciphertext, @aad, tag, false) do
       plaintext when is_binary(plaintext) -> {:ok, plaintext}

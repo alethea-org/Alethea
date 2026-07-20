@@ -37,7 +37,7 @@ defmodule Alethea.Encryption.PatientVault do
 
   def decrypt(<<iv::binary-size(@iv_length), rest::binary>>, key) when byte_size(key) == 32 do
     ciphertext_length = byte_size(rest) - @tag_length
-    <<ciphertext::binary-size(ciphertext_length), tag::binary-size(@tag_length)>> = rest
+    <<ciphertext::binary-size(^ciphertext_length), tag::binary-size(@tag_length)>> = rest
 
     case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, ciphertext, @aad, tag, false) do
       plaintext when is_binary(plaintext) -> {:ok, plaintext}

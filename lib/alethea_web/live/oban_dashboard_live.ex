@@ -288,19 +288,15 @@ defmodule AletheaWeb.ObanDashboardLive do
   def handle_event("cancel_job", %{"job_id" => job_id}, socket) do
     job_id = String.to_integer(job_id)
 
-    case Oban.cancel_job(job_id) do
-      :ok ->
-        {:noreply,
-         socket
-         |> assign(:selected_job, nil)
-         |> put_flash(:info, "Job cancelled successfully")
-         |> load_jobs()}
+    # Oban.cancel_job/1 is specced to always return :ok; assert it so a
+    # contract change surfaces loudly instead of being silently swallowed.
+    :ok = Oban.cancel_job(job_id)
 
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "Failed to cancel job: #{inspect(reason)}")}
-    end
+    {:noreply,
+     socket
+     |> assign(:selected_job, nil)
+     |> put_flash(:info, "Job cancelled successfully")
+     |> load_jobs()}
   end
 
   def handle_event("retry_job", %{"job_id" => job_id}, socket) do
