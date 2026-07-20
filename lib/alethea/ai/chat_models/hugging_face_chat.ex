@@ -72,18 +72,14 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
           messages: messages
         })
 
-        case do_api_request(model, messages) do
-          {:error, reason} ->
-            {:error, reason}
+        parsed = do_api_request(model, messages)
 
-          parsed ->
-            LangChain.Telemetry.llm_response(%{system_time: System.system_time()}, %{
-              model: model.model,
-              response: parsed
-            })
+        LangChain.Telemetry.llm_response(%{system_time: System.system_time()}, %{
+          model: model.model,
+          response: parsed
+        })
 
-            {:ok, Message.new_assistant!(parsed)}
-        end
+        {:ok, Message.new_assistant!(parsed)}
       rescue
         err in LangChainError -> {:error, err.message}
       end
@@ -111,7 +107,11 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
 
     url = model.endpoint_url <> model.model
 
-    case Req.post(url, json: payload, headers: headers, receive_timeout: model.receive_timeout) do
+    req_options = Application.get_env(:alethea, :huggingface_chat_req_options, [])
+
+    base_options = [json: payload, headers: headers, receive_timeout: model.receive_timeout]
+
+    case Req.post(url, base_options ++ req_options) do
       {:ok, %Req.Response{status: 200, body: nil}} ->
         raise LangChainError, "Hugging Face API returned empty response (nil)"
 
