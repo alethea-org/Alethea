@@ -298,6 +298,13 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       Alethea.AI.PhiWorkerMock
       |> expect(:process, fn %{message_id: mid} ->
+        # Round 2 SEVERE fix: prove the worker actually forwards the
+        # inbound message id to PhiWorker (not just any binary) — the
+        # previous version of this test never asserted `mid ==
+        # inbound.id`, so a regression that passed a stray id would
+        # have gone undetected.
+        send(self(), {:phi_worker_process_mid, mid})
+
         {:ok,
          %{
            response: "ok",
@@ -310,6 +317,10 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
 
       inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+
+      assert_receive {:phi_worker_process_mid, mid}
+      assert mid == inbound.id
+
       assert_enqueued(worker: EmotionAnalysisWorker, args: %{message_id: inbound.id})
     end
 
@@ -462,6 +473,51 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # already received (the previous attempt did NOT enqueue
       # because the diagnosis step raised first).
       refute_enqueued(worker: TelegramOutboundWorker)
+
+      # Round 2 SEVERE fix (atomicity): the outbound Message insert
+      # and the diagnosis insert now run inside a single
+      # `Repo.transaction`. Before the fix, the outbound row committed
+      # BEFORE the diagnosis save failed — leaving a fabricated
+      # "elicited" outbound Message row permanently persisted (a
+      # clinical record of a reply the patient never received, since
+      # the job then raised and no TelegramOutboundWorker was
+      # enqueued). Asserting 0 outbound rows proves the rollback.
+      outbound_count =
+        Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count)
+
+      assert outbound_count == 0
+    end
+
+    test "diagnosis-save failure error message does NOT leak the plaintext AI reply " <>
+           "(PHI hygiene, Round 2 SEVERE fix)",
+         ctx do
+      _ = ctx
+
+      sentinel_reply = "SENTINEL-PHI-#{unique_int()}-mi terapeuta me dijo que..."
+
+      args = build_args("hola", telegram_message_id: 601, telegram_update_id: 131)
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid} ->
+        {:ok,
+         %{
+           response: sentinel_reply,
+           source_message_id: mid,
+           # NB: no `model_version` key, same forcing function as the
+           # sibling test above — the diagnosis changeset rejects the
+           # missing required field.
+           behavior_type: :elicited
+         }}
+      end)
+
+      error =
+        assert_raise RuntimeError, fn ->
+          TelegramMessageWorker.perform(%Oban.Job{args: args})
+        end
+
+      refute error.message =~ sentinel_reply,
+             "the raised error message must not embed the plaintext AI reply " <>
+               "(the full changeset `changes` map would leak it via inspect/1)"
     end
   end
 

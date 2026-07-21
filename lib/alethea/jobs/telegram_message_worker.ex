@@ -66,7 +66,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   require Logger
 
-  alias Alethea.{Accounts, Clinical}
+  alias Alethea.{Accounts, Clinical, Repo}
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
@@ -209,28 +209,63 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        ) do
     reply = chain_result.response
 
-    with {:ok, outbound} <-
-           Clinical.save_telegram_message(
-             foundation_patient,
-             reply,
-             "outbound",
-             "elicited",
-             nil
-           ),
-         {:ok, _diagnosis} <-
-           Clinical.save_ai_diagnosis(inbound_message_id, chain_result) do
-      enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix,
-        # Round 1 (WARNING-5): foundation UUID, not legacy integer.
-        patient_id: foundation_patient.id
-      )
+    # Both inserts run inside a single Repo.transaction (Round 2
+    # SEVERE fix — atomicity): the outbound Message row and the
+    # ai_diagnosis anchor either both commit or neither does. Without
+    # this, a diagnosis-save failure after the outbound insert already
+    # committed would leave a fabricated "elicited" Message row
+    # persisted (a reply the patient never actually received, because
+    # the job raises and the caller never reaches `enqueue_outbound/6`).
+    # `Repo.rollback/1` unwinds the outbound insert too, so a retry
+    # starts from a clean slate — no orphaned clinical record.
+    transaction_result =
+      Repo.transaction(fn ->
+        with {:ok, outbound} <-
+               Clinical.save_telegram_message(
+                 foundation_patient,
+                 reply,
+                 "outbound",
+                 "elicited",
+                 nil
+               ),
+             {:ok, _diagnosis} <-
+               Clinical.save_ai_diagnosis(inbound_message_id, chain_result) do
+          outbound
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
 
-      :ok
-    else
+    case transaction_result do
+      {:ok, outbound} ->
+        enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix,
+          # Round 1 (WARNING-5): foundation UUID, not legacy integer.
+          patient_id: foundation_patient.id
+        )
+
+        :ok
+
       {:error, reason} ->
+        # PHI hygiene (Round 2 SEVERE fix): never embed the full
+        # changeset in the raised message. `inspect(%Ecto.Changeset{})`
+        # includes `changes` — which, for the diagnosis changeset,
+        # carries the plaintext `ai_response`. Report only the failed
+        # field keys (or the raw reason for non-changeset errors).
         raise "TelegramMessageWorker: failed to persist AI reply/diagnosis " <>
-                "(reason=#{inspect(reason)}, hash_prefix=#{hash_prefix})"
+                "(reason=#{safe_reason(reason)}, hash_prefix=#{hash_prefix})"
     end
   end
+
+  # Renders a persistence failure reason WITHOUT leaking changeset
+  # `changes` (which may hold plaintext clinical content, e.g.
+  # `ai_response`). For an `Ecto.Changeset`, only the field keys that
+  # failed validation are surfaced; any other reason is inspected
+  # as-is (non-changeset reasons carry no PHI).
+  defp safe_reason(%Ecto.Changeset{errors: errors}) do
+    errors |> Keyword.keys() |> Enum.uniq() |> inspect()
+  end
+
+  defp safe_reason(reason), do: inspect(reason)
 
   # ----------------------------------------------------------------
   # Enqueue helpers

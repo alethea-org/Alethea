@@ -4,6 +4,11 @@ defmodule Alethea.AI.Diagnosis do
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
+  # PHI hygiene: `ai_response` and `extracted_emotions` carry plaintext
+  # clinical content. `@derive` excludes them from `inspect/1` so no
+  # inspect site (logs, IEx, error messages, e.g. the Telegram worker's
+  # persistence-failure raise) can leak them.
+  @derive {Inspect, except: [:ai_response, :extracted_emotions]}
   schema "ai_diagnoses" do
     field :model_version, :string
     field :extracted_emotions, :map
