@@ -45,26 +45,14 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   import Alethea.FoundationTestHelper
   import Ecto.Query
 
-  # Inline test doubles for the LLM adapter. Defined at the module
-  # level (NOT inside each test) so ExUnit does not redefine them on
-  # every invocation. Each test sets `:test_pid` via Process.put and
-  # the adapter reads it via Process.get to forward the call.
-  defmodule ProbeLLM do
-    @behaviour Alethea.AI.LLM
-    def chat(messages, _opts) do
-      test_pid = Process.get(:telegram_test_pid)
-      send(test_pid, {:llm_called, messages})
-      {:ok, %{content: "probe-reply", usage: nil, model: "probe-llm"}}
-    end
-
-    def generate(_prompt, _opts), do: {:ok, "probe-completion"}
-  end
-
-  defmodule FailingLLM do
-    @behaviour Alethea.AI.LLM
-    def chat(_messages, _opts), do: {:error, :service_unavailable}
-    def generate(_prompt, _opts), do: {:ok, "fake"}
-  end
+  # Inline test doubles for the LLM adapter were removed when the
+  # safe path migrated from the `:ai_llm` discovery seam to the
+  # `:phi_worker` Mox port. The setup-level
+  # `Alethea.AI.PhiWorkerMock` `stub/2` below is now the only AI
+  # pipeline mock — tests that need to drive a specific shape or an
+  # error path use `expect(:process, ...)` to override the default
+  # stub. `verify_on_exit!` (further down) fails the test if any
+  # unexpected `PhiWorker.process/1` call lands.
 
   @pepper "telegram-chat-id-pepper-v1-test-only-min-32-bytes-padding-xyz"
   @chat_id 123_456_789
@@ -74,10 +62,6 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   setup do
     # Pepper is required by `ChatIdHash.hash/2` (raises on < 32 bytes).
     Application.put_env(:alethea, :telegram_chat_id_pepper, @pepper)
-    # Deterministic LLM adapter for tests.
-    Application.put_env(:alethea, :ai_llm, Alethea.AI.LLM.Fake)
-    # Forward LLM calls to the test pid so `ProbeLLM` can record them.
-    Process.put(:telegram_test_pid, self())
     # Hermetic Oban queue state: every test starts with an empty
     # `oban_jobs` table so `assert_enqueued` does not pick up jobs from
     # other tests.
@@ -127,6 +111,24 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
     # Mox setup for tests that stub `OutboundEnqueue.insert/1` to
     # simulate `:queue_full`.
+    #
+    # Default stub for `Alethea.AI.PhiWorkerMock.process/1`. Tests that
+    # need to assert on the call shape (or drive an error path) override
+    # this with `expect(:process, ...)`. Without this stub, every happy
+    # path test would need to re-state the same default reply — and any
+    # test that forgets to set one would fail with a Mox
+    # UnexpectedCallError on the worker's `phi_worker().process/1` call.
+    Alethea.AI.PhiWorkerMock
+    |> stub(:process, fn %{message_id: mid} ->
+      {:ok,
+       %{
+         response: "respuesta clínica",
+         source_message_id: mid,
+         model_version: "phi-4-mini",
+         behavior_type: :elicited
+       }}
+    end)
+
     :ok
   end
 
@@ -238,16 +240,77 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert_enqueued(worker: EmotionAnalysisWorker)
     end
 
-    test "calls the LLM via Alethea.AI.llm().chat/2 with the patient context", ctx do
-      Application.put_env(:alethea, :ai_llm, ProbeLLM)
+    test "calls phi_worker().process/1 with the inbound message id, raw content, and patient context",
+         ctx do
       args = build_args("hola, buen día", telegram_message_id: 302, telegram_update_id: 7)
       _ = ctx
 
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid, raw_content: text, patient_context: ctx_str} ->
+        assert is_binary(mid)
+        assert text == "hola, buen día"
+        assert is_binary(ctx_str)
+
+        {:ok,
+         %{
+           response: "respuesta clínica",
+           source_message_id: mid,
+           model_version: "phi-4-mini",
+           behavior_type: :elicited
+         }}
+      end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+    end
+
+    test "anchors the AI diagnosis to the inbound message (source_message_id == inbound.id)",
+         ctx do
+      args = build_args("hola, buen día", telegram_message_id: 303, telegram_update_id: 8)
+      _ = ctx
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid} ->
+        {:ok,
+         %{
+           response: "respuesta clínica",
+           source_message_id: mid,
+           model_version: "phi-4-mini",
+           behavior_type: :elicited
+         }}
+      end)
+
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
 
-      assert_received {:llm_called, messages}
-      assert is_list(messages)
-      assert Enum.any?(messages, &match?(%{role: :user, content: c} when is_binary(c), &1))
+      inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+      assert inbound
+
+      diagnosis = Repo.one(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+      assert diagnosis
+      assert diagnosis.model_version == "phi-4-mini"
+      assert diagnosis.ai_response == "respuesta clínica"
+    end
+
+    test "safe path still feeds the sentiment pipeline (regression): enqueues " <>
+           "EmotionAnalysisWorker for the inbound message and passes its id to PhiWorker",
+         ctx do
+      args = build_args("hola, buen día", telegram_message_id: 310, telegram_update_id: 31)
+      _ = ctx
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid} ->
+        {:ok,
+         %{
+           response: "ok",
+           source_message_id: mid,
+           model_version: "phi-4-mini",
+           behavior_type: :elicited
+         }}
+      end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound = Repo.one(from m in Message, where: m.direction == "inbound")
+      assert_enqueued(worker: EmotionAnalysisWorker, args: %{message_id: inbound.id})
     end
 
     test "persists the outbound Message with direction: 'outbound', behavior_type: 'elicited'",
@@ -320,9 +383,11 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     end
 
     test "LLM unavailability raises (Oban retries the job)", ctx do
-      Application.put_env(:alethea, :ai_llm, FailingLLM)
       args = build_args("hola", telegram_message_id: 500, telegram_update_id: 12)
       _ = ctx
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn _ -> {:error, :service_unavailable} end)
 
       assert_raise RuntimeError, ~r/service_unavailable/, fn ->
         TelegramMessageWorker.perform(%Oban.Job{args: args})
@@ -330,6 +395,72 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       # The inbound persisted but no outbound was enqueued.
       assert Repo.aggregate(Message, :count) == 1
+      refute_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "empty PhiWorker response raises (fail-loud — no silent empty delivery)",
+         ctx do
+      args = build_args("hola", telegram_message_id: 501, telegram_update_id: 14)
+      _ = ctx
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid} ->
+        {:ok,
+         %{
+           response: "",
+           source_message_id: mid,
+           model_version: "phi-4-mini",
+           behavior_type: :elicited
+         }}
+      end)
+
+      assert_raise RuntimeError, ~r/empty response/, fn ->
+        TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      # The inbound persisted but no outbound was enqueued and no
+      # empty Message row was created (the empty-response guard fires
+      # before persist_and_enqueue_outbound).
+      assert Repo.aggregate(Message, :count) == 1
+      refute_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "diagnosis-save failure raises BEFORE enqueueing TelegramOutboundWorker (no double-send on retry)",
+         ctx do
+      _ = ctx
+
+      # Forcing function: stub PhiWorkerMock to return a `chain_result`
+      # WITHOUT a `model_version` key. `Clinical.save_ai_diagnosis/2`
+      # then sets `model_version: nil`, which fails the Diagnosis
+      # changeset (`validate_required([:model_version, ...])`). The
+      # worker's `with` chain therefore raises on the second step
+      # BEFORE `enqueue_outbound/6` runs — the resolved ordering
+      # guarantee (no double-send on Oban retry).
+      args = build_args("hola", telegram_message_id: 600, telegram_update_id: 13)
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid} ->
+        {:ok,
+         %{
+           response: "respuesta clínica",
+           source_message_id: mid,
+           # NB: no `model_version` key — `save_ai_diagnosis/2` will
+           # coerce `Map.get(...)` to nil, and the Diagnosis
+           # `validate_required(:model_version)` will reject it.
+           behavior_type: :elicited
+         }}
+      end)
+
+      assert_raise RuntimeError, ~r/failed to persist AI reply\/diagnosis/, fn ->
+        TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      # Direct proof of the RESOLVED ordering: enqueue happens
+      # STRICTLY after a successful diagnosis save. If the diagnosis
+      # save fails, no TelegramOutboundWorker job is enqueued — so
+      # an Oban retry cannot re-deliver a message the patient
+      # already received (the previous attempt did NOT enqueue
+      # because the diagnosis step raised first).
       refute_enqueued(worker: TelegramOutboundWorker)
     end
   end
@@ -349,21 +480,26 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       :ok
     end
 
-    test "on :crisis classification, the LLM is NOT invoked (REQ-C5 scenario: never produces a neutral LLM reply)",
+    test "on :crisis classification, PhiWorkerMock.process/1 is NOT invoked (REQ-C5 scenario: never produces a neutral LLM reply)",
          ctx do
-      Application.put_env(:alethea, :ai_llm, ProbeLLM)
       _ = ctx
 
       text = "me voy a quitar la vida"
+
+      # `verify_on_exit!` (already in the file's `setup`) fails the
+      # test if any unexpected `Alethea.AI.PhiWorkerMock.process/1`
+      # call lands. The crisis branch never calls `phi_worker()` —
+      # it short-circuits through `handle_crisis_path/*`. The setup-
+      # level stub is therefore allowed but never invoked.
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, 0, fn _ ->
+        flunk("phi_worker().process/1 must NOT be invoked on the crisis path")
+      end)
 
       assert :ok =
                TelegramMessageWorker.perform(%Oban.Job{
                  args: build_args(text, telegram_message_id: 700, telegram_update_id: 70)
                })
-
-      # ProbeLLM records calls by sending a message to the test pid.
-      # No call should arrive.
-      refute_received {:llm_called, _}, 200
     end
 
     test "persists the inbound Message with direction: 'inbound', behavior_type: 'spontaneous' (crisis share the inbound path)",
