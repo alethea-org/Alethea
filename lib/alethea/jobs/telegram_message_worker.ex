@@ -551,15 +551,31 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     )
 
     # 4. Persist the outbound Message with `behavior_type: "crisis_bypass"`.
-    {:ok, outbound} =
-      Clinical.save_telegram_message(
-        foundation_patient,
-        crisis_text,
-        "outbound",
-        "crisis_bypass",
-        nil,
-        session_id
-      )
+    # Round 2 judgment-day SEVERE fix: same vulnerability class as the
+    # inbound fix at lines 136-151. Before #85 the 6th arg (session_id)
+    # was nil; after #85 it carries the real session UUID. A bare
+    # `{:ok, _} = ...` match on a failing save would raise MatchError
+    # whose exception value is the Ecto.Changeset — its inspect output
+    # embeds the `changes` map carrying the session UUID. Oban captures
+    # that value into oban_jobs.errors and exception logs, leaking
+    # clinical metadata. Wrap with a case that raises via safe_reason/1,
+    # which only surfaces failed-validation field keys (no changes map).
+    outbound =
+      case Clinical.save_telegram_message(
+             foundation_patient,
+             crisis_text,
+             "outbound",
+             "crisis_bypass",
+             nil,
+             session_id
+           ) do
+        {:ok, outbound} ->
+          outbound
+
+        {:error, reason} ->
+          raise "TelegramMessageWorker: failed to persist crisis outbound " <>
+                  "(reason=#{safe_reason(reason)})"
+      end
 
     # 5. Enqueue on the :telegram_outbound_crisis lane.
     # Round 1 (WARNING-5): same fix as the broadcast — pass
