@@ -25,7 +25,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        safe path only**; the `:crisis` branch (`:telegram_outbound_crisis`
        lane, PubSub `:crisis_detected`, `urgent_intervention: true`)
        lands in PR #3b.
-    7. Build patient context, call `Alethea.AI.llm().chat/2` (REQ-C5-llm-reply-on-safe).
+    7. Route the reply through `Alethea.AI.PhiWorker.process/1` (PII-sanitized, emotion-enriched), then anchor an `ai_diagnosis` to the inbound message before enqueueing the outbound (REQ-C5-llm-reply-on-safe).
     8. Persist outbound `Message` via `Clinical.save_telegram_message/7`
        with `direction: "outbound"`, `source: "elicited"` (REQ-C5-persist-outbound-reply).
     9. Enqueue `TelegramOutboundWorker` on `:telegram_outbound` with
@@ -66,8 +66,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   require Logger
 
-  alias Alethea.{Accounts, Clinical}
-  alias Alethea.AI
+  alias Alethea.{Accounts, Clinical, Repo}
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
@@ -75,6 +74,14 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias AletheaJobs.EmotionAnalysisWorker
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
+
+  # Reads the PhiWorker port from Application env at call-time.
+  # Mirrors `AletheaJobs.ProcessMessageWorker` (the WhatsApp pipeline)
+  # so the Telegram safe path and the WhatsApp pipeline converge on
+  # the same PII-sanitizing, emotion-enriching chain. Production uses
+  # `Alethea.AI.PhiWorker`; tests bind the port to the Mox
+  # `Alethea.AI.PhiWorkerMock`.
+  defp phi_worker, do: Application.get_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
@@ -166,24 +173,28 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         {:error, _reason} -> ""
       end
 
-    messages = build_llm_messages(context, text)
-
-    case AI.llm().chat(messages, []) do
-      {:ok, %{content: reply}} when is_binary(reply) and reply != "" ->
+    case phi_worker().process(%{
+           message_id: inbound.id,
+           raw_content: text,
+           patient_context: context
+         }) do
+      {:ok, %{response: reply} = chain_result}
+      when is_binary(reply) and reply != "" ->
         persist_and_enqueue_outbound(
           foundation_patient,
           chat_id,
           chat_id_hash,
           hash_prefix,
-          reply,
+          chain_result,
           inbound.id
         )
 
-      {:ok, %{content: ""}} ->
-        raise "TelegramMessageWorker: LLM returned empty content (hash_prefix=#{hash_prefix})"
+      {:ok, %{response: _empty}} ->
+        raise "TelegramMessageWorker: PhiWorker returned empty response " <>
+                "(hash_prefix=#{hash_prefix})"
 
       {:error, reason} ->
-        raise "TelegramMessageWorker: LLM error: #{inspect(reason)} " <>
+        raise "TelegramMessageWorker: PhiWorker error: #{inspect(reason)} " <>
                 "(hash_prefix=#{hash_prefix})"
     end
   end
@@ -193,31 +204,68 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
          chat_id,
          chat_id_hash,
          hash_prefix,
-         reply,
+         chain_result,
          inbound_message_id
        ) do
-    {:ok, outbound} =
-      Clinical.save_telegram_message(
-        foundation_patient,
-        reply,
-        "outbound",
-        "elicited",
-        nil
-      )
+    reply = chain_result.response
 
-    # Link the outbound reply to the inbound for traceability. The
-    # `Message` schema does not carry a FK for this today; we record
-    # the link via the outbound job's args. A future schema change
-    # can persist the `reply_to_message_id` directly.
-    _ = inbound_message_id
+    # Both inserts run inside a single Repo.transaction (Round 2
+    # SEVERE fix — atomicity): the outbound Message row and the
+    # ai_diagnosis anchor either both commit or neither does. Without
+    # this, a diagnosis-save failure after the outbound insert already
+    # committed would leave a fabricated "elicited" Message row
+    # persisted (a reply the patient never actually received, because
+    # the job raises and the caller never reaches `enqueue_outbound/6`).
+    # `Repo.rollback/1` unwinds the outbound insert too, so a retry
+    # starts from a clean slate — no orphaned clinical record.
+    transaction_result =
+      Repo.transaction(fn ->
+        with {:ok, outbound} <-
+               Clinical.save_telegram_message(
+                 foundation_patient,
+                 reply,
+                 "outbound",
+                 "elicited",
+                 nil
+               ),
+             {:ok, _diagnosis} <-
+               Clinical.save_ai_diagnosis(inbound_message_id, chain_result) do
+          outbound
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
 
-    enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix,
-      # Round 1 (WARNING-5): foundation UUID, not legacy integer.
-      patient_id: foundation_patient.id
-    )
+    case transaction_result do
+      {:ok, outbound} ->
+        enqueue_outbound(chat_id_hash, chat_id, outbound.id, reply, hash_prefix,
+          # Round 1 (WARNING-5): foundation UUID, not legacy integer.
+          patient_id: foundation_patient.id
+        )
 
-    :ok
+        :ok
+
+      {:error, reason} ->
+        # PHI hygiene (Round 2 SEVERE fix): never embed the full
+        # changeset in the raised message. `inspect(%Ecto.Changeset{})`
+        # includes `changes` — which, for the diagnosis changeset,
+        # carries the plaintext `ai_response`. Report only the failed
+        # field keys (or the raw reason for non-changeset errors).
+        raise "TelegramMessageWorker: failed to persist AI reply/diagnosis " <>
+                "(reason=#{safe_reason(reason)}, hash_prefix=#{hash_prefix})"
+    end
   end
+
+  # Renders a persistence failure reason WITHOUT leaking changeset
+  # `changes` (which may hold plaintext clinical content, e.g.
+  # `ai_response`). For an `Ecto.Changeset`, only the field keys that
+  # failed validation are surfaced; any other reason is inspected
+  # as-is (non-changeset reasons carry no PHI).
+  defp safe_reason(%Ecto.Changeset{errors: errors}) do
+    errors |> Keyword.keys() |> Enum.uniq() |> inspect()
+  end
+
+  defp safe_reason(reason), do: inspect(reason)
 
   # ----------------------------------------------------------------
   # Enqueue helpers
@@ -528,20 +576,6 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   defp empty_text?(text) when is_binary(text) do
     String.trim(text) == ""
-  end
-
-  defp build_llm_messages(context, text) do
-    user_content =
-      if context == "" do
-        text
-      else
-        "Contexto reciente:\n#{context}\n\nMensaje del paciente:\n#{text}"
-      end
-
-    [
-      %{role: :system, content: "Sos Alethea, un asistente clínico de apoyo."},
-      %{role: :user, content: user_content}
-    ]
   end
 
   defp pepper! do

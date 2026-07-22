@@ -3,7 +3,16 @@
 
 version: "1.0"
 strict_tdd: true
-artifact_store: openspec
+artifact_store: hybrid
+
+context: |
+  Elixir/Phoenix hexagonal modular monolith (Mix, Phoenix 1.8 + LiveView,
+  Ecto, Postgres + pgvector). Contexts: lib/alethea (accounts, clinical,
+  encryption/Cloak.Ecto vault, ai = Bumblebee RoBERTa + LangChain Phi-4/Groq
+  + Whisper), lib/alethea_web (LiveView), lib/alethea_jobs (Oban workers,
+  async message pipeline). Patient channel: Telegram (see risks — CLAUDE.md
+  says WhatsApp, code/CONTEXT.md say Telegram-only). See openspec/CONTEXT.md
+  and openspec/UBIQUITOUS_LANGUAGE.md for full domain context.
 
 preferences:
   execution_mode: interactive
