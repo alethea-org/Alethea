@@ -37,7 +37,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   import Mox
 
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
-  alias Alethea.Clinical.Message
+  alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
   alias AletheaJobs.EmotionAnalysisWorker
@@ -231,6 +231,32 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert inbound.patient_id == ctx.legacy_patient.id
     end
 
+    test "reuses the same open session for consecutive inbound messages", ctx do
+      _ = ctx
+
+      first_args =
+        build_args("primer mensaje", telegram_message_id: 1_100, telegram_update_id: 110)
+
+      second_args =
+        build_args("segundo mensaje", telegram_message_id: 1_101, telegram_update_id: 111)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: first_args})
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
+
+      [first_session_id, second_session_id] =
+        Repo.all(
+          from m in Message,
+            where:
+              m.direction == "inbound" and
+                m.telegram_message_id in ["1100", "1101"],
+            order_by: m.telegram_message_id,
+            select: m.session_id
+        )
+
+      assert first_session_id != nil
+      assert second_session_id == first_session_id
+    end
+
     test "enqueues an EmotionAnalysisWorker job on :ai_analysis", ctx do
       args = build_args("hola, buen día", telegram_message_id: 301, telegram_update_id: 6)
       _ = ctx
@@ -338,6 +364,27 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert outbound.patient_id == ctx.legacy_patient.id
     end
 
+    test "persists safe-path outbound in the same session as inbound", ctx do
+      _ = ctx
+
+      args =
+        build_args("mensaje seguro", telegram_message_id: 1_102, telegram_update_id: 112)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound =
+        Repo.one!(
+          from m in Message,
+            where: m.direction == "inbound" and m.telegram_message_id == "1102"
+        )
+
+      outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
+
+      assert inbound.session_id != nil
+      assert outbound.session_id != nil
+      assert outbound.session_id == inbound.session_id
+    end
+
     test "enqueues a TelegramOutboundWorker job on :telegram_outbound (safe lane)",
          ctx do
       args = build_args("hola, buen día", telegram_message_id: 304, telegram_update_id: 9)
@@ -356,6 +403,61 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     end
   end
 
+  describe "perform/1 — session lifecycle" do
+    setup :setup_bound_patient
+
+    test "opens a new session after the current session is explicitly closed", ctx do
+      first_args =
+        build_args("mensaje antes del cierre",
+          telegram_message_id: 1_104,
+          telegram_update_id: 114
+        )
+
+      second_args =
+        build_args("mensaje después del cierre",
+          telegram_message_id: 1_105,
+          telegram_update_id: 115
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: first_args})
+
+      first_inbound =
+        Repo.one!(
+          from m in Message,
+            where: m.direction == "inbound" and m.telegram_message_id == "1104"
+        )
+
+      {:ok, open_session} = SessionManager.current_open_session(ctx.legacy_patient.id)
+      assert open_session.id == first_inbound.session_id
+      assert {:ok, _closed_session} = SessionManager.close_session(open_session)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
+
+      second_inbound =
+        Repo.one!(
+          from m in Message,
+            where: m.direction == "inbound" and m.telegram_message_id == "1105"
+        )
+
+      assert second_inbound.session_id != nil
+      assert second_inbound.session_id != first_inbound.session_id
+    end
+
+    test "does not enqueue a SessionTimeoutWorker", ctx do
+      _ = ctx
+
+      args =
+        build_args("mensaje sin auto cierre",
+          telegram_message_id: 1_106,
+          telegram_update_id: 116
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      refute_enqueued(worker: AletheaJobs.SessionTimeoutWorker)
+    end
+  end
+
   # ----------------------------------------------------------------
   # Failure modes (REQ-C3 / REQ-C5)
   # ----------------------------------------------------------------
@@ -363,7 +465,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   describe "perform/1 — failure modes" do
     setup :setup_bound_patient
 
-    test "inbound persistence failure raises (Oban retries; no outbound enqueued)", ctx do
+    test "inbound persistence failure raises without leaking session_id (Oban retries; no outbound enqueued)",
+         ctx do
       _ = ctx
 
       # Pre-insert a Message with telegram_message_id "401" so the
@@ -379,15 +482,30 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       collision_args = build_args("hola", telegram_message_id: 401, telegram_update_id: 11)
 
-      # The worker uses `{:ok, _} = Clinical.save_telegram_message(...)`
-      # which raises a MatchError on `{:error, changeset}`. The
-      # constraint error is caught by `save_message/8` and converted
-      # to a changeset error (REQ-C5-persist-outbound-reply
-      # "persistence failure blocks the send"); the worker propagates
-      # by raising MatchError so Oban schedules a retry.
-      assert_raise MatchError, fn ->
-        TelegramMessageWorker.perform(%Oban.Job{args: collision_args})
-      end
+      # Pre-fetch the open session UUID the worker will try to attach
+      # to the colliding inbound. R2 judges required runtime proof
+      # that this UUID does NOT appear in the raised error message —
+      # mirror of the sibling diagnosis-leak test at lines 598-628
+      # which uses `refute error.message =~ sentinel_reply`.
+      {:ok, open_session} = SessionManager.current_open_session(ctx.legacy_patient.id)
+      session_uuid = open_session.id
+
+      # R1 + R2 fixes: the worker must raise a sanitized RuntimeError
+      # (via safe_reason/1) on inbound persistence failure, NOT a raw
+      # MatchError whose exception value embeds the Ecto.Changeset
+      # `changes` map (which carries the session UUID introduced by
+      # #85). Pre-fix, this exception value was captured by Oban into
+      # oban_jobs.errors and exception logs — leaking clinical
+      # metadata into operational data.
+      error =
+        assert_raise RuntimeError, ~r/failed to persist inbound/, fn ->
+          TelegramMessageWorker.perform(%Oban.Job{args: collision_args})
+        end
+
+      # Runtime proof the fix achieves its stated PHI goal. Without
+      # safe_reason/1 (or analog), the session UUID would appear in
+      # `error.message` via inspect(%Ecto.Changeset{changes: %{session_id: <uuid>}}).
+      refute error.message =~ session_uuid
 
       # No outbound was enqueued (the inbound did not succeed).
       refute_enqueued(worker: TelegramOutboundWorker)
@@ -576,6 +694,29 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert inbound.telegram_message_id == "701"
       assert inbound.behavior_type == "spontaneous"
       assert inbound.patient_id == ctx.legacy_patient.id
+    end
+
+    test "persists crisis-path outbound in the same session as inbound", ctx do
+      _ = ctx
+
+      args =
+        build_args("me voy a suicidar",
+          telegram_message_id: 1_103,
+          telegram_update_id: 113
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound =
+        Repo.one!(
+          from m in Message,
+            where: m.direction == "inbound" and m.telegram_message_id == "1103"
+        )
+
+      outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
+
+      assert inbound.session_id != nil
+      assert outbound.session_id == inbound.session_id
     end
 
     test "marks the patient as urgent_intervention: true (REQ-C5-crisis-bypasses-llm 'marks urgent_intervention')",
