@@ -465,7 +465,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   describe "perform/1 — failure modes" do
     setup :setup_bound_patient
 
-    test "inbound persistence failure raises (Oban retries; no outbound enqueued)", ctx do
+    test "inbound persistence failure raises without leaking changeset (Oban retries; no outbound enqueued)",
+         ctx do
       _ = ctx
 
       # Pre-insert a Message with telegram_message_id "401" so the
@@ -481,13 +482,17 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       collision_args = build_args("hola", telegram_message_id: 401, telegram_update_id: 11)
 
-      # The worker uses `{:ok, _} = Clinical.save_telegram_message(...)`
-      # which raises a MatchError on `{:error, changeset}`. The
-      # constraint error is caught by `save_message/8` and converted
-      # to a changeset error (REQ-C5-persist-outbound-reply
-      # "persistence failure blocks the send"); the worker propagates
-      # by raising MatchError so Oban schedules a retry.
-      assert_raise MatchError, fn ->
+      # Round-1 judgment-day SEVERE fix (judge B CRITICAL; judge A
+      # disagreed; human decision: fix): the worker MUST NOT raise a
+      # raw MatchError on inbound persistence failure. A raw MatchError
+      # exception value is the Ecto.Changeset, whose inspect output
+      # embeds the `changes` map — which now carries the real session
+      # UUID (introduced by #85). The exception is caught by Oban and
+      # persisted into oban_jobs.errors and exception logs, leaking
+      # clinical metadata into operational data. Instead, the worker
+      # raises a RuntimeError built from `safe_reason/1`, which only
+      # surfaces failed-validation field keys (no `changes` map).
+      assert_raise RuntimeError, ~r/failed to persist inbound/, fn ->
         TelegramMessageWorker.perform(%Oban.Job{args: collision_args})
       end
 

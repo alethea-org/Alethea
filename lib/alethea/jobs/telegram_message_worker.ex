@@ -133,15 +133,22 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       legacy_patient = Accounts.get_patient_with_professional(legacy_patient.id)
       {:ok, session} = SessionManager.current_open_session(legacy_patient.id)
 
-      {:ok, inbound} =
-        Clinical.save_telegram_message(
-          foundation_patient,
-          text,
-          "inbound",
-          "spontaneous",
-          to_string(telegram_message_id),
-          session.id
-        )
+      inbound =
+        case Clinical.save_telegram_message(
+               foundation_patient,
+               text,
+               "inbound",
+               "spontaneous",
+               to_string(telegram_message_id),
+               session.id
+             ) do
+          {:ok, inbound} ->
+            inbound
+
+          {:error, reason} ->
+            raise "TelegramMessageWorker: failed to persist inbound " <>
+                    "(reason=#{safe_reason(reason)})"
+        end
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
 
