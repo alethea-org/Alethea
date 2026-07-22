@@ -15,10 +15,10 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     - REQ-C5-persist-inbound-message: empty text payloads are dropped.
     - REQ-C5-trigger-emotion-analysis: `EmotionAnalysisWorker` enqueued
       on `:ai_analysis`.
-    - REQ-C5-llm-reply-on-safe: LLM called via `Alethea.AI.llm().chat/2`,
-      outbound `Message` persisted with `direction: "outbound"`,
-      `source: "elicited"`.
-    - REQ-C5-llm-unavailability: LLM error raises (Oban retry-eligible).
+    - REQ-C5-llm-reply-on-safe: reply generated via the `:phi_worker`
+      port (`phi_worker().process/1`), outbound `Message` persisted with
+      `direction: "outbound"`, `source: "elicited"`.
+    - REQ-C5-llm-unavailability: PhiWorker error raises (Oban retry-eligible).
 
   The crisis branch (`:crisis_detected` PubSub, `:telegram_outbound_crisis`
   lane, no LLM bypass) is out of scope for this PR — it lands in PR #3b.
@@ -46,7 +46,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   import Ecto.Query
 
   # Inline test doubles for the LLM adapter were removed when the
-  # safe path migrated from the `:ai_llm` discovery seam to the
+  # safe path migrated from the legacy LLM discovery seam to the
   # `:phi_worker` Mox port. The setup-level
   # `Alethea.AI.PhiWorkerMock` `stub/2` below is now the only AI
   # pipeline mock — tests that need to drive a specific shape or an
