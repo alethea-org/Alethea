@@ -90,9 +90,8 @@ config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1Pr
 
 # AI adapter swap points (PR B of bootstrap-alethea-v2).
 # The behaviours are the contract; the Fakes are the no-op adapters
-# used in :test and :dev. Production adapters (Groq LLM, HF
-# Embeddings, Groq Whisper) are out of scope for bootstrap and land
-# in their own changes (ai-llm-groq-foundation, etc.).
-config :alethea, :ai_llm, Alethea.AI.LLM.Fake
+# used in :test and :dev. Production adapters (HF Embeddings, Groq
+# Whisper) are out of scope for bootstrap and land in their own
+# changes (ai-embeddings-hf-foundation, etc.).
 config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake
 config :alethea, :ai_whisper, Alethea.AI.Whisper.Fake
