@@ -53,19 +53,54 @@ defmodule AletheaJobs.SessionTimeoutWorker do
       the canonical lookup key used by the Pacer rate-limiter and
       the dead-letter audit table — `chat_id` itself is only used
       at Telegram dispatch time.
-    * Safeguards for `oban_jobs.args` access: PostgreSQL row-level
-      privileges (operational role limited to job-management
-      views), TLS-encrypted connections, application-level
-      `LogRedactor` on error serialization, and Oban's
-      `prune`/retention settings purge completed/failed rows on
-      schedule. No encrypted column is added (consistent with the
-      existing pattern across the codebase).
-    * Removing `chat_id` from args would force a DB lookup by
-      `chat_id_hash` at goodbye dispatch time, adding latency and
-      a new failure mode (DB unavailable) at exactly the wrong
-      moment. The chosen design keeps `chat_id` in args; this is
-      the same posture as the pre-existing `TelegramOutboundWorker`
-      and is not a regression introduced by #86.
+    * **Actual safeguards** for `oban_jobs.args` access (honest
+      inventory — see R2 tightening):
+        - PostgreSQL row-level privileges (operational role
+          limited to job-management views). Operationally managed
+          outside this repo; if a deployment does NOT enforce them,
+          the only remaining guard is TLS.
+        - TLS-encrypted connections to Postgres (operationally
+          managed; if disabled, `chat_id` traverses the network in
+          plaintext).
+        - Per-call `AletheaJobs.SafeReason.for_log/1` at error
+          sites (this worker + `TelegramMessageWorker`). Renders
+          `Ecto.Changeset.errors` keys only — the `changes` map
+          (which embeds `summary_text` / `ai_response` / `body`)
+          never appears in a log line. See the
+          `AletheaJobs.SafeReason` moduledoc for the rationale.
+        - Per-call `Alethea.Telegram.LogRedactor.prefix/1` /
+          `redact/1` scrubs the 64-char lowercase-hex
+          `chat_id_hash` shape out of arbitrary log strings (used
+          in `TelegramMessageWorker`, NOT this worker — this
+          worker uses `SafeReason.for_log/1` for changesets and
+          `Logger.error` only with the bare `session.id`
+          correlation token).
+    * **Known gaps** (open follow-ups — NOT promises of current
+      protection):
+        - NO `Oban.Plugins.Pruner` is configured in `config/*.exs`
+          (`config/config.exs:91-96` only enables
+          `Oban.Plugins.Cron`). Completed / discarded `oban_jobs`
+          rows survive forever in the DB. Removing or
+          anonymizing `chat_id` after a window is a follow-up
+          issue — until that lands, `chat_id` and `chat_id_hash`
+          accumulate in `oban_jobs.args` for the lifetime of the
+          table. (A previous version of this moduledoc claimed
+          Oban's prune settings were configured; that claim was
+          aspirational, not actual, and has been removed in R2.)
+        - NO global Logger redaction backend is configured —
+          `SafeReason.for_log/1` is per-call. If a future error
+          site forgets to apply it, a Changeset's `changes` would
+          land in the log undredacted. A follow-up could
+          centralize this as either a real Logger backend or a
+          wrapper helper.
+    * No encrypted column is added (consistent with the existing
+      pattern across the codebase). Removing `chat_id` from args
+      would force a DB lookup by `chat_id_hash` at goodbye
+      dispatch time, adding latency and a new failure mode (DB
+      unavailable) at exactly the wrong moment. The chosen
+      design keeps `chat_id` in args; this is the same posture as
+      the pre-existing `TelegramOutboundWorker` and is not a
+      regression introduced by #86.
   """
 
   use Oban.Worker,
@@ -77,6 +112,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
   alias Alethea.{Accounts, Clinical, AI.Sanitizer}
   alias Alethea.Clinical.{Session, SessionManager}
+  alias AletheaJobs.SafeReason
 
   require Logger
 
@@ -177,7 +213,19 @@ defmodule AletheaJobs.SessionTimeoutWorker do
       :ok
     else
       {:error, reason} ->
-        Logger.error("SessionTimeoutWorker failed for session #{session.id}: #{inspect(reason)}")
+        # PHI-safe error rendering (R2 #86 PR-1 fix). Bare
+        # `inspect(reason)` would embed `Ecto.Changeset.changes`
+        # — which carries `summary_text` (AI-generated clinical
+        # summary) + `patient_id` when `Clinical.save_summary/1`
+        # fails validation. `SafeReason.for_log/1` only surfaces
+        # the failed-validation field keys for changesets; for
+        # non-changeset reasons it falls back to `inspect/1` (which
+        # is the desired behaviour — non-changeset reasons carry
+        # no PHI by shape). See `AletheaJobs.SafeReason` moduledoc.
+        Logger.error(
+          "SessionTimeoutWorker failed for session #{session.id}: #{SafeReason.for_log(reason)}"
+        )
+
         {:error, reason}
     end
   end

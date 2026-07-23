@@ -72,7 +72,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
   alias Alethea.Jobs.TelegramOutboundWorker
-  alias AletheaJobs.{EmotionAnalysisWorker, SessionTimeoutWorker}
+  alias AletheaJobs.{EmotionAnalysisWorker, SessionTimeoutWorker, SafeReason}
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
 
@@ -147,7 +147,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
           {:error, reason} ->
             raise "TelegramMessageWorker: failed to persist inbound " <>
-                    "(reason=#{safe_reason(reason)})"
+                    "(reason=#{SafeReason.for_log(reason)})"
         end
 
       # PR-1 (#86): enqueue the session-timeout job right after the
@@ -299,21 +299,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         # includes `changes` — which, for the diagnosis changeset,
         # carries the plaintext `ai_response`. Report only the failed
         # field keys (or the raw reason for non-changeset errors).
+        # `SafeReason.for_log/1` (AletheaJobs.SafeReason — shared with
+        # `SessionTimeoutWorker`) is the per-call helper that scrubs
+        # Changeset `changes`; see its @moduledoc for the rationale.
         raise "TelegramMessageWorker: failed to persist AI reply/diagnosis " <>
-                "(reason=#{safe_reason(reason)}, hash_prefix=#{hash_prefix})"
+                "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
     end
   end
-
-  # Renders a persistence failure reason WITHOUT leaking changeset
-  # `changes` (which may hold plaintext clinical content, e.g.
-  # `ai_response`). For an `Ecto.Changeset`, only the field keys that
-  # failed validation are surfaced; any other reason is inspected
-  # as-is (non-changeset reasons carry no PHI).
-  defp safe_reason(%Ecto.Changeset{errors: errors}) do
-    errors |> Keyword.keys() |> Enum.uniq() |> inspect()
-  end
-
-  defp safe_reason(reason), do: inspect(reason)
 
   # ----------------------------------------------------------------
   # Enqueue helpers
@@ -609,15 +601,18 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     )
 
     # 4. Persist the outbound Message with `behavior_type: "crisis_bypass"`.
-    # Round 2 judgment-day SEVERE fix: same vulnerability class as the
-    # inbound fix at lines 136-151. Before #85 the 6th arg (session_id)
-    # was nil; after #85 it carries the real session UUID. A bare
-    # `{:ok, _} = ...` match on a failing save would raise MatchError
-    # whose exception value is the Ecto.Changeset — its inspect output
-    # embeds the `changes` map carrying the session UUID. Oban captures
-    # that value into oban_jobs.errors and exception logs, leaking
-    # clinical metadata. Wrap with a case that raises via safe_reason/1,
-    # which only surfaces failed-validation field keys (no changes map).
+    # Round 2 judgment-day SEVERE fix (extracted to `SafeReason` in #86 R2):
+    # same vulnerability class as the inbound fix at lines 136-151. Before
+    # #85 the 6th arg (session_id) was nil; after #85 it carries the real
+    # session UUID. A bare `{:ok, _} = ...` match on a failing save would
+    # raise MatchError whose exception value is the Ecto.Changeset — its
+    # inspect output embeds the `changes` map carrying the session UUID.
+    # Oban captures that value into oban_jobs.errors and exception logs,
+    # leaking clinical metadata. Wrap with a case that raises via
+    # `SafeReason.for_log/1`, which only surfaces failed-validation field
+    # keys (no changes map). The helper was extracted to the shared
+    # `AletheaJobs.SafeReason` module in #86 R2 so other workers (notably
+    # `SessionTimeoutWorker:180`) can use the same PHI-safe rendering.
     outbound =
       case Clinical.save_telegram_message(
              foundation_patient,
@@ -632,7 +627,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
         {:error, reason} ->
           raise "TelegramMessageWorker: failed to persist crisis outbound " <>
-                  "(reason=#{safe_reason(reason)})"
+                  "(reason=#{SafeReason.for_log(reason)})"
       end
 
     # 5. Enqueue on the :telegram_outbound_crisis lane.

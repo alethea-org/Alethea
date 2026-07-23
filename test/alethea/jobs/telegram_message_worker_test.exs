@@ -703,20 +703,23 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       session_uuid = open_session.id
 
       # R1 + R2 fixes: the worker must raise a sanitized RuntimeError
-      # (via safe_reason/1) on inbound persistence failure, NOT a raw
-      # MatchError whose exception value embeds the Ecto.Changeset
-      # `changes` map (which carries the session UUID introduced by
-      # #85). Pre-fix, this exception value was captured by Oban into
-      # oban_jobs.errors and exception logs — leaking clinical
-      # metadata into operational data.
+      # (via `SafeReason.for_log/1` from `AletheaJobs.SafeReason` —
+      # originally a private `safe_reason/1` helper in this worker, now
+      # extracted so `SessionTimeoutWorker` can use it too; #86 R2) on
+      # inbound persistence failure, NOT a raw MatchError whose exception
+      # value embeds the Ecto.Changeset `changes` map (which carries the
+      # session UUID introduced by #85). Pre-fix, this exception value
+      # was captured by Oban into oban_jobs.errors and exception logs —
+      # leaking clinical metadata into operational data.
       error =
         assert_raise RuntimeError, ~r/failed to persist inbound/, fn ->
           TelegramMessageWorker.perform(%Oban.Job{args: collision_args})
         end
 
       # Runtime proof the fix achieves its stated PHI goal. Without
-      # safe_reason/1 (or analog), the session UUID would appear in
-      # `error.message` via inspect(%Ecto.Changeset{changes: %{session_id: <uuid>}}).
+      # `SafeReason.for_log/1` (or analog), the session UUID would appear
+      # in `error.message` via
+      # inspect(%Ecto.Changeset{changes: %{session_id: <uuid>}}).
       refute error.message =~ session_uuid
 
       # No outbound was enqueued (the inbound did not succeed).
