@@ -24,20 +24,62 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   Hasta pronto.
   """
 
+  # Telegram goodbye dispatch target (PR-1 #86). The raw `chat_id` is
+  # never persisted at rest (only the HMAC `chat_id_hash`); both ride
+  # in Oban job args at enqueue-time (the only place the raw chat_id
+  # is available). The goodbye is enqueued on the safe lane with
+  # `patient_id: nil` — goodbyes are nil-safe per design (see design.md).
+  alias Alethea.Jobs.TelegramOutboundWorker
+
   @impl Oban.Worker
+  # Telegram-channel args (PR-1 #86). Channel dispatch via Oban args
+  # (no migration, no Session schema column) — see exploration.md's
+  # "Channel-dispatch mechanism" decision.
   def perform(%Oban.Job{
-        args: %{"session_id" => session_id, "patient_id" => patient_id, "phone" => phone}
+        args: %{
+          "session_id" => session_id,
+          "patient_id" => patient_id,
+          "channel" => "telegram",
+          "chat_id" => chat_id,
+          "chat_id_hash" => chat_id_hash
+        }
       }) do
     session = Alethea.Repo.get!(Session, session_id)
 
     if session.status == "closed" do
       :ok
     else
-      run_close_flow(session, patient_id, phone)
+      run_close_flow(session, patient_id,
+        channel: "telegram",
+        chat_id: chat_id,
+        chat_id_hash: chat_id_hash
+      )
     end
   end
 
-  defp run_close_flow(session, patient_id, phone) do
+  # Legacy WhatsApp args shape (unchanged, preserved by the
+  # `process_message_worker.ex` pipeline). Absent `channel` + present
+  # `phone` defaults to `"whatsapp"` (Req: WhatsApp Backward
+  # Compatibility — the 2 pre-existing tests stay green unmodified).
+  def perform(%Oban.Job{
+        args:
+          %{
+            "session_id" => session_id,
+            "patient_id" => patient_id,
+            "phone" => phone
+          } = args
+      }) do
+    channel = Map.get(args, "channel", "whatsapp")
+    session = Alethea.Repo.get!(Session, session_id)
+
+    if session.status == "closed" do
+      :ok
+    else
+      run_close_flow(session, patient_id, channel: channel, phone: phone)
+    end
+  end
+
+  defp run_close_flow(session, patient_id, opts) do
     patient = Accounts.get_patient!(patient_id)
 
     with {:ok, closed_session} <- SessionManager.close_session(session),
@@ -56,12 +98,58 @@ defmodule AletheaJobs.SessionTimeoutWorker do
              type: "session",
              patient_id: patient.id
            }) do
-      whatsapp_client().send_message(phone, @goodbye_message)
+      send_goodbye(opts, @goodbye_message)
       :ok
     else
       {:error, reason} ->
         Logger.error("SessionTimeoutWorker failed for session #{session.id}: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  # Channel switch on the goodbye send (PR-1 #86). The summary /
+  # trends pipeline is channel-independent (it was always
+  # channel-independent — only the final send was WhatsApp-coupled).
+  # The goodbye body text is identical across channels; the dispatch
+  # target differs:
+  #
+  #   * `"whatsapp"` → existing inline send via the WhatsApp client
+  #     (unchanged behavior — the 2 pre-existing tests stay green
+  #     unmodified).
+  #   * `"telegram"` → enqueue a `TelegramOutboundWorker` goodbye job
+  #     on the safe lane with `patient_id: nil` (goodbyes are
+  #     nil-safe per design). The raw `chat_id` + `chat_id_hash`
+  #     were carried in the job args from the enqueue site — they
+  #     are NOT recoverable from any persisted Session column.
+  defp send_goodbye(opts, body) when is_list(opts) do
+    case Keyword.fetch!(opts, :channel) do
+      "telegram" ->
+        chat_id = Keyword.fetch!(opts, :chat_id)
+        chat_id_hash = Keyword.fetch!(opts, :chat_id_hash)
+
+        TelegramOutboundWorker.new(%{
+          chat_id: chat_id,
+          chat_id_hash: chat_id_hash,
+          body: body,
+          patient_id: nil
+        })
+        |> Oban.insert!()
+
+        :ok
+
+      "whatsapp" ->
+        phone = Keyword.fetch!(opts, :phone)
+        whatsapp_client().send_message(phone, body)
+
+      other ->
+        # Backstop: unknown channel (future addition). The session is
+        # already closed + summary/trends persisted — a missing goodbye
+        # is the gentlest possible failure mode. Logged, no raise.
+        Logger.warning(
+          "SessionTimeoutWorker: unknown channel for goodbye send (channel=#{inspect(other)})"
+        )
+
+        :ok
     end
   end
 

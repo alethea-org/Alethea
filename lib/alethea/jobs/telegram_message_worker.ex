@@ -72,7 +72,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
   alias Alethea.Jobs.TelegramOutboundWorker
-  alias AletheaJobs.EmotionAnalysisWorker
+  alias AletheaJobs.{EmotionAnalysisWorker, SessionTimeoutWorker}
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
 
@@ -149,6 +149,24 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
             raise "TelegramMessageWorker: failed to persist inbound " <>
                     "(reason=#{safe_reason(reason)})"
         end
+
+      # PR-1 (#86): enqueue the session-timeout job right after the
+      # successful inbound save, BEFORE the CrisisMonitor.detect/1
+      # case split. One call site covers both the safe branch (line
+      # ~166) and the crisis branch (line ~167) because both branches
+      # share this successful-inbound-save point — the raw chat_id +
+      # chat_id_hash are passed at enqueue-time, the only place they
+      # exist (raw chat_id is never persisted at rest per PHI hygiene;
+      # see Session schema context).
+      #
+      # Renewal behavior matches the WhatsApp pipeline (`process_message_worker.ex`
+      # `schedule_session_timeout/3`): `Oban.insert!(replace:
+      # [:scheduled_at])` + the worker's own `unique:
+      # [fields: [:args]]` keeps a single scheduled row per
+      # (session_id, patient_id, channel) tuple — a subsequent inbound
+      # on the same open session upserts `scheduled_at` rather than
+      # duplicating the job.
+      schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash)
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
 
@@ -312,6 +330,27 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         raise "TelegramMessageWorker: failed to enqueue EmotionAnalysisWorker " <>
                 "(reason=#{inspect(reason)}, hash_prefix=#{hash_prefix})"
     end
+  end
+
+  # PR-1 (#86): channel-dispatched session-timeout enqueue. Mirrors
+  # `AletheaJobs.ProcessMessageWorker.schedule_session_timeout/3` for
+  # the WhatsApp pipeline (the "now + 30 min" logic is local to each
+  # worker — no shared helper, per design). Channel + routing
+  # identifiers ride in Oban job args (no migration, no Session
+  # schema column — see exploration.md "Channel-dispatch mechanism").
+  defp schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash) do
+    args = %{
+      session_id: session.id,
+      patient_id: legacy_patient.id,
+      channel: "telegram",
+      chat_id: chat_id,
+      chat_id_hash: chat_id_hash
+    }
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    SessionTimeoutWorker.new(args, scheduled_at: DateTime.add(now, 30, :minute))
+    |> Oban.insert!(replace: [:scheduled_at])
   end
 
   defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix, opts \\ []) do

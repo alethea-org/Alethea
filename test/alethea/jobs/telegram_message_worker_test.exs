@@ -443,18 +443,104 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert second_inbound.session_id != first_inbound.session_id
     end
 
-    test "does not enqueue a SessionTimeoutWorker", ctx do
+    test "enqueues a SessionTimeoutWorker carrying telegram-channel args (PR-1 #86)", ctx do
       _ = ctx
 
       args =
-        build_args("mensaje sin auto cierre",
+        build_args("mensaje con auto cierre",
           telegram_message_id: 1_106,
           telegram_update_id: 116
         )
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
 
-      refute_enqueued(worker: AletheaJobs.SessionTimeoutWorker)
+      # The session-timeout job carries the routing identifiers the
+      # worker needs to send the goodbye through the Telegram adapter —
+      # `channel: "telegram"`, `chat_id` (raw, never persisted at rest),
+      # `chat_id_hash` (Pacer key).
+      [job] =
+        Repo.all(from j in Oban.Job, where: j.worker == "AletheaJobs.SessionTimeoutWorker")
+
+      assert job.args["channel"] == "telegram"
+      assert job.args["chat_id"] == @chat_id
+      assert job.args["chat_id_hash"] == @chat_id_hash
+      assert is_binary(job.args["session_id"])
+      assert is_binary(job.args["patient_id"])
+
+      assert_enqueued(worker: AletheaJobs.SessionTimeoutWorker)
+    end
+
+    test "crisis-path inbound also enqueues a SessionTimeoutWorker (PR-1 #86; one call site covers both branches)",
+         ctx do
+      _ = ctx
+
+      args =
+        build_args("me voy a suicidar",
+          telegram_message_id: 1_107,
+          telegram_update_id: 117
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      assert_enqueued(worker: AletheaJobs.SessionTimeoutWorker)
+
+      [job] =
+        Repo.all(from j in Oban.Job, where: j.worker == "AletheaJobs.SessionTimeoutWorker")
+
+      assert job.args["channel"] == "telegram"
+      assert job.args["chat_id"] == @chat_id
+      assert job.args["chat_id_hash"] == @chat_id_hash
+    end
+
+    test "second inbound on the same open session renews the timeout (unique args + replace scheduled_at)",
+         ctx do
+      _ = ctx
+
+      first_args =
+        build_args("primer mensaje",
+          telegram_message_id: 1_108,
+          telegram_update_id: 118
+        )
+
+      second_args =
+        build_args("segundo mensaje",
+          telegram_message_id: 1_109,
+          telegram_update_id: 119
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: first_args})
+
+      first_jobs =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "AletheaJobs.SessionTimeoutWorker"
+        )
+
+      assert length(first_jobs) == 1,
+             "exactly one timeout job enqueued after the first inbound"
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
+
+      # The unique `[fields: [:args]]` + `replace: [:scheduled_at]` pattern
+      # keeps the row count at exactly 1 across renewals — the second
+      # inbound upserts the same args row with a fresh `scheduled_at`.
+      second_jobs =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "AletheaJobs.SessionTimeoutWorker"
+        )
+
+      assert length(second_jobs) == 1,
+             "renewal must NOT duplicate the timeout job — exactly 1 row after the second inbound"
+
+      # The single row's args match the routing identifiers (args are
+      # identical across renewals because they're keyed by the open
+      # session + telegram channel, not the per-message unique key).
+      [job] = second_jobs
+
+      assert job.args["channel"] == "telegram"
+      assert job.args["chat_id"] == @chat_id
+      assert job.args["chat_id_hash"] == @chat_id_hash
     end
   end
 
