@@ -519,11 +519,32 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert length(first_jobs) == 1,
              "exactly one timeout job enqueued after the first inbound"
 
+      [first_job] = first_jobs
+      first_id = first_job.id
+      first_scheduled_at = first_job.scheduled_at
+
+      # Round 1 (verify-flagged CRITICAL): capture the initial
+      # `scheduled_at` so we can prove the renewal REPLACES the row
+      # (same `id`, strictly later `scheduled_at`) instead of leaving
+      # the timer pinned at its original value. The earlier assertion
+      # only checked row count and never inspected `scheduled_at`.
+      assert is_struct(first_scheduled_at, DateTime)
+
+      assert DateTime.compare(first_scheduled_at, DateTime.utc_now()) == :gt,
+             "first timeout is scheduled in the future (now + 30 min)"
+
+      # Sleep a tick so the renewal's `scheduled_at` is strictly later
+      # than the original — `DateTime.truncate(:second)` in the
+      # helper means without the sleep two near-simultaneous inserts
+      # could collide on the same second and mask a broken replacement.
+      Process.sleep(1_100)
+
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
 
-      # The unique `[fields: [:args]]` + `replace: [:scheduled_at]` pattern
-      # keeps the row count at exactly 1 across renewals — the second
-      # inbound upserts the same args row with a fresh `scheduled_at`.
+      # The unique `[fields: [:args], period: :infinity]` + `replace:
+      # [:scheduled_at]` pattern keeps the row count at exactly 1
+      # across renewals — the second inbound upserts the same args
+      # row with a fresh `scheduled_at`.
       second_jobs =
         Repo.all(
           from j in Oban.Job,
@@ -533,14 +554,119 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert length(second_jobs) == 1,
              "renewal must NOT duplicate the timeout job — exactly 1 row after the second inbound"
 
+      [job] = second_jobs
+
+      # Round 1 fix runtime proof #1: the renewal REPLACES the row
+      # rather than appending a second one. The row identity is the
+      # SAME Oban.Job id (replacement, not insertion).
+      assert job.id == first_id,
+             "renewal must replace the existing Oban.Job row (same id); " <>
+               "a new id would mean a duplicate row was inserted"
+
+      # Round 1 fix runtime proof #2: the replacement pushed the
+      # timeout forward — the new `scheduled_at` is strictly later
+      # than the original. Without this assertion, a worker that
+      # replaced the row but did NOT update `scheduled_at` would
+      # pass the row-count check but still close the session at the
+      # original (premature) wall-clock time.
+      assert DateTime.compare(job.scheduled_at, first_scheduled_at) == :gt,
+             "renewal must push `scheduled_at` strictly later " <>
+               "(first=#{inspect(first_scheduled_at)}, second=#{inspect(job.scheduled_at)})"
+
       # The single row's args match the routing identifiers (args are
       # identical across renewals because they're keyed by the open
       # session + telegram channel, not the per-message unique key).
-      [job] = second_jobs
-
       assert job.args["channel"] == "telegram"
       assert job.args["chat_id"] == @chat_id
       assert job.args["chat_id_hash"] == @chat_id_hash
+    end
+
+    test "renewal uniqueness holds past the 40-minute inserted_at horizon (Round 1 boundary probe)",
+         ctx do
+      # Round 1 (verify-flagged CRITICAL): the pre-fix worker had
+      # `unique: [period: 40 * 60]` evaluated against `inserted_at`.
+      # After 40 minutes, a renewal could no longer find a matching
+      # unique row to replace and inserted a second job, producing
+      # duplicate timeouts. Fix: `period: :infinity` (this test's
+      # runtime proof). We age the original job's `inserted_at` by
+      # 41 minutes (just past the broken horizon) and verify that a
+      # second inbound still keeps exactly one scheduled row.
+      _ = ctx
+
+      first_args =
+        build_args("primer mensaje",
+          telegram_message_id: 1_200,
+          telegram_update_id: 120
+        )
+
+      second_args =
+        build_args("segundo mensaje",
+          telegram_message_id: 1_201,
+          telegram_update_id: 121
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: first_args})
+
+      [first_job] =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "AletheaJobs.SessionTimeoutWorker"
+        )
+
+      first_id = first_job.id
+      first_scheduled_at = first_job.scheduled_at
+
+      # Age the row's `inserted_at` by 41 minutes — past the 40-min
+      # horizon where the pre-fix `period: 40 * 60` would let a
+      # second row slip through. Direct Repo.update on the Oban.Job
+      # is the only reliable way to simulate this in a unit test
+      # (we can't actually wait 41 minutes inside the suite).
+      aged_inserted_at = DateTime.add(first_job.inserted_at, 41, :minute)
+
+      {1, _} =
+        from(j in Oban.Job, where: j.id == ^first_id)
+        |> Repo.update_all(set: [inserted_at: aged_inserted_at])
+
+      # The scheduled timer must still be in the future after the
+      # age — the renewal hasn't happened yet, so the original
+      # `scheduled_at` (now + 30 min at enqueue time) is still ahead
+      # of `DateTime.utc_now()`. If the row had naturally aged into
+      # the past we'd need a different test shape; this assertion
+      # documents that the boundary is purely a `inserted_at` issue
+      # and not a `scheduled_at` collision.
+      assert DateTime.compare(first_scheduled_at, DateTime.utc_now()) == :gt,
+             "the original timeout is still scheduled in the future " <>
+               "(scheduled_at=#{inspect(first_scheduled_at)})"
+
+      Process.sleep(1_100)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
+
+      second_jobs =
+        Repo.all(
+          from j in Oban.Job,
+            where: j.worker == "AletheaJobs.SessionTimeoutWorker"
+        )
+
+      # The pre-fix defect: count would be 2 here after the 41-minute
+      # age (the uniqueness period against `inserted_at` had expired
+      # and the renewal inserted a fresh row). The Round 1 fix
+      # (`period: :infinity`) keeps count at 1 regardless of how old
+      # the original row's `inserted_at` is.
+      assert length(second_jobs) == 1,
+             "renewal must still dedupe past the 40-minute inserted_at " <>
+               "horizon (Round 1 fix: `period: :infinity`)"
+
+      [job] = second_jobs
+
+      # Same row id — replacement, not append.
+      assert job.id == first_id
+
+      # `scheduled_at` strictly later than the original.
+      assert DateTime.compare(job.scheduled_at, first_scheduled_at) == :gt,
+             "renewal must push `scheduled_at` strictly later even past " <>
+               "the 40-minute inserted_at horizon " <>
+               "(first=#{inspect(first_scheduled_at)}, second=#{inspect(job.scheduled_at)})"
     end
   end
 

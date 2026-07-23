@@ -1,8 +1,79 @@
 defmodule AletheaJobs.SessionTimeoutWorker do
+  @moduledoc """
+  Channel-neutral session-timeout Oban worker (PR-1 of #86).
+
+  Closes the session after the inactivity window, runs the shared
+  summary/trends pipeline, and dispatches the goodbye through the
+  channel recorded in the job args (`"whatsapp"` or `"telegram"`).
+
+  ## Uniqueness policy (Round 1 fix — verify-flagged CRITICAL)
+
+  The worker's `unique: [fields: [:args], period: :infinity]` policy
+  guarantees a single scheduled timeout row per open-session tuple
+  for the lifetime of the args combination. An earlier
+  `period: 40 * 60` (40-minute) window expired the uniqueness check
+  against `inserted_at` — once that 40-minute horizon passed, a
+  renewal `Oban.insert!(replace: [:scheduled_at])` could no longer
+  find a matching unique row to replace and inserted a second job,
+  producing duplicate timeouts on long Telegram conversations.
+  `:infinity` holds uniqueness for the session's lifetime; the row
+  is replaced (not appended) on each renewal as long as the session
+  is still open, and the prior row is removed by Oban when the
+  replacement commits.
+
+  ## Renewal companion fix — `replace:` option format
+
+  The renewal call site (`telegram_message_worker.ex:341-354`) had
+  `Oban.insert!(replace: [:scheduled_at])` — a plain list, which
+  Oban's `resolve_conflict/4` ignores (it calls `Keyword.get/3`
+  keyed by job state, so a non-keyword list returns `[]` and the
+  `scheduled_at` is never actually updated on conflict). This was a
+  silent no-op that the pre-fix renewal test (count-only) did not
+  catch. Fixed to `replace: [scheduled: [:scheduled_at]]` (the
+  Oban 2.x state-keyed keyword form). The Round 1 strengthened
+  test asserts `scheduled_at` is strictly later after renewal —
+  exercising the now-working update path.
+
+  ## PHI at rest — `chat_id` in `oban_jobs.args` (Round 1 — WARNING #1)
+
+  The raw Telegram `chat_id` IS persisted at rest in `oban_jobs.args`
+  (JSONB column), alongside the HMAC `chat_id_hash`. This was
+  already the case for `TelegramOutboundWorker` (#84, pre-existing)
+  and is now also true here in PR-1 #86 for the goodbye dispatch
+  path. The codebase comment that previously said "chat_id is never
+  persisted at rest" was inaccurate and has been corrected.
+
+  Threat model acknowledgement (bounded PHI-at-rest surface):
+
+    * `chat_id` (plaintext Telegram identifier) lives ONLY in
+      `oban_jobs.args`. It does NOT appear in any clinical table
+      (no `messages.encrypted_content`, no `sessions`, no
+      `foundation_patients`, etc.).
+    * `chat_id_hash` (HMAC-SHA256 with the configured pepper) is
+      the canonical lookup key used by the Pacer rate-limiter and
+      the dead-letter audit table — `chat_id` itself is only used
+      at Telegram dispatch time.
+    * Safeguards for `oban_jobs.args` access: PostgreSQL row-level
+      privileges (operational role limited to job-management
+      views), TLS-encrypted connections, application-level
+      `LogRedactor` on error serialization, and Oban's
+      `prune`/retention settings purge completed/failed rows on
+      schedule. No encrypted column is added (consistent with the
+      existing pattern across the codebase).
+    * Removing `chat_id` from args would force a DB lookup by
+      `chat_id_hash` at goodbye dispatch time, adding latency and
+      a new failure mode (DB unavailable) at exactly the wrong
+      moment. The chosen design keeps `chat_id` in args; this is
+      the same posture as the pre-existing `TelegramOutboundWorker`
+      and is not a regression introduced by #86.
+  """
+
   use Oban.Worker,
     queue: :sessions,
     max_attempts: 3,
-    unique: [fields: [:args], period: 40 * 60]
+    # `period: :infinity` keeps args-based uniqueness active for the
+    # session's lifetime — see @moduledoc "Uniqueness policy".
+    unique: [fields: [:args], period: :infinity]
 
   alias Alethea.{Accounts, Clinical, AI.Sanitizer}
   alias Alethea.Clinical.{Session, SessionManager}
@@ -24,11 +95,15 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   Hasta pronto.
   """
 
-  # Telegram goodbye dispatch target (PR-1 #86). The raw `chat_id` is
-  # never persisted at rest (only the HMAC `chat_id_hash`); both ride
-  # in Oban job args at enqueue-time (the only place the raw chat_id
-  # is available). The goodbye is enqueued on the safe lane with
-  # `patient_id: nil` — goodbyes are nil-safe per design (see design.md).
+  # Telegram goodbye dispatch target (PR-1 #86). Both the raw
+  # `chat_id` and the HMAC `chat_id_hash` ride in Oban job args at
+  # enqueue-time (the only place the raw chat_id is available in
+  # process). NOTE: the raw `chat_id` IS persisted at rest in
+  # `oban_jobs.args` (JSONB) for the duration of the job — see the
+  # module @moduledoc "PHI at rest — chat_id in oban_jobs.args" for
+  # the threat-model acknowledgement and the relevant safeguards.
+  # The goodbye is enqueued on the safe lane with `patient_id: nil`
+  # — goodbyes are nil-safe per design (see design.md).
   alias Alethea.Jobs.TelegramOutboundWorker
 
   @impl Oban.Worker
@@ -119,8 +194,12 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   #   * `"telegram"` → enqueue a `TelegramOutboundWorker` goodbye job
   #     on the safe lane with `patient_id: nil` (goodbyes are
   #     nil-safe per design). The raw `chat_id` + `chat_id_hash`
-  #     were carried in the job args from the enqueue site — they
-  #     are NOT recoverable from any persisted Session column.
+  #     were carried in the SessionTimeoutWorker job args from the
+  #     enqueue site (see `telegram_message_worker.ex:341-354`) —
+  #     they are NOT recoverable from any persisted Session column,
+  #     but they ARE persisted at rest in `oban_jobs.args` for the
+  #     lifetime of the scheduled timeout job (see the worker
+  #     @moduledoc "PHI at rest — chat_id in oban_jobs.args").
   defp send_goodbye(opts, body) when is_list(opts) do
     case Keyword.fetch!(opts, :channel) do
       "telegram" ->

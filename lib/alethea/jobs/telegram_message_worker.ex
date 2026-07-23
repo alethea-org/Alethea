@@ -338,6 +338,22 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # worker — no shared helper, per design). Channel + routing
   # identifiers ride in Oban job args (no migration, no Session
   # schema column — see exploration.md "Channel-dispatch mechanism").
+  #
+  # Renewal: `replace: [scheduled: [:scheduled_at]]` is passed to
+  # `SessionTimeoutWorker.new/2`, NOT to `Oban.insert!/2` — the
+  # latter ignores the `:replace` opt (Oban reads the `:replace`
+  # field from the changeset only). The pre-fix `replace:
+  # [:scheduled_at]` (whether passed to `new/2` as a plain list or to
+  # `Oban.insert!/2` as a state-keyed keyword) was a silent no-op:
+  # `Job.put_replace/3` only put it in the changeset if the list
+  # elements were atoms, and `Oban.insert/2` doesn't accept it as an
+  # opt. As a result the existing row's `scheduled_at` was never
+  # updated on conflict, and the timer stayed pinned at the original
+  # scheduled time across all renewals. The Round 1 strengthened
+  # renewal test (asserting `scheduled_at` strictly later than the
+  # original) caught the no-op; the fix is to pass `replace:` to
+  # `new/2` so it lands in the changeset, in the Oban 2.x
+  # state-keyed keyword form.
   defp schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash) do
     args = %{
       session_id: session.id,
@@ -349,8 +365,11 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    SessionTimeoutWorker.new(args, scheduled_at: DateTime.add(now, 30, :minute))
-    |> Oban.insert!(replace: [:scheduled_at])
+    SessionTimeoutWorker.new(args,
+      scheduled_at: DateTime.add(now, 30, :minute),
+      replace: [scheduled: [:scheduled_at]]
+    )
+    |> Oban.insert!()
   end
 
   defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix, opts \\ []) do
