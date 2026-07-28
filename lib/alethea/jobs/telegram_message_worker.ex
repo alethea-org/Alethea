@@ -72,7 +72,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
   alias Alethea.Jobs.TelegramOutboundWorker
-  alias AletheaJobs.EmotionAnalysisWorker
+  alias AletheaJobs.{EmotionAnalysisWorker, SessionTimeoutWorker, SafeReason}
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
 
@@ -147,8 +147,26 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
           {:error, reason} ->
             raise "TelegramMessageWorker: failed to persist inbound " <>
-                    "(reason=#{safe_reason(reason)})"
+                    "(reason=#{SafeReason.for_log(reason)})"
         end
+
+      # PR-1 (#86): enqueue the session-timeout job right after the
+      # successful inbound save, BEFORE the CrisisMonitor.detect/1
+      # case split. One call site covers both the safe branch (line
+      # ~166) and the crisis branch (line ~167) because both branches
+      # share this successful-inbound-save point — the raw chat_id +
+      # chat_id_hash are passed at enqueue-time, the only place they
+      # exist (raw chat_id is never persisted at rest per PHI hygiene;
+      # see Session schema context).
+      #
+      # Renewal behavior matches the WhatsApp pipeline (`process_message_worker.ex`
+      # `schedule_session_timeout/3`): `Oban.insert!(replace:
+      # [:scheduled_at])` + the worker's own `unique:
+      # [fields: [:args]]` keeps a single scheduled row per
+      # (session_id, patient_id, channel) tuple — a subsequent inbound
+      # on the same open session upserts `scheduled_at` rather than
+      # duplicating the job.
+      schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash)
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
 
@@ -281,21 +299,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         # includes `changes` — which, for the diagnosis changeset,
         # carries the plaintext `ai_response`. Report only the failed
         # field keys (or the raw reason for non-changeset errors).
+        # `SafeReason.for_log/1` (AletheaJobs.SafeReason — shared with
+        # `SessionTimeoutWorker`) is the per-call helper that scrubs
+        # Changeset `changes`; see its @moduledoc for the rationale.
         raise "TelegramMessageWorker: failed to persist AI reply/diagnosis " <>
-                "(reason=#{safe_reason(reason)}, hash_prefix=#{hash_prefix})"
+                "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
     end
   end
-
-  # Renders a persistence failure reason WITHOUT leaking changeset
-  # `changes` (which may hold plaintext clinical content, e.g.
-  # `ai_response`). For an `Ecto.Changeset`, only the field keys that
-  # failed validation are surfaced; any other reason is inspected
-  # as-is (non-changeset reasons carry no PHI).
-  defp safe_reason(%Ecto.Changeset{errors: errors}) do
-    errors |> Keyword.keys() |> Enum.uniq() |> inspect()
-  end
-
-  defp safe_reason(reason), do: inspect(reason)
 
   # ----------------------------------------------------------------
   # Enqueue helpers
@@ -312,6 +322,46 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         raise "TelegramMessageWorker: failed to enqueue EmotionAnalysisWorker " <>
                 "(reason=#{inspect(reason)}, hash_prefix=#{hash_prefix})"
     end
+  end
+
+  # PR-1 (#86): channel-dispatched session-timeout enqueue. Mirrors
+  # `AletheaJobs.ProcessMessageWorker.schedule_session_timeout/3` for
+  # the WhatsApp pipeline (the "now + 30 min" logic is local to each
+  # worker — no shared helper, per design). Channel + routing
+  # identifiers ride in Oban job args (no migration, no Session
+  # schema column — see exploration.md "Channel-dispatch mechanism").
+  #
+  # Renewal: `replace: [scheduled: [:scheduled_at]]` is passed to
+  # `SessionTimeoutWorker.new/2`, NOT to `Oban.insert!/2` — the
+  # latter ignores the `:replace` opt (Oban reads the `:replace`
+  # field from the changeset only). The pre-fix `replace:
+  # [:scheduled_at]` (whether passed to `new/2` as a plain list or to
+  # `Oban.insert!/2` as a state-keyed keyword) was a silent no-op:
+  # `Job.put_replace/3` only put it in the changeset if the list
+  # elements were atoms, and `Oban.insert/2` doesn't accept it as an
+  # opt. As a result the existing row's `scheduled_at` was never
+  # updated on conflict, and the timer stayed pinned at the original
+  # scheduled time across all renewals. The Round 1 strengthened
+  # renewal test (asserting `scheduled_at` strictly later than the
+  # original) caught the no-op; the fix is to pass `replace:` to
+  # `new/2` so it lands in the changeset, in the Oban 2.x
+  # state-keyed keyword form.
+  defp schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash) do
+    args = %{
+      session_id: session.id,
+      patient_id: legacy_patient.id,
+      channel: "telegram",
+      chat_id: chat_id,
+      chat_id_hash: chat_id_hash
+    }
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    SessionTimeoutWorker.new(args,
+      scheduled_at: DateTime.add(now, 30, :minute),
+      replace: [scheduled: [:scheduled_at]]
+    )
+    |> Oban.insert!()
   end
 
   defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix, opts \\ []) do
@@ -551,15 +601,18 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     )
 
     # 4. Persist the outbound Message with `behavior_type: "crisis_bypass"`.
-    # Round 2 judgment-day SEVERE fix: same vulnerability class as the
-    # inbound fix at lines 136-151. Before #85 the 6th arg (session_id)
-    # was nil; after #85 it carries the real session UUID. A bare
-    # `{:ok, _} = ...` match on a failing save would raise MatchError
-    # whose exception value is the Ecto.Changeset — its inspect output
-    # embeds the `changes` map carrying the session UUID. Oban captures
-    # that value into oban_jobs.errors and exception logs, leaking
-    # clinical metadata. Wrap with a case that raises via safe_reason/1,
-    # which only surfaces failed-validation field keys (no changes map).
+    # Round 2 judgment-day SEVERE fix (extracted to `SafeReason` in #86 R2):
+    # same vulnerability class as the inbound fix at lines 136-151. Before
+    # #85 the 6th arg (session_id) was nil; after #85 it carries the real
+    # session UUID. A bare `{:ok, _} = ...` match on a failing save would
+    # raise MatchError whose exception value is the Ecto.Changeset — its
+    # inspect output embeds the `changes` map carrying the session UUID.
+    # Oban captures that value into oban_jobs.errors and exception logs,
+    # leaking clinical metadata. Wrap with a case that raises via
+    # `SafeReason.for_log/1`, which only surfaces failed-validation field
+    # keys (no changes map). The helper was extracted to the shared
+    # `AletheaJobs.SafeReason` module in #86 R2 so other workers (notably
+    # `SessionTimeoutWorker:180`) can use the same PHI-safe rendering.
     outbound =
       case Clinical.save_telegram_message(
              foundation_patient,
@@ -574,7 +627,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
         {:error, reason} ->
           raise "TelegramMessageWorker: failed to persist crisis outbound " <>
-                  "(reason=#{safe_reason(reason)})"
+                  "(reason=#{SafeReason.for_log(reason)})"
       end
 
     # 5. Enqueue on the :telegram_outbound_crisis lane.
