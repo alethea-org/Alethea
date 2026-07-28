@@ -567,87 +567,105 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        ) do
     crisis_text = crisis_reply_text(legacy_patient)
 
-    # 1. Mark urgent_intervention on the legacy Patient.
-    {:ok, _updated_patient} =
-      Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true})
-
-    # 2. Save a crisis-bypass ai_diagnosis row for audit.
-    {:ok, _diagnosis} =
-      Clinical.save_ai_diagnosis(inbound.id, %{
-        response: crisis_text,
-        model_version: "crisis-bypass",
-        extracted_emotions: %{crisis: true, level: level, triggers: triggers}
-      })
-
-    # 3. Broadcast on psychologist:alerts.
-    # Round 1 (WARNING-5): the operator-visible patient_id is the
-    # foundation Patient's UUID (the foundation row is the identity
-    # surface per the foundation/legacy split; the legacy `patients`
-    # table is the clinical-state surface — `urgent_intervention`
-    # lives there). The PubSub broadcast and the dead-letter row
-    # MUST use the foundation UUID so the FK resolves and operator
-    # dashboards correlate to the foundation patient record.
-    Phoenix.PubSub.broadcast(
-      Alethea.PubSub,
-      "psychologist:alerts",
-      {:crisis_detected,
-       %{
-         patient_id: foundation_patient.id,
-         chat_id_hash: chat_id_hash,
-         level: level,
-         triggers: triggers,
-         at: DateTime.utc_now()
-       }}
-    )
-
-    # 4. Persist the outbound Message with `behavior_type: "crisis_bypass"`.
-    # Round 2 judgment-day SEVERE fix (extracted to `SafeReason` in #86 R2):
-    # same vulnerability class as the inbound fix at lines 136-151. Before
-    # #85 the 6th arg (session_id) was nil; after #85 it carries the real
-    # session UUID. A bare `{:ok, _} = ...` match on a failing save would
-    # raise MatchError whose exception value is the Ecto.Changeset — its
-    # inspect output embeds the `changes` map carrying the session UUID.
-    # Oban captures that value into oban_jobs.errors and exception logs,
-    # leaking clinical metadata. Wrap with a case that raises via
-    # `SafeReason.for_log/1`, which only surfaces failed-validation field
-    # keys (no changes map). The helper was extracted to the shared
-    # `AletheaJobs.SafeReason` module in #86 R2 so other workers (notably
-    # `SessionTimeoutWorker:180`) can use the same PHI-safe rendering.
-    outbound =
-      case Clinical.save_telegram_message(
-             foundation_patient,
-             crisis_text,
-             "outbound",
-             "crisis_bypass",
-             nil,
-             session_id
-           ) do
-        {:ok, outbound} ->
+    # PR #86 PR-2 (crisis-path transactional atomicity): steps 1, 2,
+    # and 4 — `update_patient`, `save_ai_diagnosis`, and the crisis
+    # outbound `save_telegram_message` — execute inside a single
+    # `Repo.transaction`. Any single failure rolls back all three, so
+    # we never leave an `:crisis_detected` PubSub alert with no
+    # backing record, a flipped `urgent_intervention` with no
+    # diagnosis, or a fabricated "crisis_bypass" Message that the
+    # patient never actually received (same vulnerability class as
+    # #84 PR-A judgment-day SEVERE + #85 R1-W4 carry-forward).
+    #
+    # Mirrors the shape established at
+    # `persist_and_enqueue_outbound/9` (lines 268-285) exactly —
+    # `Repo.transaction(fn -> with ... else {:error, r} ->
+    # Repo.rollback(r) end end)` followed by a `case` on
+    # `{:ok, outbound}` (commit) vs `{:error, reason}` (raise).
+    # No shared helper extracted: the safe path's transaction
+    # captures different step arity (outbound save then diagnosis;
+    # crisis path is patient-update, then diagnosis, then outbound
+    # save) and the proposal forbids sharing the body. A different
+    # inline body keeps each branch's blast radius minimal.
+    transaction_result =
+      Repo.transaction(fn ->
+        with {:ok, _updated_patient} <-
+               Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true}),
+             {:ok, _diagnosis} <-
+               Clinical.save_ai_diagnosis(inbound.id, %{
+                 response: crisis_text,
+                 model_version: "crisis-bypass",
+                 extracted_emotions: %{crisis: true, level: level, triggers: triggers}
+               }),
+             {:ok, outbound} <-
+               Clinical.save_telegram_message(
+                 foundation_patient,
+                 crisis_text,
+                 "outbound",
+                 "crisis_bypass",
+                 nil,
+                 session_id
+               ) do
           outbound
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
 
-        {:error, reason} ->
-          raise "TelegramMessageWorker: failed to persist crisis outbound " <>
-                  "(reason=#{SafeReason.for_log(reason)})"
-      end
+    case transaction_result do
+      {:ok, outbound} ->
+        # POST-COMMIT. The `:crisis_detected` broadcast carries the
+        # operator-visible `patient_id` (foundation UUID,
+        # WARNING-5) and the `chat_id_hash` correlation token — a
+        # broadcast MUST NEVER precede its backing commit, or operator
+        # dashboards see an alert they cannot reconcile with a
+        # clinical record. Round 1 (WARNING-5): the foundation
+        # Patient's UUID — not the legacy Patient's integer — is
+        # the identity surface. The dead-letter row's FK on
+        # `foundation_outbound_dead_letters.patient_id` requires the
+        # UUID; previously the worker passed the legacy integer and
+        # the FK silently didn't exist.
+        Phoenix.PubSub.broadcast(
+          Alethea.PubSub,
+          "psychologist:alerts",
+          {:crisis_detected,
+           %{
+             patient_id: foundation_patient.id,
+             chat_id_hash: chat_id_hash,
+             level: level,
+             triggers: triggers,
+             at: DateTime.utc_now()
+           }}
+        )
 
-    # 5. Enqueue on the :telegram_outbound_crisis lane.
-    # Round 1 (WARNING-5): same fix as the broadcast — pass
-    # `foundation_patient.id` (the foundation UUID), not
-    # `legacy_patient.id` (the legacy integer). The FK on
-    # `foundation_outbound_dead_letters.patient_id` requires the
-    # foundation UUID; previously the worker passed the legacy
-    # integer and the FK silently didn't exist.
-    enqueue_outbound(chat_id_hash, chat_id, outbound.id, crisis_text, hash_prefix,
-      lane: :crisis,
-      patient_id: foundation_patient.id
-    )
+        # Enqueue on the :telegram_outbound_crisis lane. Same
+        # `foundation_patient.id` (UUID) passed to the dead-letter
+        # path of the outbound worker — see the WARNING-5 fix above.
+        enqueue_outbound(chat_id_hash, chat_id, outbound.id, crisis_text, hash_prefix,
+          lane: :crisis,
+          patient_id: foundation_patient.id
+        )
 
-    Logger.warning(
-      "TelegramMessageWorker: crisis branch (hash_prefix=#{hash_prefix}, " <>
-        "level=#{level}, triggers=#{length(triggers)})"
-    )
+        Logger.warning(
+          "TelegramMessageWorker: crisis branch (hash_prefix=#{hash_prefix}, " <>
+            "level=#{level}, triggers=#{length(triggers)})"
+        )
 
-    :ok
+        :ok
+
+      {:error, reason} ->
+        # PHI hygiene: `SafeReason.for_log/1` (already aliased at
+        # worker.ex:75) renders the failed-validation field keys for
+        # an `%Ecto.Changeset{}` and `inspect/1` for any other reason
+        # shape. It NEVER surfaces `changes`/`data` — so a bare atom
+        # like `:not_linked` or `:legacy_not_found` (from
+        # `save_telegram_message/6`, clinical.ex:134-161) round-trips
+        # as `"{:error, :not_linked}"` (no PHI surface). Mirrors the
+        # `persist_and_enqueue_outbound/9` error branch
+        # (worker.ex:296-307).
+        raise "TelegramMessageWorker: failed to persist crisis path " <>
+                "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
+    end
   end
 
   # Resolve the crisis-bypass reply text. The psychologist preconfigures
