@@ -38,34 +38,34 @@ Chain strategy: feature-branch-chain
 | Base branch | feature/tracker branch (session-timeout-channel-neutral) |
 
 ### Phase 1 — RED: SessionTimeoutWorker channel-dispatch tests
-- [ ] 1.1 `test/alethea_jobs/session_timeout_worker_test.exs`: add test — telegram-channel args enqueue `Alethea.Jobs.TelegramOutboundWorker` goodbye job (`assert_enqueued` with `chat_id`, `chat_id_hash`, `body`, `patient_id: nil`).
-- [ ] 1.2 Same file: add test — idempotent skip (`status: "closed"`) also short-circuits telegram channel, no enqueue.
-- [ ] 1.3 Confirm both RED against current `perform/1` (only accepts `phone` shape) — fails to compile/match.
+- [x] 1.1 `test/alethea_jobs/session_timeout_worker_test.exs`: add test — telegram-channel args enqueue `Alethea.Jobs.TelegramOutboundWorker` goodbye job (`assert_enqueued` with `chat_id`, `chat_id_hash`, `body`, `patient_id: nil`).
+- [x] 1.2 Same file: add test — idempotent skip (`status: "closed"`) also short-circuits telegram channel, no enqueue.
+- [x] 1.3 Confirm both RED against current `perform/1` (only accepts `phone` shape) — fails to compile/match.
 
 ### Phase 2 — GREEN: `lib/alethea_jobs/session_timeout_worker.ex`
-- [ ] 2.1 Extend `perform/1` to accept `%{"channel"=>_, "chat_id"=>_, "chat_id_hash"=>_}` alongside legacy `%{"phone"=>_}`; default `channel` to `"whatsapp"` when absent and `phone` present (Req: Channel-Neutral Timeout Dispatch, WhatsApp Backward Compatibility).
-- [ ] 2.2 Change `run_close_flow/3` to stop calling `whatsapp_client().send_message/2` directly; return control to a new `send_goodbye/2`.
-- [ ] 2.3 Add `send_goodbye/2` channel switch: `"whatsapp"` → `whatsapp_client().send_message(phone, msg)`; `"telegram"` → `Alethea.Jobs.TelegramOutboundWorker.new(%{chat_id:, chat_id_hash:, body: msg, patient_id: nil}) |> Oban.insert!()`.
-- [ ] 2.4 Verify Phase 1 tests GREEN; run the 2 pre-existing tests unmodified — must stay green (Req: Existing WhatsApp tests remain green).
+- [x] 2.1 Extend `perform/1` to accept `%{"channel"=>_, "chat_id"=>_, "chat_id_hash"=>_}` alongside legacy `%{"phone"=>_}`; default `channel` to `"whatsapp"` when absent and `phone` present (Req: Channel-Neutral Timeout Dispatch, WhatsApp Backward Compatibility).
+- [x] 2.2 Change `run_close_flow/3` to stop calling `whatsapp_client().send_message/2` directly; return control to a new `send_goodbye/2`.
+- [x] 2.3 Add `send_goodbye/2` channel switch: `"whatsapp"` → `whatsapp_client().send_message(phone, msg)`; `"telegram"` → `Alethea.Jobs.TelegramOutboundWorker.new(%{chat_id:, chat_id_hash:, body: msg, patient_id: nil}) |> Oban.insert!()`.
+- [x] 2.4 Verify Phase 1 tests GREEN; run the 2 pre-existing tests unmodified — must stay green (Req: Existing WhatsApp tests remain green).
 
 ### Phase 3 — RED: Telegram enqueue-on-inbound-save tests
-- [ ] 3.1 `test/alethea/jobs/telegram_message_worker_test.exs`: replace the `refute_enqueued` block (446-458, #85 leftover) with `assert_enqueued(worker: AletheaJobs.SessionTimeoutWorker, args: %{channel: "telegram", ...})` for the safe path (Req: Telegram Timeout Job Args).
-- [ ] 3.2 Same file: add crisis-path test — crisis inbound save also asserts `SessionTimeoutWorker` enqueued (Req: Crisis-path message also enqueues/renews timeout).
-- [ ] 3.3 Same file: add renewal test — second inbound message on the same open session pushes `scheduled_at` via `replace: [:scheduled_at]` rather than duplicating the job.
+- [x] 3.1 `test/alethea/jobs/telegram_message_worker_test.exs`: replace the `refute_enqueued` block (446-458, #85 leftover) with `assert_enqueued(worker: AletheaJobs.SessionTimeoutWorker, args: %{channel: "telegram", ...})` for the safe path (Req: Telegram Timeout Job Args).
+- [x] 3.2 Same file: add crisis-path test — crisis inbound save also asserts `SessionTimeoutWorker` enqueued (Req: Crisis-path message also enqueues/renews timeout).
+- [x] 3.3 Same file: add renewal test — second inbound message on the same open session pushes `scheduled_at` via `replace: [:scheduled_at]` rather than duplicating the job.
 
 ### Phase 4 — GREEN: `lib/alethea/jobs/telegram_message_worker.ex`
-- [ ] 4.1 Add private `schedule_telegram_session_timeout/4` (session, legacy_patient, chat_id, chat_id_hash): builds `%{session_id: session.id, patient_id: legacy_patient.id, channel: "telegram", chat_id:, chat_id_hash:}`, `unique: [fields: [:args]]`, `Oban.insert!(replace: [:scheduled_at])`, `scheduled_at: now + 30 min`.
-- [ ] 4.2 Call it once in `process_bound_message/6`, immediately after the successful inbound save (post line 151), before the `CrisisMonitor.detect/1` case split — one call site covering both safe and crisis branches.
-- [ ] 4.3 Verify Phase 3 tests GREEN.
+- [x] 4.1 Add private `schedule_telegram_session_timeout/4` (session, legacy_patient, chat_id, chat_id_hash): builds `%{session_id: session.id, patient_id: legacy_patient.id, channel: "telegram", chat_id:, chat_id_hash:}`, `unique: [fields: [:args]]`, `Oban.insert!(replace: [:scheduled_at])`, `scheduled_at: now + 30 min`.
+- [x] 4.2 Call it once in `process_bound_message/6`, immediately after the successful inbound save (post line 151), before the `CrisisMonitor.detect/1` case split — one call site covering both safe and crisis branches.
+- [x] 4.3 Verify Phase 3 tests GREEN.
 
 ### Phase 5 — REFACTOR
-- [ ] 5.1 Confirm no duplicated "now + 30 min" logic leaks cross-module; keep local to each worker (mirrors `process_message_worker.ex` pattern, no shared helper per design).
-- [ ] 5.2 Clean up `session_timeout_worker.ex`: colocate `whatsapp_client/0` and telegram dispatch helpers, remove dead branches.
+- [x] 5.1 Confirm no duplicated "now + 30 min" logic leaks cross-module; keep local to each worker (mirrors `process_message_worker.ex` pattern, no shared helper per design).
+- [x] 5.2 Clean up `session_timeout_worker.ex`: colocate `whatsapp_client/0` and telegram dispatch helpers, remove dead branches.
 
 ### Phase 6 — Verification
-- [ ] 6.1 `mix test test/alethea_jobs/session_timeout_worker_test.exs`
-- [ ] 6.2 `mix test test/alethea/jobs/telegram_message_worker_test.exs`
-- [ ] 6.3 `mix precommit` green before opening PR-1.
+- [x] 6.1 `mix test test/alethea_jobs/session_timeout_worker_test.exs`
+- [x] 6.2 `mix test test/alethea/jobs/telegram_message_worker_test.exs`
+- [x] 6.3 `mix precommit` green before opening PR-1.
 
 ---
 
