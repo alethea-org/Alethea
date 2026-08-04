@@ -42,13 +42,6 @@ defmodule AletheaWeb.Router do
     get("/test-roberta", HealthController, :test_roberta)
   end
 
-  scope "/webhooks", AletheaWeb do
-    pipe_through(:api)
-
-    get("/whatsapp", WhatsappWebhookController, :verify)
-    post("/whatsapp", WhatsappWebhookController, :receive)
-  end
-
   # Telegram webhook + auth routes.
   #
   # The POST `/webhooks/telegram/` route is behind the

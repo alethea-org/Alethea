@@ -16,8 +16,6 @@ defmodule Alethea.Application do
       {DNSCluster, query: Application.get_env(:alethea, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Alethea.PubSub},
       Alethea.Encryption.Vault,
-      Alethea.WhatsApp.ConsentCache,
-      Alethea.RateLimiter,
       {Oban, Application.fetch_env!(:alethea, Oban)},
       AletheaWeb.Endpoint
     ]

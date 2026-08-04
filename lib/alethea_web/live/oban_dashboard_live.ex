@@ -14,7 +14,6 @@ defmodule AletheaWeb.ObanDashboardLive do
 
   @queues [
     :default,
-    :whatsapp,
     :sessions,
     :schedulers,
     :reports,

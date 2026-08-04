@@ -21,17 +21,10 @@ defmodule AletheaJobs.DailySchedulerWorker do
     Enum.each(patients, fn patient ->
       {:ok, session_dt} = DateTime.new(tomorrow, patient.session_time)
       report_scheduled_at = DateTime.add(session_dt, -2 * 3600, :second)
-      reminder_scheduled_at = DateTime.add(session_dt, -24 * 3600, :second)
 
       {:ok, _} =
         AletheaJobs.WeeklyReportWorker.new(%{patient_id: patient.id},
           scheduled_at: report_scheduled_at
-        )
-        |> Oban.insert()
-
-      {:ok, _} =
-        AletheaJobs.SessionReminderWorker.new(%{patient_id: patient.id},
-          scheduled_at: reminder_scheduled_at
         )
         |> Oban.insert()
     end)

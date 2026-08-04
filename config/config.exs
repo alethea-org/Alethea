@@ -50,7 +50,6 @@ config :alethea, Oban,
   engine: Oban.Engines.Basic,
   queues: [
     default: 10,
-    whatsapp: 20,
     sessions: 10,
     schedulers: 5,
     reports: 5,
