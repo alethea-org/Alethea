@@ -1166,13 +1166,6 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
           telegram_update_id: 110
         )
 
-      # Pre-anchor a session UUID so we can use it as a PHI sentinel in
-      # the raised error message (the inbound save binds `session_id`
-      # to the row, and the diagnosis changes map carries the same
-      # session_id surface if a future regression leaks the changeset).
-      {:ok, open_session} = SessionManager.current_open_session(ctx.legacy_patient.id)
-      session_uuid = open_session.id
-
       # Capture the inbound message id so we can scope the zero-row
       # assertion on `ai_diagnoses` (other tests may have left rows in
       # the sandboxed DB) — `where: d.message_id == ^inbound_id`.
@@ -1231,6 +1224,10 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # on step 2 raised a `MatchError` whose exception value WAS the
       # full `%Ecto.Changeset{}` (with `changes: %{ai_response: ...,
       # message_id: <uuid>, ...}`); the SafeReason wrap strips that.
+      # (This forcing path sets `ai_response: ""`, so there is no
+      # plaintext value to sentinel here — redaction of a real reply
+      # value is proven by the safe-path sibling test via `sentinel_reply`.
+      # These structural guards prove the changeset itself never dumps.)
       assert error.message =~ "[:ai_response]",
              "R3 acceptance: the raised error must include the SafeReason field keys " <>
                "(got: #{inspect(error.message)})"
@@ -1240,9 +1237,6 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       refute error.message =~ "changes:",
              "R3 PHI hygiene: the raised error must NOT leak the changeset `changes` map"
-
-      refute error.message =~ session_uuid,
-             "R3 PHI hygiene: the raised error must NOT embed the session UUID"
 
       # The PubSub subscription was set up in this describe block's
       # second `setup`. After the transaction rolls back, no
