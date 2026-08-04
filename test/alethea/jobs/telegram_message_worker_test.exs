@@ -1124,6 +1124,136 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # R3 acceptance test (PR #86 PR-2) — Crisis-Path Transactional Atomicity.
+  # Forces `save_ai_diagnosis/2` to fail end-to-end through `perform/1`
+  # (zero mocks, DB-level transaction) and proves the crisis-path writes
+  # roll back together while the raised error stays PHI-safe and no
+  # `:crisis_detected` broadcast or `TelegramOutboundWorker` job fires.
+  #
+  # Lives in a separate describe block (instead of the main
+  # `"perform/1 — crisis branch"` block) because ExUnit doesn't let a
+  # per-test setup callback replace the describe-level setup — running
+  # both `setup :setup_bound_patient` and
+  # `setup :setup_bound_patient_with_blank_crisis_message` in the same
+  # test would try to insert TWO foundation patients with the SAME
+  # `telegram_chat_id_hash`, tripping the `foundation_patients_telegram_chat_id_hash_unique`
+  # index. Mirrors the same separation-of-concerns pattern used by the
+  # `describe "perform/1 — crisis branch with a customized crisis_message"`
+  # block above.
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — crisis branch — R3 forced save_ai_diagnosis failure" do
+    setup :setup_bound_patient_with_blank_crisis_message
+
+    setup do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      :ok
+    end
+
+    test "blank Professional.crisis_message forces save_ai_diagnosis to fail; zero rows after rollback, PHI-safe raise, no broadcast, no enqueue (PR #86 PR-2 acceptance)",
+         ctx do
+      _ = ctx
+
+      # Sanity: the crisis-path forcing mechanism is in place. Without
+      # `crisis_message: ""` the worker's `crisis_text` (from
+      # `crisis_reply_text/1`, worker.ex:658) would resolve to the
+      # default fallback message and `save_ai_diagnosis` would succeed.
+      assert ctx.legacy_patient.urgent_intervention == false
+
+      inbound_args =
+        build_args("me voy a suicidar",
+          telegram_message_id: 1100,
+          telegram_update_id: 110
+        )
+
+      # Capture the inbound message id so we can scope the zero-row
+      # assertion on `ai_diagnoses` (other tests may have left rows in
+      # the sandboxed DB) — `where: d.message_id == ^inbound_id`.
+      error =
+        assert_raise RuntimeError, ~r/failed to persist/, fn ->
+          TelegramMessageWorker.perform(%Oban.Job{args: inbound_args})
+        end
+
+      # Reload the patient: `urgent_intervention` MUST still be
+      # `false`. Pre-fix (PR-2 without transaction), the bare-match
+      # step 1 `update_patient` had already committed before the
+      # diagnosis save raised — leaving the legacy Patient's clinical
+      # state inconsistent with the absent diagnosis and outbound row.
+      reloaded_patient = Alethea.Accounts.get_patient!(ctx.legacy_patient.id)
+
+      refute reloaded_patient.urgent_intervention,
+             "R3 acceptance: urgent_intervention MUST NOT flip when the crisis transaction rolls back"
+
+      # inbound_message_id was never persisted because the assert_raise
+      # aborted the test process before `perform/1` finished — but the
+      # inbound save happens BEFORE the transaction (outside it,
+      # per design). The actual persisted inbound row survives; we
+      # scope the diagnosis + outbound assertions to that row.
+      inbound =
+        Repo.one!(
+          from m in Message,
+            where: m.direction == "inbound" and m.telegram_message_id == "1100"
+        )
+
+      # Zero `ai_diagnoses` rows for the inbound.
+      ai_diagnoses_count =
+        Repo.aggregate(
+          from(d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id),
+          :count
+        )
+
+      assert ai_diagnoses_count == 0,
+             "R3 acceptance: no ai_diagnoses row must persist after rollback"
+
+      # Zero crisis-bypass outbound Message rows.
+      crisis_outbound_count =
+        Repo.aggregate(
+          from(m in Message,
+            where: m.direction == "outbound" and m.behavior_type == "crisis_bypass"
+          ),
+          :count
+        )
+
+      assert crisis_outbound_count == 0,
+             "R3 acceptance: no crisis outbound Message row must persist after rollback"
+
+      # PHI-safe raise: the diagnosis changeset only fails on
+      # `validate_required(:ai_response)`, so `SafeReason.for_log/1`
+      # surfaces exactly `[:ai_response]` — the failed field key,
+      # nothing from `changes`. Pre-fix the bare `{:ok, _} = ...` match
+      # on step 2 raised a `MatchError` whose exception value WAS the
+      # full `%Ecto.Changeset{}` (with `changes: %{ai_response: ...,
+      # message_id: <uuid>, ...}`); the SafeReason wrap strips that.
+      # (This forcing path sets `ai_response: ""`, so there is no
+      # plaintext value to sentinel here — redaction of a real reply
+      # value is proven by the safe-path sibling test via `sentinel_reply`.
+      # These structural guards prove the changeset itself never dumps.)
+      assert error.message =~ "[:ai_response]",
+             "R3 acceptance: the raised error must include the SafeReason field keys " <>
+               "(got: #{inspect(error.message)})"
+
+      refute error.message =~ "%Ecto.Changeset",
+             "R3 PHI hygiene: the raised error must NOT embed the inspect of the changeset"
+
+      refute error.message =~ "changes:",
+             "R3 PHI hygiene: the raised error must NOT leak the changeset `changes` map"
+
+      # The PubSub subscription was set up in this describe block's
+      # second `setup`. After the transaction rolls back, no
+      # `:crisis_detected` broadcast fires. The `safe classification
+      # does NOT broadcast...` test (line 1079) uses a 200 ms timeout;
+      # we use the same window — generous enough for any
+      # synchronous-but-misordered broadcast to land on the test
+      # process's mailbox.
+      refute_receive {:crisis_detected, _}, 200
+
+      # No `TelegramOutboundWorker` job on the safe or crisis lane
+      # (the inbound worker raised before reaching `enqueue_outbound`).
+      refute_enqueued(worker: TelegramOutboundWorker)
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Crisis queue-full escalation (REQ-C7-crisis-queue-full-escalation;
   #                              PR #3b / TASK-3b-3)
   # ----------------------------------------------------------------
@@ -1550,6 +1680,16 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
   defp setup_bound_patient_with_custom_crisis_message(_ctx) do
     setup_bound_patient_with_crisis_message("Custom reply from Dr. Test")
+  end
+
+  # PR-2 (#86) R3 forcing mechanism: `crisis_message: ""` -> `crisis_text: ""`
+  # (Elixir `||` does NOT fall through on `""`, only on `nil`/`false`) ->
+  # `ai_response: ""` -> Diagnosis `validate_required([:ai_response, ...])` rejects
+  # the blank string -> `save_ai_diagnosis/2` returns
+  # `{:error, %Ecto.Changeset{}}` deterministically. Zero mocks, zero production
+  # churn — exercises the worker's real DB transaction path.
+  defp setup_bound_patient_with_blank_crisis_message(_ctx) do
+    setup_bound_patient_with_crisis_message("")
   end
 
   defp setup_bound_patient_with_crisis_message(crisis_message) do
