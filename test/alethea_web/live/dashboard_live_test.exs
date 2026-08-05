@@ -1,8 +1,11 @@
 defmodule AletheaWeb.DashboardLiveTest do
   use AletheaWeb.ConnCase
+  use Oban.Testing, repo: Alethea.Repo
   import Phoenix.LiveViewTest
 
   alias Alethea.Accounts
+  alias Alethea.Repo
+  alias AletheaJobs.SessionReminderWorker
 
   setup [:register_and_log_in_professional]
 
@@ -92,6 +95,47 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert render(view) =~ "Mensaje de bienvenida actualizado."
       assert render(view) =~ "¡Hola! Bienvenido a tu espacio."
+    end
+  end
+
+  describe "save_session_schedule (real mode, #102 reminder cancellation)" do
+    test "cancels the pending reminder and shows the success flash", %{
+      conn: conn,
+      professional: professional
+    } do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{
+            "whatsapp_number" => "+5491#{:rand.uniform(99_999_999)}",
+            "alias" => "alias-#{System.unique_integer([:positive])}",
+            "professional_id" => professional.id
+          },
+          kek
+        )
+
+      {:ok, job} =
+        %{
+          "patient_id" => patient.id,
+          "session_date" => "2099-01-10",
+          "chat_id" => 555_666_777,
+          "chat_id_hash" => String.duplicate("b", 64)
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view
+      |> form("#schedule-form", %{day: "2", time: "18:00"})
+      |> render_submit()
+
+      assert render(view) =~ "Horario de sesión actualizado correctamente"
+      assert Repo.get(Oban.Job, job.id).state == "cancelled"
     end
   end
 
