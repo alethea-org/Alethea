@@ -55,15 +55,29 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     %{patient: patient, session: session, phone: phone}
   end
 
-  # #87: the WhatsApp path is retired. The channel-neutral goodbye send +
-  # the legacy `%{phone: ...}` perform clause were removed. A timeout job
-  # scheduled before the retirement (legacy WhatsApp args shape) must resolve
-  # to a no-op via the orphan-safe fallback clause — no crash, no close flow.
-  test "ignores a legacy WhatsApp (phone-args) timeout job without crashing", %{
-    patient: patient,
-    session: session,
-    phone: phone
-  } do
+  # #87: the WhatsApp path is retired. A timeout job scheduled before the
+  # retirement (legacy `%{phone: ...}` args) still closes + summarizes the
+  # session — the close/summary/trends pipeline is channel-independent — but
+  # SKIPS the retired WhatsApp goodbye (routed to the unknown-channel
+  # backstop), so no TelegramOutboundWorker goodbye is enqueued.
+  test "closes and summarizes a legacy WhatsApp (phone-args) session, skipping the retired goodbye",
+       %{patient: patient, session: session, phone: phone} do
+    emotion_scores = [
+      %{label: "joy", score: 0.80},
+      %{label: "sadness", score: 0.05},
+      %{label: "anger", score: 0.05},
+      %{label: "fear", score: 0.05},
+      %{label: "neutral", score: 0.05}
+    ]
+
+    Alethea.AI.RoBERTaWorkerMock
+    |> expect(:analyze_batch, fn _texts -> emotion_scores end)
+
+    Alethea.AI.SessionSummaryChainMock
+    |> expect(:run, fn _texts, _scores ->
+      {:ok, "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"}
+    end)
+
     log =
       capture_log(fn ->
         assert :ok =
@@ -74,19 +88,21 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
                  })
       end)
 
-    assert log =~ "ignoring non-Telegram timeout job"
+    # The close flow ran: session closed, trends + summary persisted.
+    assert Repo.get!(Session, session.id).status == "closed"
+    assert length(Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))) == 5
+    assert length(Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))) == 1
 
-    # The close flow did not run: no trends, no summary, session stays open.
-    assert Repo.all(from(t in Trend, where: t.patient_id == ^patient.id)) == []
-    assert Repo.all(from(s in Summary, where: s.patient_id == ^patient.id)) == []
-    assert Repo.get!(Session, session.id).status == "open"
+    # The retired WhatsApp goodbye is skipped via the unknown-channel
+    # backstop; no Telegram goodbye is enqueued for a legacy WhatsApp session.
+    assert log =~ "unknown channel for goodbye send"
+    refute_enqueued(worker: TelegramOutboundWorker)
   end
 
   # ----------------------------------------------------------------
-  # PR-1 (#86) — channel-neutral dispatch (Phase 1 RED).
+  # PR-1 (#86) — channel-neutral dispatch.
   # Telegram channel enqueues a TelegramOutboundWorker goodbye job
-  # (patient_id: nil — goodbyes are nil-safe per design). The 2
-  # WhatsApp tests above remain unchanged.
+  # (patient_id: nil — goodbyes are nil-safe per design).
   # ----------------------------------------------------------------
 
   describe "channel dispatch (PR-1 #86)" do
@@ -147,6 +163,12 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         Repo.all(from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker")
 
       assert job.args["body"] =~ "Tu sesión de hoy ha concluido"
+
+      # Close-flow side effects (primary-path coverage): the session is
+      # closed and its trends + summary are persisted.
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert length(Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))) == 5
+      assert length(Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))) == 1
     end
 
     test "telegram-channel idempotent skip: closed session short-circuits, NO TelegramOutboundWorker enqueued",

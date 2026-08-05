@@ -166,18 +166,27 @@ defmodule AletheaJobs.SessionTimeoutWorker do
     end
   end
 
-  # Orphan-safe fallback (#87): the WhatsApp path was retired, so no
-  # producer enqueues non-Telegram timeout jobs anymore. Any job that was
-  # scheduled before the retirement (e.g. a legacy `%{"phone" => ...}`
-  # WhatsApp timeout) resolves to a logged no-op instead of raising a
-  # FunctionClauseError on a now-unhandled args shape.
-  def perform(%Oban.Job{args: args}) do
-    Logger.warning(
-      "SessionTimeoutWorker: ignoring non-Telegram timeout job (retired WhatsApp path); " <>
-        "session_id=#{inspect(Map.get(args, "session_id"))}"
-    )
+  # Legacy WhatsApp timeout job scheduled before the #87 retirement. The
+  # close/summary/trends pipeline is channel-independent, so we still close
+  # the session and persist its summary — only the retired WhatsApp goodbye
+  # send is skipped (routed to `send_goodbye/2`'s unknown-channel backstop,
+  # which no-ops the send). A job matching neither the Telegram clause above
+  # nor this legacy `"phone"` shape raises FunctionClauseError (fails loud +
+  # Oban-visible) rather than being silently swallowed.
+  def perform(%Oban.Job{
+        args: %{
+          "session_id" => session_id,
+          "patient_id" => patient_id,
+          "phone" => _phone
+        }
+      }) do
+    session = Alethea.Repo.get!(Session, session_id)
 
-    :ok
+    if session.status == "closed" do
+      :ok
+    else
+      run_close_flow(session, patient_id, channel: "retired_whatsapp")
+    end
   end
 
   defp run_close_flow(session, patient_id, opts) do
