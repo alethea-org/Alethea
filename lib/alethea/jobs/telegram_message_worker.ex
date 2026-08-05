@@ -69,10 +69,17 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.{Accounts, Clinical, Repo}
   alias Alethea.Alerts.CrisisMonitor
   alias Alethea.Clinical.SessionManager
+  alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
   alias Alethea.Jobs.TelegramOutboundWorker
-  alias AletheaJobs.{EmotionAnalysisWorker, SessionTimeoutWorker, SafeReason}
+
+  alias AletheaJobs.{
+    EmotionAnalysisWorker,
+    SessionReminderWorker,
+    SessionTimeoutWorker,
+    SafeReason
+  }
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
 
@@ -165,6 +172,15 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       # on the same open session upserts `scheduled_at` rather than
       # duplicating the job.
       schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash)
+
+      # #97: opportunistic pre-session reminder enqueue. This is the
+      # only in-process moment the plaintext chat_id exists, so the
+      # reminder (scheduled for next_session - 24h) is enqueued here,
+      # right after the timeout enqueue, reusing the already-loaded
+      # `legacy_patient` (no extra query). Silent no-op when the
+      # patient has no schedule or the 24h window has already elapsed
+      # — see `schedule_session_reminder/3`.
+      schedule_session_reminder(legacy_patient, chat_id, chat_id_hash)
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
 
@@ -359,6 +375,87 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       replace: [scheduled: [:scheduled_at]]
     )
     |> Oban.insert!()
+  end
+
+  # #97 (telegram-session-reminders): enqueue a pre-session Telegram
+  # reminder scheduled for `next_session - 24h`, computed from the
+  # already-loaded `legacy_patient`'s `session_day_of_week` /
+  # `session_time` (`patient.ex:15-16`). Design (03-design.md
+  # "24h guard location"): the guard is local to this helper, not
+  # extracted into `SessionSchedule`, to keep enqueue orchestration
+  # at the trigger site (same philosophy as the timeout enqueue).
+  #
+  # Skip semantics (both silent, no log — see design.md "Skip semantics"):
+  #   - no schedule configured (`session_day_of_week`/`session_time` nil)
+  #   - the 24h window has already elapsed (`reminder_at <= now`) —
+  #     this fires on nearly every inbound message within 24h of a
+  #     session, so logging would be pure noise.
+  #
+  # Idempotency: `SessionReminderWorker`'s own `unique: [keys:
+  # [:patient_id, :session_date], period: :infinity]` dedups repeated
+  # inbound-triggered enqueue attempts for the same target session —
+  # the conflict surfaces as `{:ok, _}` and is treated as success;
+  # a genuine insert error is logged best-effort (see below).
+  defp schedule_session_reminder(
+         %{session_day_of_week: nil} = _legacy_patient,
+         _chat_id,
+         _chat_id_hash
+       ),
+       do: :ok
+
+  defp schedule_session_reminder(%{session_time: nil} = _legacy_patient, _chat_id, _chat_id_hash),
+    do: :ok
+
+  defp schedule_session_reminder(legacy_patient, chat_id, chat_id_hash) do
+    now = DateTime.utc_now()
+
+    next =
+      SessionSchedule.next_datetime(
+        legacy_patient.session_day_of_week,
+        legacy_patient.session_time,
+        now
+      )
+
+    reminder_at = DateTime.add(next, -24, :hour)
+
+    if DateTime.compare(reminder_at, now) == :gt do
+      args = %{
+        patient_id: legacy_patient.id,
+        session_date: Date.to_iso8601(DateTime.to_date(next)),
+        chat_id: chat_id,
+        chat_id_hash: chat_id_hash
+      }
+
+      insert_result =
+        args
+        |> SessionReminderWorker.new(scheduled_at: reminder_at)
+        |> Oban.insert()
+
+      case insert_result do
+        # `unique` dedup returns the conflicting job as `{:ok, _}` — a
+        # repeated inbound-triggered enqueue for the same target session
+        # is expected and needs no action.
+        {:ok, _job} ->
+          :ok
+
+        # A genuine insert failure (changeset/DB) must not be swallowed:
+        # log it PHI-safely (only the hash prefix + the non-PHI target
+        # date + scrubbed reason — never the raw chat_id) so a lost
+        # reminder is observable. The reminder is a best-effort nudge, so
+        # a failure here does NOT propagate and fail the clinical inbound
+        # message.
+        {:error, reason} ->
+          Logger.warning(
+            "TelegramMessageWorker: session-reminder enqueue failed " <>
+              "(hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, " <>
+              "session_date=#{args.session_date}, reason=#{SafeReason.for_log(reason)})"
+          )
+
+          :ok
+      end
+    else
+      :ok
+    end
   end
 
   defp enqueue_outbound(chat_id_hash, chat_id, message_id, body, hash_prefix, opts \\ []) do
