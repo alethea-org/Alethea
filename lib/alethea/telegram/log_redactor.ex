@@ -35,8 +35,9 @@ defmodule Alethea.Telegram.LogRedactor do
   the Telegram channel's `chat_id_hash` shape (64-char lowercase
   hex, per `Alethea.Telegram.ChatIdHash`). It does NOT redact:
 
-    - Legacy `whatsapp_number_hash` (different shape, different
-      risk profile; the WhatsApp pipeline has its own logging).
+    - Legacy `whatsapp_number_hash` (a retained-but-dead column from
+      the WhatsApp path retired in #87 — different shape, different
+      risk profile).
     - Patient names, aliases, or other PII.
     - The `body` (patient's own words). The `TelegramMessageWorker`
       already avoids logging `body`.

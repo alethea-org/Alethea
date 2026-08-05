@@ -55,11 +55,13 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     %{patient: patient, session: session, phone: phone}
   end
 
-  test "creates Trend records and a session Summary after closing", %{
-    patient: patient,
-    session: session,
-    phone: phone
-  } do
+  # #87: the WhatsApp path is retired. A timeout job scheduled before the
+  # retirement (legacy `%{phone: ...}` args) still closes + summarizes the
+  # session — the close/summary/trends pipeline is channel-independent — but
+  # SKIPS the retired WhatsApp goodbye (routed to the unknown-channel
+  # backstop), so no TelegramOutboundWorker goodbye is enqueued.
+  test "closes and summarizes a legacy WhatsApp (phone-args) session, skipping the retired goodbye",
+       %{patient: patient, session: session, phone: phone} do
     emotion_scores = [
       %{label: "joy", score: 0.80},
       %{label: "sadness", score: 0.05},
@@ -68,7 +70,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       %{label: "neutral", score: 0.05}
     ]
 
-    # Setup expectations - the mock is already configured via test.exs config
     Alethea.AI.RoBERTaWorkerMock
     |> expect(:analyze_batch, fn _texts -> emotion_scores end)
 
@@ -77,52 +78,31 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       {:ok, "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"}
     end)
 
-    Alethea.WhatsApp.ClientMock
-    |> expect(:send_message, fn _phone, body ->
-      assert body =~ "Tu sesión de hoy ha concluido"
-      {:ok, %{}}
-    end)
+    log =
+      capture_log(fn ->
+        assert :ok =
+                 perform_job(SessionTimeoutWorker, %{
+                   session_id: session.id,
+                   patient_id: patient.id,
+                   phone: phone
+                 })
+      end)
 
-    assert :ok =
-             perform_job(SessionTimeoutWorker, %{
-               session_id: session.id,
-               patient_id: patient.id,
-               phone: phone
-             })
+    # The close flow ran: session closed, trends + summary persisted.
+    assert Repo.get!(Session, session.id).status == "closed"
+    assert length(Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))) == 5
+    assert length(Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))) == 1
 
-    trends = Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))
-    assert length(trends) == 5
-
-    summaries = Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))
-    assert length(summaries) == 1
-    assert hd(summaries).type == "session"
-
-    closed_session = Repo.get!(Session, session.id)
-    assert closed_session.status == "closed"
-  end
-
-  test "is idempotent when session is already closed", %{
-    session: session,
-    patient: patient,
-    phone: phone
-  } do
-    {:ok, _} = SessionManager.close_session(session)
-
-    assert :ok =
-             perform_job(SessionTimeoutWorker, %{
-               session_id: session.id,
-               patient_id: patient.id,
-               phone: phone
-             })
-
-    assert Repo.all(from(t in Trend, where: t.patient_id == ^patient.id)) == []
+    # The retired WhatsApp goodbye is skipped via the unknown-channel
+    # backstop; no Telegram goodbye is enqueued for a legacy WhatsApp session.
+    assert log =~ "unknown channel for goodbye send"
+    refute_enqueued(worker: TelegramOutboundWorker)
   end
 
   # ----------------------------------------------------------------
-  # PR-1 (#86) — channel-neutral dispatch (Phase 1 RED).
+  # PR-1 (#86) — channel-neutral dispatch.
   # Telegram channel enqueues a TelegramOutboundWorker goodbye job
-  # (patient_id: nil — goodbyes are nil-safe per design). The 2
-  # WhatsApp tests above remain unchanged.
+  # (patient_id: nil — goodbyes are nil-safe per design).
   # ----------------------------------------------------------------
 
   describe "channel dispatch (PR-1 #86)" do
@@ -145,7 +125,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       }
     end
 
-    test "telegram-channel args enqueue TelegramOutboundWorker goodbye (chat_id, chat_id_hash, body, patient_id: nil) and do NOT call whatsapp_client",
+    test "telegram-channel args enqueue TelegramOutboundWorker goodbye (chat_id, chat_id_hash, body, patient_id: nil)",
          %{session: session, patient: patient, telegram_args: targs} do
       targs = %{targs | session_id: session.id, patient_id: patient.id}
 
@@ -163,15 +143,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       Alethea.AI.SessionSummaryChainMock
       |> expect(:run, fn _texts, _scores ->
         {:ok, "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"}
-      end)
-
-      # WhatsApp client MUST NOT be called on the telegram channel —
-      # `verify_on_exit!` would catch an unexpected call. Set an
-      # explicit 0-call expectation so the assertion is unambiguous
-      # (Mox fails the test if `send_message/2` lands even once).
-      Alethea.WhatsApp.ClientMock
-      |> expect(:send_message, 0, fn _phone, _body ->
-        flunk("whatsapp_client must NOT be invoked on the telegram channel")
       end)
 
       assert :ok = perform_job(SessionTimeoutWorker, targs)
@@ -192,6 +163,12 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         Repo.all(from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker")
 
       assert job.args["body"] =~ "Tu sesión de hoy ha concluido"
+
+      # Close-flow side effects (primary-path coverage): the session is
+      # closed and its trends + summary are persisted.
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert length(Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))) == 5
+      assert length(Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))) == 1
     end
 
     test "telegram-channel idempotent skip: closed session short-circuits, NO TelegramOutboundWorker enqueued",
@@ -208,11 +185,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       Alethea.AI.SessionSummaryChainMock
       |> expect(:run, 0, fn _, _ ->
         flunk("SessionSummaryChain must not run on closed session")
-      end)
-
-      Alethea.WhatsApp.ClientMock
-      |> expect(:send_message, 0, fn _, _ ->
-        flunk("whatsapp_client must not run on closed session")
       end)
 
       assert :ok = perform_job(SessionTimeoutWorker, targs)
@@ -249,8 +221,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     test "failed save_summary: log line contains only the failed validation keys, NEVER the summary_text from changes",
          %{
            patient: patient,
-           session: session,
-           phone: phone
+           session: session
          } do
       emotion_scores = [
         %{label: "joy", score: 0.80},
@@ -294,20 +265,15 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         {:error, failing_cs}
       end)
 
-      # No goodbye is sent when the pipeline errors (the worker's
-      # `else` branch returns `{:error, reason}` without dispatch).
-      Alethea.WhatsApp.ClientMock
-      |> expect(:send_message, 0, fn _, _ ->
-        flunk("whatsapp_client must NOT be invoked when save_summary fails")
-      end)
-
       log =
         capture_log([level: :error], fn ->
           result =
             perform_job(SessionTimeoutWorker, %{
               session_id: session.id,
               patient_id: patient.id,
-              phone: phone
+              channel: "telegram",
+              chat_id: 987_654_321,
+              chat_id_hash: "test_chat_id_hash_abcdef"
             })
 
           # The worker MUST surface the failure to Oban so Oban
@@ -339,8 +305,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     test "failed save_summary with summary_text in the changes map: the summary_text value MUST NOT appear in the log",
          %{
            patient: patient,
-           session: session,
-           phone: phone
+           session: session
          } do
       emotion_scores = [
         %{label: "joy", score: 0.80},
@@ -376,16 +341,15 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         {:error, failing_cs}
       end)
 
-      Alethea.WhatsApp.ClientMock
-      |> expect(:send_message, 0, fn _, _ -> flunk("no whatsapp call") end)
-
       log =
         capture_log([level: :error], fn ->
           assert {:error, _} =
                    perform_job(SessionTimeoutWorker, %{
                      session_id: session.id,
                      patient_id: patient.id,
-                     phone: phone
+                     channel: "telegram",
+                     chat_id: 987_654_321,
+                     chat_id_hash: "test_chat_id_hash_abcdef"
                    })
         end)
 

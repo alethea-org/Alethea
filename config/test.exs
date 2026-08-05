@@ -27,12 +27,6 @@ config :alethea,
        :phone_hash_secret,
        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
-config :alethea, :whatsapp,
-  api_token: "mock_token",
-  phone_number_id: "mock_id",
-  app_secret: "test_secret"
-
-config :alethea, :whatsapp_client, Alethea.WhatsApp.ClientMock
 config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock

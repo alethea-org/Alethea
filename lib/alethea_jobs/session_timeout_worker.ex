@@ -4,7 +4,8 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
   Closes the session after the inactivity window, runs the shared
   summary/trends pipeline, and dispatches the goodbye through the
-  channel recorded in the job args (`"whatsapp"` or `"telegram"`).
+  channel recorded in the job args (currently `"telegram"`; the
+  legacy `"whatsapp"` path was retired in #87).
 
   ## Uniqueness policy (Round 1 fix — verify-flagged CRITICAL)
 
@@ -116,9 +117,6 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
   require Logger
 
-  defp whatsapp_client,
-    do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-
   defp roberta_worker,
     do: Application.get_env(:alethea, :roberta_worker, Alethea.AI.RoBERTaWorker)
 
@@ -168,25 +166,26 @@ defmodule AletheaJobs.SessionTimeoutWorker do
     end
   end
 
-  # Legacy WhatsApp args shape (unchanged, preserved by the
-  # `process_message_worker.ex` pipeline). Absent `channel` + present
-  # `phone` defaults to `"whatsapp"` (Req: WhatsApp Backward
-  # Compatibility — the 2 pre-existing tests stay green unmodified).
+  # Legacy WhatsApp timeout job scheduled before the #87 retirement. The
+  # close/summary/trends pipeline is channel-independent, so we still close
+  # the session and persist its summary — only the retired WhatsApp goodbye
+  # send is skipped (routed to `send_goodbye/2`'s unknown-channel backstop,
+  # which no-ops the send). A job matching neither the Telegram clause above
+  # nor this legacy `"phone"` shape raises FunctionClauseError (fails loud +
+  # Oban-visible) rather than being silently swallowed.
   def perform(%Oban.Job{
-        args:
-          %{
-            "session_id" => session_id,
-            "patient_id" => patient_id,
-            "phone" => phone
-          } = args
+        args: %{
+          "session_id" => session_id,
+          "patient_id" => patient_id,
+          "phone" => _phone
+        }
       }) do
-    channel = Map.get(args, "channel", "whatsapp")
     session = Alethea.Repo.get!(Session, session_id)
 
     if session.status == "closed" do
       :ok
     else
-      run_close_flow(session, patient_id, channel: channel, phone: phone)
+      run_close_flow(session, patient_id, channel: "retired_whatsapp")
     end
   end
 
@@ -236,9 +235,6 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   # The goodbye body text is identical across channels; the dispatch
   # target differs:
   #
-  #   * `"whatsapp"` → existing inline send via the WhatsApp client
-  #     (unchanged behavior — the 2 pre-existing tests stay green
-  #     unmodified).
   #   * `"telegram"` → enqueue a `TelegramOutboundWorker` goodbye job
   #     on the safe lane with `patient_id: nil` (goodbyes are
   #     nil-safe per design). The raw `chat_id` + `chat_id_hash`
@@ -263,10 +259,6 @@ defmodule AletheaJobs.SessionTimeoutWorker do
         |> Oban.insert!()
 
         :ok
-
-      "whatsapp" ->
-        phone = Keyword.fetch!(opts, :phone)
-        whatsapp_client().send_message(phone, body)
 
       other ->
         # Backstop: unknown channel (future addition). The session is
