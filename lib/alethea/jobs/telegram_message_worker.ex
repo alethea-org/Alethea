@@ -76,12 +76,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
 
-  # Reads the PhiWorker port from Application env at call-time.
-  # Mirrors `AletheaJobs.ProcessMessageWorker` (the WhatsApp pipeline)
-  # so the Telegram safe path and the WhatsApp pipeline converge on
-  # the same PII-sanitizing, emotion-enriching chain. Production uses
-  # `Alethea.AI.PhiWorker`; tests bind the port to the Mox
-  # `Alethea.AI.PhiWorkerMock`.
+  # Reads the PhiWorker port from Application env at call-time, so the
+  # Telegram safe path runs the same PII-sanitizing, emotion-enriching
+  # chain. Production uses `Alethea.AI.PhiWorker`; tests bind the port
+  # to the Mox `Alethea.AI.PhiWorkerMock`.
   defp phi_worker, do: Application.get_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
 
   @impl Oban.Worker
@@ -324,10 +322,9 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     end
   end
 
-  # PR-1 (#86): channel-dispatched session-timeout enqueue. Mirrors
-  # `AletheaJobs.ProcessMessageWorker.schedule_session_timeout/3` for
-  # the WhatsApp pipeline (the "now + 30 min" logic is local to each
-  # worker — no shared helper, per design). Channel + routing
+  # PR-1 (#86): channel-dispatched session-timeout enqueue. The
+  # "now + 30 min" logic is local to this worker (no shared helper,
+  # per design). Channel + routing
   # identifiers ride in Oban job args (no migration, no Session
   # schema column — see exploration.md "Channel-dispatch mechanism").
   #
@@ -671,8 +668,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # Resolve the crisis-bypass reply text. The psychologist preconfigures
   # a per-professional `crisis_message` (the patient-facing reply the
   # system sends when a `:crisis` classification lands). If unset, fall
-  # back to a system default — same fallback the WhatsApp pipeline uses
-  # (`AletheaJobs.ProcessMessageWorker` moduledoc).
+  # back to a system default.
   defp crisis_reply_text(legacy_patient) do
     legacy_patient.professional.crisis_message ||
       Application.get_env(

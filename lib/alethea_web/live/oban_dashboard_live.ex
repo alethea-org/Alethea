@@ -113,7 +113,7 @@ defmodule AletheaWeb.ObanDashboardLive do
       </div>
       
     <!-- Queue Stats -->
-      <div class="grid grid-cols-6 gap-4 mb-6">
+      <div class="grid grid-cols-5 gap-4 mb-6">
         <%= for queue <- @queues do %>
           <div class="bg-gray-50 rounded-lg p-4">
             <div class="text-sm text-gray-500">{queue}</div>

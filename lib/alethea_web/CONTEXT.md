@@ -6,7 +6,7 @@ Este es el **Adaptador de Entrada** para el mundo exterior (HTTP, WebSockets).
 Gestionar las peticiones de los usuarios y profesionales, traduciéndolas en llamadas al núcleo de la aplicación.
 
 ## Sub-módulos
-*   **`controllers/`**: Maneja peticiones HTTP tradicionales y Webhooks (ej. WhatsApp).
+*   **`controllers/`**: Maneja peticiones HTTP tradicionales y Webhooks (ej. Telegram).
 *   **`live/`**: Dashboard profesional reactivo usando Phoenix LiveView.
 *   **`components/`**: Componentes visuales reutilizables.
 *   **`router.ex`**: Define los puntos de entrada y los pipelines de seguridad (browser, api).
