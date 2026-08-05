@@ -30,7 +30,6 @@ defmodule Alethea.Test.ObanHelper do
   @spec drain_all_jobs() :: :ok
   def drain_all_jobs do
     Oban.drain_queue(queue: :default)
-    Oban.drain_queue(queue: :whatsapp)
     Oban.drain_queue(queue: :ai_analysis)
     :ok
   end

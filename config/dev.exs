@@ -74,12 +74,6 @@ config :alethea,
        :phone_hash_secret,
        "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
 
-config :alethea, :whatsapp,
-  api_token: System.get_env("WHATSAPP_API_TOKEN", "mock"),
-  phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "mock"),
-  app_secret: System.get_env("WHATSAPP_APP_SECRET"),
-  verify_token: System.get_env("WHATSAPP_VERIFY_TOKEN", "alethea2026")
-
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

@@ -5,7 +5,7 @@ defmodule AletheaJobs.DailySchedulerWorkerTest do
   import Ecto.Query
 
   alias Alethea.{Accounts, Repo}
-  alias AletheaJobs.{DailySchedulerWorker, WeeklyReportWorker}
+  alias AletheaJobs.{DailySchedulerWorker, SessionReminderWorker, WeeklyReportWorker}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
@@ -55,6 +55,10 @@ defmodule AletheaJobs.DailySchedulerWorkerTest do
     assert :ok = perform_job(DailySchedulerWorker, %{})
 
     assert_enqueued(worker: WeeklyReportWorker, args: %{patient_id: matching_patient.id})
+
+    # #87: WhatsApp session reminders were retired — the scheduler must no
+    # longer enqueue SessionReminderWorker (Telegram equivalent tracked in #97).
+    refute_enqueued(worker: SessionReminderWorker)
 
     jobs =
       Repo.all(

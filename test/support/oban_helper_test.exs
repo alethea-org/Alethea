@@ -17,7 +17,6 @@ defmodule Alethea.Test.ObanHelperTest do
     end
 
     test "accepts different queue names" do
-      drain_queue(queue: :whatsapp)
       drain_queue(queue: :ai_analysis)
       assert true
     end

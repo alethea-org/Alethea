@@ -125,11 +125,6 @@ if config_env() == :prod do
 
   config :alethea, Alethea.Encryption.Vault, aes_key: cloak_aes_key
 
-  config :alethea, :whatsapp,
-    api_token: System.get_env("WHATSAPP_API_TOKEN", ""),
-    phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", ""),
-    app_secret: System.get_env("WHATSAPP_APP_SECRET", "")
-
   ai_provider =
     System.get_env("AI_PROVIDER", "local")
     |> String.downcase()

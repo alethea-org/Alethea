@@ -27,10 +27,6 @@ services:
       - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-phi-4-mini}
       - REDIS_URL=redis://redis:6379
-      - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN:-}
-      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
-      - WHATSAPP_APP_SECRET=${WHATSAPP_APP_SECRET:-}
-      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-alethea2026}
     depends_on:
       db:
         condition: service_healthy

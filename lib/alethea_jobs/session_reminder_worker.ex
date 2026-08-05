@@ -1,55 +1,20 @@
 defmodule AletheaJobs.SessionReminderWorker do
+  @moduledoc """
+  Retired in #87 alongside the WhatsApp messaging path.
+
+  Session reminders were WhatsApp-only; they have no Telegram equivalent yet
+  (tracked in #97). No new reminder jobs are enqueued — `DailySchedulerWorker`
+  no longer schedules this worker. This module is kept as an inert no-op so any
+  Oban job scheduled before the retirement (reminders are queued up to ~24h
+  ahead) resolves cleanly to `:ok` instead of crashing on a missing module.
+
+  When #97 lands, this module is either repurposed for the Telegram reminder or
+  removed once no scheduled jobs can reference it.
+  """
   use Oban.Worker,
     queue: :sessions,
-    max_attempts: 3,
-    unique: [fields: [:args], period: 23 * 3600]
-
-  alias Alethea.{Accounts, Clinical}
-  alias Alethea.Encryption.PatientVault
-
-  require Logger
-
-  defp whatsapp_client,
-    do: Application.get_env(:alethea, :whatsapp_client, Alethea.WhatsApp.Client)
-
-  @reminder_message """
-  Hola, te recordamos que mañana tienes una sesión programada con tu terapeuta.
-  Si necesitas reprogramar, comunícate con tu terapeuta.
-  """
+    max_attempts: 3
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"patient_id" => patient_id}}) do
-    patient = Accounts.get_patient!(patient_id)
-
-    with {:ok, phone} <- decrypt_phone(patient),
-         {:ok, _response} <- whatsapp_client().send_message(phone, @reminder_message) do
-      Accounts.log_action(%{
-        professional_id: patient.professional_id,
-        action: "SESSION_REMINDER_SENT",
-        resource_type: "Patient",
-        resource_id: patient.id,
-        details: %{scheduled_at: patient.session_time}
-      })
-
-      :ok
-    else
-      {:error, reason} ->
-        Accounts.log_action(%{
-          professional_id: patient.professional_id,
-          action: "SESSION_REMINDER_FAILED",
-          resource_type: "Patient",
-          resource_id: patient.id,
-          details: %{reason: inspect(reason)}
-        })
-
-        Logger.error("SessionReminderWorker failed for patient #{patient_id}: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp decrypt_phone(patient) do
-    with {:ok, dek} <- Clinical.patient_dek(patient) do
-      PatientVault.decrypt(patient.encrypted_whatsapp_number, dek)
-    end
-  end
+  def perform(%Oban.Job{}), do: :ok
 end
