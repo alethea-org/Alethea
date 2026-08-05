@@ -108,6 +108,114 @@ defmodule AletheaJobs.SessionReminderWorkerTest do
     end
   end
 
+  describe "cancel_pending/1" do
+    test "happy path: cancels a real pending job and returns {:ok, 1}" do
+      patient_id = Ecto.UUID.generate()
+
+      {:ok, job} =
+        %{
+          "patient_id" => patient_id,
+          "session_date" => "2099-01-10",
+          "chat_id" => @chat_id,
+          "chat_id_hash" => @chat_id_hash
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      assert {:ok, 1} = SessionReminderWorker.cancel_pending(patient_id)
+
+      assert Repo.get(Oban.Job, job.id).state == "cancelled"
+    end
+
+    test "scoping: only cancels the pending job for the given patient" do
+      patient_a = Ecto.UUID.generate()
+      patient_b = Ecto.UUID.generate()
+
+      {:ok, job_a} =
+        %{
+          "patient_id" => patient_a,
+          "session_date" => "2099-01-10",
+          "chat_id" => @chat_id,
+          "chat_id_hash" => @chat_id_hash
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      {:ok, job_b} =
+        %{
+          "patient_id" => patient_b,
+          "session_date" => "2099-01-11",
+          "chat_id" => @chat_id,
+          "chat_id_hash" => @chat_id_hash
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      assert {:ok, 1} = SessionReminderWorker.cancel_pending(patient_a)
+
+      assert Repo.get(Oban.Job, job_a.id).state == "cancelled"
+      assert Repo.get(Oban.Job, job_b.id).state == "scheduled"
+    end
+
+    test "worker-string pin: the enqueued job's worker field literal-equals the cancel query filter" do
+      patient_id = Ecto.UUID.generate()
+
+      {:ok, job} =
+        %{
+          "patient_id" => patient_id,
+          "session_date" => "2099-01-10",
+          "chat_id" => @chat_id,
+          "chat_id_hash" => @chat_id_hash
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      assert job.worker == "AletheaJobs.SessionReminderWorker"
+    end
+
+    test "no pending reminder exists: completes without error and changes nothing" do
+      patient_id = Ecto.UUID.generate()
+      other_patient_id = Ecto.UUID.generate()
+
+      {:ok, other_job} =
+        %{
+          "patient_id" => other_patient_id,
+          "session_date" => "2099-01-10",
+          "chat_id" => @chat_id,
+          "chat_id_hash" => @chat_id_hash
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      assert {:ok, 0} = SessionReminderWorker.cancel_pending(patient_id)
+
+      assert Repo.get(Oban.Job, other_job.id).state == "scheduled"
+    end
+
+    test "cancels a job awaiting retry (retryable state)" do
+      patient_id = Ecto.UUID.generate()
+
+      {:ok, job} =
+        %{
+          "patient_id" => patient_id,
+          "session_date" => "2099-01-10",
+          "chat_id" => @chat_id,
+          "chat_id_hash" => @chat_id_hash
+        }
+        |> SessionReminderWorker.new(scheduled_at: DateTime.add(DateTime.utc_now(), 3, :day))
+        |> Oban.insert()
+
+      # A reminder that already fired, raised, and is awaiting a retry
+      # (max_attempts: 3) sits in "retryable" — it must still be cancelled
+      # on a schedule change, or it would deliver the stale reminder.
+      {:ok, _} = job |> Ecto.Changeset.change(state: "retryable") |> Repo.update()
+
+      assert {:ok, 1} = SessionReminderWorker.cancel_pending(patient_id)
+
+      assert Repo.get(Oban.Job, job.id).state == "cancelled"
+    end
+  end
+
   defp safe_start_pacer do
     case Process.whereis(Pacer) do
       nil ->

@@ -1,6 +1,7 @@
 defmodule AletheaWeb.DashboardLive do
   use AletheaWeb, :live_view
   import Ecto.Query
+  require Logger
   alias Alethea.Accounts
   alias Alethea.Clinical.{MockData, Message}
   alias AletheaWeb.DashboardLive.Components.EmotionChart
@@ -145,6 +146,16 @@ defmodule AletheaWeb.DashboardLive do
     else
       case Accounts.update_patient_session_schedule(patient, day, time) do
         {:ok, updated_patient} ->
+          try do
+            AletheaJobs.SessionReminderWorker.cancel_pending(updated_patient.id)
+          rescue
+            error ->
+              Logger.warning(
+                "save_session_schedule: reminder cancel failed " <>
+                  "(patient_id=#{updated_patient.id}, reason=#{inspect(error)})"
+              )
+          end
+
           patients = Accounts.list_patients(socket.assigns.current_professional.id)
 
           socket =
