@@ -7,6 +7,9 @@ defmodule AletheaWeb.DashboardLive do
   alias AletheaWeb.DashboardLive.Components.EmotionChart
   alias Alethea.Encryption.PatientVault
   alias AletheaWeb.DashboardLive.Components.NotificationCenter
+  # PROTOTYPE (#116) — layout variants; delete with the module.
+  alias AletheaWeb.Components.PrototypeSwitcher
+  alias AletheaWeb.DashboardLive.PrototypeVariants
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
@@ -52,6 +55,9 @@ defmodule AletheaWeb.DashboardLive do
   end
 
   def handle_params(params, _url, socket) do
+    # PROTOTYPE (#116) — layout variant selector; remove with PrototypeVariants.
+    socket = assign(socket, :prototype_variant, params["variant"] || "actual")
+
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
 
