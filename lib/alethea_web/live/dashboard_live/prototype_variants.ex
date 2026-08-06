@@ -47,7 +47,7 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
       <div class="pta-picker">
         <.link
           :for={patient <- @patients}
-          patch={~p"/dashboard/patients/#{patient.id}?variant=a"}
+          patch={dash_path(patient, variant: "a", theme: @theme)}
           class={[
             "pta-chip",
             @selected_patient && @selected_patient.id == patient.id && "pta-chip--active",
@@ -99,13 +99,13 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
 
         <div class="ptd-toggle" role="group" aria-label="Cómo elegir el paciente">
           <.link
-            patch={picker_path(@selected_patient, "chips")}
+            patch={picker_path(@selected_patient, "chips", @theme)}
             class={["ptd-toggle__btn", @picker == "chips" && "ptd-toggle__btn--on"]}
           >
             Pacientes
           </.link>
           <.link
-            patch={picker_path(@selected_patient, "week")}
+            patch={picker_path(@selected_patient, "week", @theme)}
             class={["ptd-toggle__btn", @picker == "week" && "ptd-toggle__btn--on"]}
           >
             Semana
@@ -117,7 +117,7 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
       <div :if={@picker == "chips"} class="pta-picker">
         <.link
           :for={patient <- @patients}
-          patch={patient_path(patient, "chips")}
+          patch={patient_path(patient, "chips", @theme)}
           class={[
             "pta-chip",
             @selected_patient && @selected_patient.id == patient.id && "pta-chip--active",
@@ -137,7 +137,7 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
           <div class="ptc-day__name">{day_name(day)}</div>
           <.link
             :for={patient <- Map.get(@by_day, day, [])}
-            patch={patient_path(patient, "week")}
+            patch={patient_path(patient, "week", @theme)}
             class={[
               "ptc-slot",
               patient.urgent_intervention && "ptc-slot--risk",
@@ -287,7 +287,7 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
               class={patient.urgent_intervention && "ptb-row--risk"}
             >
               <td>
-                <.link patch={~p"/dashboard/patients/#{patient.id}?variant=b"} class="ptb-name">
+                <.link patch={dash_path(patient, variant: "b", theme: @theme)} class="ptb-name">
                   <span class="pt-avatar" style="width:30px; height:30px; font-size:11px;">
                     {initials(patient.alias)}
                   </span>
@@ -334,7 +334,11 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
             <div class="pt-h2">{@selected_patient.alias}</div>
             <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
           </div>
-          <.link patch={~p"/dashboard?variant=b"} class="ptb-drawer__close" aria-label="Cerrar">
+          <.link
+            patch={dash_path(nil, variant: "b", theme: @theme)}
+            class="ptb-drawer__close"
+            aria-label="Cerrar"
+          >
             &times;
           </.link>
         </div>
@@ -435,7 +439,7 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
           <div class="ptc-day__name">{day_name(day)}</div>
           <.link
             :for={patient <- Map.get(@by_day, day, [])}
-            patch={~p"/dashboard/patients/#{patient.id}?variant=c"}
+            patch={dash_path(patient, variant: "c", theme: @theme)}
             class={["ptc-slot", patient.urgent_intervention && "ptc-slot--risk"]}
           >
             {patient.alias}
@@ -652,13 +656,17 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
 
   # ── Variant D routing ─────────────────────────────────────────────
 
-  defp patient_path(patient, picker) do
-    ~p"/dashboard/patients/#{patient.id}?#{[variant: "d", picker: picker]}"
+  # Every in-variant link must carry variant AND theme, otherwise
+  # selecting a patient silently drops the warm palette.
+  defp dash_path(nil, params), do: ~p"/dashboard?#{params}"
+
+  defp dash_path(patient, params), do: ~p"/dashboard/patients/#{patient.id}?#{params}"
+
+  defp patient_path(patient, picker, theme) do
+    dash_path(patient, variant: "d", picker: picker, theme: theme)
   end
 
-  defp picker_path(nil, picker), do: ~p"/dashboard?#{[variant: "d", picker: picker]}"
-
-  defp picker_path(patient, picker), do: patient_path(patient, picker)
+  defp picker_path(patient, picker, theme), do: patient_path(patient, picker, theme)
 
   # ── Formatting ────────────────────────────────────────────────────
 

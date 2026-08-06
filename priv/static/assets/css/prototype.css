@@ -157,6 +157,27 @@
 .pt-theme--warm .pt-h1 { font-size: 34px; }
 .pt-theme--warm .pta-briefing__text { font-size: 19px; line-height: 1.6; }
 
+/* Odds and ends inside the briefing that carried cold hardcoded values.
+   The emotion bars keep their own hues on purpose — those encode data
+   (alegría / tristeza / ira / miedo / neutro), so warming them would
+   change what the chart means. Only the chrome around them moves. */
+.pt-theme--warm .pt-pill { border-color: transparent; }
+.pt-theme--warm .pta-chip--risk { border-color: var(--pt-danger-soft); }
+.pt-theme--warm .pta-metrics { background: var(--pt-line); }
+
+.pt-theme--warm svg line { stroke: var(--pt-line) !important; }
+.pt-theme--warm svg text { fill: var(--pt-ink-3) !important; }
+
+.pt-theme--warm .chat-bubble {
+  background: var(--pt-accent-soft);
+  color: var(--pt-ink);
+}
+.pt-theme--warm .chat-bubble-primary {
+  background: var(--pt-accent);
+  color: var(--pt-on-accent);
+}
+.pt-theme--warm progress.progress { accent-color: var(--pt-accent); }
+
 /* The app shell (sidebar + topbar) lives OUTSIDE the theme wrapper, so
    reach it from the body. This is what "retint the whole app" looks
    like — in the real build these would be the shell's own tokens. */
