@@ -47,3 +47,4 @@ node_modules/
 # Agent/runner state and local caches
 /.atl/
 /.pi/
+opencode.jsonc
