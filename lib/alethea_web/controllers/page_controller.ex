@@ -6,7 +6,10 @@ defmodule AletheaWeb.PageController do
       redirect(conn, to: "/dashboard")
     else
       # PROTOTYPE (#116) — layout variant selector; remove with PagePrototypeVariants.
-      render(conn, :home, prototype_variant: params["variant"] || "actual")
+      render(conn, :home,
+        prototype_variant: params["variant"] || "actual",
+        theme: params["theme"] || "default"
+      )
     end
   end
 end

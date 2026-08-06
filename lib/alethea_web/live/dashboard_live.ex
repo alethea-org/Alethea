@@ -60,6 +60,7 @@ defmodule AletheaWeb.DashboardLive do
       socket
       |> assign(:prototype_variant, params["variant"] || "actual")
       |> assign(:picker, params["picker"] || "chips")
+      |> assign(:theme, params["theme"] || "default")
 
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
