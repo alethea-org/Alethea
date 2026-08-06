@@ -25,7 +25,6 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
     {:ok, patient} =
       Accounts.create_patient(
         %{
-          "whatsapp_number" => "+541122223333",
           "alias" => "Weekly Patient",
           "professional_id" => professional.id
         },

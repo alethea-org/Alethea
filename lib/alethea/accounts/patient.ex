@@ -5,8 +5,6 @@ defmodule Alethea.Accounts.Patient do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "patients" do
-    field(:whatsapp_number_hash, :string)
-    field(:encrypted_whatsapp_number, :binary)
     field(:alias, :string)
     field(:status, :string, default: "active")
     field(:terms_accepted, :boolean, default: false)
@@ -14,9 +12,6 @@ defmodule Alethea.Accounts.Patient do
     field(:encryption_version, :integer, default: 1)
     field(:session_day_of_week, :integer)
     field(:session_time, :time)
-
-    # Virtual field for the raw number during input
-    field(:whatsapp_number, :string, virtual: true)
 
     belongs_to(:professional, Alethea.Accounts.Professional)
     belongs_to(:encryption_key, Alethea.Accounts.EncryptionKey)
@@ -32,9 +27,6 @@ defmodule Alethea.Accounts.Patient do
   def changeset(patient, attrs) do
     patient
     |> cast(attrs, [
-      :whatsapp_number,
-      :whatsapp_number_hash,
-      :encrypted_whatsapp_number,
       :alias,
       :status,
       :terms_accepted,
@@ -49,9 +41,6 @@ defmodule Alethea.Accounts.Patient do
     |> validate_inclusion(:status, ["active", "archived", "deleted"])
     |> validate_inclusion(:session_day_of_week, 1..7,
       message: "must be between 1 (Monday) and 7 (Sunday)"
-    )
-    |> unique_constraint(:whatsapp_number_hash,
-      name: :patients_whatsapp_number_hash_index
     )
   end
 end

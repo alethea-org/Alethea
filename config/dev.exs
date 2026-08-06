@@ -70,10 +70,6 @@ config :alethea, AletheaWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :alethea, dev_routes: true
 
-config :alethea,
-       :phone_hash_secret,
-       "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
-
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

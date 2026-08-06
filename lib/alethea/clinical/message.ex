@@ -7,10 +7,8 @@ defmodule Alethea.Clinical.Message do
   schema "messages" do
     field(:direction, :string)
     field(:behavior_type, :string, default: "spontaneous")
-    field(:whatsapp_message_id, :string)
     # Telegram inbound traceability (REQ-C3-worker-persists-message).
-    # Mirrors `whatsapp_message_id` — nullable because not every channel
-    # writes one. Partial unique index
+    # Nullable because not every channel writes one. Partial unique index
     # `messages_telegram_message_id_unique` enforces "at most one
     # inbound row per Telegram message_id" while leaving the column
     # `NULL` for rows from other channels (migration
@@ -36,7 +34,6 @@ defmodule Alethea.Clinical.Message do
     |> cast(attrs, [
       :direction,
       :behavior_type,
-      :whatsapp_message_id,
       :telegram_message_id,
       :encrypted_content,
       :encryption_version,
@@ -59,7 +56,6 @@ defmodule Alethea.Clinical.Message do
     # `20260622000001_add_crisis_bypass_to_message_behavior_type.exs`; the
     # Ecto-level validate_inclusion is kept in lockstep with the DB constraint.
     |> validate_inclusion(:behavior_type, ["spontaneous", "elicited", "crisis_bypass"])
-    |> unique_constraint(:whatsapp_message_id)
     |> unique_constraint(:telegram_message_id,
       name: :messages_telegram_message_id_unique
     )

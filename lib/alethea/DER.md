@@ -27,10 +27,10 @@ Este documento detalla la arquitectura de datos relacional de Alethea, diseñada
 **Decisión:** Cada paciente tiene una llave única cifrada por la llave del profesional.
 **Impacto:** Permite el **Borrado Criptográfico**. Destruyendo la llave del paciente, sus datos se vuelven ruido ilegible instantáneamente sin afectar a otros pacientes.
 
-### ADR 02: Privacidad entre Profesionales (Salted Hash)
+### ADR 02: Privacidad entre Profesionales (Salted Hash) — RETIRADO
 **Contexto:** Un paciente puede atenderse con múltiples terapeutas que usen Alethea.
-**Decisión:** El `whatsapp_number_hash` se genera con una sal (salt) única por profesional.
-**Impacto:** El mismo número genera hashes distintos para diferentes terapeutas. Se evita la fuga de información cruzada (un terapeuta no puede saber si el paciente ya está registrado por otro).
+**Decisión (histórica):** El `whatsapp_number_hash` se generaba con una sal (salt) única por profesional.
+**Estado:** Retirado en #107 junto con la superficie de identidad de WhatsApp (WhatsApp se retiró en #87). El alias es hoy el identificador de registro; la unicidad de identidad vive en el `telegram_chat_id_hash` de foundation.
 
 ### ADR 03: Relación 1:N en Diagnósticos de IA
 **Contexto:** Los modelos de IA evolucionan rápidamente.

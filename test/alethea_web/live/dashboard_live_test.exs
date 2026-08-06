@@ -111,7 +111,6 @@ defmodule AletheaWeb.DashboardLiveTest do
       {:ok, patient} =
         Accounts.create_patient(
           %{
-            "whatsapp_number" => "+5491#{:rand.uniform(99_999_999)}",
             "alias" => "alias-#{System.unique_integer([:positive])}",
             "professional_id" => professional.id
           },
