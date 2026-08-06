@@ -4,7 +4,6 @@ defmodule Alethea.Accounts do
   """
 
   import Ecto.Query, warn: false
-  require Logger
   alias Alethea.Repo
   alias Alethea.Accounts.{Professional, Patient, EncryptionKey}
   alias Alethea.Encryption.{PatientVault, ProfessionalKek}
@@ -171,24 +170,6 @@ defmodule Alethea.Accounts do
 
   def get_patient!(id), do: Repo.get!(Patient, id)
 
-  def lookup_patient_by_phone(phone) do
-    normalized = normalize_phone(phone)
-
-    hash =
-      :crypto.mac(
-        :hmac,
-        :sha256,
-        Application.fetch_env!(:alethea, :phone_hash_secret),
-        normalized
-      )
-      |> Base.encode64()
-
-    case Repo.get_by(Patient, whatsapp_number_hash: hash) do
-      nil -> {:error, :not_found}
-      patient -> {:ok, patient}
-    end
-  end
-
   def update_patient_terms(%Patient{} = patient, accepted?) do
     patient
     |> Patient.changeset(%{terms_accepted: accepted?})
@@ -233,97 +214,61 @@ defmodule Alethea.Accounts do
 
   @doc """
   Crea un paciente con cifrado de extremo a extremo.
-  Genera una DEK única, la envuelve con la KEK del profesional y cifra el número de WhatsApp.
+  Genera una DEK única y la envuelve con la KEK del profesional. La identidad
+  del paciente es únicamente el `alias`; los campos obligatorios los valida
+  `Patient.changeset/2` (`validate_required([:alias, :professional_id])`).
   """
   def create_patient(attrs, kek_bytes) when is_binary(kek_bytes) do
     # Normalizar attrs a string keys para evitar mixed keys
     attrs = for {k, v} <- attrs, into: %{}, do: {to_string(k), v}
 
-    whatsapp_number = attrs["whatsapp_number"]
+    # 1. Generar DEK
+    dek_bytes = :crypto.strong_rand_bytes(32)
 
-    cond do
-      is_nil(whatsapp_number) or not is_binary(whatsapp_number) or
-          String.trim(whatsapp_number) == "" ->
-        changeset =
-          %Patient{}
-          |> Patient.changeset(attrs)
-          |> Ecto.Changeset.add_error(:whatsapp_number, "can't be blank")
+    # 2. Cifrar DEK con KEK
+    {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, kek_bytes)
 
-        {:error, %{changeset | action: :insert}}
-
-      true ->
-        # Normalizar número de teléfono a E.164
-        normalized_number = normalize_phone(whatsapp_number)
-
-        # 1. Generar DEK
-        dek_bytes = :crypto.strong_rand_bytes(32)
-
-        # 2. Cifrar DEK con KEK
-        {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, kek_bytes)
-
-        # 3. Cifrar número con DEK
-        {:ok, encrypted_number} = PatientVault.encrypt(normalized_number, dek_bytes)
-
-        # 4. Calcular hash determinista
-        phone_hash =
-          :crypto.mac(
-            :hmac,
-            :sha256,
-            Application.fetch_env!(:alethea, :phone_hash_secret),
-            normalized_number
-          )
-          |> Base.encode64()
-
-        # Insert encryption key with placeholder patient_id
-        # After patient is created, we update with the real patient_id
-        # This is ACID-safe within the transaction - the key cannot be accessed
-        # externally until patient_id is set, and if anything fails, both roll back
-        Ecto.Multi.new()
-        |> Ecto.Multi.insert(
-          :encryption_key,
-          EncryptionKey.changeset(%EncryptionKey{}, %{
-            "encrypted_key" => wrapped_dek,
-            "type" => "patient"
-          })
+    # Insert encryption key with placeholder patient_id
+    # After patient is created, we update with the real patient_id
+    # This is ACID-safe within the transaction - the key cannot be accessed
+    # externally until patient_id is set, and if anything fails, both roll back
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(
+      :encryption_key,
+      EncryptionKey.changeset(%EncryptionKey{}, %{
+        "encrypted_key" => wrapped_dek,
+        "type" => "patient"
+      })
+    )
+    |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
+      attrs_with_security = Map.put(attrs, "encryption_key_id", key.id)
+      %Patient{} |> Patient.changeset(attrs_with_security)
+    end)
+    |> Ecto.Multi.update(:finalize_key, fn %{patient: patient, encryption_key: key} ->
+      EncryptionKey.changeset(key, %{patient_id: patient.id})
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{patient: patient}} ->
+        # Notificar a los LiveViews del profesional
+        Phoenix.PubSub.broadcast(
+          Alethea.PubSub,
+          "patients:#{patient.professional_id}",
+          {:patient_created, patient}
         )
-        |> Ecto.Multi.insert(:patient, fn %{encryption_key: key} ->
-          attrs_with_security =
-            attrs
-            |> Map.put("encrypted_whatsapp_number", encrypted_number)
-            |> Map.put("whatsapp_number_hash", phone_hash)
-            |> Map.put("encryption_key_id", key.id)
 
-          %Patient{} |> Patient.changeset(attrs_with_security)
-        end)
-        |> Ecto.Multi.update(:finalize_key, fn %{patient: patient, encryption_key: key} ->
-          EncryptionKey.changeset(key, %{patient_id: patient.id})
-        end)
-        |> Repo.transaction()
-        |> case do
-          {:ok, %{patient: patient}} ->
-            # Enviar términos de consentimiento automáticamente
-            send_consent_terms(patient)
+        log_action(%{
+          professional_id: patient.professional_id,
+          action: "CREATE_PATIENT",
+          resource_type: "Patient",
+          resource_id: patient.id,
+          details: %{alias: patient.alias}
+        })
 
-            # Notificar a los LiveViews del profesional
-            Phoenix.PubSub.broadcast(
-              Alethea.PubSub,
-              "patients:#{patient.professional_id}",
-              {:patient_created, patient}
-            )
+        {:ok, patient}
 
-            log_action(%{
-              professional_id: patient.professional_id,
-              action: "CREATE_PATIENT",
-              resource_type: "Patient",
-              resource_id: patient.id,
-              details: %{alias: patient.alias}
-            })
-
-            {:ok, patient}
-
-          {:error, _name, error, _changes} ->
-            {:error, error}
-        end
+      {:error, _name, error, _changes} ->
+        {:error, error}
     end
   end
 
@@ -332,15 +277,6 @@ defmodule Alethea.Accounts do
     %Patient{}
     |> Patient.changeset(attrs)
     |> Repo.insert()
-  end
-
-  defp normalize_phone(phone) when is_binary(phone) do
-    phone
-    |> String.replace(~r/[^\d+]/, "")
-    |> then(fn
-      "+" <> _ = phone -> phone
-      phone -> "+" <> phone
-    end)
   end
 
   defp rotate_remember_token(old_token_hash) do
@@ -388,27 +324,5 @@ defmodule Alethea.Accounts do
 
   defp utc_now do
     DateTime.utc_now() |> DateTime.truncate(:second)
-  end
-
-  # TODO: Re-enable consent terms sending once KEK access is resolved
-  # @terms_message """
-  # Hola, soy Alethea...
-  # """
-
-  # Envía automáticamente los términos de consentimiento cuando se registra un paciente
-  defp send_consent_terms(patient) do
-    patient = get_patient_with_professional(patient.id)
-    whatsapp_number = patient.encrypted_whatsapp_number
-
-    # Solo enviar si el paciente tiene número de WhatsApp
-    if is_binary(whatsapp_number) and whatsapp_number != "" do
-      # TODO: Re-implement WhatsApp consent terms sending once KEK access is resolved
-      Logger.info(
-        "Patient #{patient.alias} has WhatsApp number but consent terms sending is pending"
-      )
-    end
-  rescue
-    # Silently ignore errors during consent terms sending (e.g., in seeds)
-    _ -> :ok
   end
 end

@@ -21,17 +21,15 @@ defmodule Alethea.Clinical do
           String.t(),
           String.t(),
           String.t() | nil,
-          binary() | nil,
           String.t() | nil
         ) ::
-          {:ok, Message.t()} | {:error, term()} | {:error, :duplicate, Message.t()}
+          {:ok, Message.t()} | {:error, term()}
   def save_message(
         patient,
         text,
         dek,
         direction,
         behavior_type,
-        whatsapp_message_id \\ nil,
         session_id \\ nil,
         telegram_message_id \\ nil
       ) do
@@ -47,11 +45,6 @@ defmodule Alethea.Clinical do
       }
 
       attrs =
-        if whatsapp_message_id,
-          do: Map.put(attrs, :whatsapp_message_id, whatsapp_message_id),
-          else: attrs
-
-      attrs =
         if telegram_message_id,
           do: Map.put(attrs, :telegram_message_id, telegram_message_id),
           else: attrs
@@ -65,12 +58,6 @@ defmodule Alethea.Clinical do
 
         {:error, changeset} ->
           cond do
-            Keyword.has_key?(changeset.errors, :whatsapp_message_id) && whatsapp_message_id ->
-              case Repo.get_by(Message, whatsapp_message_id: whatsapp_message_id) do
-                nil -> {:error, changeset}
-                existing_message -> {:error, :duplicate, existing_message}
-              end
-
             Keyword.has_key?(changeset.errors, :telegram_message_id) && telegram_message_id ->
               # Telegram duplicates are surfaced as raw errors so the
               # worker treats them as retry-eligible (REQ-C3). The
@@ -90,12 +77,12 @@ defmodule Alethea.Clinical do
   Persists a `Message` for the Telegram channel (REQ-C3-worker-persists-message
   + REQ-C5-persist-inbound-message + REQ-C5-persist-outbound-reply).
 
-  Unlike `save_message/8`, this variant takes the **foundation**
+  Unlike `save_message/7`, this variant takes the **foundation**
   `Alethea.Foundation.Accounts.Patient` (the row returned by
   `lookup_patient_by_chat_hash/1`) and the Telegram `message_id`. It
   resolves the legacy `Alethea.Accounts.Patient` via
   `Alethea.Foundation.Accounts.legacy_patient/1`, then delegates to
-  `save_message/8` (passing `telegram_message_id` as the 8th arg) for
+  `save_message/7` (passing `telegram_message_id` as the 7th arg) for
   the encryption + insert.
 
   The split between foundation and legacy Patient schemas is
@@ -115,13 +102,12 @@ defmodule Alethea.Clinical do
   ## Duplicate handling
 
   The `telegram_message_id` partial unique index rejects a second
-  row for the same id. Unlike the WhatsApp path (which catches the
-  constraint and returns `{:error, :duplicate, existing}`), this
-  function surfaces the changeset error to the caller — the worker
-  treats it as a retry-eligible failure (REQ-C3-worker-persists-message
-  "persistence failure crashes the job"). The Oban unique-period on
-  `telegram_update_id` is the first line of defence; this DB-level
-  constraint is the safety net for replays outside the Oban window.
+  row for the same id; this function surfaces the changeset error to
+  the caller — the worker treats it as a retry-eligible failure
+  (REQ-C3-worker-persists-message "persistence failure crashes the
+  job"). The Oban unique-period on `telegram_update_id` is the first
+  line of defence; this DB-level constraint is the safety net for
+  replays outside the Oban window.
   """
   @spec save_telegram_message(
           Alethea.Foundation.Accounts.Patient.t(),
@@ -147,7 +133,6 @@ defmodule Alethea.Clinical do
           nil,
           direction,
           behavior_type,
-          nil,
           session_id,
           telegram_message_id
         )

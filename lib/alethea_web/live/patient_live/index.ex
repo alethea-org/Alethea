@@ -267,7 +267,7 @@ defmodule AletheaWeb.PatientLive.Index do
                       Privacidad de grado clínico
                     </p>
                     <p style="font-size:11px; color:#15803d;">
-                      El número de WhatsApp se cifrará con una DEK única y nunca será visible en texto plano.
+                      Los datos clínicos se cifran con una DEK única por paciente y nunca son visibles en texto plano.
                     </p>
                   </div>
                 </div>
@@ -284,25 +284,6 @@ defmodule AletheaWeb.PatientLive.Index do
                     style="width:100%; padding:10px 14px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px; background:#fff; color:#334155;"
                   />
                   <%= for error <- Keyword.get_values(@form[:alias].errors, :message) do %>
-                    <p style="font-size:11px; color:#ef4444; margin-top:4px;">{error}</p>
-                  <% end %>
-                </div>
-
-                <div style="margin-bottom:20px;">
-                  <label style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:0.04em; display:block; margin-bottom:6px;">
-                    Número de WhatsApp
-                  </label>
-                  <input
-                    type="text"
-                    name="patient[whatsapp_number]"
-                    value={@form[:whatsapp_number].value || ""}
-                    placeholder="+56 9 1234 5678"
-                    style="width:100%; padding:10px 14px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px; background:#fff; color:#334155;"
-                  />
-                  <p style="font-size:10px; color:#94a3b8; margin-top:4px; text-transform:uppercase; letter-spacing:0.03em;">
-                    Formato E.164
-                  </p>
-                  <%= for error <- Keyword.get_values(@form[:whatsapp_number].errors, :message) do %>
                     <p style="font-size:11px; color:#ef4444; margin-top:4px;">{error}</p>
                   <% end %>
                 </div>

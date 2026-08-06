@@ -28,14 +28,10 @@ defmodule AletheaJobs.DailySchedulerWorkerTest do
     tomorrow_dow = Date.day_of_week(tomorrow)
     other_dow = rem(tomorrow_dow, 7) + 1
 
-    dummy_enc = Alethea.Encryption.Vault.encrypt!("+5400000000")
-
     matching_patient =
       Repo.insert!(%Alethea.Accounts.Patient{
         alias: "Matching Patient",
         professional_id: professional.id,
-        whatsapp_number_hash: Ecto.UUID.generate(),
-        encrypted_whatsapp_number: dummy_enc,
         session_day_of_week: tomorrow_dow,
         session_time: ~T[10:00:00],
         status: "active"
@@ -45,8 +41,6 @@ defmodule AletheaJobs.DailySchedulerWorkerTest do
       Repo.insert!(%Alethea.Accounts.Patient{
         alias: "Non-Matching Patient",
         professional_id: professional.id,
-        whatsapp_number_hash: Ecto.UUID.generate(),
-        encrypted_whatsapp_number: dummy_enc,
         session_day_of_week: other_dow,
         session_time: ~T[10:00:00],
         status: "active"
@@ -81,8 +75,6 @@ defmodule AletheaJobs.DailySchedulerWorkerTest do
     Repo.insert!(%Alethea.Accounts.Patient{
       alias: "No Time Patient",
       professional_id: professional.id,
-      whatsapp_number_hash: Ecto.UUID.generate(),
-      encrypted_whatsapp_number: Alethea.Encryption.Vault.encrypt!("+5400000001"),
       session_day_of_week: tomorrow_dow,
       session_time: nil,
       status: "active"

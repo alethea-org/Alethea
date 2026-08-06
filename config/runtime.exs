@@ -110,12 +110,6 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
-  phone_hash_secret =
-    System.get_env("PHONE_HASH_SECRET") ||
-      raise "environment variable PHONE_HASH_SECRET is missing."
-
-  config :alethea, :phone_hash_secret, phone_hash_secret
-
   cloak_aes_key =
     System.get_env("CLOAK_AES_KEY") ||
       raise """

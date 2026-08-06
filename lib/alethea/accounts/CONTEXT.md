@@ -18,8 +18,6 @@ Manejar el registro, autenticación y la relación jerárquica entre el terapeut
 *   **Table `patients`**: 
     *   `id` (UUIDv4)
     *   `professional_id` (FK -> `professionals.id`)
-    *   `whatsapp_number_hash` (Salted hash unique per professional for privacy)
-    *   `encrypted_whatsapp_number` (AES-256 with versioning)
     *   `encryption_key_id` (FK -> `encryption_keys.id`)
     *   `alias` (Anonymized display name)
     *   `status` (Default: 'active')

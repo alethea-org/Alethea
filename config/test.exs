@@ -23,10 +23,6 @@ config :alethea, AletheaWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
-config :alethea,
-       :phone_hash_secret,
-       "dev_test_phone_hash_secret_key_32_bytes_minimum_length_fallback"
-
 config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock

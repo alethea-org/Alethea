@@ -17,7 +17,6 @@ defmodule Alethea.Clinical.SessionManagerTest do
     {:ok, patient} =
       Alethea.Accounts.create_patient(
         %{
-          "whatsapp_number" => "+5491111111111",
           "alias" => "test-patient",
           "professional_id" => professional.id
         },

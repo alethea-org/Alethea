@@ -1745,7 +1745,6 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     {:ok, patient} =
       Alethea.Accounts.create_patient(
         %{
-          "whatsapp_number" => "+5491#{:rand.uniform(99_999_999)}",
           "alias" => alias_name,
           "professional_id" => professional.id
         },

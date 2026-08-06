@@ -27,7 +27,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     {:ok, patient} =
       Accounts.create_patient(
         %{
-          "whatsapp_number" => "+54110000000#{:rand.uniform(99)}",
           "alias" => "Test Patient",
           "professional_id" => professional.id
         },
@@ -46,7 +45,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         nil,
         "inbound",
         "spontaneous",
-        nil,
         session.id
       )
 
