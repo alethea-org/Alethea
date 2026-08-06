@@ -157,10 +157,24 @@
 .pt-theme--warm .pt-h1 { font-size: 34px; }
 .pt-theme--warm .pta-briefing__text { font-size: 19px; line-height: 1.6; }
 
-/* Odds and ends inside the briefing that carried cold hardcoded values.
-   The emotion bars keep their own hues on purpose — those encode data
-   (alegría / tristeza / ira / miedo / neutro), so warming them would
-   change what the chart means. Only the chrome around them moves. */
+/* Emotion palette, warm build.
+   These five hues encode DATA (alegría / tristeza / ira / miedo /
+   neutro), so the constraint is not "make them warm" but "keep them
+   mutually distinguishable while warm". Chroma comes down and every
+   hue picks up a warm bias, but the hue ANGLES stay far apart —
+   olive / dusty blue / brick / ochre / taupe. Losing that separation
+   is losing the chart.
+   The `!important` is fighting SVG presentation attributes, which the
+   component sets inline; in the real build these become tokens on the
+   component itself. */
+.pt-theme--warm [data-emotion="joy"] { fill: #7f9163 !important; background: #7f9163 !important; }
+.pt-theme--warm [data-emotion="sadness"] { fill: #6b87a6 !important; background: #6b87a6 !important; }
+.pt-theme--warm [data-emotion="anger"] { fill: #a8453a !important; background: #a8453a !important; }
+.pt-theme--warm [data-emotion="fear"] { fill: #d9a441 !important; background: #d9a441 !important; }
+.pt-theme--warm [data-emotion="neutral"] { fill: #aaa79e !important; background: #aaa79e !important; }
+.pt-theme--warm .emotion-legend-label { color: var(--pt-ink-2) !important; }
+
+/* Odds and ends inside the briefing that carried cold hardcoded values. */
 .pt-theme--warm .pt-pill { border-color: transparent; }
 .pt-theme--warm .pta-chip--risk { border-color: var(--pt-danger-soft); }
 .pt-theme--warm .pta-metrics { background: var(--pt-line); }

@@ -43,6 +43,7 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
         gx = @chart_left + day_idx * group_w
 
         %{
+          key: key,
           x: Float.round(gx + group_pad + emo_idx * (@bar_w + @bar_gap), 1),
           y: Float.round(@chart_bottom - bar_h, 1),
           w: @bar_w,
@@ -100,6 +101,7 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
             width={bar.w}
             height={bar.h}
             fill={bar.fill}
+            data-emotion={bar.key}
             rx="2"
             opacity="0.85"
           />
@@ -115,11 +117,14 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
 
       <%!-- legend --%>
       <div style="display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:4px; padding:0 40px;">
-        <%= for {_key, label, color} <- @emotions do %>
+        <%= for {key, label, color} <- @emotions do %>
           <div style="display:flex; align-items:center; gap:4px;">
-            <span style={"width:10px; height:10px; border-radius:2px; background:#{color}; flex-shrink:0; display:inline-block;"}>
+            <span
+              data-emotion={key}
+              style={"width:10px; height:10px; border-radius:2px; background:#{color}; flex-shrink:0; display:inline-block;"}
+            >
             </span>
-            <span style="font-size:10px; color:#64748b;">{label}</span>
+            <span class="emotion-legend-label" style="font-size:10px; color:#64748b;">{label}</span>
           </div>
         <% end %>
       </div>
