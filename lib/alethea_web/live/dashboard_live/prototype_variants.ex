@@ -67,83 +67,7 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
         </div>
       </div>
 
-      <div :if={@selected_patient}>
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
-          <h2 class="pt-h2">Briefing · {@selected_patient.alias}</h2>
-          <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
-        </div>
-
-        <article class="pta-briefing">
-          <p class="pt-eyebrow" style="margin-bottom:10px;">
-            Resumen semanal
-            <span :if={@weekly_summary}>· {format_date(@weekly_summary.period_end)}</span>
-          </p>
-          <p :if={@weekly_summary} class="pta-briefing__text">{@weekly_summary.summary_text}</p>
-          <p :if={!@weekly_summary} class="pt-muted" style="font-style:italic;">
-            Sin resumen semanal generado todavía.
-          </p>
-        </article>
-
-        <div class="pta-metrics">
-          <div :for={emotion <- @emotion_rows} class="pta-metric">
-            <div class="pta-metric__value">{emotion.percent}%</div>
-            <div class="pta-metric__label">{emotion.label}</div>
-          </div>
-          <div :if={@emotion_rows == []} class="pta-metric">
-            <div class="pta-metric__value">—</div>
-            <div class="pta-metric__label">Sin métricas</div>
-          </div>
-        </div>
-
-        <div class="pt-card" style="margin-bottom:20px;">
-          <div class="pt-card__head">
-            <span class="pt-h2">Evolución emocional</span>
-            <span class="pt-eyebrow">Últimos 7 días</span>
-          </div>
-          <div class="pt-card__body">
-            <EmotionChart.emotion_chart daily_data={@emotion_chart_data} />
-          </div>
-        </div>
-
-        <h3 class="pt-h2" style="margin-bottom:14px;">Sesiones anteriores</h3>
-        <div :if={@session_summaries == []} class="pt-card">
-          <div class="pt-empty">Sin sesiones con seguimiento clínico aún.</div>
-        </div>
-        <div class="pta-timeline">
-          <div :for={summary <- @session_summaries} class="pta-timeline__item">
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-              <strong style="font-size:13px;">{format_date(summary.period_end)}</strong>
-              <span class={"pt-pill " <> status_pill(summary.status_level)}>
-                {summary.status_level}
-              </span>
-            </div>
-            <p class="pt-muted">{summary.summary_text}</p>
-          </div>
-        </div>
-
-        <div class="pt-card" style="margin-top:20px;">
-          <div class="pt-card__head">
-            <span class="pt-h2">Sesión y historial</span>
-          </div>
-          <div
-            class="pt-card__body"
-            style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:20px;"
-          >
-            <.schedule_form patient={@selected_patient} />
-            <div>
-              <button
-                id="decrypt-chat-button"
-                type="button"
-                phx-click="decrypt_chat"
-                class={["pt-btn", @chat_decrypted && "pt-btn--ghost"]}
-              >
-                {if @chat_decrypted, do: "Chat descifrado", else: "Descifrar chat"}
-              </button>
-              <.chat_history :if={@chat_decrypted} streams={@streams} />
-            </div>
-          </div>
-        </div>
-      </div>
+      {briefing_body(assigns)}
 
       <details class="pta-settings">
         <summary>Configuración de tu bot (aplica a todos tus pacientes)</summary>
@@ -152,6 +76,180 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
           <.welcome_form professional={@current_professional} />
         </div>
       </details>
+    </div>
+    """
+  end
+
+  # ── Variant D — Briefing with a switchable patient picker ─────────
+  #
+  # The pick from #116: the professional chooses how to reach a patient
+  # (chips or the week agenda); everything below is always the variant A
+  # reading column.
+
+  def variant_d(assigns) do
+    assigns = assign(assigns, :by_day, Enum.group_by(assigns.patients, & &1.session_day_of_week))
+
+    ~H"""
+    <div class="pt ptd-wrap">
+      <div class="ptd-head">
+        <div>
+          <p class="pt-eyebrow">Preparación de sesión</p>
+          <h1 class="pt-h1">{@current_professional.full_name || "Profesional Clínico"}</h1>
+        </div>
+
+        <div class="ptd-toggle" role="group" aria-label="Cómo elegir el paciente">
+          <.link
+            patch={picker_path(@selected_patient, "chips")}
+            class={["ptd-toggle__btn", @picker == "chips" && "ptd-toggle__btn--on"]}
+          >
+            Pacientes
+          </.link>
+          <.link
+            patch={picker_path(@selected_patient, "week")}
+            class={["ptd-toggle__btn", @picker == "week" && "ptd-toggle__btn--on"]}
+          >
+            Semana
+          </.link>
+        </div>
+      </div>
+
+      <%!-- Picker: chips --%>
+      <div :if={@picker == "chips"} class="pta-picker">
+        <.link
+          :for={patient <- @patients}
+          patch={patient_path(patient, "chips")}
+          class={[
+            "pta-chip",
+            @selected_patient && @selected_patient.id == patient.id && "pta-chip--active",
+            patient.urgent_intervention && "pta-chip--risk"
+          ]}
+        >
+          <span class="pt-avatar" style="width:24px; height:24px; font-size:10px;">
+            {initials(patient.alias)}
+          </span>
+          {patient.alias}
+        </.link>
+      </div>
+
+      <%!-- Picker: week agenda --%>
+      <div :if={@picker == "week"} class="ptc-week">
+        <div :for={day <- 1..7} class={["ptc-day", day == @today_day_of_week && "ptc-day--today"]}>
+          <div class="ptc-day__name">{day_name(day)}</div>
+          <.link
+            :for={patient <- Map.get(@by_day, day, [])}
+            patch={patient_path(patient, "week")}
+            class={[
+              "ptc-slot",
+              patient.urgent_intervention && "ptc-slot--risk",
+              @selected_patient && @selected_patient.id == patient.id && "ptc-slot--on"
+            ]}
+          >
+            {patient.alias}
+            <small>{format_time(patient.session_time)}</small>
+          </.link>
+        </div>
+      </div>
+
+      <div :if={!@selected_patient} class="pt-card">
+        <div class="pt-empty">
+          {if @picker == "week",
+            do: "Elegí una sesión de la semana para preparar el encuentro.",
+            else: "Elegí un paciente arriba para leer su briefing de la semana."}
+        </div>
+      </div>
+
+      {briefing_body(assigns)}
+
+      <details class="pta-settings">
+        <summary>Configuración de tu bot (aplica a todos tus pacientes)</summary>
+        <div class="pta-settings__grid">
+          <.crisis_form professional={@current_professional} />
+          <.welcome_form professional={@current_professional} />
+        </div>
+      </details>
+    </div>
+    """
+  end
+
+  # The variant A reading column — shared by A and D.
+  defp briefing_body(assigns) do
+    ~H"""
+    <div :if={@selected_patient}>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
+        <h2 class="pt-h2">Briefing · {@selected_patient.alias}</h2>
+        <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
+      </div>
+
+      <article class="pta-briefing">
+        <p class="pt-eyebrow" style="margin-bottom:10px;">
+          Resumen semanal
+          <span :if={@weekly_summary}>· {format_date(@weekly_summary.period_end)}</span>
+        </p>
+        <p :if={@weekly_summary} class="pta-briefing__text">{@weekly_summary.summary_text}</p>
+        <p :if={!@weekly_summary} class="pt-muted" style="font-style:italic;">
+          Sin resumen semanal generado todavía.
+        </p>
+      </article>
+
+      <div class="pta-metrics">
+        <div :for={emotion <- @emotion_rows} class="pta-metric">
+          <div class="pta-metric__value">{emotion.percent}%</div>
+          <div class="pta-metric__label">{emotion.label}</div>
+        </div>
+        <div :if={@emotion_rows == []} class="pta-metric">
+          <div class="pta-metric__value">—</div>
+          <div class="pta-metric__label">Sin métricas</div>
+        </div>
+      </div>
+
+      <div class="pt-card" style="margin-bottom:20px;">
+        <div class="pt-card__head">
+          <span class="pt-h2">Evolución emocional</span>
+          <span class="pt-eyebrow">Últimos 7 días</span>
+        </div>
+        <div class="pt-card__body">
+          <EmotionChart.emotion_chart daily_data={@emotion_chart_data} />
+        </div>
+      </div>
+
+      <h3 class="pt-h2" style="margin-bottom:14px;">Sesiones anteriores</h3>
+      <div :if={@session_summaries == []} class="pt-card">
+        <div class="pt-empty">Sin sesiones con seguimiento clínico aún.</div>
+      </div>
+      <div class="pta-timeline">
+        <div :for={summary <- @session_summaries} class="pta-timeline__item">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            <strong style="font-size:13px;">{format_date(summary.period_end)}</strong>
+            <span class={"pt-pill " <> status_pill(summary.status_level)}>
+              {summary.status_level}
+            </span>
+          </div>
+          <p class="pt-muted">{summary.summary_text}</p>
+        </div>
+      </div>
+
+      <div class="pt-card" style="margin-top:20px;">
+        <div class="pt-card__head">
+          <span class="pt-h2">Sesión y historial</span>
+        </div>
+        <div
+          class="pt-card__body"
+          style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:20px;"
+        >
+          <.schedule_form patient={@selected_patient} />
+          <div>
+            <button
+              id="decrypt-chat-button"
+              type="button"
+              phx-click="decrypt_chat"
+              class={["pt-btn", @chat_decrypted && "pt-btn--ghost"]}
+            >
+              {if @chat_decrypted, do: "Chat descifrado", else: "Descifrar chat"}
+            </button>
+            <.chat_history :if={@chat_decrypted} streams={@streams} />
+          </div>
+        </div>
+      </div>
     </div>
     """
   end
@@ -551,6 +649,16 @@ defmodule AletheaWeb.DashboardLive.PrototypeVariants do
     </span>
     """
   end
+
+  # ── Variant D routing ─────────────────────────────────────────────
+
+  defp patient_path(patient, picker) do
+    ~p"/dashboard/patients/#{patient.id}?#{[variant: "d", picker: picker]}"
+  end
+
+  defp picker_path(nil, picker), do: ~p"/dashboard?#{[variant: "d", picker: picker]}"
+
+  defp picker_path(patient, picker), do: patient_path(patient, picker)
 
   # ── Formatting ────────────────────────────────────────────────────
 

@@ -256,6 +256,39 @@
 .pta-settings summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--pt-ink-2); }
 .pta-settings__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
 
+/* === Variant D — Briefing + switchable picker ================== */
+.ptd-wrap { max-width: 1040px; margin: 0 auto; }
+.ptd-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.ptd-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--pt-line);
+  border-radius: 10px;
+  background: #fff;
+}
+.ptd-toggle__btn {
+  padding: 6px 16px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pt-ink-3);
+  text-decoration: none;
+}
+.ptd-toggle__btn--on { background: var(--pt-accent); color: #fff; }
+
+/* The reading column stays readable even though the picker above is wide. */
+.ptd-wrap .pta-briefing__text { max-width: 68ch; }
+
+/* Selected slot in the week picker. */
+.ptc-slot--on { outline: 2px solid var(--pt-accent); outline-offset: 1px; }
+
 /* === Variant B — Triage board (table + slide-over) ============= */
 .ptb-toolbar {
   display: flex;

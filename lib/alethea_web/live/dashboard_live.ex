@@ -56,7 +56,10 @@ defmodule AletheaWeb.DashboardLive do
 
   def handle_params(params, _url, socket) do
     # PROTOTYPE (#116) — layout variant selector; remove with PrototypeVariants.
-    socket = assign(socket, :prototype_variant, params["variant"] || "actual")
+    socket =
+      socket
+      |> assign(:prototype_variant, params["variant"] || "actual")
+      |> assign(:picker, params["picker"] || "chips")
 
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end

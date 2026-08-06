@@ -14,6 +14,8 @@
     {PrototypeVariants.variant_b(assigns)}
   <% "c" -> %>
     {PrototypeVariants.variant_c(assigns)}
+  <% "d" -> %>
+    {PrototypeVariants.variant_d(assigns)}
   <% _ -> %>
     <%!-- ── Header + stats ── --%>
     <div style="margin-bottom:24px;">
@@ -573,6 +575,7 @@
   base_path="/dashboard"
   current={@prototype_variant}
   variants={[
+    {"d", "Elegida — picker conmutable + columna de lectura"},
     {"actual", "Actual"},
     {"a", "Briefing — una columna de lectura"},
     {"b", "Triage — tabla + panel lateral"},
