@@ -54,7 +54,18 @@ defmodule Alethea.Clinical.MockData do
           "Esta semana el paciente ha mostrado una mejora significativa en su estado de ánimo, aunque persiste cierta ansiedad relacionada con el trabajo.",
         status_level: "Estable",
         period_start: DateTime.utc_now() |> DateTime.add(-7, :day),
-        period_end: DateTime.utc_now()
+        period_end: DateTime.utc_now(),
+        anxiety_score: 0.62,
+        social_score: 0.41,
+        emotional_range: %{
+          "joy" => 0.34,
+          "sadness" => 0.21,
+          "anger" => 0.08,
+          "fear" => 0.17,
+          "neutral" => 0.52
+        },
+        crisis_events: 1,
+        session_count: 5
       }
     ]
   end

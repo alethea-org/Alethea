@@ -472,6 +472,73 @@ defmodule AletheaWeb.DashboardLive do
 
   defp format_summary_date(_), do: "-"
 
+  # El reporte semanal guarda scores 0.0-1.0 y contadores enteros, todos
+  # nullable: el chain los deja en nil cuando el LLM no devuelve JSON válido.
+  # Un dato ausente se muestra como guión para no romper la grilla de métricas.
+  defp format_score(value) when is_number(value), do: "#{round(value * 100)}%"
+  defp format_score(_), do: "—"
+
+  defp format_count(value) when is_integer(value) and value >= 0, do: Integer.to_string(value)
+  defp format_count(_), do: "—"
+
+  defp weekly_metrics?(%{
+         anxiety_score: anxiety,
+         social_score: social,
+         crisis_events: crisis,
+         session_count: sessions
+       }) do
+    Enum.any?([anxiety, social, crisis, sessions], &is_number/1)
+  end
+
+  defp weekly_metrics?(_), do: false
+
+  # El nivel de estado no está validado en el schema y llega desde varias
+  # fuentes (chain semanal, worker de sesión, seeds), así que se normaliza sin
+  # acentos ni mayúsculas antes de mapearlo a un tono.
+  defp status_tone(%{status_level: level}), do: status_tone(level)
+
+  defp status_tone(level) when is_binary(level) do
+    normalized =
+      level
+      |> String.downcase()
+      |> :unicode.characters_to_nfd_binary()
+      |> String.replace(~r/[^a-z ]/u, "")
+
+    cond do
+      String.contains?(normalized, "intervencion") -> "critical"
+      String.contains?(normalized, "critico") -> "critical"
+      String.contains?(normalized, "alerta") -> "warning"
+      String.contains?(normalized, "stable") -> "stable"
+      true -> "neutral"
+    end
+  end
+
+  defp status_tone(_), do: "neutral"
+
+  defp tone_rgb("stable"), do: "34,197,94"
+  defp tone_rgb("warning"), do: "245,158,11"
+  defp tone_rgb("critical"), do: "239,68,68"
+  defp tone_rgb(_), do: "148,163,184"
+
+  defp weekly_tone_rgb(summary), do: summary |> status_tone() |> tone_rgb()
+
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+
+  defp metric_tile(assigns) do
+    ~H"""
+    <div id={@id} style="text-align:center;">
+      <div style="font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:2px;">
+        {@label}
+      </div>
+      <div style="font-size:20px; font-weight:700; color:#1e293b; font-variant-numeric:tabular-nums; line-height:1.2;">
+        {@value}
+      </div>
+    </div>
+    """
+  end
+
   # Registra auditoría cuando el profesional descifra el historial de chat.
   defp log_decrypt_audit(socket, patient, result, message_count) do
     try do
