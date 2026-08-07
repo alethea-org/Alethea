@@ -224,26 +224,64 @@
           <%!-- Weekly Pre-Session Report --%>
           <div
             id="weekly-pre-session-report"
-            style="border:1px solid rgba(34,197,94,.2); border-radius:16px; overflow:hidden;"
+            data-status-tone={status_tone(@weekly_summary)}
+            style={"border:1px solid rgba(#{weekly_tone_rgb(@weekly_summary)},.2); border-radius:16px; overflow:hidden;"}
           >
-            <div style="background:rgba(34,197,94,.06); border-bottom:1px solid rgba(34,197,94,.12); padding:10px 16px; display:flex; align-items:center; justify-content:space-between;">
+            <div style={"background:rgba(#{weekly_tone_rgb(@weekly_summary)},.06); border-bottom:1px solid rgba(#{weekly_tone_rgb(@weekly_summary)},.12); padding:10px 16px; display:flex; align-items:center; justify-content:space-between; gap:8px;"}>
               <div style="display:flex; align-items:center; gap:8px;">
                 <.icon
                   name="hero-clipboard-document-check"
-                  style="width:14px; height:14px; color:#22c55e;"
+                  style={"width:14px; height:14px; color:rgb(#{weekly_tone_rgb(@weekly_summary)});"}
                 />
-                <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#22c55e;">
+                <span style={"font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:rgb(#{weekly_tone_rgb(@weekly_summary)});"}>
                   Weekly Pre-Session Report
                 </span>
               </div>
-              <span :if={@weekly_summary} style="font-size:10px; color:#94a3b8;">
-                {format_summary_date(@weekly_summary.period_end)}
-              </span>
+              <div :if={@weekly_summary} style="display:flex; align-items:center; gap:8px;">
+                <span
+                  id="weekly-status-badge"
+                  style={"font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:2px 8px; border-radius:999px; background:rgba(#{weekly_tone_rgb(@weekly_summary)},.14); color:rgb(#{weekly_tone_rgb(@weekly_summary)});"}
+                >
+                  {@weekly_summary.status_level}
+                </span>
+                <span style="font-size:10px; color:#94a3b8;">
+                  {format_summary_date(@weekly_summary.period_end)}
+                </span>
+              </div>
             </div>
             <div style="padding:14px 16px; background:#fff;">
               <div :if={@weekly_summary} style="font-size:13px; line-height:1.6; color:#475569;">
                 {@weekly_summary.summary_text}
               </div>
+
+              <%!-- Metric strip — hidden entirely when the report filled none of them --%>
+              <div
+                :if={weekly_metrics?(@weekly_summary)}
+                id="weekly-metrics"
+                style="margin-top:14px; padding-top:12px; border-top:1px solid #f1f5f9; display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px;"
+              >
+                <.metric_tile
+                  id="weekly-metric-anxiety"
+                  label="Ansiedad"
+                  value={format_score(@weekly_summary.anxiety_score)}
+                />
+                <.metric_tile
+                  id="weekly-metric-social"
+                  label="Social"
+                  value={format_score(@weekly_summary.social_score)}
+                />
+                <.metric_tile
+                  id="weekly-metric-crisis"
+                  label="Crisis"
+                  value={format_count(@weekly_summary.crisis_events)}
+                />
+                <.metric_tile
+                  id="weekly-metric-sessions"
+                  label="Sesiones"
+                  value={format_count(@weekly_summary.session_count)}
+                />
+              </div>
+
               <div :if={!@weekly_summary} style="text-align:center; padding:16px 0;">
                 <.icon
                   name="hero-document-text"

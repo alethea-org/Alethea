@@ -179,6 +179,114 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert html =~ "Sin reportes semanales aún."
     end
+
+    test "renders the metric strip with the stored weekly scores", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_weekly_summary(patient, %{
+        status_level: "Alerta",
+        anxiety_score: 0.62,
+        social_score: 0.41,
+        crisis_events: 1,
+        session_count: 5
+      })
+
+      {:ok, view, html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert html =~ "Ansiedad"
+      assert has_element?(view, "#weekly-metric-anxiety", "62%")
+      assert has_element?(view, "#weekly-metric-social", "41%")
+      assert has_element?(view, "#weekly-metric-crisis", "1")
+      assert has_element?(view, "#weekly-metric-sessions", "5")
+    end
+
+    test "renders zero crisis events as a value, not as missing data", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_weekly_summary(patient, %{crisis_events: 0, session_count: 3})
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#weekly-metric-crisis", "0")
+    end
+
+    test "renders a dash for the metrics the report did not fill", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_weekly_summary(patient, %{session_count: 4})
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#weekly-metric-sessions", "4")
+      assert has_element?(view, "#weekly-metric-anxiety", "—")
+      assert has_element?(view, "#weekly-metric-social", "—")
+      assert has_element?(view, "#weekly-metric-crisis", "—")
+    end
+
+    test "hides the whole strip when the report carries no metrics at all", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_weekly_summary(patient, %{})
+
+      {:ok, view, html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      refute has_element?(view, "#weekly-metrics")
+      assert html =~ "La semana estuvo marcada por una mejora del sueño."
+    end
+
+    test "does not surface the per-emotion range inside the weekly card", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_weekly_summary(patient, %{
+        session_count: 2,
+        emotional_range: %{"joy" => 0.7, "sadness" => 0.1}
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      refute has_element?(view, "#weekly-pre-session-report", "Alegría")
+    end
+
+    test "tints the card by status level", %{conn: conn, patient: patient} do
+      save_weekly_summary(patient, %{status_level: "Intervención Requerida", session_count: 6})
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#weekly-pre-session-report[data-status-tone=critical]")
+      assert has_element?(view, "#weekly-status-badge", "Intervención Requerida")
+    end
+
+    test "falls back to a neutral tint for an unknown status level", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_weekly_summary(patient, %{status_level: "whatever", session_count: 1})
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#weekly-pre-session-report[data-status-tone=neutral]")
+    end
+
+    defp save_weekly_summary(patient, attrs) do
+      period_start = DateTime.utc_now() |> DateTime.add(-9, :day) |> DateTime.truncate(:second)
+
+      defaults = %{
+        period_start: period_start,
+        period_end: DateTime.add(period_start, 7, :day),
+        summary_text: "La semana estuvo marcada por una mejora del sueño.",
+        status_level: "Estable",
+        type: "weekly",
+        patient_id: patient.id
+      }
+
+      {:ok, summary} = Alethea.Clinical.save_summary(Map.merge(defaults, attrs))
+      summary
+    end
   end
 
   describe "Authorization" do
