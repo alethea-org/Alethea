@@ -249,12 +249,7 @@ defmodule AletheaWeb.DashboardLive do
       if use_mock? do
         List.first(MockData.list_mock_summaries(patient.id, "weekly"))
       else
-        Alethea.Clinical
-        |> apply(:list_session_summaries, [
-          patient.id,
-          DateTime.utc_now() |> DateTime.add(-7, :day)
-        ])
-        |> Enum.find(&(&1.type == "weekly"))
+        Alethea.Clinical.latest_weekly_summary(patient.id)
       end
 
     # Session summaries (last 30 days)
