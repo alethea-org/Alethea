@@ -278,6 +278,23 @@ defmodule Alethea.Clinical do
     )
   end
 
+  @doc """
+  Devuelve el reporte semanal más reciente del paciente, o `nil` si no hay ninguno.
+
+  No filtra por fecha: un reporte semanal cubre la semana *anterior*, así que su
+  `period_start` casi siempre queda fuera de una ventana de 7 días.
+  """
+  @spec latest_weekly_summary(binary()) :: Summary.t() | nil
+  def latest_weekly_summary(patient_id) do
+    Repo.one(
+      from(s in Summary,
+        where: s.patient_id == ^patient_id and s.type == "weekly",
+        order_by: [desc: s.period_end, desc: s.inserted_at],
+        limit: 1
+      )
+    )
+  end
+
   @spec list_daily_emotion_scores(binary(), DateTime.t()) :: [map()]
   def list_daily_emotion_scores(patient_id, since) do
     Repo.all(

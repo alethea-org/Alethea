@@ -138,6 +138,49 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
+  describe "Weekly Pre-Session Report (real mode)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      {:ok, patient} =
+        Accounts.create_patient(%{
+          alias: "Paciente Real",
+          professional_id: professional.id
+        })
+
+      %{patient: patient}
+    end
+
+    test "renders the latest weekly summary", %{conn: conn, patient: patient} do
+      period_start = DateTime.utc_now() |> DateTime.add(-9, :day) |> DateTime.truncate(:second)
+
+      {:ok, _summary} =
+        Alethea.Clinical.save_summary(%{
+          period_start: period_start,
+          period_end: DateTime.add(period_start, 7, :day),
+          summary_text: "La semana estuvo marcada por una mejora del sueño.",
+          status_level: "stable",
+          type: "weekly",
+          patient_id: patient.id
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert html =~ "La semana estuvo marcada por una mejora del sueño."
+      refute html =~ "Sin reportes semanales aún."
+    end
+
+    test "falls back to the empty state when there is no weekly summary", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, _view, html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert html =~ "Sin reportes semanales aún."
+    end
+  end
+
   describe "Authorization" do
     test "restricts access to non-existent patients in real mode", %{conn: conn} do
       Application.put_env(:alethea, :use_mock_data, false)
