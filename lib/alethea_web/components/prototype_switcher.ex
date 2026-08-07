@@ -4,8 +4,8 @@ defmodule AletheaWeb.Components.PrototypeSwitcher do
   #116 ("Layout & visual disposition: dashboard + onboarding").
 
   Renders a fixed bottom-centre pill that cycles the `?variant=` search
-  param and toggles `?theme=warm`. Hidden outside `:dev_routes` so a
-  stray merge cannot ship it.
+  param and cycles `?theme=` through the palettes. Hidden outside
+  `:dev_routes` so a stray merge cannot ship it.
 
   Delete together with the `*_prototype_variants.ex` modules and
   `prototype.css` once a variant wins.
@@ -13,6 +13,8 @@ defmodule AletheaWeb.Components.PrototypeSwitcher do
   use AletheaWeb, :html
 
   @enabled Application.compile_env(:alethea, :dev_routes, false)
+
+  @themes [{"default", "Frío"}, {"warm", "Cálido"}, {"editorial", "Editorial"}]
 
   attr(:variants, :list, required: true, doc: "list of {key, name} tuples")
   attr(:current, :string, required: true)
@@ -23,7 +25,10 @@ defmodule AletheaWeb.Components.PrototypeSwitcher do
     keys = Enum.map(assigns.variants, &elem(&1, 0))
     index = Enum.find_index(keys, &(&1 == assigns.current)) || 0
     count = length(keys)
-    warm? = assigns.theme == "warm"
+
+    theme_keys = Enum.map(@themes, &elem(&1, 0))
+    theme_index = Enum.find_index(theme_keys, &(&1 == assigns.theme)) || 0
+    next_theme = Enum.at(theme_keys, rem(theme_index + 1, length(theme_keys)))
 
     href = fn variant, theme ->
       "#{assigns.base_path}?variant=#{variant}&theme=#{theme}"
@@ -32,11 +37,12 @@ defmodule AletheaWeb.Components.PrototypeSwitcher do
     assigns =
       assigns
       |> assign(:enabled, @enabled)
-      |> assign(:warm?, warm?)
+      |> assign(:theme_label, @themes |> Enum.at(theme_index) |> elem(1))
+      |> assign(:themed?, assigns.theme != "default")
       |> assign(:name, assigns.variants |> Enum.at(index) |> elem(1))
       |> assign(:prev_href, href.(Enum.at(keys, rem(index - 1 + count, count)), assigns.theme))
       |> assign(:next_href, href.(Enum.at(keys, rem(index + 1, count)), assigns.theme))
-      |> assign(:theme_href, href.(assigns.current, if(warm?, do: "default", else: "warm")))
+      |> assign(:theme_href, href.(assigns.current, next_theme))
       |> assign(:current_key, assigns.current)
 
     ~H"""
@@ -58,11 +64,11 @@ defmodule AletheaWeb.Components.PrototypeSwitcher do
         &#8594;
       </a>
       <a
-        class={["pt-switcher__theme", @warm? && "pt-switcher__theme--on"]}
+        class={["pt-switcher__theme", @themed? && "pt-switcher__theme--on"]}
         href={@theme_href}
-        aria-label="Alternar paleta cálida"
+        aria-label="Cambiar paleta"
       >
-        {if @warm?, do: "Cálido ✓", else: "Cálido"}
+        {@theme_label}
       </a>
     </div>
 

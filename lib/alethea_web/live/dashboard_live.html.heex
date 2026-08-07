@@ -7,7 +7,7 @@
 <%!-- PROTOTYPE (#116) — layout variant dispatch.
      Delete this case (keeping the "actual" branch) together with
      AletheaWeb.DashboardLive.PrototypeVariants. --%>
-<div class={["pt-theme", @theme == "warm" && "pt-theme--warm"]}>
+<div class={["pt-theme", @theme != "default" && "pt-theme--#{@theme}"]}>
   <%= case @prototype_variant do %>
     <% "a" -> %>
       {PrototypeVariants.variant_a(assigns)}

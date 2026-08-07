@@ -138,6 +138,186 @@
   --pt-display-tracking: -0.02em;
 }
 
+/* Editorial theme — the reference system's logic: white canvas, ink-black
+   as the ACTION colour (not an accent hue), colour reserved for full-bleed
+   signature surfaces, and display type that never goes bold. Emphasis
+   comes from size and surface contrast, never from weight. */
+.pt-theme--editorial {
+  --pt-ink: #181d26;
+  --pt-ink-2: #333840;
+  --pt-ink-3: #41454d;
+  --pt-line: #dddddd;
+  --pt-surface: #ffffff;
+  --pt-surface-2: #f8fafc;
+  --pt-bg: #ffffff;
+  --pt-accent: #181d26;
+  --pt-accent-active: #0d1218;
+  --pt-accent-soft: #f8fafc;
+  --pt-on-accent: #ffffff;
+  --pt-danger: #aa2d00;
+  --pt-danger-soft: #f7ece7;
+  --pt-ok: #006400;
+  --pt-ok-soft: #edf4ed;
+  --pt-warn: #d9a441;
+  --pt-warn-soft: #fdf6e7;
+  --pt-cream: #f5e9d4;
+  --pt-dark: #181d26;
+  --pt-on-dark: #ffffff;
+  --pt-on-dark-soft: #9297a0;
+  --pt-display: 'Inter', system-ui, -apple-system, sans-serif;
+  --pt-display-weight: 400;
+  --pt-display-tracking: 0;
+}
+
+.pt-theme--editorial { background: var(--pt-bg); }
+
+/* Display type at weight 400. Bigger before bolder. */
+.pt-theme--editorial .pt-h1,
+.pt-theme--editorial .ptla-title,
+.pt-theme--editorial .ptlb-title,
+.pt-theme--editorial .ptlc-title {
+  font-family: var(--pt-display);
+  font-weight: var(--pt-display-weight);
+  letter-spacing: var(--pt-display-tracking);
+}
+.pt-theme--editorial .pt-h1 { font-size: 40px; line-height: 1.2; }
+.pt-theme--editorial .pt-h2 { font-weight: 500; }
+.pt-theme--editorial .pt-eyebrow { font-weight: 500; letter-spacing: 0.16px; }
+
+/* Cards: hairline outline, no shadow. Depth is surface contrast. */
+.pt-theme--editorial .pt-card,
+.pt-theme--editorial .ptla-shot,
+.pt-theme--editorial .ptlb-mock {
+  background: var(--pt-surface);
+  border: 1px solid var(--pt-line);
+  border-radius: 10px;
+  box-shadow: none;
+}
+.pt-theme--editorial .pt-card__head { border-bottom-color: var(--pt-line); }
+
+/* The briefing is this system's signature surface — a full cream card,
+   not a white card with a coloured edge. Colour arrives as a whole
+   surface or not at all. */
+.pt-theme--editorial .pta-briefing {
+  background: var(--pt-cream);
+  border: none;
+  border-radius: 12px;
+  padding: 32px;
+}
+.pt-theme--editorial .pta-briefing__text {
+  font-size: 20px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.pt-theme--editorial .pta-metrics {
+  background: var(--pt-line);
+  border-radius: 10px;
+  border: none;
+}
+.pt-theme--editorial .pta-metric { background: var(--pt-surface); }
+.pt-theme--editorial .pta-metric__value { font-weight: 500; }
+.pt-theme--editorial .pta-metric__label { font-weight: 500; letter-spacing: 0; }
+
+/* Buttons: ink-black primary, white hairline secondary. Radius 12. */
+.pt-theme--editorial .pt-btn,
+.pt-theme--editorial .ptl-cta {
+  background: var(--pt-accent);
+  border: 1px solid var(--pt-accent);
+  color: var(--pt-on-accent);
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  padding: 12px 20px;
+}
+.pt-theme--editorial .pt-btn--ghost,
+.pt-theme--editorial .ptl-cta--ghost {
+  background: var(--pt-surface);
+  color: var(--pt-ink);
+  border-color: var(--pt-line);
+}
+
+/* Pickers: hairline chips; the selected one goes ink-black. */
+.pt-theme--editorial .pta-chip,
+.pt-theme--editorial .ptc-slot,
+.pt-theme--editorial .ptc-day {
+  background: var(--pt-surface);
+  border: 1px solid var(--pt-line);
+  border-radius: 10px;
+  color: var(--pt-ink-2);
+}
+.pt-theme--editorial .pta-chip--active,
+.pt-theme--editorial .ptc-slot--on {
+  background: var(--pt-accent);
+  border-color: var(--pt-accent);
+  color: var(--pt-on-accent);
+  outline: none;
+}
+.pt-theme--editorial .ptc-day--today { border-color: var(--pt-ink); box-shadow: none; }
+.pt-theme--editorial .pta-chip--risk,
+.pt-theme--editorial .ptc-slot--risk {
+  background: var(--pt-danger);
+  border-color: var(--pt-danger);
+  color: var(--pt-on-accent);
+}
+.pt-theme--editorial .ptd-toggle { border-radius: 12px; border-color: var(--pt-line); }
+.pt-theme--editorial .ptd-toggle__btn { border-radius: 9px; font-weight: 500; }
+.pt-theme--editorial .ptd-toggle__btn--on { background: var(--pt-accent); color: var(--pt-on-accent); }
+
+.pt-theme--editorial .pt-pill { border: 1px solid var(--pt-line); border-radius: 10px; font-weight: 500; }
+.pt-theme--editorial .pt-pill--danger { background: var(--pt-danger); color: var(--pt-on-accent); border-color: var(--pt-danger); }
+.pt-theme--editorial .pt-avatar { background: var(--pt-surface-2); color: var(--pt-ink); }
+.pt-theme--editorial .pt-input,
+.pt-theme--editorial .pt-textarea,
+.pt-theme--editorial .pt-select { border-radius: 6px; border-color: var(--pt-line); }
+
+/* Emotion palette drawn from the system's own signature surfaces —
+   coral, mint, mustard, info blue, and the neutral border grey. Same
+   rule as always: the five must stay tellable apart. */
+.pt-theme--editorial [data-emotion="joy"] { fill: #a8d8c4 !important; background: #a8d8c4 !important; }
+.pt-theme--editorial [data-emotion="sadness"] { fill: #254fad !important; background: #254fad !important; }
+.pt-theme--editorial [data-emotion="anger"] { fill: #aa2d00 !important; background: #aa2d00 !important; }
+.pt-theme--editorial [data-emotion="fear"] { fill: #d9a441 !important; background: #d9a441 !important; }
+.pt-theme--editorial [data-emotion="neutral"] { fill: #9297a0 !important; background: #9297a0 !important; }
+.pt-theme--editorial svg line { stroke: var(--pt-line) !important; }
+.pt-theme--editorial svg text { fill: var(--pt-ink-3) !important; }
+.pt-theme--editorial .emotion-legend-label { color: var(--pt-ink-2) !important; }
+
+.pt-theme--editorial .chat-bubble { background: var(--pt-surface-2); color: var(--pt-ink); }
+.pt-theme--editorial .chat-bubble-primary { background: var(--pt-accent); color: var(--pt-on-accent); }
+.pt-theme--editorial progress.progress { accent-color: var(--pt-ink); }
+
+/* The nav stays light on every page — this system never inverts it. */
+body:has(.pt-theme--editorial) { background: #ffffff; }
+body:has(.pt-theme--editorial) .app-content { background: #ffffff; }
+body:has(.pt-theme--editorial) .app-sidebar,
+body:has(.pt-theme--editorial) .app-topbar {
+  background: #ffffff;
+  border-color: #dddddd;
+}
+body:has(.pt-theme--editorial) .app-sidebar__header,
+body:has(.pt-theme--editorial) .app-sidebar__footer { border-color: #dddddd; }
+body:has(.pt-theme--editorial) .app-sidebar__logo,
+body:has(.pt-theme--editorial) .app-sidebar__avatar,
+body:has(.pt-theme--editorial) .app-topbar__avatar {
+  background: #181d26;
+  border-radius: 10px;
+  box-shadow: none;
+}
+body:has(.pt-theme--editorial) .app-sidebar__brand-name { color: #181d26; }
+body:has(.pt-theme--editorial) .app-sidebar__link { color: #333840; border-radius: 10px; }
+body:has(.pt-theme--editorial) .app-sidebar__link--active {
+  background: #f8fafc;
+  color: #181d26;
+  font-weight: 500;
+  border-color: #dddddd;
+}
+body:has(.pt-theme--editorial) .app-sidebar__user {
+  background: #f8fafc;
+  border-color: #dddddd;
+  border-radius: 10px;
+}
+
 .pt-theme--warm { background: var(--pt-bg); }
 .pt-theme--warm .pt-card,
 .pt-theme--warm .pt-input,

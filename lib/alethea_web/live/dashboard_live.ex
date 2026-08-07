@@ -60,10 +60,15 @@ defmodule AletheaWeb.DashboardLive do
       socket
       |> assign(:prototype_variant, params["variant"] || "actual")
       |> assign(:picker, params["picker"] || "chips")
-      |> assign(:theme, params["theme"] || "default")
+      |> assign(:theme, prototype_theme(params["theme"]))
 
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
+
+  # PROTOTYPE (#116) — the theme lands in a DOM class, so only allow known
+  # values instead of interpolating whatever arrives in the query string.
+  defp prototype_theme(theme) when theme in ["warm", "editorial"], do: theme
+  defp prototype_theme(_), do: "default"
 
   defp apply_action(socket, :index, _params) do
     socket
