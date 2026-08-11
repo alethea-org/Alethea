@@ -57,36 +57,4 @@ defmodule AletheaWeb.HealthController do
   rescue
     _ -> :error
   end
-
-  def test_roberta(conn, _params) do
-    config = Application.get_env(:alethea, Alethea.AI.RoBERTaWorker, [])
-    _provider = Keyword.get(config, :provider, :unknown)
-
-    # Force override to local for testing
-    Application.put_env(
-      :alethea,
-      Alethea.AI.RoBERTaWorker,
-      Keyword.put(config, :provider, :local)
-    )
-
-    texts = [
-      "Estoy muy feliz hoy",
-      "Esto me pone muy triste",
-      "Tengo mucho miedo"
-    ]
-
-    result = Alethea.AI.RoBERTaWorker.analyze_batch(texts)
-
-    conn
-    |> put_status(200)
-    |> json(%{
-      provider: :local,
-      results: result
-    })
-  rescue
-    e in RuntimeError ->
-      conn
-      |> put_status(500)
-      |> json(%{error: e.message})
-  end
 end

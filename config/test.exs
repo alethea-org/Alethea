@@ -23,15 +23,10 @@ config :alethea, AletheaWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
-config :alethea, :roberta_worker, Alethea.AI.RoBERTaWorkerMock
+config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerMock
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
 config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
-
-config :alethea, Alethea.AI.RoBERTaWorker,
-  api_url: "http://test.local/roberta",
-  api_key: "test_key",
-  req_options: [plug: {Req.Test, Alethea.AI.RoBERTaWorker}]
 
 config :alethea, Alethea.AI.EmotionAnalyzer,
   base_url: "http://emotion-sidecar.test",

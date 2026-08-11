@@ -21,4 +21,9 @@ defmodule AletheaWeb.HealthControllerTest do
       assert response["checks"]["redis"] == "ok"
     end
   end
+
+  test "legacy model test endpoint is not exposed", %{conn: conn} do
+    conn = get(conn, "/health/test-roberta")
+    assert response(conn, 404)
+  end
 end

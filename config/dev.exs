@@ -82,14 +82,6 @@ config :alethea, use_mock_data: false
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
 
-config :alethea, Alethea.AI.RoBERTaWorker,
-  provider: :huggingface,
-  huggingface: [
-    api_url:
-      "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
-    api_key: System.get_env("ROBERTA_HF_API_KEY", "")
-  ]
-
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   provider: :local,
   local: [

@@ -131,10 +131,12 @@ config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   5. Si detectas riesgo inminente, el sistema perimetral ya actuó, tú continúa con el proceso reflexivo calmado.
   """
 
-config :alethea, Alethea.AI.RoBERTaWorker,
-  api_url:
-    "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis",
-  api_key: System.get_env("HUGGINGFACE_API_KEY")
+config :alethea, Alethea.AI.EmotionAnalyzer,
+  base_url: "http://127.0.0.1:8080",
+  connect_timeout: 2_000,
+  receive_timeout: 30_000,
+  max_batch_size: 32,
+  max_text_bytes: 4096
 
 # --- Security & Encryption ---
 

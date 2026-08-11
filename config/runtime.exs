@@ -131,27 +131,6 @@ if config_env() == :prod do
       endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434")
     ]
 
-  # Configuración para RoBERTa (Análisis de Emociones)
-  roberta_provider =
-    System.get_env("ROBERTA_PROVIDER", "local")
-    |> String.downcase()
-    |> case do
-      "huggingface" -> :huggingface
-      "hf" -> :huggingface
-      _ -> :local
-    end
-
-  config :alethea, Alethea.AI.RoBERTaWorker,
-    provider: roberta_provider,
-    huggingface: [
-      api_url:
-        System.get_env(
-          "ROBERTA_HF_API_URL",
-          "https://api-inference.huggingface.co/models/pysentimiento/robertuito-emotion-analysis"
-        ),
-      api_key: System.get_env("ROBERTA_HF_API_KEY", "")
-    ]
-
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key

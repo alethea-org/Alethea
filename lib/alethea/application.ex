@@ -61,7 +61,7 @@ defmodule Alethea.Application do
 
     children =
       if Application.get_env(:alethea, :start_ai, true) do
-        children ++ [Alethea.AI.RoBERTaWorker, Alethea.AI.ConversationMemory]
+        children ++ [Alethea.AI.ConversationMemory]
       else
         children
       end
