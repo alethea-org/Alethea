@@ -151,6 +151,24 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     test "max_attempts is 3 per spec REQ-C3 (was 5 in PR #2 stub)" do
       assert TelegramMessageWorker.__opts__()[:max_attempts] == 3
     end
+
+    test "perform/1 accepts args reloaded from Oban persistence" do
+      args = build_args("hola", telegram_message_id: 99, telegram_update_id: 99)
+
+      persisted_job =
+        args
+        |> TelegramMessageWorker.new()
+        |> Oban.insert!()
+        |> then(&Repo.get!(Oban.Job, &1.id))
+
+      assert %{"message" => %{"chat" => %{"id" => @chat_id}}} = persisted_job.args
+      assert :ok = TelegramMessageWorker.perform(persisted_job)
+
+      assert_enqueued(
+        worker: TelegramOutboundWorker,
+        args: %{chat_id_hash: @chat_id_hash, body: @unregistered_copy, lane: :safe}
+      )
+    end
   end
 
   # ----------------------------------------------------------------
@@ -1664,8 +1682,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
   defp build_args(text, opts) do
     %{
-      telegram_update_id: Keyword.fetch!(opts, :telegram_update_id),
-      message: %{
+      "telegram_update_id" => Keyword.fetch!(opts, :telegram_update_id),
+      "message" => %{
         "message_id" => Keyword.fetch!(opts, :telegram_message_id),
         "date" => 1_700_000_000,
         "chat" => %{"id" => @chat_id, "type" => "private"},
