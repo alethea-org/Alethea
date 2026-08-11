@@ -1,6 +1,6 @@
 defmodule Alethea.Clinical.EmotionAnalysis do
   @moduledoc """
-  Almacena el resultado del análisis de emociones realizado por RoBERTa.
+  Almacena el resultado canónico del análisis de emociones.
   Cada mensaje puede tener un único análisis de emociones asociado.
   """
   use Ecto.Schema
@@ -9,7 +9,8 @@ defmodule Alethea.Clinical.EmotionAnalysis do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @canonical_labels [:joy, :sadness, :anger, :fear, :neutral]
+  @canonical_labels ~w(joy sadness anger fear neutral)
+  @score_fields [:joy_score, :sadness_score, :anger_score, :fear_score, :neutral_score]
 
   schema "emotion_analyses" do
     field(:model_version, :string, default: "robertuito-emotion-analysis")
@@ -47,9 +48,39 @@ defmodule Alethea.Clinical.EmotionAnalysis do
       :confidence,
       :processed_at
     ])
-    |> validate_required([:message_id])
-    |> validate_inclusion(:dominant_label, @canonical_labels ++ [nil])
+    |> validate_required([
+      :message_id,
+      :dominant_label,
+      :confidence,
+      :processed_at | @score_fields
+    ])
+    |> validate_inclusion(:dominant_label, @canonical_labels)
+    |> validate_number(:confidence, greater_than: 0.0, less_than_or_equal_to: 1.0)
+    |> validate_scores()
+    |> validate_nonzero_scores()
   end
+
+  @doc false
+  def canonical_scores(results) when is_list(results) do
+    with {:ok, scores} <- collect_scores(results),
+         true <- map_size(scores) == length(@canonical_labels),
+         true <- Enum.any?(scores, fn {_label, score} -> score > 0.0 end) do
+      {:ok,
+       %{
+         joy_score: scores["joy"],
+         sadness_score: scores["sadness"],
+         anger_score: scores["anger"],
+         fear_score: scores["fear"],
+         neutral_score: scores["neutral"],
+         dominant_label: dominant_label(scores),
+         confidence: Enum.max(Map.values(scores))
+       }}
+    else
+      _ -> {:error, :invalid_emotion_scores}
+    end
+  end
+
+  def canonical_scores(_), do: {:error, :invalid_emotion_scores}
 
   @doc """
   Calcula el label dominante y confidence a partir de los scores.
@@ -84,4 +115,39 @@ defmodule Alethea.Clinical.EmotionAnalysis do
 
   defp format_score(nil), do: "N/A"
   defp format_score(score) when is_float(score), do: :erlang.float_to_binary(score, decimals: 3)
+
+  defp validate_scores(changeset) do
+    Enum.reduce(@score_fields, changeset, fn field, changeset ->
+      validate_number(changeset, field, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
+    end)
+  end
+
+  defp validate_nonzero_scores(changeset) do
+    if Enum.all?(@score_fields, &(get_field(changeset, &1) == 0.0)) do
+      add_error(changeset, :confidence, "must have at least one non-zero score")
+    else
+      changeset
+    end
+  end
+
+  defp collect_scores(results) do
+    Enum.reduce_while(results, {:ok, %{}}, fn
+      %{label: label, score: score}, {:ok, scores}
+      when is_binary(label) and is_number(score) and score == score and score >= 0.0 and
+             score <= 1.0 ->
+        if label in @canonical_labels and not Map.has_key?(scores, label) do
+          {:cont, {:ok, Map.put(scores, label, score)}}
+        else
+          {:halt, {:error, :invalid_emotion_scores}}
+        end
+
+      _result, _scores ->
+        {:halt, {:error, :invalid_emotion_scores}}
+    end)
+  end
+
+  defp dominant_label(scores) do
+    {label, _score} = Enum.max_by(scores, fn {_label, score} -> score end)
+    label
+  end
 end
