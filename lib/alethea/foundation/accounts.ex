@@ -204,4 +204,133 @@ defmodule Alethea.Foundation.Accounts do
       %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
     end
   end
+
+  @doc """
+  Provisions (find-or-creates) the legacy patient's Telegram-native
+  identity row in the foundation schema, then mints both invite
+  kinds (deep_link + six_digit) and returns them for display.
+
+  Per #108 acceptance criteria:
+
+    - The foundation row is bridged to the legacy patient via
+      `legacy_patient_id` (no orphan rows).
+    - The foundation row mirrors the legacy `alias` so the
+      Telegram identity inherits the same display name.
+    - The row is scoped to the acting professional — the
+      `professional_id` is set programmatically (not via the cast
+      list), matching the existing
+      `Alethea.Foundation.Accounts.Patient.create_patient/2`
+      tenant boundary.
+    - Calling it again for the same legacy patient REUSES the
+      existing foundation row — `legacy_patient_id` is the natural
+      idempotency key. The `(patient_id, code, kind)` unique index
+      on `foundation_patient_auth_codes` is unaffected because each
+      mint is a fresh code.
+    - The 10-minute TTL on the auth code is unchanged (the
+      underlying `create_patient_auth_code/2` still uses the
+      existing `@ttl_seconds = 600`).
+    - No raw `chat_id` ever touches the foundation row here — only
+      the eventual `/start` bind step writes
+      `telegram_chat_id_hash`, and only as a one-way HMAC.
+
+  Returns `{:ok, %{patient: %Patient{}, deep_link: code,
+  six_digit: code, expires_at: DateTime.t()}}` on success. Returns
+  `{:error, :tenant_mismatch}` when the legacy patient and the
+  professional disagree on `professional_id` (the caller is trying
+  to act across the tenant boundary — fail loud, fail closed).
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. The minted codes are bearer secrets for
+  the patient onboarding flow; they must never appear in logs.
+  Caller-side error handling must NOT log the returned codes.
+  """
+  @spec invite_to_telegram(
+          Alethea.Accounts.Patient.t(),
+          Alethea.Accounts.Professional.t()
+        ) ::
+          {:ok, %{patient: Patient.t(), deep_link: String.t(), six_digit: String.t(), expires_at: DateTime.t()}}
+          | {:error, :tenant_mismatch | Ecto.Changeset.t()}
+  def invite_to_telegram(
+        %Alethea.Accounts.Patient{professional_id: pro_id, alias: legacy_alias, id: legacy_id},
+        %Alethea.Accounts.Professional{id: pro_id}
+      ) when is_binary(legacy_alias) do
+    Ecto.Multi.new()
+    |> Ecto.Multi.run(:foundation_patient, fn repo, _changes ->
+      case repo.get_by(Patient, legacy_patient_id: legacy_id) do
+        nil ->
+          %Patient{}
+          |> Patient.changeset(%{
+            alias: legacy_alias,
+            legacy_patient_id: legacy_id,
+            status: "active"
+          })
+          |> Ecto.Changeset.put_change(:professional_id, pro_id)
+          |> repo.insert()
+
+        %Patient{} = existing ->
+          {:ok, existing}
+      end
+    end)
+    |> Ecto.Multi.run(:deep_link, fn _repo, %{foundation_patient: fp} ->
+      PatientAuthCode.create_patient_auth_code(fp.id, kind: "deep_link")
+    end)
+    |> Ecto.Multi.run(:six_digit, fn _repo, %{foundation_patient: fp} ->
+      PatientAuthCode.create_patient_auth_code(fp.id, kind: "six_digit")
+    end)
+    |> Ecto.Multi.run(:invite, fn _repo, %{foundation_patient: fp, deep_link: dl, six_digit: sd} ->
+      {:ok,
+       %{
+         patient: fp,
+         deep_link: dl.code,
+         six_digit: sd.code,
+         expires_at: dl.expires_at
+       }}
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{invite: invite}} -> {:ok, invite}
+      {:error, _step, error, _changes} -> {:error, error}
+    end
+  end
+
+  def invite_to_telegram(
+        %Alethea.Accounts.Patient{} = _legacy_patient,
+        %Alethea.Accounts.Professional{} = _professional
+      ) do
+    # Mismatched tenant boundary: the legacy patient belongs to a
+    # different professional than the actor. Fail closed — the
+    # caller should never see an invite minted across tenants.
+    {:error, :tenant_mismatch}
+  end
+
+  @doc """
+  Returns `true` if the legacy patient has a bound Telegram
+  identity (their foundation row exists AND has
+  `telegram_chat_id_hash` set), `false` otherwise.
+
+  Per #108: the dashboard shows a light connected/not-connected
+  indicator derived from the Telegram identity hash. The check is
+  scoped to the legacy patient's `legacy_patient_id` bridge, so the
+  indicator is per-patient, not per-professional-roster.
+
+  Returns `false` for any non-legacy-patient input (defensive
+  guard).
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. The hash itself is a PHI surface (it
+  correlates the patient to a specific Telegram chat); checking
+  its presence must not appear in logs.
+  """
+  @spec telegram_connected?(Alethea.Accounts.Patient.t()) :: boolean()
+  def telegram_connected?(%Alethea.Accounts.Patient{id: legacy_id})
+      when is_binary(legacy_id) do
+    case Repo.get_by(Patient, legacy_patient_id: legacy_id) do
+      %Patient{telegram_chat_id_hash: hash} when is_binary(hash) -> true
+      _ -> false
+    end
+  end
+
+  def telegram_connected?(_), do: false
 end

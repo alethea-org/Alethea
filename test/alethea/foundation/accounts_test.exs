@@ -210,6 +210,154 @@ defmodule Alethea.Foundation.AccountsTest do
     end
   end
 
+  describe "invite_to_telegram/2 — #108" do
+    setup do
+      legacy_pro = legacy_professional_fixture()
+
+      kek =
+        case Alethea.Accounts.load_professional_kek(legacy_pro) do
+          {:ok, kek} -> kek
+          _ -> Alethea.Encryption.ProfessionalKek.generate_kek()
+        end
+
+      legacy_pat =
+        legacy_patient_fixture(legacy_pro,
+          alias: "Invitee #{System.unique_integer([:positive])}",
+          kek_bytes: kek
+        )
+
+      %{legacy_pro: legacy_pro, legacy_pat: legacy_pat}
+    end
+
+    test "provisions a foundation Patient bridged by legacy_patient_id", %{
+      legacy_pro: legacy_pro,
+      legacy_pat: legacy_pat
+    } do
+      assert {:ok, invite} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+
+      foundation = invite.patient
+      assert %Alethea.Foundation.Accounts.Patient{} = foundation
+      assert foundation.legacy_patient_id == legacy_pat.id
+      assert foundation.professional_id == legacy_pro.id
+      assert foundation.alias == legacy_pat.alias
+    end
+
+    test "returns both invite kinds (deep_link + six_digit)", %{
+      legacy_pro: legacy_pro,
+      legacy_pat: legacy_pat
+    } do
+      assert {:ok, invite} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+
+      # 32 raw bytes URL-safe base64 (no padding) → exactly 43 chars
+      assert byte_size(invite.deep_link) == 43
+      assert Regex.match?(~r/^[A-Za-z0-9_-]+$/, invite.deep_link)
+
+      assert String.length(invite.six_digit) == 6
+      assert Regex.match?(~r/^[0-9]{6}$/, invite.six_digit)
+    end
+
+    test "expires_at is ~10 minutes after mint", %{
+      legacy_pro: legacy_pro,
+      legacy_pat: legacy_pat
+    } do
+      assert {:ok, invite} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+
+      delta = DateTime.diff(invite.expires_at, DateTime.utc_now(), :second)
+      assert_in_delta delta, 600, 2
+    end
+
+    test "is idempotent per patient — a second call reuses the same foundation row", %{
+      legacy_pro: legacy_pro,
+      legacy_pat: legacy_pat
+    } do
+      assert {:ok, first} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+      assert {:ok, second} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+
+      assert first.patient.id == second.patient.id
+
+      # Foundation count for this bridge is exactly 1 — no duplicate
+      # identity row was minted on the second call.
+      count =
+        Alethea.Foundation.Accounts.Patient
+        |> where([p], p.legacy_patient_id == ^legacy_pat.id)
+        |> Alethea.Repo.aggregate(:count)
+
+      assert count == 1
+
+      # Each call mints a fresh code (the underlying auth-code TTL is
+      # the rotation boundary), so the codes differ.
+      assert first.deep_link != second.deep_link
+      assert first.six_digit != second.six_digit
+    end
+
+    test "is scoped to the acting professional — cross-tenant calls fail closed", %{
+      legacy_pat: legacy_pat
+    } do
+      other_pro = legacy_professional_fixture()
+
+      assert {:error, :tenant_mismatch} =
+               Accounts.invite_to_telegram(legacy_pat, other_pro)
+
+      # And no foundation row was minted for the cross-tenant probe.
+      count =
+        Alethea.Foundation.Accounts.Patient
+        |> where([p], p.legacy_patient_id == ^legacy_pat.id)
+        |> Alethea.Repo.aggregate(:count)
+
+      assert count == 0
+    end
+  end
+
+  describe "telegram_connected?/1 — #108" do
+    setup do
+      legacy_pro = legacy_professional_fixture()
+
+      kek =
+        case Alethea.Accounts.load_professional_kek(legacy_pro) do
+          {:ok, kek} -> kek
+          _ -> Alethea.Encryption.ProfessionalKek.generate_kek()
+        end
+
+      legacy_pat =
+        legacy_patient_fixture(legacy_pro,
+          alias: "Conn #{System.unique_integer([:positive])}",
+          kek_bytes: kek
+        )
+
+      %{legacy_pro: legacy_pro, legacy_pat: legacy_pat}
+    end
+
+    test "returns false before any invite is minted", %{legacy_pat: legacy_pat} do
+      refute Accounts.telegram_connected?(legacy_pat)
+    end
+
+    test "returns false after invite is minted — the patient has not yet /started", %{
+      legacy_pro: legacy_pro,
+      legacy_pat: legacy_pat
+    } do
+      {:ok, _invite} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+      refute Accounts.telegram_connected?(legacy_pat)
+    end
+
+    test "returns true once the patient's foundation row has telegram_chat_id_hash set", %{
+      legacy_pro: legacy_pro,
+      legacy_pat: legacy_pat
+    } do
+      {:ok, invite} = Accounts.invite_to_telegram(legacy_pat, legacy_pro)
+
+      invite.patient
+      |> Ecto.Changeset.change(%{telegram_chat_id_hash: valid_hash_for("connected")})
+      |> Alethea.Repo.update!()
+
+      assert Accounts.telegram_connected?(legacy_pat)
+    end
+
+    test "returns false for a non-legacy-patient struct (defensive guard)" do
+      refute Accounts.telegram_connected?(%{})
+      refute Accounts.telegram_connected?(nil)
+    end
+  end
+
   # --- helpers ---
 
   # A deterministic 64-char lowercase hex hash, the only input shape
@@ -235,5 +383,36 @@ defmodule Alethea.Foundation.AccountsTest do
       full_name: "Ctx #{tag} Pro",
       password: password
     })
+  end
+
+  # Legacy (`Alethea.Accounts.*`) fixtures for #108 tests, which
+  # exercise the boundary between the foundation `Patient` schema
+  # (provisioned by `invite_to_telegram/2`) and the legacy
+  # `Alethea.Accounts.Patient` schema (the input).
+  defp legacy_professional_fixture do
+    {:ok, pro} =
+      Alethea.Accounts.create_professional(%{
+        email: "legacy-pro-#{System.unique_integer([:positive])}@example.com",
+        password: "supersecret12",
+        full_name: "Legacy Pro #{System.unique_integer([:positive])}"
+      })
+
+    pro
+  end
+
+  defp legacy_patient_fixture(pro, attrs) do
+    kek_bytes = Keyword.fetch!(attrs, :kek_bytes)
+    alias_value = Keyword.fetch!(attrs, :alias)
+
+    {:ok, patient} =
+      Alethea.Accounts.create_patient(
+        %{
+          "alias" => alias_value,
+          "professional_id" => pro.id
+        },
+        kek_bytes
+      )
+
+    patient
   end
 end

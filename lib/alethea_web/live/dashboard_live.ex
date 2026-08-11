@@ -6,6 +6,7 @@ defmodule AletheaWeb.DashboardLive do
   alias Alethea.Clinical.{MockData, Message}
   alias AletheaWeb.DashboardLive.Components.EmotionChart
   alias Alethea.Encryption.PatientVault
+  alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias AletheaWeb.DashboardLive.Components.NotificationCenter
 
   def mount(_params, %{"professional_id" => id}, socket) do
@@ -46,9 +47,22 @@ defmodule AletheaWeb.DashboardLive do
         DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week()
       )
       |> assign(:chat_decrypted, false)
+      |> assign(:telegram_status, build_telegram_status(patients, use_mock?))
+      |> assign(:invite_modal, nil)
       |> stream(:decrypted_messages, [])
 
     {:ok, socket}
+  end
+
+  # Per-patient connected/not-connected map for the dashboard indicator.
+  # In mock mode we skip the DB hit (no foundation rows behind mock
+  # patients) and report all "not connected" so the Invite button is
+  # always shown — the modal still surfaces a fake invite for the
+  # demo to click through.
+  defp build_telegram_status(_patients, true), do: %{}
+
+  defp build_telegram_status(patients, false) do
+    Map.new(patients, fn patient -> {patient.id, FoundationAccounts.telegram_connected?(patient)} end)
   end
 
   def handle_params(params, _url, socket) do
@@ -206,6 +220,106 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  # ── Telegram invite action (issue #108) ─────────────────────────
+  #
+  # On-demand provisions the foundation Telegram identity row and
+  # mints a deep-link + 6-digit invite. Idempotent: a second click
+  # reuses the same identity row and mints a fresh pair of codes
+  # (the underlying `(patient_id, code, kind)` unique index is
+  # unaffected — each mint is a fresh code).
+  #
+  # The button adapts by state:
+  #   - Not connected  → "Invite to Telegram"  (mints invite)
+  #   - Not connected + invite already shown → "Regenerate" (re-mints)
+  #   - Connected      → "Connected" (no-op indicator)
+  #
+  # The professional shares the deep link + 6-digit code with the
+  # patient in-session. The app never delivers the invite anywhere.
+
+  def handle_event("invite_to_telegram", %{"patient_id" => id}, socket) do
+    socket = mint_and_show_invite(socket, id, regenerate: false)
+    {:noreply, socket}
+  end
+
+  def handle_event("regenerate_invite", %{"patient_id" => id}, socket) do
+    socket = mint_and_show_invite(socket, id, regenerate: true)
+    {:noreply, socket}
+  end
+
+  def handle_event("close_invite_modal", _params, socket) do
+    {:noreply, assign(socket, :invite_modal, nil)}
+  end
+
+  defp mint_and_show_invite(socket, patient_id, opts) do
+    patient = find_patient(socket, patient_id)
+
+    cond do
+      is_nil(patient) ->
+        put_flash(socket, :error, "Paciente no encontrado.")
+
+      socket.assigns.use_mock_data ->
+        show_mock_invite(socket, patient, opts)
+
+      true ->
+        mint_real_invite(socket, patient, opts)
+    end
+  end
+
+  defp show_mock_invite(socket, patient, opts) do
+    # Mock mode: no real foundation row behind mock patients, so we
+    # synthesize a fake invite so the demo flow is end-to-end
+    # clickable. The codes are obviously fake — they carry the
+    # `MOCK_` prefix in the deep-link token.
+    deep_link = "MOCK_#{Alethea.Telegram.DeepLinkToken.mint()}"
+    six_digit = random_six_digit()
+    expires_at = DateTime.add(DateTime.utc_now(), 600, :second)
+
+    socket
+    |> assign(:invite_modal, %{
+      patient_id: patient.id,
+      patient_alias: patient.alias,
+      deep_link: deep_link,
+      six_digit: six_digit,
+      expires_at: expires_at,
+      regenerated: opts[:regenerate] || false
+    })
+    |> maybe_flash_regenerate(patient.alias, opts)
+  end
+
+  defp mint_real_invite(socket, patient, opts) do
+    case FoundationAccounts.invite_to_telegram(patient, socket.assigns.current_professional) do
+      {:ok, invite} ->
+        socket
+        |> assign(:invite_modal, %{
+          patient_id: patient.id,
+          patient_alias: patient.alias,
+          deep_link: invite.deep_link,
+          six_digit: invite.six_digit,
+          expires_at: invite.expires_at,
+          regenerated: opts[:regenerate] || false
+        })
+        |> maybe_flash_regenerate(patient.alias, opts)
+
+      {:error, :tenant_mismatch} ->
+        put_flash(socket, :error, "Acción no autorizada para este paciente.")
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        put_flash(socket, :error, "No se pudo generar el invite: #{inspect(changeset.errors)}")
+    end
+  end
+
+  defp maybe_flash_regenerate(socket, _alias, opts) do
+    if opts[:regenerate],
+      do: put_flash(socket, :info, "Invite regenerado. Comparte el nuevo código con el paciente."),
+      else: socket
+  end
+
+  defp random_six_digit do
+    (:rand.uniform(1_000_000) - 1)
+    |> Integer.to_string()
+    |> String.pad_leading(6, "0")
+  end
+
   defp decrypt_real_messages(patient, professional_kek) do
     key_record = Accounts.get_encryption_key_for_patient(patient.id)
 
@@ -293,6 +407,21 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:emotion_rows, emotion_rows)
     |> assign(:emotion_chart_data, emotion_chart_data)
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
+    |> assign(:telegram_status, refresh_telegram_status(socket, patient))
+  end
+
+  # Refresh the per-patient telegram_status for the patient being
+  # loaded into the detail panel. The status is keyed by legacy patient
+  # id, so we re-query that single row instead of rebuilding the whole
+  # map — cheaper when the roster is large.
+  defp refresh_telegram_status(socket, patient) do
+    cond do
+      socket.assigns.use_mock_data ->
+        socket.assigns.telegram_status
+
+      true ->
+        Map.put(socket.assigns.telegram_status, patient.id, FoundationAccounts.telegram_connected?(patient))
+    end
   end
 
   def handle_info({:crisis_detected, %{patient_id: patient_id, level: level}}, socket) do

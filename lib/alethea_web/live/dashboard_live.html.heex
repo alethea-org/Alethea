@@ -217,6 +217,75 @@
         </span>
       </div>
 
+      <%!-- Telegram onboarding — adaptive action (issue #108) --%>
+      <div
+        id="telegram-onboarding-row"
+        style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; margin-bottom:16px; border:1px solid #e2e8f0; border-radius:14px; background:#fafbfc;"
+      >
+        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+          <span
+            style={
+              "width:8px; height:8px; border-radius:50%; flex-shrink:0; " <>
+              if(Map.get(@telegram_status, @selected_patient.id, false),
+                do: "background:#22c55e;",
+                else: "background:#f59e0b;"
+              )
+            }
+            id={
+              if(Map.get(@telegram_status, @selected_patient.id, false),
+                do: "telegram-status-dot-connected",
+                else: "telegram-status-dot-disconnected"
+              )
+            }
+          >
+          </span>
+          <div style="min-width:0;">
+            <div style="font-size:12px; font-weight:700; color:#1e293b;">
+              Telegram
+            </div>
+            <div
+              id="telegram-status-label"
+              style="font-size:11px; color:#64748b;"
+            >
+              {if Map.get(@telegram_status, @selected_patient.id, false),
+                do: "Conectado · el bot ya está vinculado",
+                else: "No conectado · generá un invite para vincular"}
+            </div>
+          </div>
+        </div>
+
+        <%= if not Map.get(@telegram_status, @selected_patient.id, false) do %>
+          <%= if @invite_modal && @invite_modal.patient_id == @selected_patient.id do %>
+            <button
+              id="telegram-regenerate-button"
+              type="button"
+              phx-click="regenerate_invite"
+              phx-value-patient_id={@selected_patient.id}
+              style="padding:8px 14px; border:1px solid rgba(245,158,11,.3); border-radius:10px; background:rgba(245,158,11,.08); color:#b45309; font-size:12px; font-weight:600; cursor:pointer;"
+            >
+              Regenerar invite
+            </button>
+          <% else %>
+            <button
+              id="telegram-invite-button"
+              type="button"
+              phx-click="invite_to_telegram"
+              phx-value-patient_id={@selected_patient.id}
+              style="padding:8px 14px; border:none; border-radius:10px; background:#6366f1; color:#fff; font-size:12px; font-weight:600; cursor:pointer;"
+            >
+              Invitar a Telegram
+            </button>
+          <% end %>
+        <% else %>
+          <span
+            id="telegram-connected-indicator"
+            style="font-size:11px; font-weight:600; color:#16a34a; padding:6px 10px; border:1px solid rgba(34,197,94,.25); border-radius:8px; background:rgba(34,197,94,.06);"
+          >
+            Conectado
+          </span>
+        <% end %>
+      </div>
+
       <%!-- Detail grid: reports left, controls right --%>
       <div class="dashboard-detail-grid">
         <%!-- ── Left: clinical content ── --%>
@@ -572,10 +641,108 @@
                   style="font-size:12px; line-height:1.5;"
                 >
                   {msg.encrypted_content}
-                </div>
-              </div>
-            </div>
-          </div>
+</div>
+    </div>
+  </div>
+</div>
+
+<%!-- ── Telegram invite modal (issue #108) ── --%>
+<div
+  :if={@invite_modal}
+  id="telegram-invite-modal"
+  class="modal"
+  style="position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:24px;"
+>
+  <div
+    id="telegram-invite-modal-backdrop"
+    style="position:absolute; inset:0;"
+    phx-click="close_invite_modal"
+  >
+  </div>
+  <div
+    id="telegram-invite-modal-card"
+    style="position:relative; background:#fff; border-radius:18px; box-shadow:0 24px 60px rgba(15,23,42,.25); max-width:480px; width:100%; padding:24px;"
+  >
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+      <div>
+        <p style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#6366f1; margin-bottom:2px;">
+          Telegram
+        </p>
+        <h3 style="font-size:17px; font-weight:800; color:#1e293b; letter-spacing:-0.01em;">
+          Invite para {@invite_modal.patient_alias}
+        </h3>
+      </div>
+      <button
+        id="telegram-invite-modal-close"
+        type="button"
+        phx-click="close_invite_modal"
+        aria-label="Cerrar"
+        style="background:none; border:none; cursor:pointer; color:#94a3b8; padding:4px;"
+      >
+        <.icon name="hero-x-mark" style="width:18px; height:18px;" />
+      </button>
+    </div>
+
+    <p style="font-size:12px; color:#64748b; line-height:1.5; margin-bottom:18px;">
+      Compartí este invite con tu paciente en sesión. El enlace
+      profundo o el código de 6 dígitos lo llevan al bot; cuando
+      hace <code style="background:#f1f5f9; padding:1px 4px; border-radius:4px; font-size:11px;">/start</code>
+      se vincula a su ficha. El invite vence a los
+      <strong>10 minutos</strong>; podés regenerarlo si expiró.
+    </p>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; display:block; margin-bottom:6px;">
+        Enlace profundo
+      </label>
+      <div
+        id="telegram-invite-deep-link"
+        style="padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; font-family:'JetBrains Mono','Menlo',monospace; font-size:12px; color:#1e293b; word-break:break-all;"
+      >
+        https://t.me/alethea_bot?start={@invite_modal.deep_link}
+      </div>
+    </div>
+
+    <div style="margin-bottom:18px;">
+      <label style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; display:block; margin-bottom:6px;">
+        Código de 6 dígitos (respaldo)
+      </label>
+      <div
+        id="telegram-invite-six-digit"
+        style="padding:12px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; font-family:'JetBrains Mono','Menlo',monospace; font-size:22px; font-weight:700; color:#1e293b; letter-spacing:0.3em; text-align:center;"
+      >
+        {@invite_modal.six_digit}
+      </div>
+    </div>
+
+    <div
+      id="telegram-invite-expiry"
+      style="font-size:11px; color:#64748b; padding:8px 12px; background:#f1f5f9; border-radius:8px; margin-bottom:18px;"
+    >
+      Vence a las {Calendar.strftime(@invite_modal.expires_at, "%H:%M:%S UTC")}
+    </div>
+
+    <div style="display:flex; gap:10px;">
+      <button
+        id="telegram-invite-regenerate"
+        type="button"
+        phx-click="regenerate_invite"
+        phx-value-patient_id={@invite_modal.patient_id}
+        style="flex:1; padding:10px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; color:#334155; font-size:12px; font-weight:600; cursor:pointer;"
+      >
+        Regenerar
+      </button>
+      <button
+        id="telegram-invite-done"
+        type="button"
+        phx-click="close_invite_modal"
+        style="flex:1; padding:10px; border:none; border-radius:10px; background:#6366f1; color:#fff; font-size:12px; font-weight:600; cursor:pointer;"
+      >
+        Listo
+      </button>
+    </div>
+  </div>
+</div>
         </div>
       </div>
     </div>
