@@ -116,7 +116,7 @@ config :alethea, Alethea.Clinical, recent_message_limit: 10
 # Global configuration for LangChain chains
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   provider: :local,
-  model: System.get_env("LLM_MODEL", "phi-4-mini"),
+  model: System.get_env("LLM_MODEL", "phi4-mini"),
   stream: false,
   temperature: 0.0,
   max_tokens: 512,

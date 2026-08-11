@@ -18,7 +18,7 @@ defmodule Alethea.AI.LLMConfig do
       LLMConfig.run_with_retry(config, fn -> chain.run(params) end)
   """
 
-  alias Alethea.AI.ChatModels.HuggingFaceChat
+  alias Alethea.AI.ChatModels.OllamaChat
   alias Alethea.AI.Retry
   alias LangChain.ChatModels.ChatOpenAI
 
@@ -70,7 +70,10 @@ defmodule Alethea.AI.LLMConfig do
   """
   @spec get(chain_name(), keyword()) :: config()
   def get(chain_name, overrides \\ []) when is_atom(chain_name) do
-    chain_config = Application.get_env(:alethea, chain_name, [])
+    chain_config =
+      Application.get_env(:alethea, chain_module(chain_name), [])
+      |> Keyword.merge(Application.get_env(:alethea, chain_name, []))
+
     global_config = Application.get_env(:alethea, __MODULE__, [])
 
     provider =
@@ -132,24 +135,17 @@ defmodule Alethea.AI.LLMConfig do
   @doc """
   Construye un LLM instance listo para usar.
   """
-  @spec build_llm(config()) :: {:ok, HuggingFaceChat.t() | ChatOpenAI.t()} | {:error, String.t()}
+  @spec build_llm(config()) :: {:ok, OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
   def build_llm(%Config{provider: :local} = config) do
-    case config.api_key do
-      nil ->
-        {:error, "API key required for local provider"}
-
-      api_key when is_binary(api_key) ->
-        {:ok,
-         HuggingFaceChat.new!(%{
-           model: config.model,
-           api_key: api_key,
-           endpoint_url: config.endpoint_url,
-           temperature: config.temperature,
-           max_tokens: config.max_tokens,
-           stream: config.stream,
-           receive_timeout: config.timeout
-         })}
-    end
+    {:ok,
+     OllamaChat.new!(%{
+       model: config.model,
+       endpoint_url: config.endpoint_url,
+       temperature: config.temperature,
+       max_tokens: config.max_tokens,
+       stream: config.stream,
+       receive_timeout: config.timeout
+     })}
   end
 
   def build_llm(%Config{provider: :cloud} = config) do
@@ -174,7 +170,7 @@ defmodule Alethea.AI.LLMConfig do
   @doc """
   Construye un LLM instance o lanza excepción.
   """
-  @spec build_llm!(config()) :: HuggingFaceChat.t() | ChatOpenAI.t() | no_return()
+  @spec build_llm!(config()) :: OllamaChat.t() | ChatOpenAI.t() | no_return()
   def build_llm!(%Config{} = config) do
     case build_llm(config) do
       {:ok, llm} -> llm
@@ -186,7 +182,7 @@ defmodule Alethea.AI.LLMConfig do
   Obtiene la config y construye el LLM en un solo paso.
   """
   @spec get_and_build(chain_name(), keyword()) ::
-          {:ok, config(), HuggingFaceChat.t() | ChatOpenAI.t()} | {:error, String.t()}
+          {:ok, config(), OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
   def get_and_build(chain_name, overrides \\ []) do
     config = get(chain_name, overrides)
 
@@ -222,11 +218,16 @@ defmodule Alethea.AI.LLMConfig do
   defp resolve_api_key({:system, env_var}) when is_binary(env_var),
     do: System.get_env(env_var)
 
-  defp default_endpoint(:local), do: "https://router.huggingface.co/hf-inference/models/"
+  defp default_endpoint(:local), do: "http://localhost:11434"
   defp default_endpoint(:cloud), do: "https://api.openai.com/v1/"
 
-  defp default_model(:local), do: "phi-4-mini"
+  defp default_model(:local), do: "phi4-mini"
   defp default_model(:cloud), do: "gpt-4o-mini"
+
+  defp chain_module(:guided_conversation), do: Alethea.AI.Chains.GuidedConversationChain
+  defp chain_module(:session_summary), do: Alethea.AI.Chains.SessionSummaryChain
+  defp chain_module(:weekly_summary), do: Alethea.AI.Chains.WeeklySummaryChain
+  defp chain_module(:weekly_report), do: Alethea.AI.Chains.WeeklyReportChain
 
   defp build_retry_config(global, chain, overrides) do
     retry_enabled =
