@@ -50,6 +50,61 @@ defmodule Alethea.Foundation.Accounts do
   """
   defdelegate register_admin(attrs), to: Admin
 
+  @doc """
+  Lazy-provisions a foundation Professional from a legacy
+  `Alethea.Accounts.Professional` (decision in #111, Option A — bridge
+  the parallel identity namespaces without cutting over the auth path).
+
+  The foundation professional is an **owner record only**: it carries
+  the foundation-side foreign keys (patients, audit, etc.) while the
+  legacy row keeps owning the credential. The foundation row is
+  created by copying `email`, `full_name`, and the legacy
+  `password_hash` **verbatim** — no re-hash, the plaintext was never
+  available on this side, and a re-hash would invalidate the legacy
+  credential. From that point on the foundation row is not a login
+  surface; foundation auth remains dormant (see the `psicologo-foundation`
+  follow-up change for the full unification).
+
+  Idempotent: a second call with the same legacy professional returns
+  the same foundation row without creating a duplicate. The unique
+  index `foundation_professionals_legacy_professional_id_unique`
+  enforces the "one foundation per legacy" invariant at the DB layer
+  and makes the helper race-safe — two concurrent calls cannot
+  create two foundation rows for the same legacy one; the second
+  call falls through to a re-lookup that returns the winner's row.
+
+  Returns `{:ok, %Professional{}}` on success, or
+  `{:error, %Ecto.Changeset{}}` if the legacy row carries a missing
+  or malformed `email` / `full_name` / `password_hash` (these are
+  defensive — a healthy legacy row always has all three).
+  """
+  @spec find_or_provision_foundation_professional(Alethea.Accounts.Professional.t()) ::
+          {:ok, Professional.t()} | {:error, Ecto.Changeset.t()}
+  def find_or_provision_foundation_professional(%Alethea.Accounts.Professional{} = legacy) do
+    case Repo.get_by(Professional, legacy_professional_id: legacy.id) do
+      %Professional{} = foundation ->
+        {:ok, foundation}
+
+      nil ->
+        case Professional.provision_foundation_professional(legacy) do
+          {:ok, foundation} ->
+            {:ok, foundation}
+
+          # Race-safety: if a concurrent caller won the unique-index
+          # race and inserted the row between our lookup and our
+          # insert, the second insert fails with a unique violation
+          # that is captured as a changeset error. Re-lookup picks
+          # up the winning row; only the pathological case where
+          # the row has vanished again propagates the changeset.
+          {:error, %Ecto.Changeset{} = changeset} ->
+            case Repo.get_by(Professional, legacy_professional_id: legacy.id) do
+              %Professional{} = foundation -> {:ok, foundation}
+              nil -> {:error, changeset}
+            end
+        end
+    end
+  end
+
   @valid_hash_byte_size 64
 
   @doc """
