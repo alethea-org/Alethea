@@ -1,0 +1,254 @@
+name: Triage
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  auto-triage-new:
+    name: New issue → status:needs-triage
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add needs-triage label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const existing = (issue.labels || []).map(l => l.name);
+            const toAdd = ['status:needs-triage'].filter(l => !existing.includes(l));
+            if (toAdd.length === 0) return;
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: toAdd,
+            });
+
+  handle-slash-command:
+    name: /claim y /release
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse command
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = (context.payload.comment.body || '').trim();
+            const cmd = body.split(/\s+/)[0].toLowerCase();
+            if (cmd !== '/claim' && cmd !== '/release') {
+              core.setOutput('run', 'false');
+              return;
+            }
+            core.setOutput('run', 'true');
+            core.setOutput('command', cmd);
+
+      - name: /claim
+        if: steps.parse.outputs.command == '/claim'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const author = context.payload.comment.user.login;
+            const currentAssignees = (issue.assignees || []).map(a => a.login);
+            const existingLabels = (issue.labels || []).map(l => l.name);
+
+            if (currentAssignees.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `❌ Esta issue ya está tomada por @${currentAssignees[0]}. Pedile que la libere con \`/release\`.`,
+              });
+              return;
+            }
+
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              assignees: [author],
+            });
+
+            const addLabels = ['status:claimed'].filter(l => !existingLabels.includes(l));
+            const removeLabels = ['status:needs-triage'].filter(l => existingLabels.includes(l));
+            if (addLabels.length) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, labels: addLabels,
+              });
+            }
+            if (removeLabels.length) {
+              for (const l of removeLabels) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, name: l,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `✅ Issue tomada por @${author}. **Lock activo** — nadie más puede desasignarte.\n\nPara liberarla cuando no puedas seguir: \`/release\`.`,
+            });
+
+      - name: /release
+        if: steps.parse.outputs.command == '/release'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const author = context.payload.comment.user.login;
+            const currentAssignees = (issue.assignees || []).map(a => a.login);
+            const existingLabels = (issue.labels || []).map(l => l.name);
+
+            if (currentAssignees.length === 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `ℹ️ Esta issue no tiene assignee. No hay nada que liberar.`,
+              });
+              return;
+            }
+
+            if (!currentAssignees.includes(author)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🔒 Solo el assignee actual (@${currentAssignees[0]}) puede liberar esta issue. Si querés tomarla, pedile a @${currentAssignees[0]} que la libere primero.`,
+              });
+              return;
+            }
+
+            await github.rest.issues.removeAssignees({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              assignees: [author],
+            });
+
+            const addLabels = ['status:needs-triage'].filter(l => !existingLabels.includes(l));
+            const removeLabels = ['status:claimed'].filter(l => existingLabels.includes(l));
+            if (addLabels.length) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, labels: addLabels,
+              });
+            }
+            if (removeLabels.length) {
+              for (const l of removeLabels) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, name: l,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `🔓 @${author} liberó esta issue. Vuelve a \`status:needs-triage\` — otro dev puede \`/claim\`.`,
+            });
+
+  hard-lock:
+    name: Hard lock sobre asignaciones
+    if: github.event_name == 'issues' && github.event.action == 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read rota
+        id: rota
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.getContent({
+              owner: context.repo.owner, repo: context.repo.repo,
+              path: '.github/ROTA.yml',
+              ref: context.ref,
+            });
+            const content = Buffer.from(data.content, 'base64').toString('utf-8');
+            core.setOutput('content', content);
+
+      - name: Validate assignee change
+        uses: actions/github-script@v7
+        env:
+          ROTA_CONTENT: ${{ steps.rota.outputs.content }}
+        with:
+          script: |
+            const changes = context.payload.changes || {};
+            if (!changes.assignees) return;
+
+            const issue = context.payload.issue;
+            const actor = context.payload.sender.login;
+            const currentAssignees = (issue.assignees || []).map(a => a.login);
+            const newAssigneesRaw = changes.assignees;
+
+            const previousAssignees = (issue.previous_assignees || []).map(a => a.login);
+            const before = new Set(previousAssignees);
+            const after = new Set(currentAssignees);
+            const added = [...after].filter(x => !before.has(x));
+            const removed = [...before].filter(x => !after.has(x));
+
+            const isAuthorizedChange =
+              (added.length === 1 && added[0] === actor) ||
+              (removed.length === 1 && removed[0] === actor) ||
+              (currentAssignees.length === 1 && currentAssignees[0] === actor);
+
+            if (isAuthorizedChange) return;
+
+            const m = (env.ROTA_CONTENT || '').match(/current_po:\s*(\S+)/);
+            const currentPO = m ? m[1].replace(/^@/, '') : null;
+            const isPO = currentPO && actor === currentPO;
+
+            if (isPO) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🔧 PO de la semana (@${currentPO}) reasignó esta issue.`,
+              });
+              return;
+            }
+
+            const desired = previousAssignees.length ? previousAssignees : [];
+            await github.rest.issues.setAssignees({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              assignees: desired,
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `🔒 **Asignación protegida.** Solo el assignee actual o el PO de la semana (@${currentPO || 'N/A'}) pueden modificar quién trabaja esta issue.\n\nCambio revertido a: ${desired.length ? '@' + desired.join(', @') : 'sin asignar'}.`,
+            });
+
+  cap-one-assignee:
+    name: Máximo 1 assignee por issue
+    if: github.event_name == 'issues' && github.event.action == 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Normalize assignees
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const currentAssignees = (issue.assignees || []).map(a => a.login);
+            if (currentAssignees.length <= 1) return;
+
+            const kept = [currentAssignees[0]];
+            await github.rest.issues.setAssignees({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              assignees: kept,
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `⚠️ **Regla "una persona por issue".** Se detectó más de un assignee (${currentAssignees.map(a => '@' + a).join(', ')}). Se dejó solo a @${kept[0]} — el resto fue removido.`,
+            });

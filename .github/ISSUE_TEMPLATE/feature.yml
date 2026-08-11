@@ -1,0 +1,67 @@
+name: Feature
+description: Proponé una funcionalidad nueva o un cambio de comportamiento
+title: "[Feature]: "
+labels: ["enhancement", "status:needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proponé una feature con el contexto suficiente como para que otro
+        dev del equipo pueda implementarla sin volver a preguntarte.
+
+  - type: input
+    id: area
+    attributes:
+      label: Área afectada
+      placeholder: "area:dashboard, area:ai, ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Prioridad
+      options:
+        - priority:p0 (crítico, bloquea release)
+        - priority:p1 (importante, sprint actual)
+        - priority:p2 (nice to have, backlog)
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema / oportunidad
+      description: ¿Qué dolor resuelve o qué valor agrega?
+      placeholder: "Los psicólogos hoy tienen que ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Propuesta
+      description: Cómo lo resolverías vos. Si no sabés, describí el outcome esperado.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: Opcional: qué otras opciones pensaste y por qué descartaste
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Criterios de aceptación
+      description: Lista concreta de "esto está listo cuando ..."
+      placeholder: |
+        - [ ] El usuario puede ...
+        - [ ] Los tests cubren ...
+        - [ ] El RAG no ingiere adjuntos
+    validations:
+      required: true
