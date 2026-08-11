@@ -91,7 +91,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    %{message: message} = args
+    message = Map.get(args, "message") || Map.fetch!(args, :message)
     %{"chat" => %{"id" => chat_id}, "message_id" => telegram_message_id, "text" => text} = message
 
     chat_id_hash = ChatIdHash.hash(chat_id, pepper!())
