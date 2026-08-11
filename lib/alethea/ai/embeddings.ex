@@ -25,10 +25,9 @@ defmodule Alethea.AI.Embeddings do
 
   ## Boundary with the legacy `Alethea.AI.*` namespace
 
-  The legacy `Alethea.AI.RoBERTaWorker` is the v1 local sentiment
-  analyzer. It is NOT an embeddings adapter. The v2 behaviour here is
-  parallel: the RAG (future change) calls `Alethea.AI.embeddings().embed/2`
-  to vectorize before inserting into pgvector.
+  The v2 behaviour here is parallel: the RAG (future change) calls
+  `Alethea.AI.embeddings().embed/2` to vectorize before inserting into
+  pgvector.
 
   ## Adapter discovery
 

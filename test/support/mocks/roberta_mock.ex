@@ -1,12 +1,9 @@
 defmodule Alethea.AI.Mock.RoBERTa do
   @moduledoc """
-  Mock específico para RoBERTaWorker en tests.
-  Implementa el behaviour Alethea.AI.RoBERTaWorkerBehavior.
+  Legacy RoBERTa test mock retained until the follow-up support cleanup.
   """
 
   use GenServer
-  @behaviour Alethea.AI.RoBERTaWorkerBehavior
-
   # Client API
 
   def start_link(opts \\ []) do

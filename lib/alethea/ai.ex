@@ -29,9 +29,9 @@ defmodule Alethea.AI do
 
   ## Boundary with the legacy `Alethea.AI.*` namespace
 
-  The legacy `Alethea.AI.LLMConfig`, `Alethea.AI.PhiWorker`,
-  `Alethea.AI.RoBERTaWorker`, etc. remain the v1 LangChain / local
-  model surface. The v2 swap point here is parallel: the future
+  The legacy `Alethea.AI.LLMConfig`, `Alethea.AI.PhiWorker`, etc.
+  remain the v1 LangChain / local model surface. The v2 swap point
+  here is parallel: the future
   AI feature changes (RAG ingest, psicometría batch, etc.) will
   call `Alethea.AI.embeddings/0` / `Alethea.AI.whisper/0` and
   dispatch into the configured adapter. The legacy code is
