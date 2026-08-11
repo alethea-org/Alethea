@@ -11,7 +11,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   @behaviour Alethea.AI.Chains.ChainBehaviour
 
   alias Alethea.AI.LLMConfig
-  alias Alethea.AI.ChatModels.HuggingFaceChat
+  alias Alethea.AI.ChatModels.OllamaChat
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
@@ -38,7 +38,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   @impl true
   def supported_providers, do: [:local, :cloud]
 
-  defp do_run(%HuggingFaceChat{} = llm, content, ctx, msg_id) do
+  defp do_run(%OllamaChat{} = llm, content, ctx, msg_id) do
     system_msg = build_system_message(ctx)
 
     :telemetry.execute(

@@ -117,8 +117,7 @@ if config_env() == :prod do
       api_key: System.get_env("OPENAI_API_KEY", "")
     ],
     local: [
-      endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1"),
-      api_key: System.get_env("LOCAL_LLM_API_KEY", "ollama")
+      endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434")
     ]
 
   # Configuración para RoBERTa (Análisis de Emociones)

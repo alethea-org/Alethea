@@ -93,8 +93,7 @@ config :alethea, Alethea.AI.RoBERTaWorker,
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   provider: :local,
   local: [
-    endpoint_url: "http://localhost:11434/v1",
-    api_key: "ollama"
+    endpoint_url: "http://localhost:11434"
   ]
 
 config :phoenix_live_view,

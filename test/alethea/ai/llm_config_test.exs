@@ -1,7 +1,20 @@
 defmodule Alethea.AI.LLMConfigTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Alethea.AI.LLMConfig
+  alias Alethea.AI.Chains.GuidedConversationChain
+
+  setup do
+    original = Application.get_env(:alethea, GuidedConversationChain)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:alethea, GuidedConversationChain, original),
+        else: Application.delete_env(:alethea, GuidedConversationChain)
+    end)
+
+    :ok
+  end
 
   describe "get/2" do
     test "returns default config structure" do
@@ -24,23 +37,37 @@ defmodule Alethea.AI.LLMConfigTest do
       assert config.provider == :cloud
     end
 
+    test "consumes the guided conversation module configuration" do
+      Application.put_env(:alethea, GuidedConversationChain,
+        provider: :local,
+        model: "phi4-mini:demo",
+        local: [endpoint_url: "http://ollama.test:11434"]
+      )
+
+      config = LLMConfig.get(:guided_conversation)
+
+      assert config.model == "phi4-mini:demo"
+      assert config.endpoint_url == "http://ollama.test:11434"
+    end
+
     test "defaults to :local provider" do
       config = LLMConfig.get(:guided_conversation)
-      # Provider comes from config, test the structure
-      assert config.api_key == nil
+      assert config.provider == :local
     end
   end
 
   describe "build_llm/1" do
-    test "returns error when api_key is nil for local" do
+    test "builds the credential-free Ollama adapter for local" do
       config = %LLMConfig.Config{
         provider: :local,
-        model: "phi-4-mini",
+        model: "phi4-mini",
         api_key: nil,
-        endpoint_url: "https://api-inference.huggingface.co/models/"
+        endpoint_url: "http://localhost:11434"
       }
 
-      assert {:error, "API key required for local provider"} = LLMConfig.build_llm(config)
+      assert {:ok, %Alethea.AI.ChatModels.OllamaChat{} = model} = LLMConfig.build_llm(config)
+      assert model.model == "phi4-mini"
+      assert model.endpoint_url == "http://localhost:11434"
     end
 
     test "returns error when api_key is nil for cloud" do
@@ -56,10 +83,12 @@ defmodule Alethea.AI.LLMConfigTest do
   end
 
   describe "get_and_build/2" do
-    test "returns error tuple when config fails" do
-      # This will fail because no api_key is set
-      result = LLMConfig.get_and_build(:guided_conversation)
-      assert {:error, "API key required for local provider"} = result
+    test "returns the resolved config and local adapter" do
+      assert {:ok, config, %Alethea.AI.ChatModels.OllamaChat{} = model} =
+               LLMConfig.get_and_build(:guided_conversation)
+
+      assert model.model == config.model
+      assert model.endpoint_url == config.endpoint_url
     end
   end
 
