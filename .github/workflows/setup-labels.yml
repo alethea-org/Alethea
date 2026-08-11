@@ -36,28 +36,32 @@ jobs:
               { name: "triage-rota",        color: "c5def5", description: "Label interno: marca la issue pinneada que es la fuente de verdad de la rotacion" },
             ];
 
-            const existing = (await github.paginate(github.rest.issues.listLabelsForRepo, {
+            const existing = await github.paginate(github.rest.issues.listLabelsForRepo, {
               owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
-            })).map(l => l.name);
-            const results = { created: [], skipped: [], failed: [] };
+            });
+            const byName = new Map(existing.map(l => [l.name, l]));
+            const results = { created: [], updated: [], failed: [] };
 
             for (const l of labels) {
-              if (existing.includes(l.name)) {
-                results.skipped.push(l.name);
-                continue;
-              }
               try {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner, repo: context.repo.repo,
-                  name: l.name, color: l.color, description: l.description,
-                });
-                results.created.push(l.name);
+                if (byName.has(l.name)) {
+                  await github.rest.issues.updateLabel({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    name: l.name, color: l.color, description: l.description,
+                  });
+                  results.updated.push(l.name);
+                } else {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    name: l.name, color: l.color, description: l.description,
+                  });
+                  results.created.push(l.name);
+                }
               } catch (e) {
                 results.failed.push(`${l.name}: ${e.message}`);
               }
             }
-            core.summary.addRaw('## Setup labels\n\n').addRaw('```json\n' + JSON.stringify(results, null, 2) + '\n```\n').write();
-            await github.rest.issues.createComment({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: context.runId, body: '',
-            }).catch(() => {});
+            await core.summary
+              .addRaw('## Setup labels\n\n')
+              .addRaw('```json\n' + JSON.stringify(results, null, 2) + '\n```\n')
+              .write();
