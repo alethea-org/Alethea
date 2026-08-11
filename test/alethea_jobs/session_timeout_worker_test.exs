@@ -15,6 +15,19 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   setup :verify_on_exit!
 
   setup do
+    previous_analyzer = Application.get_env(:alethea, :emotion_analyzer)
+    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerMock)
+
+    on_exit(fn ->
+      if previous_analyzer do
+        Application.put_env(:alethea, :emotion_analyzer, previous_analyzer)
+      else
+        Application.delete_env(:alethea, :emotion_analyzer)
+      end
+    end)
+  end
+
+  setup do
     {:ok, professional} =
       Accounts.create_professional(%{
         email: "timeout_test_#{:rand.uniform(999_999)}@example.com",
@@ -68,8 +81,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       %{label: "neutral", score: 0.05}
     ]
 
-    Alethea.AI.RoBERTaWorkerMock
-    |> expect(:analyze_batch, fn _texts -> emotion_scores end)
+    Alethea.AI.EmotionAnalyzerMock
+    |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
 
     Alethea.AI.SessionSummaryChainMock
     |> expect(:run, fn _texts, _scores ->
@@ -135,8 +148,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         %{label: "neutral", score: 0.05}
       ]
 
-      Alethea.AI.RoBERTaWorkerMock
-      |> expect(:analyze_batch, fn _texts -> emotion_scores end)
+      Alethea.AI.EmotionAnalyzerMock
+      |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
 
       Alethea.AI.SessionSummaryChainMock
       |> expect(:run, fn _texts, _scores ->
@@ -177,8 +190,10 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
 
       # Neither adapter should be invoked — any unexpected call
       # indicates the close-skip guard failed.
-      Alethea.AI.RoBERTaWorkerMock
-      |> expect(:analyze_batch, 0, fn _ -> flunk("RoBERTa must not run on closed session") end)
+      Alethea.AI.EmotionAnalyzerMock
+      |> expect(:analyze_batch, 0, fn _ ->
+        flunk("Emotion analysis must not run on closed session")
+      end)
 
       Alethea.AI.SessionSummaryChainMock
       |> expect(:run, 0, fn _, _ ->
@@ -189,6 +204,48 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
 
       refute_enqueued(worker: TelegramOutboundWorker)
     end
+  end
+
+  test "unavailable emotion analysis creates no trends or summary", %{
+    patient: patient,
+    session: session,
+    phone: phone
+  } do
+    Alethea.AI.EmotionAnalyzerMock
+    |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
+
+    capture_log(fn ->
+      assert {:error, :unavailable} =
+               perform_job(SessionTimeoutWorker, %{
+                 session_id: session.id,
+                 patient_id: patient.id,
+                 phone: phone
+               })
+    end)
+
+    assert Repo.aggregate(Trend, :count) == 0
+    assert Repo.aggregate(Summary, :count) == 0
+  end
+
+  test "malformed emotion analysis creates no trends or summary", %{
+    patient: patient,
+    session: session,
+    phone: phone
+  } do
+    Alethea.AI.EmotionAnalyzerMock
+    |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
+
+    capture_log(fn ->
+      assert {:error, :invalid_emotion_scores} =
+               perform_job(SessionTimeoutWorker, %{
+                 session_id: session.id,
+                 patient_id: patient.id,
+                 phone: phone
+               })
+    end)
+
+    assert Repo.aggregate(Trend, :count) == 0
+    assert Repo.aggregate(Summary, :count) == 0
   end
 
   # ----------------------------------------------------------------
@@ -229,8 +286,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         %{label: "neutral", score: 0.05}
       ]
 
-      Alethea.AI.RoBERTaWorkerMock
-      |> expect(:analyze_batch, fn _texts -> emotion_scores end)
+      Alethea.AI.EmotionAnalyzerMock
+      |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
 
       # Force `Clinical.save_summary/1` to fail by piping a Changeset
       # with a violation through the chain. The chain itself returns
@@ -313,8 +370,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         %{label: "neutral", score: 0.05}
       ]
 
-      Alethea.AI.RoBERTaWorkerMock
-      |> expect(:analyze_batch, fn _texts -> emotion_scores end)
+      Alethea.AI.EmotionAnalyzerMock
+      |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
 
       # Force save_summary failure on a DIFFERENT field (`:type`) so
       # the failed-validation key is `[:type]`. The `summary_text` is
