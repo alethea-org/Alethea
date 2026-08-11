@@ -2,6 +2,17 @@ import Config
 
 Alethea.RuntimeEnv.load_dotenv(".env")
 
+if config_env() in [:dev, :prod] do
+  config :alethea, Alethea.AI.EmotionAnalyzer,
+    base_url: System.get_env("EMOTION_SIDECAR_URL", "http://127.0.0.1:8080"),
+    connect_timeout:
+      String.to_integer(System.get_env("EMOTION_SIDECAR_CONNECT_TIMEOUT_MS", "2000")),
+    receive_timeout:
+      String.to_integer(System.get_env("EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS", "30000")),
+    max_batch_size: String.to_integer(System.get_env("EMOTION_SIDECAR_MAX_BATCH_SIZE", "32")),
+    max_text_bytes: String.to_integer(System.get_env("EMOTION_SIDECAR_MAX_TEXT_BYTES", "4096"))
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

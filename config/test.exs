@@ -33,6 +33,14 @@ config :alethea, Alethea.AI.RoBERTaWorker,
   api_key: "test_key",
   req_options: [plug: {Req.Test, Alethea.AI.RoBERTaWorker}]
 
+config :alethea, Alethea.AI.EmotionAnalyzer,
+  base_url: "http://emotion-sidecar.test",
+  connect_timeout: 100,
+  receive_timeout: 100,
+  max_batch_size: 32,
+  max_text_bytes: 4096,
+  req_options: [plug: {Req.Test, Alethea.AI.EmotionAnalyzer}]
+
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   api_key: "test_key",
   endpoint_url: "http://test.local/ai"
