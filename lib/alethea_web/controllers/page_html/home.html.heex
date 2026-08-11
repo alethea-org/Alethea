@@ -132,9 +132,14 @@
   .landing-hero-actions {
     display: flex;
     flex-direction: column;
-    sm:flex-row;
     gap: 12px;
     justify-content: center;
+  }
+
+  @media (min-width: 640px) {
+    .landing-hero-actions {
+      flex-direction: row;
+    }
   }
 
   .landing-btn {
@@ -347,7 +352,7 @@
   </h1>
 
   <p class="landing-hero-subtitle">
-    Acompañamiento 24/7 para tus pacientes vía WhatsApp, con análisis emocional por IA y resúmenes semanales que facilitan tu trabajo clínico.
+    Acompañamiento 24/7 para tus pacientes vía Telegram, con análisis emocional por IA y resúmenes semanales que facilitan tu trabajo clínico.
   </p>
 
   <div class="landing-hero-actions">
@@ -415,9 +420,9 @@
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
       </div>
-      <h3 class="landing-feature-title">Journaling vía WhatsApp</h3>
+      <h3 class="landing-feature-title">Journaling vía Telegram</h3>
       <p class="landing-feature-desc">
-        Tus pacientes escriben cuando quieran desde WhatsApp. Sin apps, sin passwords, sin fricción.
+        Tus pacientes escriben cuando quieran desde Telegram. Sin apps, sin passwords, sin fricción.
       </p>
     </div>
 

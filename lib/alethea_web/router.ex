@@ -23,6 +23,19 @@ defmodule AletheaWeb.Router do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :fetch_current_professional)
   end
 
+  # Landing route — same HTML doc shell as :browser, but no #auth-layout
+  # wrapper. The home page needs full-bleed hero, features, and CTA
+  # sections; the auth-layout's centered flex box would box them in.
+  pipeline :landing do
+    plug(:accepts, ["html"])
+    plug(:fetch_session)
+    plug(:fetch_live_flash)
+    plug(:put_root_layout, html: {AletheaWeb.Layouts, :landing})
+    plug(:protect_from_forgery)
+    plug(:put_secure_browser_headers)
+    plug(AletheaWeb.Plugs.ProfessionalAuth, :fetch_current_professional)
+  end
+
   pipeline :api do
     plug(:accepts, ["json"])
   end
@@ -70,7 +83,7 @@ defmodule AletheaWeb.Router do
   end
 
   scope "/", AletheaWeb do
-    pipe_through([:browser_auth])
+    pipe_through([:landing])
 
     get("/", PageController, :home)
   end
