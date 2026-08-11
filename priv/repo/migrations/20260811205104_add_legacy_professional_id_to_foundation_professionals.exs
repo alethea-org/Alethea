@@ -74,9 +74,9 @@ defmodule Alethea.Repo.Migrations.AddLegacyProfessionalIdToFoundationProfessiona
     # migration has a non-unique index because the patient side has
     # no such invariant; the professional side does).
     create unique_index(
-      :foundation_professionals,
-      [:legacy_professional_id],
-      name: :foundation_professionals_legacy_professional_id_unique
-    )
+             :foundation_professionals,
+             [:legacy_professional_id],
+             name: :foundation_professionals_legacy_professional_id_unique
+           )
   end
 end
