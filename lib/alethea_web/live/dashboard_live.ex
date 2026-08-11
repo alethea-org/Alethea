@@ -7,6 +7,8 @@ defmodule AletheaWeb.DashboardLive do
   alias AletheaWeb.DashboardLive.Components.EmotionChart
   alias Alethea.Encryption.PatientVault
   alias AletheaWeb.DashboardLive.Components.NotificationCenter
+  alias Alethea.Foundation.Accounts, as: FoundationAccounts
+  alias Alethea.Foundation.Accounts.BotConfig
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
@@ -46,6 +48,38 @@ defmodule AletheaWeb.DashboardLive do
         DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week()
       )
       |> assign(:chat_decrypted, false)
+
+    # Telegram invite wiring (feature: patient telegram invites).
+    # Real mode resolves the foundation professional once per session
+    # (email bridge, D1) and derives the per-patient connection statuses
+    # in a single batch query (no N+1). Mock mode short-circuits both
+    # and never touches the foundation tenant (D5).
+    foundation_pro =
+      if use_mock? do
+        nil
+      else
+        case FoundationAccounts.professional_by_email(professional.email) do
+          {:ok, fp} -> fp
+          :not_found -> nil
+        end
+      end
+
+    telegram_statuses =
+      if use_mock? or is_nil(foundation_pro) do
+        %{}
+      else
+        FoundationAccounts.telegram_connection_statuses(
+          Enum.map(patients, & &1.id),
+          foundation_pro
+        )
+      end
+
+    socket =
+      socket
+      |> assign(:foundation_professional, foundation_pro)
+      |> assign(:telegram_statuses, telegram_statuses)
+      |> assign(:invited_ids, MapSet.new())
+      |> assign(:invite_modal, nil)
       |> stream(:decrypted_messages, [])
 
     {:ok, socket}
@@ -206,6 +240,23 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  # Telegram invite flow (feature: patient telegram invites). Both the
+  # header button and the sidebar row buttons (which bubble up from the
+  # PatientSearch LiveComponent, since it does not handle this event)
+  # land here. Regenerate re-opens the modal minting a fresh pair of
+  # codes in real mode; mock mode reuses the static payload (D5).
+  def handle_event("invite_patient", %{"id" => patient_id}, socket) do
+    invite_patient_to_telegram(socket, patient_id)
+  end
+
+  def handle_event("regenerate_invite", %{"id" => patient_id}, socket) do
+    invite_patient_to_telegram(socket, patient_id)
+  end
+
+  def handle_event("close_invite_modal", _params, socket) do
+    {:noreply, assign(socket, :invite_modal, nil)}
+  end
+
   defp decrypt_real_messages(patient, professional_kek) do
     key_record = Accounts.get_encryption_key_for_patient(patient.id)
 
@@ -238,6 +289,124 @@ defmodule AletheaWeb.DashboardLive do
       Enum.find(socket.assigns.patients, &(&1.id == id))
     else
       Accounts.get_patient_for_professional(socket.assigns.current_professional.id, id)
+    end
+  end
+
+  # --- Telegram invite flow (feature: patient telegram invites) ---
+  #
+  # Real mode delegates to the domain `invite_patient_to_telegram/2`,
+  # which mints both the deep-link token and the 6-digit code (D4/D6).
+  # Mock mode short-circuits to a static payload and never touches the
+  # DB (D5). The web layer composes the deep link URL from the BotConfig
+  # bot_username; the domain returns only the token (D6).
+  defp invite_patient_to_telegram(socket, patient_id) do
+    patient = find_patient(socket, patient_id)
+
+    if is_nil(patient) do
+      {:noreply, put_flash(socket, :error, "Paciente no encontrado o no autorizado.")}
+    else
+      socket =
+        if socket.assigns.use_mock_data do
+          open_invite_modal(socket, patient, MockData.mock_invite_payload(patient))
+        else
+          case socket.assigns.foundation_professional do
+            nil ->
+              put_flash(
+                socket,
+                :error,
+                "No se pudo generar la invitación. Configuración de Fundación pendiente."
+              )
+
+            foundation_pro ->
+              case FoundationAccounts.invite_patient_to_telegram(patient.id, foundation_pro) do
+                {:ok, %{deep_link_token: token, six_digit_code: code, expires_at: expires_at}} ->
+                  open_invite_modal(socket, patient, %{
+                    deep_link_token: token,
+                    six_digit_code: code,
+                    expires_at: expires_at
+                  })
+
+                {:error, :legacy_not_found} ->
+                  put_flash(socket, :error, "No se pudo generar la invitación.")
+
+                {:error, _changeset} ->
+                  put_flash(socket, :error, "No se pudo generar la invitación.")
+              end
+          end
+        end
+
+      {:noreply, socket}
+    end
+  end
+
+  # Both the mock and real branches converge here: the modal state is a
+  # plain map and the template renders whatever the caller supplied.
+  defp open_invite_modal(socket, patient, %{
+         deep_link_token: token,
+         six_digit_code: code,
+         expires_at: expires_at
+       }) do
+    socket
+    |> assign(
+      :invite_modal,
+      %{
+        patient_id: patient.id,
+        patient_alias: patient.alias,
+        deep_link: telegram_deep_link(token),
+        six_digit_code: code,
+        expires_at: expires_at
+      }
+    )
+    |> assign(:invited_ids, MapSet.put(socket.assigns.invited_ids, patient.id))
+  end
+
+  # D6: the web layer composes the deep link from the BotConfig
+  # bot_username (test/dev/prod env row). Missing config -> nil, and
+  # the modal then shows the 6-digit code only.
+  defp telegram_deep_link(token) when is_binary(token) do
+    case BotConfig.for_env(to_string(Mix.env())) do
+      {:ok, %BotConfig{bot_username: username}} when is_binary(username) and username != "" ->
+        "https://t.me/#{username}?start=#{token}"
+
+      _ ->
+        nil
+    end
+  end
+
+  # --- Template helpers for the Telegram invite UI ---
+
+  defp tg_status(statuses, patient_id), do: Map.get(statuses, patient_id, :not_connected)
+
+  defp tg_status_label(statuses, patient_id) do
+    case tg_status(statuses, patient_id) do
+      :connected -> "Conectado"
+      _ -> "Sin conectar"
+    end
+  end
+
+  defp tg_status_class(statuses, patient_id) do
+    case tg_status(statuses, patient_id) do
+      :connected -> "badge badge-success"
+      _ -> "badge badge-ghost"
+    end
+  end
+
+  defp tg_button_label(statuses, patient_id, invited_ids) do
+    case tg_status(statuses, patient_id) do
+      :connected -> "Conectado"
+      _ -> if MapSet.member?(invited_ids, patient_id), do: "Regenerar", else: "Invitar"
+    end
+  end
+
+  defp tg_button_event(statuses, patient_id, invited_ids) do
+    case tg_status(statuses, patient_id) do
+      :connected ->
+        nil
+
+      _ ->
+        if MapSet.member?(invited_ids, patient_id),
+          do: "regenerate_invite",
+          else: "invite_patient"
     end
   end
 
@@ -532,6 +701,7 @@ defmodule AletheaWeb.DashboardLive do
       <div style="font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:2px;">
         {@label}
       </div>
+
       <div style="font-size:20px; font-weight:700; color:#1e293b; font-variant-numeric:tabular-nums; line-height:1.2;">
         {@value}
       </div>

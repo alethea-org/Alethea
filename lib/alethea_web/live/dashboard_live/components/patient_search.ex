@@ -29,7 +29,9 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
      socket
      |> assign(:id, assigns.id)
      |> assign(:patients, assigns.patients)
-     |> assign(:selected_patient_id, Map.get(assigns, :selected_patient_id))}
+     |> assign(:selected_patient_id, Map.get(assigns, :selected_patient_id))
+     |> assign(:telegram_statuses, Map.get(assigns, :telegram_statuses, %{}))
+     |> assign(:invited_ids, Map.get(assigns, :invited_ids, MapSet.new()))}
   end
 
   def handle_event("search", %{"q" => query}, socket) do
@@ -82,7 +84,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             {length(@filtered)}/{length(@patients)}
           </span>
         </div>
-
         <%!-- Search input --%>
         <div style="position:relative;">
           <.icon
@@ -101,7 +102,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             style="width:100%; padding:6px 10px 6px 28px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; background:#fff; color:#334155; outline:none; box-sizing:border-box;"
           />
         </div>
-
         <%!-- Filter chips — AND logic --%>
         <div style="display:flex; gap:4px; flex-wrap:wrap;">
           <%= for {key, label} <- @filter_labels do %>
@@ -115,7 +115,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             </button>
           <% end %>
         </div>
-
         <%!-- Sort select --%>
         <div style="display:flex; align-items:center; gap:6px;">
           <span style="font-size:10px; color:#94a3b8; white-space:nowrap;">Ordenar:</span>
@@ -131,7 +130,6 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
           </select>
         </div>
       </div>
-
       <%!-- Patient list --%>
       <nav id={"#{@id}-results"}>
         <div :if={@filtered == []} style="padding:32px 16px; text-align:center;">
@@ -163,6 +161,7 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
               <div style="font-size:13px; font-weight:600; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                 {patient.alias}
               </div>
+
               <div style="font-size:10px; color:#94a3b8; margin-top:1px;">
                 {status_label(patient)}
               </div>
@@ -174,6 +173,24 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
               class="animate-pulse-dot"
             >
             </span>
+            <%!-- Telegram invite: green dot when connected, Invite/Regenerate button otherwise --%>
+            <span
+              :if={tg_connected?(@telegram_statuses, patient.id)}
+              id={"tg-dot-row-" <> patient.id}
+              style="width:8px; height:8px; border-radius:50%; background:#22c55e; flex-shrink:0;"
+            >
+            </span>
+            <button
+              :if={not tg_connected?(@telegram_statuses, patient.id)}
+              id={"tg-btn-row-" <> patient.id}
+              type="button"
+              phx-click={tg_row_button_event(@invited_ids, patient.id)}
+              phx-value-id={patient.id}
+              phx-stop-propagation="true"
+              style="border:none; background:rgba(99,102,241,.08); color:#4338ca; font-size:10px; font-weight:600; padding:3px 8px; border-radius:6px; cursor:pointer; flex-shrink:0;"
+            >
+              {tg_row_button_label(@invited_ids, patient.id)}
+            </button>
           </.link>
         <% end %>
       </nav>
@@ -219,6 +236,26 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
   end
 
   defp sort_patients(patients, _), do: patients
+
+  # --- Telegram invite row helpers (feature: patient telegram invites) ---
+  #
+  # The connected dot and the invite/regenerate button live in the
+  # sidebar row. The button's event has NO phx-target: events without a
+  # target are handled by the parent LiveView (the component only
+  # intercepts what it is explicitly targeted with), so it bubbles to
+  # DashboardLive, which owns the invite flow. phx-stop-propagation
+  # keeps the surrounding patch link from also navigating.
+  defp tg_connected?(statuses, patient_id) do
+    Map.get(statuses, patient_id, :not_connected) == :connected
+  end
+
+  defp tg_row_button_label(invited_ids, patient_id) do
+    if MapSet.member?(invited_ids, patient_id), do: "Regenerar", else: "Invitar"
+  end
+
+  defp tg_row_button_event(invited_ids, patient_id) do
+    if MapSet.member?(invited_ids, patient_id), do: "regenerate_invite", else: "invite_patient"
+  end
 
   # ---------------------------------------------------------------------------
   # Style helpers (keep interpolation out of template for readability)
