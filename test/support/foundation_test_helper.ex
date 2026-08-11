@@ -28,7 +28,7 @@ defmodule Alethea.FoundationTestHelper do
   - Status: `"active"`
   """
 
-  alias Alethea.Foundation.Accounts.{Admin, Patient, Professional}
+  alias Alethea.Foundation.Accounts.{Admin, BotConfig, Patient, Professional}
 
   @default_password "fixturepass1234"
 
@@ -80,5 +80,74 @@ defmodule Alethea.FoundationTestHelper do
 
     {:ok, admin} = Admin.register_admin(merged)
     admin
+  end
+
+  @doc """
+  Creates and persists a legacy (`Alethea.Accounts`) professional —
+  the tenant the foundation `Professional` bridges to via the email
+  bridge (`invite_patient_to_telegram/2`). Accepts an optional map of
+  overrides for `:email`, `:password`, `:full_name`, etc.
+
+  ## Defaults
+
+  - Email: `legacy-pro-<n>@test.local`
+  - Password: `supersecret12` (12 characters, passes the legacy
+    `validate_length(:password, min: 12)`)
+  - Full name: `"Legacy Pro <n>"`
+  """
+  def legacy_professional_fixture(attrs \\ %{}) do
+    base = %{
+      email: "legacy-pro-#{System.unique_integer([:positive])}@test.local",
+      password: "supersecret12",
+      full_name: "Legacy Pro #{System.unique_integer([:positive])}"
+    }
+
+    merged = Map.merge(base, attrs)
+
+    {:ok, professional} = Alethea.Accounts.create_professional(merged)
+    professional
+  end
+
+  @doc """
+  Creates and persists a legacy (`Alethea.Accounts`) patient bound to
+  the given legacy professional, wrapping a fresh DEK with the
+  professional's KEK (the same path `create_patient/2` uses in
+  production). Accepts an optional map of overrides for `:alias`, etc.
+
+  ## Defaults
+
+  - Alias: `"Legacy Pat <n>"`
+  """
+  def legacy_patient_fixture(professional, attrs \\ %{}) do
+    base = %{
+      alias: "Legacy Pat #{System.unique_integer([:positive])}",
+      professional_id: professional.id
+    }
+
+    merged = Map.merge(base, attrs)
+
+    {:ok, kek} = Alethea.Accounts.load_professional_kek(professional)
+
+    {:ok, patient} = Alethea.Accounts.create_patient(merged, kek)
+    patient
+  end
+
+  @doc """
+  Upserts a `BotConfig` row for the `"test"` env so `BotConfig.for_env/1`
+  resolves during tests. Accepts an optional map of overrides for
+  `:env`, `:bot_token`, `:secret_token`, `:bot_username`.
+  """
+  def bot_config_fixture(attrs \\ %{}) do
+    base = %{
+      env: "test",
+      bot_token: "123456:TEST-bot-token-fixture",
+      secret_token: "test-secret-token-fixture",
+      bot_username: "fixture_bot"
+    }
+
+    merged = Map.merge(base, attrs)
+
+    {:ok, bot_config} = BotConfig.upsert(merged)
+    bot_config
   end
 end
