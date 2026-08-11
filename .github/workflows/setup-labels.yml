@@ -1,0 +1,63 @@
+name: Setup labels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  create-labels:
+    name: Crear labels del workflow de triage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crear labels que falten
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: "status:needs-triage", color: "fbca04", description: "Issue sin asignar, esperando triage o /claim" },
+              { name: "status:claimed",      color: "0e8a16", description: "Asignada via /claim, lock activo" },
+              { name: "status:blocked",      color: "d93f0b", description: "Asignada pero bloqueada por algo externo" },
+              { name: "priority:p0",        color: "b60205", description: "Bloquea release - urgente" },
+              { name: "priority:p1",        color: "d93f0b", description: "Sprint actual - importante" },
+              { name: "priority:p2",        color: "fbca04", description: "Backlog - nice to have" },
+              { name: "area:clinical",      color: "7057ff", description: "lib/alethea/clinical/" },
+              { name: "area:encryption",    color: "7057ff", description: "lib/alethea/encryption/ - Cloak vault / KEK" },
+              { name: "area:ai",            color: "7057ff", description: "lib/alethea/ai/ - LangChain, RoBERTa, embeddings" },
+              { name: "area:telegram",      color: "7057ff", description: "Telegram bot gateway" },
+              { name: "area:accounts",      color: "7057ff", description: "lib/alethea/accounts/ - profesionales y auth" },
+              { name: "area:dashboard",     color: "7057ff", description: "LiveView dashboard del profesional" },
+              { name: "area:jobs",          color: "7057ff", description: "Oban workers / async pipeline" },
+              { name: "area:devops",        color: "7057ff", description: "CI / deploy / infraestructura" },
+              { name: "triage:rotating",    color: "5319e7", description: "Esperando decision del PO de la semana" },
+              { name: "triage-rota",        color: "c5def5", description: "Label interno: marca la issue pinneada que es la fuente de verdad de la rotacion" },
+            ];
+
+            const existing = (await github.paginate(github.rest.issues.listLabelsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            })).map(l => l.name);
+            const results = { created: [], skipped: [], failed: [] };
+
+            for (const l of labels) {
+              if (existing.includes(l.name)) {
+                results.skipped.push(l.name);
+                continue;
+              }
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: l.name, color: l.color, description: l.description,
+                });
+                results.created.push(l.name);
+              } catch (e) {
+                results.failed.push(`${l.name}: ${e.message}`);
+              }
+            }
+            core.summary.addRaw('## Setup labels\n\n').addRaw('```json\n' + JSON.stringify(results, null, 2) + '\n```\n').write();
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.runId, body: '',
+            }).catch(() => {});
