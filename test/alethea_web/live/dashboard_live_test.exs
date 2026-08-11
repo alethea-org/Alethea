@@ -34,7 +34,9 @@ defmodule AletheaWeb.DashboardLiveTest do
       send(view.pid, {:crisis_detected, %{patient_id: "p2", level: :high}})
 
       assert render(view) =~ "Alerta Critica: El paciente Maria Garcia ha entrado en crisis"
-      assert has_element?(view, "#critical-patient-p2")
+      # The critical patient surfaces in the editorial triage strip
+      # as a `pta-chip pta-chip--risk` link to the patient's detail.
+      assert has_element?(view, "a.pta-chip--risk", "Maria Garcia")
     end
   end
 
@@ -49,7 +51,9 @@ defmodule AletheaWeb.DashboardLiveTest do
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
 
       assert render(view) =~ "Juan Perez"
-      assert render(view) =~ "Weekly Pre-Session Report"
+      # Editorial layout renames the weekly report section to
+      # "Resumen semanal" (was "Weekly Pre-Session Report" before #116).
+      assert render(view) =~ "Resumen semanal"
       assert render(view) =~ "Tendencias Emocionales"
     end
 
@@ -177,7 +181,7 @@ defmodule AletheaWeb.DashboardLiveTest do
     } do
       {:ok, _view, html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
 
-      assert html =~ "Sin reportes semanales aún."
+      assert html =~ "Sin resumen semanal generado todavía."
     end
 
     test "renders the metric strip with the stored weekly scores", %{
