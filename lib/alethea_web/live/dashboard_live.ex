@@ -55,14 +55,16 @@ defmodule AletheaWeb.DashboardLive do
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
 
-  defp apply_action(socket, :index, _params) do
+  defp apply_action(socket, :index, params) do
     socket
+    |> assign(:picker, picker_from_params(params))
+    |> assign(:by_day, by_day(socket.assigns.patients))
     |> assign(:selected_patient, nil)
     |> assign(:chat_decrypted, false)
     |> stream(:decrypted_messages, [], reset: true)
   end
 
-  defp apply_action(socket, :show, %{"id" => id}) do
+  defp apply_action(socket, :show, %{"id" => id} = params) do
     patient = find_patient(socket, id)
 
     if patient do
@@ -77,6 +79,8 @@ defmodule AletheaWeb.DashboardLive do
       end
 
       socket
+      |> assign(:picker, picker_from_params(params))
+      |> assign(:by_day, by_day(socket.assigns.patients))
       |> assign(:chat_decrypted, false)
       |> stream(:decrypted_messages, [], reset: true)
       |> load_patient_details(patient)
@@ -515,13 +519,6 @@ defmodule AletheaWeb.DashboardLive do
 
   defp status_tone(_), do: "neutral"
 
-  defp tone_rgb("stable"), do: "34,197,94"
-  defp tone_rgb("warning"), do: "245,158,11"
-  defp tone_rgb("critical"), do: "239,68,68"
-  defp tone_rgb(_), do: "148,163,184"
-
-  defp weekly_tone_rgb(summary), do: summary |> status_tone() |> tone_rgb()
-
   attr :id, :string, required: true
   attr :label, :string, required: true
   attr :value, :string, required: true
@@ -559,5 +556,79 @@ defmodule AletheaWeb.DashboardLive do
 
   defp is_valid_uuid?(id) do
     match?({:ok, _}, Ecto.UUID.cast(id))
+  end
+
+  # ── Editorial picker helpers (#116) ────────────────────────────────
+  #
+  # The editorial dashboard carries a `?picker=chips|week` URL param
+  # that toggles between a chip rail (with the patient search
+  # component) and a Mon–Sun agenda. The helpers below are tiny,
+  # view-layer only — no domain logic.
+
+  defp picker_from_params(%{"picker" => "week"}), do: "week"
+  defp picker_from_params(_), do: "chips"
+
+  defp by_day(patients) do
+    Enum.group_by(patients, & &1.session_day_of_week)
+  end
+
+  defp initials(alias_name) when is_binary(alias_name) do
+    alias_name
+    |> String.split()
+    |> Enum.map(&String.first/1)
+    |> Enum.take(2)
+    |> Enum.join()
+    |> String.upcase()
+  end
+
+  defp initials(_), do: "—"
+
+  @day_options [
+    {1, "Lunes"},
+    {2, "Martes"},
+    {3, "Miércoles"},
+    {4, "Jueves"},
+    {5, "Viernes"},
+    {6, "Sábado"},
+    {7, "Domingo"}
+  ]
+  defp day_options, do: @day_options
+
+  @day_short_names %{
+    1 => "Lun",
+    2 => "Mar",
+    3 => "Mié",
+    4 => "Jue",
+    5 => "Vie",
+    6 => "Sáb",
+    7 => "Dom"
+  }
+  defp day_name(day), do: Map.get(@day_short_names, day, "—")
+
+  defp format_time(%Time{} = time), do: Calendar.strftime(time, "%H:%M")
+  defp format_time(_), do: "—"
+
+  # Mood / status pill classes — the editorial CSS expects
+  # `pt-pill pt-pill--ok|warn|danger|neutral`. Map the existing
+  # domain signals onto them.
+
+  defp mood_pill(%{label: "Estable"}), do: "pt-pill--ok"
+  defp mood_pill(%{label: "Alerta"}), do: "pt-pill--warn"
+  defp mood_pill(%{label: "Crítico"}), do: "pt-pill--danger"
+  defp mood_pill(_), do: "pt-pill--neutral"
+
+  defp status_pill("Estable"), do: "pt-pill--ok"
+  defp status_pill("Alerta"), do: "pt-pill--warn"
+  defp status_pill("Crítico"), do: "pt-pill--danger"
+  defp status_pill(_), do: "pt-pill--neutral"
+
+  # Picker toggle patches — preserve the picker when switching
+  # between chips and week, and the patient id when one is active.
+  defp picker_path(nil, picker) do
+    ~p"/dashboard?picker=#{picker}"
+  end
+
+  defp picker_path(%{id: id}, picker) do
+    ~p"/dashboard/patients/#{id}?picker=#{picker}"
   end
 end
