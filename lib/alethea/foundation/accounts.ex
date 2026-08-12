@@ -26,6 +26,8 @@ defmodule Alethea.Foundation.Accounts do
   alias Alethea.Foundation.Accounts.{Admin, Patient, PatientAuthCode, Professional}
   alias Alethea.Repo
 
+  import Ecto.Query
+
   @doc """
   Registers a new professional. Delegates to
   `Alethea.Foundation.Accounts.Professional.register_professional/1`.
@@ -202,6 +204,258 @@ defmodule Alethea.Foundation.Accounts do
     case Repo.get(Alethea.Accounts.Patient, legacy_id) do
       nil -> {:error, :legacy_not_found}
       %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
+    end
+  end
+
+  @doc """
+  Resolves a foundation professional by email.
+
+  Returns `{:ok, %Professional{}}` for a known email, `:not_found`
+  otherwise. This is the foundation side of the legacy bridge used by
+  `invite_patient_to_telegram/2`: the foundation and legacy tenants
+  share no FK, so the professional is located by the email both
+  systems persisted at registration time.
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. The email is the lookup key, not the
+  result.
+  """
+  @spec professional_by_email(String.t()) :: {:ok, Professional.t()} | :not_found
+  def professional_by_email(email) when is_binary(email) do
+    case Repo.get_by(Professional, email: email) do
+      nil -> :not_found
+      %Professional{} = professional -> {:ok, professional}
+    end
+  end
+
+  @doc """
+  Idempotently invites a legacy patient to Telegram by bridging them
+  into the foundation tenant and minting the two onboarding codes.
+
+  `legacy_patient_id` is the legacy `patients.id`; `foundation_pro`
+  is the foundation professional (the caller's session tenant).
+
+  ## Flow (one transaction)
+
+  1. Resolve the legacy professional whose email matches the
+     foundation professional's (the email bridge). No match →
+     `{:error, :legacy_not_found}` — the professional has no legacy
+     counterpart, so no legacy patient can exist for them (zero
+     leakage across the two tenants).
+  2. `FOR SHARE`-lock the legacy patient row, scoped to that legacy
+     professional (`id` + `professional_id`). No such row →
+     `{:error, :legacy_not_found}` (dangling id, or a patient that
+     belongs to a DIFFERENT legacy professional — cross-tenant
+     isolation).
+  3. Find-or-create the foundation patient: one row per
+     `(legacy_patient_id, foundation professional)` — the bridge
+     (alias mirrored from the legacy row, `legacy_patient_id` set).
+  4. Mint `deep_link` AND `six_digit` auth codes against the
+     foundation patient via `PatientAuthCode.create_patient_auth_code/2`
+     (same 10-minute TTL as the /start flow).
+
+  Returns `{:ok, %{deep_link_token:, six_digit_code:, expires_at:,
+  foundation_patient:}}` or `{:error, :legacy_not_found}` (dangling /
+  cross-tenant / no legacy professional) or
+  `{:error, %Ecto.Changeset{}}` (validation failure on the bridge
+  insert or a code mint).
+
+  ## Idempotency and concurrency (accepted limitation)
+
+  The `FOR SHARE` lock serializes this transaction against a
+  concurrent delete/update of the legacy row, but NOT against a
+  concurrent sibling invite: two simultaneous invites for the same
+  legacy patient both hold `FOR SHARE`, both observe no foundation
+  row, and both insert. `legacy_patient_id` is intentionally NOT
+  unique at the DB layer (a foundation admin tool may create rows
+  before onboarding), so the duplicate window exists until a future
+  unique index (see design `D2`); re-invites after either commit are
+  idempotent.
+  """
+  @spec invite_patient_to_telegram(binary(), Professional.t()) ::
+          {:ok,
+           %{
+             deep_link_token: String.t(),
+             six_digit_code: String.t(),
+             expires_at: DateTime.t(),
+             foundation_patient: Patient.t()
+           }}
+          | {:error, :legacy_not_found | Ecto.Changeset.t()}
+  def invite_patient_to_telegram(legacy_patient_id, %Professional{} = foundation_pro) do
+    with {:ok, legacy_pro} <- legacy_professional_for(foundation_pro) do
+      Ecto.Multi.new()
+      |> Ecto.Multi.run(:legacy_patient, fn _repo, _changes ->
+        case lock_legacy_patient(legacy_pro, legacy_patient_id) do
+          nil -> {:error, :legacy_not_found}
+          %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
+        end
+      end)
+      |> Ecto.Multi.run(:foundation_patient, fn _repo, %{legacy_patient: legacy} ->
+        find_or_create_foundation_patient(legacy, foundation_pro)
+      end)
+      |> Ecto.Multi.run(:deep_link, fn _repo, %{foundation_patient: foundation_patient} ->
+        mint_code(foundation_patient.id, "deep_link")
+      end)
+      |> Ecto.Multi.run(:six_digit, fn _repo, %{foundation_patient: foundation_patient} ->
+        mint_code(foundation_patient.id, "six_digit")
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{foundation_patient: fp, deep_link: deep_link, six_digit: six_digit}} ->
+          {:ok,
+           %{
+             deep_link_token: deep_link.code,
+             six_digit_code: six_digit.code,
+             expires_at: deep_link.expires_at,
+             foundation_patient: fp
+           }}
+
+        {:error, :legacy_patient, :legacy_not_found, _changes} ->
+          {:error, :legacy_not_found}
+
+        {:error, _name, %Ecto.Changeset{} = changeset, _changes} ->
+          {:error, changeset}
+      end
+    end
+  end
+
+  @doc """
+  Returns the Telegram connection status for a single legacy patient
+  under the given foundation professional's scope.
+
+  Returns:
+    - `:connected` — a foundation row exists, scoped to this
+      professional, with `telegram_chat_id_hash` set (the /start bind
+      flow completed).
+    - `:not_connected` — no scoped foundation row yet, or one that has
+      not been bound (hash `nil`).
+    - `{:error, :legacy_not_found}` — the foundation professional has
+      no legacy counterpart, OR the legacy patient does not exist /
+      belongs to a different legacy professional (cross-tenant).
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. The status is derived from the hash column,
+  never from a raw chat_id.
+  """
+  @spec telegram_connection_status(binary(), Professional.t()) ::
+          :connected | :not_connected | {:error, :legacy_not_found}
+  def telegram_connection_status(legacy_patient_id, %Professional{} = foundation_pro) do
+    case legacy_professional_for(foundation_pro) do
+      {:error, :legacy_not_found} = error ->
+        error
+
+      {:ok, legacy_pro} ->
+        case Repo.get_by(Alethea.Accounts.Patient,
+               id: legacy_patient_id,
+               professional_id: legacy_pro.id
+             ) do
+          nil ->
+            {:error, :legacy_not_found}
+
+          %Alethea.Accounts.Patient{} ->
+            case Repo.get_by(Patient,
+                   legacy_patient_id: legacy_patient_id,
+                   professional_id: foundation_pro.id
+                 ) do
+              nil -> :not_connected
+              %Patient{telegram_chat_id_hash: nil} -> :not_connected
+              %Patient{telegram_chat_id_hash: hash} when is_binary(hash) -> :connected
+            end
+        end
+    end
+  end
+
+  @doc """
+  Returns the Telegram connection status for many legacy patient ids
+  under the given foundation professional's scope, as
+  `%{legacy_patient_id => :connected | :not_connected}`.
+
+  Resolves the whole batch with a SINGLE query against
+  `foundation_patients` (one `IN` clause, scoped by this
+  professional's `professional_id`) — no N+1. An id with no scoped
+  foundation row maps to `:not_connected`; an id outside this
+  professional's tenant NEVER surfaces another tenant's state (it maps
+  to `:not_connected`). Unlike `telegram_connection_status/2` this
+  function never errors — it is the dashboard-facing list primitive,
+  where a badge is always renderable.
+
+  ## PHI hygiene (R-1)
+
+  No log line is emitted. Only the presence of the hash column is
+  read.
+  """
+  @spec telegram_connection_statuses([binary()], Professional.t()) :: %{
+          binary() => :connected | :not_connected
+        }
+  def telegram_connection_statuses(legacy_patient_ids, %Professional{} = foundation_pro)
+      when is_list(legacy_patient_ids) do
+    connected_ids =
+      Patient
+      |> where([p], p.legacy_patient_id in ^legacy_patient_ids)
+      |> where([p], p.professional_id == ^foundation_pro.id)
+      |> where([p], not is_nil(p.telegram_chat_id_hash))
+      |> select([p], p.legacy_patient_id)
+      |> Repo.all()
+
+    connected_set = MapSet.new(connected_ids)
+
+    Map.new(legacy_patient_ids, fn id ->
+      {id, if(MapSet.member?(connected_set, id), do: :connected, else: :not_connected)}
+    end)
+  end
+
+  # Resolves the legacy professional whose email matches the
+  # foundation professional's (D1: the email bridge). Returns
+  # `{:error, :legacy_not_found}` when no legacy counterpart exists —
+  # deliberately NOT `:not_found`, so a caller cannot distinguish "no
+  # legacy pro" from "no legacy patient" (zero leakage).
+  defp legacy_professional_for(%Professional{email: email}) when is_binary(email) do
+    case Repo.get_by(Alethea.Accounts.Professional, email: email) do
+      nil -> {:error, :legacy_not_found}
+      %Alethea.Accounts.Professional{} = legacy_pro -> {:ok, legacy_pro}
+    end
+  end
+
+  # Locks the legacy patient row for the duration of the enclosing
+  # transaction, scoped to the legacy professional's tenant. `FOR
+  # SHARE` (not `FOR UPDATE`): the invite never mutates the legacy
+  # row, and it must not block legitimate legacy writes — it only
+  # serializes against a concurrent delete/update of the very row
+  # being bridged. A shared lock does NOT serialize two concurrent
+  # invites of the same patient (see the `invite_patient_to_telegram/2`
+  # docstring, "Idempotency and concurrency").
+  defp lock_legacy_patient(%Alethea.Accounts.Professional{id: legacy_pro_id}, legacy_patient_id) do
+    Alethea.Accounts.Patient
+    |> where([p], p.id == ^legacy_patient_id and p.professional_id == ^legacy_pro_id)
+    |> lock("FOR SHARE")
+    |> Repo.one()
+  end
+
+  # One foundation patient per (legacy_patient_id, foundation
+  # professional). The alias is mirrored from the legacy row so the
+  # foundation UI shows the same anonymized display name.
+  defp find_or_create_foundation_patient(
+         %Alethea.Accounts.Patient{alias: alias, id: legacy_id},
+         %Professional{} = foundation_pro
+       ) do
+    case Repo.get_by(Patient, legacy_patient_id: legacy_id, professional_id: foundation_pro.id) do
+      nil ->
+        Patient.create_patient(foundation_pro, %{
+          alias: alias,
+          legacy_patient_id: legacy_id
+        })
+
+      %Patient{} = foundation_patient ->
+        {:ok, foundation_patient}
+    end
+  end
+
+  defp mint_code(patient_id, kind) do
+    case PatientAuthCode.create_patient_auth_code(patient_id, kind: kind) do
+      {:ok, %PatientAuthCode{} = code} -> {:ok, code}
+      {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
     end
   end
 end
