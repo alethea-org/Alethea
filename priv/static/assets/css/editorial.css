@@ -422,3 +422,52 @@
 @media (max-width: 900px) {
   .ptla-hero { grid-template-columns: minmax(0, 1fr); gap: 36px; padding: 48px 0; }
 }
+
+/* === App shell — sidebar + topbar =====================================
+   The shell (`.app-sidebar`, `.app-topbar`) is still styled by
+   `app.css` from the previous design system — purple gradient
+   on the logo + avatar (`#6366f1 → #8b5cf6`), indigo on the
+   active nav link, `#cbd5e1` on the section title. That visual
+   layer was supposed to be re-skinned by the editorial tokens
+   from #119 but never was, so every authenticated page renders
+   the violet chrome around whatever the body actually does. This
+   block overrides those shell rules with the editorial palette so
+   the chrome is consistent with the dashboard body and the home.
+   Loaded after `app.css` per the layout bundle, so same
+   specificity means editorial wins. */
+.app-sidebar {
+  background: var(--pt-surface);
+  border-right-color: var(--pt-line);
+}
+.app-sidebar__header { border-bottom-color: var(--pt-line); }
+.app-sidebar__logo,
+.app-sidebar__avatar,
+.app-topbar__avatar {
+  background: var(--pt-accent);
+  box-shadow: none;
+  color: var(--pt-on-accent);
+}
+.app-sidebar__logo img { filter: none; }
+.app-sidebar__brand-name { color: var(--pt-ink); }
+.app-sidebar__brand-sub { color: var(--pt-ink-3); }
+.app-sidebar__section-title { color: var(--pt-ink-3); }
+.app-sidebar__link { color: var(--pt-ink-2); }
+.app-sidebar__link:hover {
+  background: var(--pt-surface-2);
+  color: var(--pt-ink);
+}
+.app-sidebar__link--active {
+  background: var(--pt-surface-2);
+  color: var(--pt-ink);
+  border-color: var(--pt-line);
+  font-weight: 600;
+}
+.app-sidebar__user {
+  background: var(--pt-surface-2);
+  border-color: var(--pt-line);
+}
+.app-sidebar__user-name { color: var(--pt-ink); }
+.app-sidebar__logout { color: var(--pt-ink-3); }
+.app-sidebar__logout:hover { color: var(--pt-danger); }
+.app-topbar { background: var(--pt-surface); border-bottom-color: var(--pt-line); }
+.app-content { background: var(--pt-bg); }

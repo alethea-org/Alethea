@@ -83,8 +83,6 @@
       id="patient-search"
       patients={@patients}
       selected_patient_id={@selected_patient && @selected_patient.id}
-      telegram_statuses={@telegram_statuses}
-      invited_ids={@invited_ids}
     />
     <div :if={@selected_patient} class="pta-chip pta-chip--active" style="cursor:default;">
       <span class="pt-avatar" style="width:24px; height:24px; font-size:10px;">
