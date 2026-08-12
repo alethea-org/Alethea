@@ -32,8 +32,11 @@ RUN mix deps.get
 # Copy remaining app files
 COPY . .
 
+RUN chmod +x /app/entrypoint.sh
+
 # Expose Phoenix port
 EXPOSE 4000
 
-# Start Phoenix with hot reload
+# Migrate + seed dev BotConfig, then start Phoenix with hot reload
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["mix", "phx.server"]
