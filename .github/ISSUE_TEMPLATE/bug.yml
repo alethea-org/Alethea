@@ -1,0 +1,69 @@
+name: Bug
+description: Reportá algo que no funciona como debería
+title: "[Bug]: "
+labels: ["bug", "status:needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar un bug. Completá lo siguiente y, si podés,
+        `/claim` la issue apenas la abras para que quede asignada.
+
+  - type: input
+    id: area
+    attributes:
+      label: Área afectada
+      description: ¿Qué parte del sistema se rompe?
+      placeholder: "area:telegram, area:encryption, ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severidad
+      description: Cuán roto está
+      options:
+        - Bloqueante (no se puede usar el sistema)
+        - Alto (funcionalidad principal afectada)
+        - Medio (workaround existe)
+        - Bajo (cosmético / molesto)
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Pasos para reproducir
+      description: Pasos concretos, 1 por línea
+      placeholder: |
+        1. Ir a ...
+        2. Hacer click en ...
+        3. Ver ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+      placeholder: "Debería ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamiento actual
+      placeholder: "En cambio, ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto adicional
+      description: Logs, screenshots, info del ambiente, lo que tengas
+    validations:
+      required: false

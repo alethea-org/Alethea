@@ -1,0 +1,47 @@
+name: Task
+description: Tarea de mantenimiento, tooling, deps, housekeeping
+title: "[Task]: "
+labels: ["type:chore", "status:needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tareas que no son features ni bugs: limpieza, deps, tooling,
+        refactors, documentación.
+
+  - type: input
+    id: area
+    attributes:
+      label: Área
+      placeholder: "area:devops, area:encryption, ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Subtipo
+      options:
+        - Refactor (type:refactor)
+        - Deps / tooling
+        - Documentación
+        - Migración de datos
+        - Otro
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Qué hay que hacer
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Por qué
+      description: Motivación / impacto de no hacerlo
+    validations:
+      required: false

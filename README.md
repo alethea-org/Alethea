@@ -9,6 +9,23 @@ Diario interactivo y sensor de conducta verbal para la continuidad terapéutica.
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
 [![CI](https://github.com/alethea-org/Alethea/actions/workflows/elixir.yml/badge.svg)](https://github.com/alethea-org/Alethea/actions)
 
+## 🚀 Onboarding
+
+¿Sos dev nuevo del equipo o evaluador de la materia "Proyecto"? Empezá por acá:
+
+### 📘 [`.github/QUICKSTART.md`](.github/QUICKSTART.md)
+
+- 5 minutos de lectura. Cubre el modelo completo con diagramas.
+- 3 escenarios paso-a-paso (tomar issue, ser PO, issue bloqueada).
+- Tabla de comandos `gh` para auditar quién hizo qué.
+
+### Después seguí con
+
+- [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) — reglas formales y vocabulario de labels.
+- [`openspec/adr/009-triage-workflow.md`](openspec/adr/009-triage-workflow.md) — la decisión de diseño (ADR).
+- [`openspec/sdd/triage-workflow/`](openspec/sdd/triage-workflow/) — el SDD completo.
+- [Issue #150 Triage rota](https://github.com/alethea-org/Alethea/issues/150) — quién es el PO actual y el orden de rotación.
+
 ## Tabla de Contenidos
 
 - [Visión del Proyecto](#visión-del-proyecto)

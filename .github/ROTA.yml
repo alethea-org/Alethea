@@ -1,0 +1,18 @@
+# Rota semanal de Product Owner
+# Esta archivo es la fuente de verdad para la rotación automática.
+# El workflow .github/workflows/rotate.yml lo lee los lunes a las 10:00 ART.
+# Para reordenar manualmente: editá este archivo en un PR.
+
+# Orden de rotación (5 personas, ciclo de 5 semanas)
+order:
+  - vicenzogiordana
+  - huajar
+  - teofurlan
+  - eveernst
+  - demianfrick
+
+# PO activo esta semana
+current_po: "@vicenzogiordana"
+
+# Última rotación
+last_rotated: "2026-08-11"
