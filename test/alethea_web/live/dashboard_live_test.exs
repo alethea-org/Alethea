@@ -5,6 +5,7 @@ defmodule AletheaWeb.DashboardLiveTest do
 
   import Ecto.Query
   import Alethea.FoundationTestHelper
+  import LazyHTML
 
   alias Alethea.Accounts
   alias Alethea.Foundation.Accounts.Patient, as: FoundationPatient
@@ -27,7 +28,7 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert html =~ "Centro de Control"
       assert html =~ professional.full_name
-      assert html =~ "Juan Perez"
+      assert html =~ "Lucca"
     end
 
     test "receives real-time crisis alerts via PubSub", %{conn: conn} do
@@ -56,7 +57,7 @@ defmodule AletheaWeb.DashboardLiveTest do
     test "loads patient details and logs profile view", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
 
-      assert render(view) =~ "Juan Perez"
+      assert render(view) =~ "Lucca"
       # Editorial layout renames the weekly report section to
       # "Resumen semanal" (was "Weekly Pre-Session Report" before #116).
       assert render(view) =~ "Resumen semanal"
@@ -105,6 +106,75 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert render(view) =~ "Mensaje de bienvenida actualizado."
       assert render(view) =~ "¡Hola! Bienvenido a tu espacio."
+    end
+  end
+
+  # Acceptance criteria for issue #160 — demo must look populated under
+  # `use_mock_data: true` without external services.
+  describe "Mock mode demo acceptance (#160)" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "triage strip is empty when no patients are critical", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/dashboard")
+
+      refute html =~ "Alertas críticas"
+      refute html =~ "pta-triage"
+    end
+
+    test "triage strip surfaces a chip once a crisis PubSub event arrives", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/dashboard")
+
+      refute html =~ "Alertas críticas"
+
+      send(view.pid, {:crisis_detected, %{patient_id: "p2", level: :high}})
+
+      assert has_element?(view, "a.pta-chip--risk", "Maria Garcia")
+    end
+
+    test "primary mock patient renders populated briefing under mock mode", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/dashboard/patients/p1")
+
+      # 1. Mock professional + linked patient — header reads "Lucca".
+      assert html =~ "Lucca"
+      assert html =~ "Briefing · Lucca"
+
+      # 2. Weekly summary with all four metric tiles filled (no dashes).
+      assert has_element?(view, "#weekly-metric-anxiety", "62%")
+      assert has_element?(view, "#weekly-metric-social", "41%")
+      assert has_element?(view, "#weekly-metric-crisis", "1")
+      assert has_element?(view, "#weekly-metric-sessions", "5")
+
+      # 3. At least three session-snapshot timeline entries.
+      timeline_count =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.filter(".pta-timeline__item")
+        |> Enum.count()
+
+      assert timeline_count >= 3
+
+      # 4. At least three emotion-trend bars rendered.
+      emotion_rows =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.filter("[id^=emotion-row-]")
+        |> Enum.count()
+
+      assert emotion_rows >= 3
+
+      # 5. Daily emotion chart renders with the 7-day aria-labelled SVG.
+      assert html =~ ~s|aria-label="Gráfico de emociones últimos 7 días"|
+
+      # 6. Chat history panel populates after "Descifrar chat".
+      refute html =~ "CONTENIDO DESCIFRADO (MOCK)"
+
+      view |> element("#decrypt-chat-button") |> render_click()
+
+      assert render(view) =~ "CONTENIDO DESCIFRADO (MOCK)"
     end
   end
 
@@ -491,7 +561,7 @@ defmodule AletheaWeb.DashboardLiveTest do
       view |> element("#tg-btn-p1") |> render_click()
 
       assert has_element?(view, "#invite-modal")
-      assert has_element?(view, "#invite-patient-alias", "Juan Perez")
+      assert has_element?(view, "#invite-patient-alias", "Lucca")
       assert has_element?(view, "#invite-six-digit", "123456")
       assert has_element?(view, "#invite-expires-at")
 
