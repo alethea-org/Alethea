@@ -132,4 +132,21 @@ defmodule Alethea.Clinical.MockData do
       }
     end)
   end
+
+  @doc """
+  Static payload for the mock-mode invite modal (design D5).
+
+  Mock mode short-circuits the invite flow entirely: the token and the
+  6-digit code are fixed constants (deterministic for tests) and the
+  expiry is computed at call time so a mock Regenerate still shows a
+  fresh timestamp. This function never touches the DB, the foundation
+  invite path, or the `professional_kek` decrypt quirk.
+  """
+  def mock_invite_payload(%Patient{}) do
+    %{
+      deep_link_token: "mock-deep-link-token",
+      six_digit_code: "123456",
+      expires_at: DateTime.utc_now() |> DateTime.add(10, :minute) |> DateTime.truncate(:second)
+    }
+  end
 end

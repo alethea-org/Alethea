@@ -3,7 +3,13 @@ defmodule AletheaWeb.DashboardLiveTest do
   use Oban.Testing, repo: Alethea.Repo
   import Phoenix.LiveViewTest
 
+  import Ecto.Query
+  import Alethea.FoundationTestHelper
+
   alias Alethea.Accounts
+  alias Alethea.Foundation.Accounts.Patient, as: FoundationPatient
+  alias Alethea.Foundation.Accounts.PatientAuthCode
+  alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Repo
   alias AletheaJobs.SessionReminderWorker
 
@@ -320,5 +326,180 @@ defmodule AletheaWeb.DashboardLiveTest do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
     |> Plug.Conn.put_session(:professional_id, professional.id)
+  end
+
+  describe "Telegram invite (real mode)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      # Foundation tenant bridged to the session professional via the
+      # shared email (D1); a "test"-env BotConfig row so the web layer
+      # can compose the deep link (D6); a legacy patient to invite.
+      foundation_pro = professional_fixture(%{email: professional.email})
+      patient = legacy_patient_fixture(professional)
+      bot_config_fixture()
+
+      %{foundation_pro: foundation_pro, patient: patient, bot_username: "fixture_bot"}
+    end
+
+    test "shows a not-connected indicator and an Invite button on the briefing body", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#tg-status-#{patient.id}", "Sin conectar")
+      assert has_element?(view, "#tg-btn-#{patient.id}", "Invitar")
+    end
+
+    test "shows a disabled Connected button once the patient is bound", %{
+      conn: conn,
+      patient: patient,
+      foundation_pro: foundation_pro
+    } do
+      {:ok, _fp} =
+        FoundationPatient.create_patient(foundation_pro, %{
+          alias: patient.alias,
+          legacy_patient_id: patient.id,
+          telegram_chat_id_hash: String.duplicate("a", 64)
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#tg-status-#{patient.id}", "Conectado")
+      assert has_element?(view, "#tg-btn-#{patient.id}[disabled]", "Conectado")
+      refute has_element?(view, "#tg-btn-#{patient.id}", "Regenerar")
+    end
+
+    test "R6 invites the patient and opens the modal with deep link, code and expiry", %{
+      conn: conn,
+      patient: patient,
+      foundation_pro: foundation_pro
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view |> element("#tg-btn-#{patient.id}") |> render_click()
+
+      assert has_element?(view, "#invite-modal")
+
+      # Deep link composed in the WEB layer from the test-env BotConfig
+      # bot_username + the domain-minted token (D6)
+      assert has_element?(
+               view,
+               ~s|#invite-deep-link[href^="https://t.me/fixture_bot?start="]|
+             )
+
+      # One bridged foundation row, alias mirrored (R1)
+      fp =
+        Repo.get_by(FoundationPatient,
+          legacy_patient_id: patient.id,
+          professional_id: foundation_pro.id
+        )
+
+      assert fp != nil
+      assert fp.alias == patient.alias
+      assert Repo.aggregate(FoundationPatient, :count, :id) == 1
+
+      # The modal shows the very codes the domain minted, with a 10-min TTL
+      six_digit = latest_code(fp.id, "six_digit")
+      deep_link = latest_code(fp.id, "deep_link")
+
+      assert has_element?(view, "#invite-six-digit", six_digit.code)
+
+      assert has_element?(
+               view,
+               "#invite-deep-link",
+               "https://t.me/fixture_bot?start=#{deep_link.code}"
+             )
+
+      ttl_seconds = DateTime.diff(six_digit.expires_at, DateTime.utc_now(), :second)
+      assert ttl_seconds in 590..610
+
+      assert has_element?(
+               view,
+               "#invite-expires-at",
+               Calendar.strftime(six_digit.expires_at, "%H:%M")
+             )
+
+      # The app never delivers the invite (R6: no outbound send)
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      # The button adapts to Regenerate for the just-invited patient
+      assert has_element?(view, "#tg-btn-#{patient.id}", "Regenerar")
+    end
+
+    test "R6 closes the modal without any side effect", %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view |> element("#tg-btn-#{patient.id}") |> render_click()
+      assert has_element?(view, "#invite-modal")
+
+      view |> element("#invite-close") |> render_click()
+
+      refute has_element?(view, "#invite-modal")
+    end
+
+    defp latest_code(patient_id, kind) do
+      Repo.one(
+        from(c in PatientAuthCode,
+          where: c.patient_id == ^patient_id and c.kind == ^kind,
+          order_by: [desc: c.inserted_at],
+          limit: 1
+        )
+      )
+    end
+  end
+
+  describe "Telegram invite without a foundation professional (real mode)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional)
+      %{patient: patient}
+    end
+
+    test "shows an error flash and never mints codes", %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view |> element("#tg-btn-#{patient.id}") |> render_click()
+
+      assert render(view) =~ "No se pudo generar la invitación"
+      refute has_element?(view, "#invite-modal")
+      assert Repo.aggregate(FoundationPatient, :count, :id) == 0
+      assert Repo.aggregate(PatientAuthCode, :count, :id) == 0
+    end
+  end
+
+  describe "Telegram invite (mock mode)" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "shows not-connected status and opens the mock invite modal without DB writes", %{
+      conn: conn
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      # Mock statuses are always not-connected (non-UUID ids, no bridge)
+      assert has_element?(view, "#tg-status-p1", "Sin conectar")
+      assert has_element?(view, "#tg-btn-p1", "Invitar")
+
+      view |> element("#tg-btn-p1") |> render_click()
+
+      assert has_element?(view, "#invite-modal")
+      assert has_element?(view, "#invite-patient-alias", "Juan Perez")
+      assert has_element?(view, "#invite-six-digit", "123456")
+      assert has_element?(view, "#invite-expires-at")
+
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      # Mock mode never touches the real invite path (D5): zero foundation rows
+      assert Repo.aggregate(FoundationPatient, :count, :id) == 0
+      assert Repo.aggregate(PatientAuthCode, :count, :id) == 0
+    end
   end
 end
