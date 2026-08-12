@@ -72,6 +72,13 @@ automatizado por GitHub Actions.
 2. Avisale al otro por el chat del equipo.
 3. La Action te deja reasignar a vos mismo como excepción al hard lock.
 
+### Si la issue está bloqueada por algo externo
+
+1. Comentá `/blocked <razón>` en ella (solo vos, el assignee actual, podés).
+   Ejemplo: `/blocked esperando input de @fulanita sobre KEK rotation`.
+2. El bot agrega `status:blocked` y comenta confirmando con la razón.
+3. Cuando se destrabe: `/unblocked` (vos otra vez). Vuelve a `status:claimed`.
+
 ### Si la issue necesita una decisión de producto
 
 1. Agregale el label `triage:rotating`.
@@ -85,6 +92,16 @@ automatizado por GitHub Actions.
    ambigüedades de prioridad/área, y destrabar a quien te pida ayuda.
 3. **NO tenés que asignar a nadie.** Si querés reorganizar el trabajo,
    reasigná vos mismo con justificación; los demás siguen con self-claim.
+4. **Las issues `wayfinder:prototype` y `wayfinder:grilling` son tuyas.** Son
+   artefactos HITL — no se pueden `/claim`. Las manejás vos directamente
+   (resolver, reasignar con justificación, o cerrar).
+
+### Cuando tu PR mergea y cierra una issue
+
+1. Tu PR usa la plantilla `PULL_REQUEST_TEMPLATE.md` con el body `Closes #N`.
+2. Al mergearla, el bot pasa la issue de `status:claimed` a `status:done`.
+3. `status:done` es **sello histórico**: no se quita nunca. Si reabrís la
+   issue después, queda como marca de auditoría.
 
 ---
 
@@ -92,13 +109,20 @@ automatizado por GitHub Actions.
 
 1. Toda issue nueva arranca con `status:needs-triage`.
 2. Para tomar una issue: `/claim`. El bot asigna al comentarista.
+   - Solo funciona para miembros de la org (MEMBER u OWNER).
+   - Issues con `wayfinder:prototype` o `wayfinder:grilling` están exentas —
+     las maneja el PO directamente.
 3. Para liberarla: `/release` (solo el assignee actual puede).
-4. **Nadie puede desasignar a otro.** Hard lock enforced por Actions. Solo el
+4. Para bloquearla: `/blocked <razón>` (solo el assignee actual).
+5. Para desbloquearla: `/unblocked` (solo el assignee actual).
+6. **Nadie puede desasignar a otro.** Hard lock enforced por Actions. Solo el
    assignee actual o el PO de semana pueden modificar `assignees`.
-5. **Una issue = una persona.** Si en el workflow se escapan >1, el bot deja
+7. **Una issue = una persona.** Si en el workflow se escapan >1, el bot deja
    solo al primero.
-6. El PO de la semana rota según la lista en issue #0 — no se reasigna
+8. El PO de la semana rota según la lista en issue #0 — no se reasigna
    manualmente a mitad de semana salvo causa mayor (y se documenta).
+9. Una PR mergeada que cierra una issue con `status:claimed` la pasa a
+   `status:done` automáticamente. El label no se quita.
 
 ---
 
@@ -107,7 +131,8 @@ automatizado por GitHub Actions.
 ### Status (`status:*`)
 - `status:needs-triage` — sin asignar, esperando triage o `/claim`
 - `status:claimed` — asignada via `/claim`, **lock activo**
-- `status:blocked` — asignada pero bloqueada por algo externo
+- `status:blocked` — asignada pero bloqueada por algo externo (`/blocked <razón>`)
+- `status:done` — cerrada via PR mergeada; **sello histórico, no se quita**
 
 ### Tipo (`type:*`)
 - `type:feature` — funcionalidad nueva
@@ -146,8 +171,11 @@ automatizado por GitHub Actions.
 
 ## 🚀 Quickstart para devs nuevos en el equipo
 
-1. **Leé esta guía completa** (sí, las tres secciones).
-2. **Abrí la issue #0 Triage rota** para ver quién es el PO actual y el orden de rotación.
-3. **Buscá issues con `status:needs-triage`** y `good first issue` para arrancar.
-4. **Comentá `/claim`** en la que te interese.
-5. **Andá a `mix test` y leé `AGENTS.md`** para entender el flujo de TDD del proyecto.
+1. **Empezá por [`.github/QUICKSTART.md`](./QUICKSTART.md)** — tiene 3 escenarios
+   paso-a-paso con diagramas, comandos `gh` y tabla para evaluadores.
+2. Volvé a esta guía (CONTRIBUTING) para las reglas formales cuando ya
+   entendés la idea.
+3. **Abrí la issue #0 Triage rota** para ver quién es el PO actual y el orden de rotación.
+4. **Buscá issues con `status:needs-triage`** y `good first issue` para arrancar.
+5. **Comentá `/claim`** en la que te interese.
+6. **Andá a `mix test` y leé `AGENTS.md`** para entender el flujo de TDD del proyecto.

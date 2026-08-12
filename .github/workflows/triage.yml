@@ -8,10 +8,15 @@ on:
   issue_comment:
     types:
       - created
+  pull_request:
+    types:
+      - closed
+      - ready_for_review
 
 permissions:
   issues: write
   contents: read
+  pull-requests: write
 
 jobs:
   auto-triage-new:
@@ -35,7 +40,7 @@ jobs:
             });
 
   handle-slash-command:
-    name: /claim y /release
+    name: /claim, /release, /blocked, /unblocked
     if: github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
     steps:
@@ -44,14 +49,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const body = (context.payload.comment.body || '').trim();
-            const cmd = body.split(/\s+/)[0].toLowerCase();
-            if (cmd !== '/claim' && cmd !== '/release') {
+            const raw = (context.payload.comment.body || '').trim();
+            const firstToken = raw.split(/\s+/)[0].toLowerCase();
+            const known = ['/claim', '/release', '/blocked', '/unblocked'];
+            if (!known.includes(firstToken)) {
               core.setOutput('run', 'false');
               return;
             }
+            const reason = raw.split(/\s+/).slice(1).join(' ').trim();
             core.setOutput('run', 'true');
-            core.setOutput('command', cmd);
+            core.setOutput('command', firstToken);
+            core.setOutput('reason', reason);
 
       - name: /claim
         if: steps.parse.outputs.command == '/claim'
@@ -59,9 +67,29 @@ jobs:
         with:
           script: |
             const issue = context.payload.issue;
-            const author = context.payload.comment.user.login;
+            const comment = context.payload.comment;
+            const author = comment.user.login;
+            const association = comment.author_association;
             const currentAssignees = (issue.assignees || []).map(a => a.login);
             const existingLabels = (issue.labels || []).map(l => l.name);
+
+            if (!['MEMBER', 'OWNER'].includes(association)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🔒 **Solo miembros de la org pueden \`/claim\` issues.** Si querés sumarte al equipo, pedile a un owner que te invite a alethea-org.`,
+              });
+              return;
+            }
+
+            if (existingLabels.includes('wayfinder:prototype') || existingLabels.includes('wayfinder:grilling')) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🚫 Esta issue tiene label \`wayfinder:prototype\` o \`wayfinder:grilling\` — son artefactos HITL. **Solo el PO de la semana la puede manejar.** Si necesitás que avance, etiquetala con \`triage:rotating\` y avisale al PO actual (ver #0 Triage rota).`,
+              });
+              return;
+            }
 
             if (currentAssignees.length > 0) {
               await github.rest.issues.createComment({
@@ -79,7 +107,7 @@ jobs:
             });
 
             const addLabels = ['status:claimed'].filter(l => !existingLabels.includes(l));
-            const removeLabels = ['status:needs-triage'].filter(l => existingLabels.includes(l));
+            const removeLabels = ['status:needs-triage', 'status:blocked'].filter(l => existingLabels.includes(l));
             if (addLabels.length) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner, repo: context.repo.repo,
@@ -136,7 +164,7 @@ jobs:
             });
 
             const addLabels = ['status:needs-triage'].filter(l => !existingLabels.includes(l));
-            const removeLabels = ['status:claimed'].filter(l => existingLabels.includes(l));
+            const removeLabels = ['status:claimed', 'status:blocked'].filter(l => existingLabels.includes(l));
             if (addLabels.length) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner, repo: context.repo.repo,
@@ -158,6 +186,93 @@ jobs:
               body: `🔓 @${author} liberó esta issue. Vuelve a \`status:needs-triage\` — otro dev puede \`/claim\`.`,
             });
 
+      - name: /blocked
+        if: steps.parse.outputs.command == '/blocked'
+        uses: actions/github-script@v7
+        env:
+          REASON: ${{ steps.parse.outputs.reason }}
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const author = context.payload.comment.user.login;
+            const currentAssignees = (issue.assignees || []).map(a => a.login);
+            const existingLabels = (issue.labels || []).map(l => l.name);
+            const reason = (process.env.REASON || '').trim();
+
+            if (currentAssignees.length === 0 || !currentAssignees.includes(author)) {
+              const assigneeMsg = currentAssignees.length
+                ? `🔒 Solo el assignee actual (@${currentAssignees[0]}) puede bloquear su propia issue.`
+                : `ℹ️ Esta issue no tiene assignee — no podés bloquear algo que no es tuyo.`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: assigneeMsg,
+              });
+              return;
+            }
+
+            if (!existingLabels.includes('status:blocked')) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['status:blocked'],
+              });
+            }
+
+            const reasonText = reason ? `: ${reason}` : ' (sin razón especificada)';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `🛑 **Bloqueada por @${author}**${reasonText}\n\nPara desbloquear: \`/unblocked\`.`,
+            });
+
+      - name: /unblocked
+        if: steps.parse.outputs.command == '/unblocked'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const author = context.payload.comment.user.login;
+            const currentAssignees = (issue.assignees || []).map(a => a.login);
+            const existingLabels = (issue.labels || []).map(l => l.name);
+
+            if (!existingLabels.includes('status:blocked')) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `ℹ️ Esta issue no está bloqueada. No hay nada que desbloquear.`,
+              });
+              return;
+            }
+
+            if (currentAssignees.length === 0 || !currentAssignees.includes(author)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🔒 Solo el assignee actual (@${currentAssignees[0] || 'N/A'}) puede desbloquear esta issue.`,
+              });
+              return;
+            }
+
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              name: 'status:blocked',
+            });
+            if (!existingLabels.includes('status:claimed')) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['status:claimed'],
+              });
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `🔄 @${author} desbloqueó esta issue. Vuelve a \`status:claimed\`.`,
+            });
+
   hard-lock:
     name: Hard lock sobre asignaciones
     if: github.event_name == 'issues' && github.event.action == 'edited'
@@ -168,13 +283,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const { data } = await github.rest.repos.getContent({
-              owner: context.repo.owner, repo: context.repo.repo,
-              path: '.github/ROTA.yml',
-              ref: context.ref,
-            });
-            const content = Buffer.from(data.content, 'base64').toString('utf-8');
-            core.setOutput('content', content);
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner: context.repo.owner, repo: context.repo.repo,
+                path: '.github/ROTA.yml',
+                ref: context.ref,
+              });
+              const content = Buffer.from(data.content, 'base64').toString('utf-8');
+              core.setOutput('content', content);
+            } catch (e) {
+              core.setOutput('content', '');
+            }
 
       - name: Validate assignee change
         uses: actions/github-script@v7
@@ -188,7 +307,6 @@ jobs:
             const issue = context.payload.issue;
             const actor = context.payload.sender.login;
             const currentAssignees = (issue.assignees || []).map(a => a.login);
-            const newAssigneesRaw = changes.assignees;
 
             const previousAssignees = (issue.previous_assignees || []).map(a => a.login);
             const before = new Set(previousAssignees);
@@ -196,27 +314,26 @@ jobs:
             const added = [...after].filter(x => !before.has(x));
             const removed = [...before].filter(x => !after.has(x));
 
-            const isAuthorizedChange =
-              (added.length === 1 && added[0] === actor) ||
-              (removed.length === 1 && removed[0] === actor) ||
-              (currentAssignees.length === 1 && currentAssignees[0] === actor);
+            const isSelfAssign = added.length === 1 && added[0] === actor;
+            const isSelfUnassign = removed.length === 1 && removed[0] === actor;
+            const isNetSelf = currentAssignees.length === 1 && currentAssignees[0] === actor;
 
-            if (isAuthorizedChange) return;
+            if (isSelfAssign || isSelfUnassign || isNetSelf) return;
 
             const m = (env.ROTA_CONTENT || '').match(/current_po:\s*(\S+)/);
-            const currentPO = m ? m[1].replace(/^@/, '') : null;
+            const currentPO = m ? m[1].replace(/^@/, '').replace(/["']/g, '') : null;
             const isPO = currentPO && actor === currentPO;
 
             if (isPO) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `🔧 PO de la semana (@${currentPO}) reasignó esta issue.`,
+                body: `🔧 PO de la semana (@${currentPO}) reasignó esta issue. El lock permite la reasignación por PO con justificación implícita.`,
               });
               return;
             }
 
-            const desired = previousAssignees.length ? previousAssignees : [];
+            const desired = previousAssignees;
             await github.rest.issues.setAssignees({
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: issue.number,
@@ -252,3 +369,115 @@ jobs:
               issue_number: issue.number,
               body: `⚠️ **Regla "una persona por issue".** Se detectó más de un assignee (${currentAssignees.map(a => '@' + a).join(', ')}). Se dejó solo a @${kept[0]} — el resto fue removido.`,
             });
+
+  pr-merged-status-done:
+    name: PR mergeada → status:done en issues cerradas
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Swap status:claimed → status:done
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = (pr.body || '');
+            const patterns = [
+              /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi,
+            ];
+            const refs = new Set();
+            for (const re of patterns) {
+              let m;
+              while ((m = re.exec(body)) !== null) refs.add(parseInt(m[1], 10));
+            }
+            if (refs.size === 0) return;
+
+            for (const issueNumber of refs) {
+              try {
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                });
+                const labels = (issue.labels || []).map(l => l.name);
+                if (!labels.includes('status:claimed')) continue;
+
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber, name: 'status:claimed',
+                });
+                if (!labels.includes('status:done')) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: issueNumber, labels: ['status:done'],
+                  });
+                }
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `✅ Issue cerrada vía PR #${pr.number}. \`status:claimed\` → \`status:done\` (sello histórico, no se quita).`,
+                });
+              } catch (e) {
+                core.warning(`No se pudo procesar #${issueNumber}: ${e.message}`);
+              }
+            }
+
+  pr-soft-check:
+    name: Soft check en PRs que cierran issues ajenas
+    if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read rota
+        id: rota
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner: context.repo.owner, repo: context.repo.repo,
+                path: '.github/ROTA.yml',
+                ref: context.ref,
+              });
+              const content = Buffer.from(data.content, 'base64').toString('utf-8');
+              core.setOutput('content', content);
+            } catch (e) {
+              core.setOutput('content', '');
+            }
+
+      - name: Comment on PR if author != assignee of referenced issue
+        uses: actions/github-script@v7
+        env:
+          ROTA_CONTENT: ${{ steps.rota.outputs.content }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            const body = (pr.body || '');
+            const pattern = /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+            const refs = new Set();
+            let m;
+            while ((m = pattern.exec(body)) !== null) refs.add(parseInt(m[1], 10));
+            if (refs.size === 0) return;
+
+            const m = (env.ROTA_CONTENT || '').match(/current_po:\s*(\S+)/);
+            const currentPO = m ? m[1].replace(/^@/, '').replace(/["']/g, '') : null;
+
+            for (const issueNumber of refs) {
+              try {
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                });
+                const assignees = (issue.assignees || []).map(a => a.login);
+                if (assignees.length === 0) continue;
+                const assignee = assignees[0];
+                if (assignee === author) continue;
+                if (assignee === currentPO) continue;
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `ℹ️ Esta PR cierra #${issueNumber} (asignada a @${assignee}) pero el autor es @${author}. ¿Es intencional? Si el assignee delegó en vos, no hay problema — el comentario queda como auditoría.`,
+                });
+              } catch (e) {
+                core.warning(`No se pudo chequear #${issueNumber}: ${e.message}`);
+              }
+            }

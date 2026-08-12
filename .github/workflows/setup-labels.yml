@@ -21,6 +21,7 @@ jobs:
               { name: "status:needs-triage", color: "fbca04", description: "Issue sin asignar, esperando triage o /claim" },
               { name: "status:claimed",      color: "0e8a16", description: "Asignada via /claim, lock activo" },
               { name: "status:blocked",      color: "d93f0b", description: "Asignada pero bloqueada por algo externo" },
+              { name: "status:done",         color: "6f42c1", description: "Cerrada via PR mergeada - sello historico, no se quita" },
               { name: "priority:p0",        color: "b60205", description: "Bloquea release - urgente" },
               { name: "priority:p1",        color: "d93f0b", description: "Sprint actual - importante" },
               { name: "priority:p2",        color: "fbca04", description: "Backlog - nice to have" },
