@@ -25,6 +25,7 @@ services:
       - SECRET_KEY_BASE=dev_secret_key_base_that_is_at_least_64_chars_long_for_production_safety
       - CLOAK_AES_KEY=0000000000000000000000000000000000000000000000000000000000000000
       - EMOTION_SIDECAR_URL=http://emotion-sidecar:8080
+      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-phi-4-mini}
       - REDIS_URL=redis://redis:6379
     depends_on:
@@ -36,7 +37,6 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
-      - phoenix_assets:/app/priv/static/assets
     command: mix phx.server
     healthcheck:
       test:
