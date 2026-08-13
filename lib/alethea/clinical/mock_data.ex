@@ -9,8 +9,8 @@ defmodule Alethea.Clinical.MockData do
     [
       %Patient{
         id: "p1",
-        alias: "Juan Perez",
-        urgent_intervention: true,
+        alias: "Lucca",
+        urgent_intervention: false,
         session_day_of_week: 1,
         session_time: ~T[10:00:00],
         professional_id: professional_id
@@ -26,7 +26,7 @@ defmodule Alethea.Clinical.MockData do
       %Patient{
         id: "p3",
         alias: "Carlos Rodriguez",
-        urgent_intervention: true,
+        urgent_intervention: false,
         session_day_of_week: 5,
         session_time: ~T[09:00:00],
         professional_id: professional_id
@@ -90,6 +90,16 @@ defmodule Alethea.Clinical.MockData do
         status_level: "Alerta",
         period_start: DateTime.utc_now() |> DateTime.add(-4, :day),
         period_end: DateTime.utc_now() |> DateTime.add(-4, :day)
+      },
+      %Summary{
+        id: Ecto.UUID.generate(),
+        patient_id: patient_id,
+        type: "session",
+        summary_text:
+          "Seguimiento de avance terapéutico. Se revisaron estrategias de afrontamiento y el paciente muestra mayor adherencia al plan.",
+        status_level: "Estable",
+        period_start: DateTime.utc_now() |> DateTime.add(-8, :day),
+        period_end: DateTime.utc_now() |> DateTime.add(-8, :day)
       }
     ]
   end
