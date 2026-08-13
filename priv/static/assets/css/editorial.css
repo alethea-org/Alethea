@@ -1,116 +1,188 @@
 /* =================================================================
-   Editorial design system — the visual decision that won the #116
-   prototype exploration (variant D for the dashboard, variant A
-   for the landing).
+   Editorial design system — Alethea's visual language.
 
-   White canvas, ink-black as the action colour, display type at
-   weight 400 / 700, colour reserved for whole surfaces. Tokens live
-   on `:root` so every selector reaches them without a `.pt-theme`
-   wrapper — that wrapper was the prototype's live-theme-switching
-   affordance and is gone now.
+   Tokens live on `:root` as semantic CSS custom properties. Every
+   selector in the file reads from `:root`; no selector carries a
+   raw hex. Class names (`.pt-card`, `.pt-h1`, `.pta-briefing`, …)
+   stay readable for the templates but the variables they reach
+   follow the Airtable-aligned vocabulary:
 
-   Pruned from the prototype's 859 lines:
-     • `.pt-switcher*` — floating variant UI
-     • `.ptb-*`      — variant B (triage board) layout
-     • `.ptlb-*`     — landing B (product first)
-     • `.ptlc-*`     — landing C (single screen, dark)
-     • `.ptc-hero`, `.ptc-next*`, `.ptc-rail` — variant C extras
-       (variant D's week picker reuses `.ptc-day`, `.ptc-slot`,
-       `.ptc-week` — those stay)
-     • `.pt-theme`, `.pt-theme--*`, `body:has(.pt-theme--*)` — the
-       theme wrapper and its overrides
-     • `.pt-field`, `.pt-input`, `.pt-textarea`, `.pt-select` —
-       form primitives the prototype had but the dashboard does
-       not use (the schedule / crisis / welcome forms keep their
-       inline styles)
-     • `.pta-wrap`, `.pta-metric*`, `.ptl-cta--light` — variant A
-       specifics that variant D does not need
+     --colors-*    Brand, surface, text, signature card, semantic
+     --spacing-*   4px-based spacing scale (xxs → section)
+     --rounded-*   Border-radius scale (xs → pill)
+     --typography-*  Display, title, label, body, caption sizes
+
+   The document `docs/design/DESIGN.md` is the source of truth for
+   what every token means and how the components compose. The CSS
+   file is the implementation of that document.
+
+   History: this file evolved from the #116 prototype exploration
+   (variant D for the dashboard, variant A for the landing). The
+   throwaway prototype rules (`.pt-switcher*`, `.ptb-*`, `.ptlb-*`,
+   `.ptlc-*`, `.ptc-hero`, `.ptc-next*`, `.ptc-rail`, `.pt-theme*`,
+   `.pt-field`, `.pt-input`, `.pt-textarea`, `.pt-select`, `.pta-*`,
+   `.ptl-cta--light`) were pruned in #156. This restyle (#164)
+   moves the surviving tokens onto the Airtable-aligned namespace
+   and exposes the additional signature-card + typography tokens
+   the spec describes, even where the demo doesn't consume them
+   yet. They are the building blocks for the post-demo marketing
+   site.
 ================================================================= */
 
 :root {
-  --pt-ink: #181d26;
-  --pt-ink-2: #333840;
-  --pt-ink-3: #41454d;
-  --pt-line: #dddddd;
-  --pt-surface: #ffffff;
-  --pt-surface-2: #f8fafc;
-  --pt-bg: #ffffff;
-  --pt-accent: #181d26;
-  --pt-accent-active: #0d1218;
-  --pt-accent-soft: #f8fafc;
-  --pt-on-accent: #ffffff;
-  --pt-danger: #aa2d00;
-  --pt-danger-soft: #f7ece7;
-  --pt-ok: #006400;
-  --pt-ok-soft: #edf4ed;
-  --pt-warn: #d9a441;
-  --pt-warn-soft: #fdf6e7;
-  --pt-cream: #f5e9d4;
-  --pt-dark: #181d26;
-  --pt-on-dark: #ffffff;
-  --pt-on-dark-soft: #9297a0;
+  /* ── Colors — Brand & Accent ─────────────────────────────────── */
+  --colors-primary: #181d26;
+  --colors-primary-active: #0d1218;
+
+  /* ── Colors — Surface ────────────────────────────────────────── */
+  --colors-canvas: #ffffff;
+  --colors-surface-soft: #f8fafc;
+  --colors-surface-strong: #e0e2e6;
+  --colors-surface-dark: #181d26;
+  --colors-surface-dark-elevated: #1d1f25;
+  --colors-hairline: #dddddd;
+
+  /* ── Colors — Text ───────────────────────────────────────────── */
+  --colors-ink: #181d26;
+  --colors-body: #333840;
+  --colors-muted: #41454d;
+  --colors-border-strong: #9297a0;
+  --colors-on-primary: #ffffff;
+  --colors-on-dark: #ffffff;
+  --colors-on-dark-soft: #9297a0;
+
+  /* ── Colors — Signature Card Surfaces ────────────────────────── */
+  --colors-signature-coral: #aa2d00;
+  --colors-signature-forest: #0a2e0e;
+  --colors-signature-cream: #f5e9d4;
+  --colors-signature-peach: #fcab79;
+  --colors-signature-mint: #a8d8c4;
+  --colors-signature-yellow: #f4d35e;
+  --colors-signature-mustard: #d9a441;
+
+  /* ── Colors — Semantic ───────────────────────────────────────── */
+  --colors-link: #1b61c9;
+  --colors-info: #254fad;
+  --colors-info-border: #458fff;
+  --colors-success: #006400;
+  --colors-success-border: #39bf45;
+  --colors-success-soft: #edf4ed;
+  --colors-danger: #aa2d00;
+  --colors-danger-soft: #f7ece7;
+  --colors-warn: #d9a441;
+  --colors-warn-soft: #fdf6e7;
+
+  /* ── Spacing (4px base unit) ─────────────────────────────────── */
+  --spacing-xxs: 4px;
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-xxl: 48px;
+  --spacing-section: 96px;
+
+  /* ── Rounded ─────────────────────────────────────────────────── */
+  --rounded-xs: 2px;
+  --rounded-sm: 6px;
+  --rounded-md: 10px;
+  --rounded-lg: 12px;
+  --rounded-pill: 9999px;
+  --rounded-full: 9999px;
+
+  /* ── Typography — sizes ──────────────────────────────────────── */
+  --typography-display-xl-size: 48px;
+  --typography-display-lg-size: 40px;
+  --typography-display-md-size: 32px;
+  --typography-title-lg-size: 24px;
+  --typography-title-md-size: 20px;
+  --typography-title-sm-size: 18px;
+  --typography-label-md-size: 16px;
+  --typography-button-size: 16px;
+  --typography-body-md-size: 14px;
+  --typography-caption-size: 14px;
+  --typography-legal-size: 13.12px;
+  --typography-pricing-display-size: 44.8px;
+  --typography-pricing-section-size: 28px;
+  --typography-pricing-card-title-size: 20px;
+
+  /* ── Pill border tones (border-only, kept beside the token for
+        the demo's pill component which needs a stronger edge than
+        the soft surface) ───────────────────────────────────────── */
+  --colors-pill-border-ok: #abefc6;
+  --colors-pill-border-warn: #fedf89;
+  --colors-pill-border-danger: #fecdca;
+  --colors-pill-border-neutral: #d5dde5;
 }
 
-/* === Shared primitives =========================================== */
-.pt { color: var(--pt-ink); }
+/* =================================================================
+   Shared primitives — base type, cards, pills, buttons, avatars.
+================================================================= */
+
+.pt { color: var(--colors-ink); }
 
 .pt-card {
-  background: var(--pt-surface);
-  border: 1px solid var(--pt-line);
-  border-radius: 12px;
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
 }
 .pt-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--pt-line);
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--colors-hairline);
 }
-.pt-card__body { padding: 16px; }
+.pt-card__body { padding: var(--spacing-md); }
 
 .pt-eyebrow {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--pt-ink-3);
+  color: var(--colors-muted);
 }
-.pt-h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
-.pt-h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
-.pt-muted { color: var(--pt-ink-2); font-size: 13px; line-height: 1.65; }
+
+/* Display-weight type per D4: 400, not 700. The dashboard's h1 is
+   a display size (24px) and follows the spec's "display-weight
+   type is intentionally not bold" principle. The h2 is a
+   sub-title and sits at 500. Buttons and eyebrow stay at 700. */
+.pt-h1 { font-size: var(--typography-title-lg-size); font-weight: 400; letter-spacing: -0.02em; }
+.pt-h2 { font-size: 15px; font-weight: 500; letter-spacing: -0.01em; }
+.pt-muted { color: var(--colors-body); font-size: 13px; line-height: 1.65; }
 
 .pt-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 3px 9px;
-  border-radius: 999px;
+  border-radius: var(--rounded-pill);
   font-size: 11px;
   font-weight: 700;
   border: 1px solid transparent;
 }
-.pt-pill--ok { background: var(--pt-ok-soft); color: var(--pt-ok); border-color: #abefc6; }
-.pt-pill--warn { background: var(--pt-warn-soft); color: var(--pt-warn); border-color: #fedf89; }
-.pt-pill--danger { background: var(--pt-danger-soft); color: var(--pt-danger); border-color: #fecdca; }
-.pt-pill--neutral { background: var(--pt-accent-soft); color: var(--pt-accent); border-color: #d5dde5; }
+.pt-pill--ok { background: var(--colors-success-soft); color: var(--colors-success); border-color: var(--colors-pill-border-ok); }
+.pt-pill--warn { background: var(--colors-warn-soft); color: var(--colors-warn); border-color: var(--colors-pill-border-warn); }
+.pt-pill--danger { background: var(--colors-danger-soft); color: var(--colors-danger); border-color: var(--colors-pill-border-danger); }
+.pt-pill--neutral { background: var(--colors-surface-soft); color: var(--colors-primary); border-color: var(--colors-pill-border-neutral); }
 
 .pt-avatar {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
-  background: var(--pt-accent-soft);
-  color: var(--pt-accent);
+  border-radius: var(--rounded-full);
+  background: var(--colors-surface-soft);
+  color: var(--colors-primary);
   font-weight: 700;
   flex-shrink: 0;
 }
-.pt-avatar--risk { background: var(--pt-danger-soft); color: var(--pt-danger); }
+.pt-avatar--risk { background: var(--colors-danger-soft); color: var(--colors-danger); }
 
 .pt-empty {
-  padding: 32px 20px;
+  padding: var(--spacing-xl) var(--spacing-lg);
   text-align: center;
-  color: var(--pt-ink-3);
+  color: var(--colors-muted);
   font-size: 13px;
 }
 
@@ -118,11 +190,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--pt-line);
-  background: var(--pt-surface);
-  color: var(--pt-ink);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -130,81 +202,343 @@
 }
 .pt-btn--ghost {
   background: transparent;
-  border-color: var(--pt-line);
-  color: var(--pt-ink-2);
+  border-color: var(--colors-hairline);
+  color: var(--colors-body);
 }
 
-/* === Briefing column (the dashboard's reading flow) ============ */
+/* =================================================================
+   Airtable spec utility classes — display / title hierarchy.
+   The existing dashboard uses the .pt-h1 / .pt-h2 names; these
+   are the Airtable-spec-named equivalents available for the
+   post-demo marketing site and any future template work.
+================================================================= */
+
+.t-display-xl { font-size: var(--typography-display-xl-size); font-weight: 500; line-height: 1.1; letter-spacing: 0; }
+.t-display-lg { font-size: var(--typography-display-lg-size); font-weight: 400; line-height: 1.2; letter-spacing: 0; }
+.t-display-md { font-size: var(--typography-display-md-size); font-weight: 400; line-height: 1.2; letter-spacing: 0; }
+.t-title-lg { font-size: var(--typography-title-lg-size); font-weight: 400; line-height: 1.35; letter-spacing: 0.12px; }
+.t-title-md { font-size: var(--typography-title-md-size); font-weight: 400; line-height: 1.5; letter-spacing: 0; }
+.t-title-sm { font-size: var(--typography-title-sm-size); font-weight: 500; line-height: 1.4; letter-spacing: 0; }
+.t-label-md { font-size: var(--typography-label-md-size); font-weight: 500; line-height: 1.4; letter-spacing: 0; }
+.t-body-md { font-size: var(--typography-body-md-size); font-weight: 400; line-height: 1.25; letter-spacing: 0; }
+.t-caption { font-size: var(--typography-caption-size); font-weight: 500; line-height: 1.35; letter-spacing: 0.16px; }
+.t-legal { font-size: var(--typography-legal-size); font-weight: 600; line-height: 1.2; letter-spacing: 0; }
+
+/* =================================================================
+   Buttons — Airtable button family.
+   The primary / secondary pair is the brand action layer; pill
+   buttons are the pricing sub-system only.
+================================================================= */
+
+.button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+  font-size: var(--typography-button-size);
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.button-primary:hover { background: var(--colors-primary-active); }
+.button-primary:active { background: var(--colors-primary-active); }
+
+.button-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  font-size: var(--typography-button-size);
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid var(--colors-hairline);
+  cursor: pointer;
+}
+
+.button-secondary-on-dark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  font-size: var(--typography-button-size);
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.button-pricing-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  border-radius: var(--rounded-pill);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  font-size: var(--typography-body-md-size);
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.button-legal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-sm) 10px;
+  border-radius: var(--rounded-xs);
+  background: var(--colors-link);
+  color: var(--colors-on-primary);
+  font-size: var(--typography-legal-size);
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.button-icon-circular {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--rounded-full);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  border: 1px solid var(--colors-hairline);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+/* =================================================================
+   Signature Cards — full-bleed brand voltage moments. The
+   editorial rhythm depends on alternating white canvas with
+   signature surfaces every two or three screens. The dashboard
+   doesn't use most of these today; they're available for the
+   post-demo explainer pages.
+================================================================= */
+
+.signature-coral-card {
+  background: var(--colors-signature-coral);
+  color: var(--colors-on-primary);
+  border-radius: var(--rounded-lg);
+  padding: var(--spacing-xxl);
+}
+.signature-coral-card h2 { color: var(--colors-on-primary); }
+
+.signature-forest-card {
+  background: var(--colors-signature-forest);
+  color: var(--colors-on-primary);
+  border-radius: var(--rounded-lg);
+  padding: var(--spacing-xxl);
+}
+.signature-forest-card h2 { color: var(--colors-on-primary); }
+
+.hero-card-dark {
+  background: var(--colors-surface-dark);
+  color: var(--colors-on-dark);
+  border-radius: var(--rounded-lg);
+  padding: var(--spacing-xxl);
+}
+.hero-card-dark h2 { color: var(--colors-on-dark); }
+
+.signature-peach-card {
+  background: var(--colors-signature-peach);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-md);
+}
+.signature-mint-card {
+  background: var(--colors-signature-mint);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-md);
+}
+.signature-yellow-card {
+  background: var(--colors-signature-yellow);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-md);
+}
+.signature-mustard-card {
+  background: var(--colors-signature-mustard);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-md);
+}
+
+.cream-callout-card {
+  background: var(--colors-signature-cream);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-lg);
+}
+
+.feature-card-tabbed {
+  background: var(--colors-surface-soft);
+  border-radius: var(--rounded-lg);
+  padding: var(--spacing-xl);
+}
+
+.demo-grid-card {
+  background: var(--colors-canvas);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+}
+
+.cta-band-light {
+  background: var(--colors-surface-strong);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-lg);
+  padding: var(--spacing-xxl);
+}
+
+/* =================================================================
+   Hero band — the editorial body sits on whitespace, not
+   atmosphere. No gradient, no mesh, no decorative backdrop.
+================================================================= */
+
+.hero-band {
+  padding: var(--spacing-section) 0;
+  background: var(--colors-canvas);
+}
+
+/* =================================================================
+   Inputs — hairline border, surface soft focus.
+================================================================= */
+
+.text-input {
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  font-size: var(--typography-body-md-size);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  height: 44px;
+  width: 100%;
+}
+.text-input:focus {
+  outline: none;
+  border-color: var(--colors-info-border);
+}
+
+/* =================================================================
+   Pricing sub-system — Inter Display + pill buttons. Tokens
+   added per D5; no pricing page yet, but the primitives are
+   here when one is built.
+================================================================= */
+
+.pricing-tier-card {
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-xl);
+  border: 1px solid var(--colors-hairline);
+}
+.pricing-tier-card--featured {
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-xl);
+  border: 1px solid var(--colors-hairline);
+}
+.pricing-tier-card .plan-name,
+.pricing-tier-card--featured .plan-name {
+  font-size: var(--typography-pricing-card-title-size);
+  font-weight: 475;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+/* =================================================================
+   Dashboard — Briefing column (the dashboard's reading flow).
+   Class names preserved so dashboard_live.html.heex is unchanged
+   in this commit; only the underlying token references moved.
+================================================================= */
+
 .pta-picker {
   display: flex;
-  gap: 8px;
+  gap: var(--spacing-xs);
   overflow-x: auto;
   padding-bottom: 10px;
-  margin-bottom: 20px;
+  margin-bottom: var(--spacing-lg);
 }
 .pta-chip {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--spacing-xs);
   padding: 7px 12px 7px 8px;
-  border: 1px solid var(--pt-line);
-  border-radius: 999px;
-  background: var(--pt-surface);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-pill);
+  background: var(--colors-canvas);
   text-decoration: none;
-  color: var(--pt-ink-2);
+  color: var(--colors-body);
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
 .pta-chip--active {
-  border-color: var(--pt-accent);
-  background: var(--pt-accent-soft);
-  color: var(--pt-accent);
+  border-color: var(--colors-primary);
+  background: var(--colors-surface-soft);
+  color: var(--colors-primary);
 }
 .pta-chip--risk {
-  border-color: #fecdca;
-  background: var(--pt-danger-soft);
-  color: var(--pt-danger);
+  border-color: var(--colors-pill-border-danger);
+  background: var(--colors-danger-soft);
+  color: var(--colors-danger);
 }
 
 .pta-briefing {
-  border: 1px solid var(--pt-line);
-  border-left: 3px solid var(--pt-accent);
-  border-radius: 12px;
-  background: var(--pt-surface);
-  padding: 24px 28px;
-  margin-bottom: 20px;
+  border: 1px solid var(--colors-hairline);
+  border-left: 3px solid var(--colors-primary);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  padding: var(--spacing-lg) var(--spacing-xxl);
+  margin-bottom: var(--spacing-lg);
 }
 .pta-briefing__text {
-  font-size: 16px;
+  font-size: var(--typography-label-md-size);
   line-height: 1.75;
-  color: var(--pt-ink);
+  color: var(--colors-ink);
 }
 .pta-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 1px;
-  background: var(--pt-line);
-  border: 1px solid var(--pt-line);
-  border-radius: 12px;
+  background: var(--colors-hairline);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
   overflow: hidden;
-  margin-bottom: 20px;
+  margin-bottom: var(--spacing-lg);
 }
 
 .pta-triage {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--spacing-sm);
   flex-wrap: wrap;
-  margin-bottom: 16px;
-  padding: 10px 14px;
-  border: 1px solid var(--pt-danger-soft);
-  border-radius: 12px;
-  background: var(--pt-danger-soft);
+  margin-bottom: var(--spacing-md);
+  padding: 10px var(--spacing-md);
+  border: 1px solid var(--colors-danger-soft);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-danger-soft);
 }
 
-.pta-timeline { border-left: 2px solid var(--pt-line); margin-left: 6px; padding-left: 18px; }
-.pta-timeline__item { position: relative; padding-bottom: 18px; }
+.pta-timeline { border-left: 2px solid var(--colors-hairline); margin-left: 6px; padding-left: var(--spacing-lg); }
+.pta-timeline__item { position: relative; padding-bottom: var(--spacing-lg); }
 .pta-timeline__item::before {
   content: '';
   position: absolute;
@@ -212,102 +546,113 @@
   top: 5px;
   width: 10px;
   height: 10px;
-  border-radius: 999px;
-  background: var(--pt-surface);
-  border: 2px solid var(--pt-ink-3);
+  border-radius: var(--rounded-full);
+  background: var(--colors-canvas);
+  border: 2px solid var(--colors-muted);
 }
 
-.pta-settings { margin-top: 40px; border-top: 1px solid var(--pt-line); padding-top: 20px; }
-.pta-settings summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--pt-ink-2); }
+.pta-settings { margin-top: 40px; border-top: 1px solid var(--colors-hairline); padding-top: var(--spacing-lg); }
+.pta-settings summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--colors-body); }
 .pta-settings__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-  margin-top: 16px;
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-md);
 }
 
-/* === Variant D — Briefing + switchable picker ==================== */
+/* =================================================================
+   Variant D — Briefing + switchable picker.
+================================================================= */
+
 .ptd-wrap { max-width: 1040px; margin: 0 auto; }
 .ptd-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--spacing-md);
   flex-wrap: wrap;
-  margin-bottom: 20px;
+  margin-bottom: var(--spacing-lg);
 }
 .ptd-toggle {
   display: inline-flex;
   padding: 3px;
-  border: 1px solid var(--pt-line);
-  border-radius: 10px;
-  background: var(--pt-surface);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-canvas);
 }
 .ptd-toggle__btn {
-  padding: 6px 16px;
-  border-radius: 7px;
+  padding: var(--spacing-xxs) var(--spacing-md);
+  border-radius: var(--rounded-sm);
   font-size: 13px;
   font-weight: 600;
-  color: var(--pt-ink-3);
+  color: var(--colors-muted);
   text-decoration: none;
 }
-.ptd-toggle__btn--on { background: var(--pt-accent); color: var(--pt-on-accent); }
+.ptd-toggle__btn--on { background: var(--colors-primary); color: var(--colors-on-primary); }
 
 /* Reading column stays readable even with a wide picker above. */
 .ptd-wrap .pta-briefing__text { max-width: 68ch; }
 
-/* === Week picker (variant D's week branch) ===================== */
+/* =================================================================
+   Week picker (variant D's week branch).
+================================================================= */
+
 .ptc-week {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 10px;
-  margin-bottom: 24px;
+  margin-bottom: var(--spacing-lg);
 }
 .ptc-day {
-  border: 1px solid var(--pt-line);
-  border-radius: 10px;
-  background: var(--pt-surface);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-canvas);
   padding: 10px;
   min-height: 130px;
 }
-.ptc-day--today { border-color: var(--pt-accent); box-shadow: 0 0 0 2px var(--pt-accent-soft); }
+.ptc-day--today { border-color: var(--colors-primary); box-shadow: 0 0 0 2px var(--colors-surface-soft); }
 .ptc-day__name {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--pt-ink-3);
-  margin-bottom: 8px;
+  color: var(--colors-muted);
+  margin-bottom: var(--spacing-xs);
 }
 .ptc-slot {
   display: block;
   padding: 7px 8px;
-  border-radius: 7px;
-  background: var(--pt-accent-soft);
-  color: var(--pt-accent);
+  border-radius: var(--rounded-sm);
+  background: var(--colors-surface-soft);
+  color: var(--colors-primary);
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
   margin-bottom: 5px;
 }
-.ptc-slot--on { outline: 2px solid var(--pt-accent); outline-offset: 1px; }
-.ptc-slot--risk { background: var(--pt-danger-soft); color: var(--pt-danger); }
+.ptc-slot--on { outline: 2px solid var(--colors-primary); outline-offset: 1px; }
+.ptc-slot--risk { background: var(--colors-danger-soft); color: var(--colors-danger); }
 .ptc-slot small { display: block; font-weight: 500; opacity: 0.75; font-size: 10px; }
 
 @media (max-width: 1023px) {
   .ptc-week { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* === Landing A — editorial ===================================== */
-.ptl { font-family: 'Inter', system-ui, sans-serif; color: var(--pt-ink); }
-.ptl-shell { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+/* =================================================================
+   Landing A — editorial hero.
+   The landing hero title follows the spec's display-weight rule:
+   weight 400 on a 40px display h1, not the marketing-template 700.
+================================================================= */
+
+.ptl { font-family: 'Inter', system-ui, sans-serif; color: var(--colors-ink); }
+.ptl-shell { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 var(--spacing-lg); }
 
 .ptl-nav {
   height: 68px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--pt-line);
+  border-bottom: 1px solid var(--colors-hairline);
 }
 .ptl-brand {
   display: flex;
@@ -322,29 +667,29 @@
 .ptl-brand__mark {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
-  background: var(--pt-accent);
+  border-radius: var(--rounded-md);
+  background: var(--colors-primary);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .ptl-brand__mark img { filter: brightness(0) invert(1); }
-.ptl-navlinks { display: flex; align-items: center; gap: 20px; }
-.ptl-link { text-decoration: none; color: var(--pt-ink-2); font-size: 14px; font-weight: 500; }
+.ptl-navlinks { display: flex; align-items: center; gap: var(--spacing-lg); }
+.ptl-link { text-decoration: none; color: var(--colors-body); font-size: var(--typography-body-md-size); font-weight: 500; }
 .ptl-cta {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 11px 20px;
-  border-radius: 8px;
-  background: var(--pt-accent);
-  color: var(--pt-on-accent);
+  gap: var(--spacing-xs);
+  padding: 11px var(--spacing-lg);
+  border-radius: var(--rounded-md);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
   text-decoration: none;
-  font-size: 14px;
+  font-size: var(--typography-body-md-size);
   font-weight: 600;
 }
-.ptl-cta--sm { padding: 8px 15px; font-size: 13px; }
-.ptl-cta--ghost { background: transparent; color: var(--pt-ink); border: 1px solid var(--pt-line); }
+.ptl-cta--sm { padding: var(--spacing-xs) 15px; font-size: 13px; }
+.ptl-cta--ghost { background: transparent; color: var(--colors-ink); border: 1px solid var(--colors-hairline); }
 
 .ptla-hero {
   display: grid;
@@ -357,50 +702,50 @@
   font-size: clamp(34px, 4.4vw, 48px);
   line-height: 1.12;
   letter-spacing: -0.03em;
-  font-weight: 700;
-  margin-bottom: 20px;
+  font-weight: 400;
+  margin-bottom: var(--spacing-lg);
 }
-.ptla-lede { font-size: 18px; line-height: 1.65; color: var(--pt-ink-2); margin-bottom: 28px; max-width: 46ch; }
-.ptla-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.ptla-lede { font-size: var(--typography-title-sm-size); line-height: 1.65; color: var(--colors-body); margin-bottom: var(--spacing-lg); max-width: 46ch; }
+.ptla-actions { display: flex; gap: var(--spacing-sm); flex-wrap: wrap; align-items: center; }
 .ptla-proof {
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid var(--pt-line);
+  margin-top: var(--spacing-lg);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--colors-hairline);
   font-size: 13px;
-  color: var(--pt-ink-3);
+  color: var(--colors-muted);
   line-height: 1.6;
 }
 .ptla-shot {
-  border: 1px solid var(--pt-line);
+  border: 1px solid var(--colors-hairline);
   border-radius: 14px;
-  background: var(--pt-surface);
+  background: var(--colors-canvas);
   box-shadow: 0 24px 48px -24px rgba(16, 24, 40, 0.24);
   overflow: hidden;
 }
 .ptla-shot__bar {
   height: 34px;
-  border-bottom: 1px solid var(--pt-line);
-  background: var(--pt-accent-soft);
+  border-bottom: 1px solid var(--colors-hairline);
+  background: var(--colors-surface-soft);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 12px;
+  gap: var(--spacing-xxs);
+  padding: 0 var(--spacing-sm);
 }
-.ptla-shot__dot { width: 9px; height: 9px; border-radius: 999px; background: var(--pt-line); }
-.ptla-shot__body { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-.ptla-shot__line { height: 9px; border-radius: 4px; background: var(--pt-accent-soft); }
-.ptla-shot__bars { display: flex; align-items: flex-end; gap: 7px; height: 82px; margin-top: 4px; }
+.ptla-shot__dot { width: 9px; height: 9px; border-radius: var(--rounded-full); background: var(--colors-hairline); }
+.ptla-shot__body { padding: var(--spacing-lg); display: flex; flex-direction: column; gap: var(--spacing-sm); }
+.ptla-shot__line { height: 9px; border-radius: 4px; background: var(--colors-surface-soft); }
+.ptla-shot__bars { display: flex; align-items: flex-end; gap: var(--spacing-xxs); height: 82px; margin-top: var(--spacing-xxs); }
 .ptla-shot__bars i {
   flex: 1;
   border-radius: 3px 3px 0 0;
-  background: var(--pt-accent);
+  background: var(--colors-primary);
   opacity: 0.7;
 }
 
 .ptla-band {
-  border-top: 1px solid var(--pt-line);
-  border-bottom: 1px solid var(--pt-line);
-  background: var(--pt-accent-soft);
+  border-top: 1px solid var(--colors-hairline);
+  border-bottom: 1px solid var(--colors-hairline);
+  background: var(--colors-surface-soft);
   padding: 56px 0;
 }
 .ptla-cols {
@@ -408,66 +753,64 @@
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 40px;
 }
-.ptla-col h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
-.ptla-col p { font-size: 14px; line-height: 1.65; color: var(--pt-ink-2); }
+.ptla-col h3 { font-size: var(--typography-label-md-size); font-weight: 700; margin-bottom: var(--spacing-xs); }
+.ptla-col p { font-size: var(--typography-body-md-size); line-height: 1.65; color: var(--colors-body); }
 .ptla-num {
   font-size: 12px;
   font-weight: 700;
-  color: var(--pt-accent);
+  color: var(--colors-primary);
   letter-spacing: 0.08em;
   margin-bottom: 10px;
   display: block;
 }
 
 @media (max-width: 900px) {
-  .ptla-hero { grid-template-columns: minmax(0, 1fr); gap: 36px; padding: 48px 0; }
+  .ptla-hero { grid-template-columns: minmax(0, 1fr); gap: 36px; padding: var(--spacing-xxl) 0; }
 }
 
-/* === App shell — sidebar + topbar =====================================
-   The shell (`.app-sidebar`, `.app-topbar`) is still styled by
-   `app.css` from the previous design system — purple gradient
-   on the logo + avatar (`#6366f1 → #8b5cf6`), indigo on the
-   active nav link, `#cbd5e1` on the section title. That visual
-   layer was supposed to be re-skinned by the editorial tokens
-   from #119 but never was, so every authenticated page renders
-   the violet chrome around whatever the body actually does. This
-   block overrides those shell rules with the editorial palette so
-   the chrome is consistent with the dashboard body and the home.
-   Loaded after `app.css` per the layout bundle, so same
-   specificity means editorial wins. */
+/* =================================================================
+   App shell — sidebar + topbar.
+   `app.css` still styles the shell with the old chrome (purple
+   gradient on the logo + avatar, indigo on the active link). The
+   block below re-skins the shell to the editorial palette so the
+   chrome matches the dashboard body and the home. Loaded after
+   `app.css` per the layout bundle, so same specificity means
+   editorial wins.
+================================================================= */
+
 .app-sidebar {
-  background: var(--pt-surface);
-  border-right-color: var(--pt-line);
+  background: var(--colors-canvas);
+  border-right-color: var(--colors-hairline);
 }
-.app-sidebar__header { border-bottom-color: var(--pt-line); }
+.app-sidebar__header { border-bottom-color: var(--colors-hairline); }
 .app-sidebar__logo,
 .app-sidebar__avatar,
 .app-topbar__avatar {
-  background: var(--pt-accent);
+  background: var(--colors-primary);
   box-shadow: none;
-  color: var(--pt-on-accent);
+  color: var(--colors-on-primary);
 }
 .app-sidebar__logo img { filter: none; }
-.app-sidebar__brand-name { color: var(--pt-ink); }
-.app-sidebar__brand-sub { color: var(--pt-ink-3); }
-.app-sidebar__section-title { color: var(--pt-ink-3); }
-.app-sidebar__link { color: var(--pt-ink-2); }
+.app-sidebar__brand-name { color: var(--colors-ink); }
+.app-sidebar__brand-sub { color: var(--colors-muted); }
+.app-sidebar__section-title { color: var(--colors-muted); }
+.app-sidebar__link { color: var(--colors-body); }
 .app-sidebar__link:hover {
-  background: var(--pt-surface-2);
-  color: var(--pt-ink);
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
 }
 .app-sidebar__link--active {
-  background: var(--pt-surface-2);
-  color: var(--pt-ink);
-  border-color: var(--pt-line);
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+  border-color: var(--colors-hairline);
   font-weight: 600;
 }
 .app-sidebar__user {
-  background: var(--pt-surface-2);
-  border-color: var(--pt-line);
+  background: var(--colors-surface-soft);
+  border-color: var(--colors-hairline);
 }
-.app-sidebar__user-name { color: var(--pt-ink); }
-.app-sidebar__logout { color: var(--pt-ink-3); }
-.app-sidebar__logout:hover { color: var(--pt-danger); }
-.app-topbar { background: var(--pt-surface); border-bottom-color: var(--pt-line); }
-.app-content { background: var(--pt-bg); }
+.app-sidebar__user-name { color: var(--colors-ink); }
+.app-sidebar__logout { color: var(--colors-muted); }
+.app-sidebar__logout:hover { color: var(--colors-danger); }
+.app-topbar { background: var(--colors-canvas); border-bottom-color: var(--colors-hairline); }
+.app-content { background: var(--colors-canvas); }
