@@ -127,11 +127,12 @@ defmodule AletheaWeb.DashboardLive do
 
   def handle_event("decrypt_chat", _params, socket) do
     patient = socket.assigns.selected_patient
-    professional_kek = socket.assigns.professional_kek
 
     {decrypted_messages, audit_result, message_count} =
       if socket.assigns.use_mock_data do
-        # Mock mode - no real decryption
+        # Mock mode - no real decryption; the :professional_kek assign is
+        # only set by the real-mode mount path, so we short-circuit before
+        # touching it.
         messages =
           MockData.list_mock_messages(patient.id)
           |> Enum.map(fn msg ->
@@ -141,7 +142,7 @@ defmodule AletheaWeb.DashboardLive do
         {messages, :mock_success, length(messages)}
       else
         # Real decryption attempt
-        case decrypt_real_messages(patient, professional_kek) do
+        case decrypt_real_messages(patient, socket.assigns.professional_kek) do
           {:ok, messages} ->
             {messages, :success, length(messages)}
 

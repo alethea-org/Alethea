@@ -5,7 +5,6 @@ defmodule AletheaWeb.DashboardLiveTest do
 
   import Ecto.Query
   import Alethea.FoundationTestHelper
-  import LazyHTML
 
   alias Alethea.Accounts
   alias Alethea.Foundation.Accounts.Patient, as: FoundationPatient
@@ -148,22 +147,14 @@ defmodule AletheaWeb.DashboardLiveTest do
       assert has_element?(view, "#weekly-metric-crisis", "1")
       assert has_element?(view, "#weekly-metric-sessions", "5")
 
-      # 3. At least three session-snapshot timeline entries.
-      timeline_count =
-        html
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.filter(".pta-timeline__item")
-        |> Enum.count()
-
+      # 3. At least three session-snapshot timeline entries (counted by
+      # occurrences of the CSS class in the rendered HTML).
+      timeline_count = html |> String.split("pta-timeline__item") |> length() |> Kernel.-(1)
       assert timeline_count >= 3
 
-      # 4. At least three emotion-trend bars rendered.
-      emotion_rows =
-        html
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.filter("[id^=emotion-row-]")
-        |> Enum.count()
-
+      # 4. At least three emotion-trend bars rendered (each gets a unique
+      # id="emotion-row-<key>" so we count the opening `id="emotion-row-`).
+      emotion_rows = html |> String.split(~s|id="emotion-row-|) |> length() |> Kernel.-(1)
       assert emotion_rows >= 3
 
       # 5. Daily emotion chart renders with the 7-day aria-labelled SVG.
