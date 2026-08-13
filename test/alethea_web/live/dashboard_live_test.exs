@@ -63,7 +63,6 @@ defmodule AletheaWeb.DashboardLiveTest do
       assert render(view) =~ "Tendencias Emocionales"
     end
 
-    @tag :skip
     test "decrypts chat history and logs audit action", %{conn: conn, professional: _professional} do
       Application.put_env(:alethea, :use_mock_data, true)
       on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)

@@ -90,6 +90,16 @@ defmodule Alethea.Clinical.MockData do
         status_level: "Alerta",
         period_start: DateTime.utc_now() |> DateTime.add(-4, :day),
         period_end: DateTime.utc_now() |> DateTime.add(-4, :day)
+      },
+      %Summary{
+        id: Ecto.UUID.generate(),
+        patient_id: patient_id,
+        type: "session",
+        summary_text:
+          "Primera sesión de seguimiento. Se establecieron objetivos terapéuticos iniciales.",
+        status_level: "Estable",
+        period_start: DateTime.utc_now() |> DateTime.add(-8, :day),
+        period_end: DateTime.utc_now() |> DateTime.add(-8, :day)
       }
     ]
   end
