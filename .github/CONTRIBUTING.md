@@ -25,8 +25,8 @@ Es **auto-organizada** con tres reglas simples:
    prioridades, y ser el punto de contacto si hay un bloqueo. El resto de la
    semana puede seguir `claim`-eando issues con libertad.
 
-Este modelo se llama **"rotating PO + self-claim con hard lock"** y está
-automatizado por GitHub Actions.
+Este modelo se llama **"PO + self-claim con hard lock"**. La rotación de PO,
+si existe, se gestiona a mano vía PR a `.github/ROTA.yml`.
 
 ### Por qué funciona para nosotros
 
@@ -84,10 +84,10 @@ automatizado por GitHub Actions.
 1. Agregale el label `triage:rotating`.
 2. Esperá al PO de la semana (ver issue #0 Triage rota).
 
-### El PO de la semana
+### El PO activo
 
-1. Cada lunes a las 10:00 ART, el bot rota automáticamente según el orden de
-   la lista en la issue #0 Triage rota.
+1. El PO activo se define en `.github/ROTA.yml`. El equipo lo cambia con un PR
+   cuando lo decide.
 2. Tu trabajo como PO: revisar issues con `triage:rotating`, resolver
    ambigüedades de prioridad/área, y destrabar a quien te pida ayuda.
 3. **NO tenés que asignar a nadie.** Si querés reorganizar el trabajo,
@@ -119,8 +119,7 @@ automatizado por GitHub Actions.
    assignee actual o el PO de semana pueden modificar `assignees`.
 7. **Una issue = una persona.** Si en el workflow se escapan >1, el bot deja
    solo al primero.
-8. El PO de la semana rota según la lista en issue #0 — no se reasigna
-   manualmente a mitad de semana salvo causa mayor (y se documenta).
+8. El PO activo está en `.github/ROTA.yml`. Cambia solo vía PR al archivo.
 9. Una PR mergeada que cierra una issue con `status:claimed` la pasa a
    `status:done` automáticamente. El label no se quita.
 

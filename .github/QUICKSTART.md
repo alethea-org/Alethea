@@ -40,7 +40,6 @@ flowchart LR
     Bot -- "status:claimed" --> Issue
 
     PO -- "reasigna / cierra wayfinder" --> Issue
-    PO -.->|"cron lunes 10 ART"| Bot
 
     Issue -.->|"PR mergeada"| Bot
     Bot -- "status:done (sello)" --> Issue
@@ -52,7 +51,7 @@ flowchart LR
 | `/release` | Solo el assignee actual | Libera la issue (vuelve al pool) |
 | `/blocked <razón>` | Solo el assignee actual | Marca como bloqueada con razón |
 | `/unblocked` | Solo el assignee actual | Desbloquea |
-| (rotación automática) | Lunes 10:00 ART | Cambia el PO de la semana |
+| (PR a `.github/ROTA.yml`) | Cuando el equipo decide | Cambia el PO activo |
 
 **Mapeo de nombres ficticios a reales** (usado en los ejemplos de abajo):
 
@@ -280,7 +279,6 @@ flowchart TB
 
     subgraph Bot["Bot GitHub Actions"]
         T[triage.yml]
-        R[rotate.yml]
     end
 
     subgraph Estado["Estado issues"]
@@ -290,8 +288,6 @@ flowchart TB
         D2[status:done]
     end
 
-    A --> R
-    R -.->|rota lunes| A
     A -->|reasigna / cierra wayfinder| Estado
     B -->|/claim /release /blocked| T
     C -->|/claim /release /blocked| T
@@ -323,7 +319,7 @@ gh api repos/alethea-org/Alethea/contents/.github/ROTA.yml --jq '.content' | bas
 
 3. **No cierres `wayfinder:prototype` o `wayfinder:grilling` sin consenso del PO de la semana.** Son artefactos HITL. El PO las maneja, no un dev.
 
-4. **No edites `.github/ROTA.yml` para saltearte la rotación.** Si querés cambiar el orden, hablá con el equipo primero. El archivo se edita con un PR normal, no con push directo.
+4. **Editá `.github/ROTA.yml` con un PR cuando cambie el PO activo.** Es la única manera de cambiar quién es el PO; los pushes directos a `main` están bloqueados por branch protection.
 
 5. **No uses el PO como excusa para no tomar issues.** El PO coordina y destraba, pero también puede `claim` y trabajar como cualquier dev. Si el PO está overloaded, el equipo habla, no espera.
 
