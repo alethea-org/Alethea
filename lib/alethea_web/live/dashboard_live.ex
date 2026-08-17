@@ -732,6 +732,7 @@ defmodule AletheaWeb.DashboardLive do
       <div style="font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:2px;">
         {@label}
       </div>
+      
       <div style="font-size:20px; font-weight:700; color:#1e293b; font-variant-numeric:tabular-nums; line-height:1.2;">
         {@value}
       </div>
