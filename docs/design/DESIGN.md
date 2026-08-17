@@ -94,6 +94,7 @@ carry a raw hex; they read from a token.
 | `--colors-on-primary`       | `#ffffff`| Text color on primary buttons and dark surfaces.          |
 | `--colors-on-dark`          | `#ffffff`| Text color on signature dark surfaces.                    |
 | `--colors-on-dark-soft`     | `#9297a0`| Secondary text on dark surfaces.                          |
+| `--colors-pricing-ink`      | `#181d26`| Type color on the pricing surface. Same value as `--colors-ink`, named separately so the pricing dialect can diverge without touching the editorial text roles. |
 
 ### Signature Card Surfaces
 
@@ -148,6 +149,11 @@ Haas Grotesk, with a fallback to `-apple-system, BlinkMacSystemFont,
 
 ### Hierarchy
 
+Every row below is four tokens, not one:
+`--typography-<step>-size`, `-weight`, `-leading`, `-tracking`. The
+`.t-*` classes are pure token references, so retuning a step is a
+`:root` edit and never a hunt through selectors.
+
 | Token                          | Size      | Weight | Line Height | Letter Spacing | Use                            |
 | ------------------------------ | --------- | ------ | ----------- | -------------- | ------------------------------ |
 | `t-display-xl`                 | 48px      | 500    | 1.1         | 0              | Articles page h2               |
@@ -158,11 +164,11 @@ Haas Grotesk, with a fallback to `-apple-system, BlinkMacSystemFont,
 | `t-title-sm`                   | 18px      | 500    | 1.4         | 0              | Article-card titles            |
 | `t-label-md`                   | 16px      | 500    | 1.4         | 0              | Demo-card titles               |
 | (button)                       | 16px      | 500    | 1.4         | 0              | Standard CTA button labels     |
+| `t-pricing-display`            | 44.8px    | 475    | 1.1         | 0              | Pricing-page h1                |
+| `t-pricing-section`            | 28px      | 475    | 1.2         | 0              | Pricing-page section heads     |
 | `t-body-md`                    | 14px      | 400    | 1.25        | 0              | Body copy, footer links, top-nav items |
 | `t-caption`                    | 14px      | 500    | 1.35        | 0.16px         | Captions and meta text         |
 | `t-legal`                      | 13.12px   | 600    | 1.2         | 0              | Cookie/legal CTA buttons       |
-| (pricing display)              | 44.8px    | 475    | 1.1         | 0              | Pricing-page h1                |
-| (pricing section)              | 28px      | 475    | 1.2         | 0              | Pricing-page section heads     |
 | (pricing card title)           | 20px      | 475    | 1.3         | 0              | Pricing tier card plan name    |
 
 ### Principles
@@ -174,11 +180,11 @@ it pivots to 500 (sub-titles, buttons, article titles), never 600
 or 700 in the editorial body. The only true bold (600) lives in
 `t-legal` — boldness is reserved for terms-of-service surfaces.
 
-The dashboard's own display class `.pt-h1` (24px) and sub-title
-`.pt-h2` (15px) follow the same weight rule: `.pt-h1` is 400,
-`.pt-h2` is 500. Sizes stay close to the demo scale; the Airtable
-spec's larger `t-display-xl/lg/md` classes are available for the
-post-demo marketing site.
+The dashboard's `.pt-h1` and `.pt-h2` are not a parallel scale. They
+are grouped selectors on `t-display-lg` and `t-title-lg`, so the page
+title and the section/card titles land on the same steps as any other
+surface. A template can use either name; there is one definition per
+step.
 
 ---
 
@@ -227,6 +233,15 @@ The system trusts whitespace alone to do the framing.
 The elevation philosophy is **color-block first, shadow second**.
 Shadows are minimal; depth is delegated to the contrast between
 white canvas and signature surface cards.
+
+Only three surfaces genuinely leave the page, and each reads its
+shadow from a token so no selector carries a raw color literal:
+
+| Token              | Use                                                   |
+| ------------------ | ----------------------------------------------------- |
+| `--shadow-lifted`  | The landing's product-screenshot mock.                |
+| `--shadow-overlay` | Floating shell overlays — the topbar user menu.       |
+| `--shadow-modal`   | Modal dialogs — the Telegram invite modal.            |
 
 ---
 
@@ -320,6 +335,14 @@ Background `--colors-surface-strong` (`#e0e2e6`), text
 `--colors-ink`, rounded `--rounded-lg` (12px), padding
 `--spacing-xxl` (48px).
 
+**`.pta-briefing`** — The dashboard's signature surface. Background
+`--colors-signature-cream`, rounded `--rounded-lg` (12px), a 3px
+`--colors-primary` rail on the left to anchor the reading column, and
+no outline: like every signature card it is flat and lets the color
+contrast against the white canvas carry it. This is the one band that
+breaks the dashboard's white rhythm, which is exactly the pacing rule
+the Don'ts describe.
+
 ### Inputs & Forms
 
 **`.text-input`** — Standard text input. Background
@@ -329,16 +352,37 @@ rounded `--rounded-sm` (6px), padding `--spacing-sm` ×
 `--colors-hairline`. Focus state recolors the border to
 `--colors-info-border`.
 
+**`.text-input--compact`** — Density modifier. Drops the fixed
+height and tightens padding and type for the dashboard's setup forms,
+which run denser than the marketing surfaces. Composes with
+`.text-input`; it is not a second input component.
+
+**`.text-input--multiline`** — The textarea variant. Adds vertical
+resize, a looser line-height and inherited font family.
+
 ### Pricing Sub-System
 
+The pricing surface is a deliberate dialect, opt-in at the wrapper:
+put **`.pricing-surface`** on the page root and the whole subtree
+picks up `--typography-pricing-family` (Inter Display). The
+mid-weights 475 / 575 only resolve against a variable font, so the
+stack leads with the variable family and the fallbacks degrade to 500.
+
+**`.t-pricing-display`** / **`.t-pricing-section`** — The dialect's
+two display steps (44.8px / 475 and 28px / 475).
+
 **`.pricing-tier-card`** — Standard tier card. Background
-`--colors-canvas`, text `--colors-ink`, plan name in pricing-card
-title typography (20px / 475), rounded `--rounded-md` (10px),
-internal padding `--spacing-xl` (32px).
+`--colors-canvas`, text `--colors-pricing-ink`, plan name in
+pricing-card title typography (20px / 475), rounded `--rounded-md`
+(10px), internal padding `--spacing-xl` (32px).
 
 **`.pricing-tier-card--featured`** — The featured tier. Background
 shifts to `--colors-surface-soft`. No accent border, no badge — the
 background tone shift is the only signal.
+
+Nothing in the app consumes these yet; there is no pricing page. They
+exist so the first pricing surface does not have to re-decide the
+dialect.
 
 ### Navigation Variants
 
@@ -350,6 +394,41 @@ every page.
 
 **`.cta-band-light`** — Light surface CTA band near the footer.
 Carries an h2 in display-md and a `.button-primary`.
+
+**`.ptl-footer`** — The landing's single privacy line. Muted body
+type on canvas, no rule above it.
+
+### App Shell
+
+The authenticated shell predates this system. `app.css` still holds
+its geometry; the editorial block at the end of `editorial.css`
+re-skins its color, and because `editorial.css` loads after `app.css`
+at equal specificity, the editorial rules win.
+
+**`.app-sidebar__logo`** — The brand mark: a `--colors-primary`
+square. `logo.svg` paints with `fill="currentColor"`, but the shell
+loads it through `<img src>` — an isolated document that does **not**
+inherit the surrounding `color`. The glyph is forced white with a
+filter; removing that filter makes it fall back to black and vanish
+into the ink.
+
+**`.app-usermenu`** and its parts (`__trigger`, `__panel`, `__head`,
+`__name`, `__email`, `__item`, `__item--danger`, `__foot`) — The
+topbar dropdown. `--shadow-overlay` for the lift, hairline dividers,
+`--colors-danger` for the sign-out row.
+
+### Dashboard
+
+`.pta-metric*`, `.pta-emotion*`, `.pta-field-title`, `.pta-label`,
+`.pta-hint*`, `.pta-chatlog*`, `.pta-modal*`, `.pta-code*` and
+`.pta-nudge*` carry the dashboard's own surfaces. They exist because
+the templates used to inline all of it on the Tailwind slate / amber /
+indigo ramp; every color now resolves through a token.
+
+The two bot-config nudges are role-coded: `.pta-nudge--crisis` speaks
+with `--colors-warn`, `.pta-nudge--welcome` with `--colors-info` over
+a soft surface. The welcome card previously used Tailwind indigo,
+which the editorial chrome rules out.
 
 ---
 
@@ -409,8 +488,20 @@ Carries an h2 in display-md and a `.button-primary`.
 ## Known Gaps
 
 - **Hover behavior** across all components is not documented (per
-  global no-hover policy).
-- **Animation and transition timings** are not in scope.
+  global no-hover policy). The one exception is the authenticated
+  shell, which already carried hover feedback on its nav and menu
+  rows before this system existed; the editorial block re-skins those
+  states rather than removing them. Spec components — buttons, cards,
+  inputs — document Default and Active/Pressed only.
+- **Animation and transition timings** are not in scope. The user
+  menu's entrance animation is pre-existing shell chrome; its
+  keyframes live in `app.css`.
+- **`--colors-pricing-ink`** is referenced by the upstream spec
+  without a defined value. It is an alias of `--colors-ink` here.
+- **FlyonUI overlap.** The app also loads FlyonUI from a CDN, and
+  parts of the UI still use its component classes (`btn`, `badge`,
+  `progress-*`, `chat-bubble-*`). Those carry FlyonUI's palette, not
+  these tokens. Reconciling the two is out of scope for this system.
 - **The CSS variable `--theme_button-background-primary:
   #1b61c9`** exists at `:root` upstream of Airtable's design
   library but is not used as the primary CTA color anywhere. It
@@ -425,15 +516,24 @@ Carries an h2 in display-md and a `.button-primary`.
 
 ## Migration from `--pt-*` namespace
 
-The restyle in PR #164 (this issue) renamed every `:root` token
-from the prototype-era `--pt-*` namespace to the Airtable-aligned
+PR #170 (issue #164) renamed every `:root` token from the
+prototype-era `--pt-*` namespace to the Airtable-aligned
 `--colors-*` / `--spacing-*` / `--rounded-*` / `--typography-*`
 namespaces documented above. Class names (`.pt-card`, `.pt-h1`,
 `.pta-briefing`, `.ptl-cta`, `.app-sidebar`, …) stayed readable for
 the templates; only the variable references inside the CSS file
 moved.
 
+A follow-up finished the parts that landed as tokens without a
+consumer: the type scale gained its weight / leading / tracking axes
+and `.pt-h1` / `.pt-h2` were grouped onto it, the briefing became the
+cream signature surface, the pricing dialect gained its font stack and
+display steps, and the dashboard and shell templates stopped inlining
+raw hex.
+
 Templates should reference tokens through class names (`.pt-card`,
-`.button-primary`, etc.), not through inline `var(--colors-…)`
-references. The system is the abstraction layer; templates should
-not bypass it.
+`.button-primary`, etc.), not through inline `style` attributes or
+inline `var(--colors-…)` references. The system is the abstraction
+layer; templates should not bypass it. Layout-only inline styles
+(grid, flex, width) remain in some templates — those carry no color
+and are a separate cleanup.
