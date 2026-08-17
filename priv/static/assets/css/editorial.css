@@ -50,6 +50,12 @@
   --colors-on-primary: #ffffff;
   --colors-on-dark: #ffffff;
   --colors-on-dark-soft: #9297a0;
+  /* The pricing dialect's type color. The upstream spec references a
+     `pricing-ink` role without ever defining its value; it resolves to
+     the same ink as the editorial body, so it is an alias here rather
+     than a second hex. Named separately so the pricing surface can
+     diverge later without touching the editorial text roles. */
+  --colors-pricing-ink: #181d26;
 
   /* ── Colors — Signature Card Surfaces ────────────────────────── */
   --colors-signature-coral: #aa2d00;
@@ -82,6 +88,15 @@
   --spacing-xxl: 48px;
   --spacing-section: 96px;
 
+  /* ── Elevation ───────────────────────────────────────────────────
+        The system is color-block first, shadow second, so there are
+        only two: the product screenshot's lift and the shell's
+        floating overlays. Kept as tokens so no selector carries a
+        raw color literal. ─────────────────────────────────────────── */
+  --shadow-lifted: 0 24px 48px -24px rgba(16, 24, 40, 0.24);
+  --shadow-overlay: 0 8px 32px rgba(24, 29, 38, 0.1), 0 1px 4px rgba(24, 29, 38, 0.04);
+  --shadow-modal: 0 24px 64px rgba(24, 29, 38, 0.35);
+
   /* ── Rounded ─────────────────────────────────────────────────── */
   --rounded-xs: 2px;
   --rounded-sm: 6px;
@@ -90,21 +105,86 @@
   --rounded-pill: 9999px;
   --rounded-full: 9999px;
 
-  /* ── Typography — sizes ──────────────────────────────────────── */
+  /* ── Typography ──────────────────────────────────────────────────
+        Each step carries all four axes the spec's hierarchy table
+        defines — size, weight, line-height, tracking — so a change to
+        the scale is a token edit, never a hunt through selectors.
+        Display steps stay at 400/500 on purpose: emphasis comes from
+        size and color contrast, not from weight. ─────────────────── */
   --typography-display-xl-size: 48px;
+  --typography-display-xl-weight: 500;
+  --typography-display-xl-leading: 1.1;
+  --typography-display-xl-tracking: 0;
+
   --typography-display-lg-size: 40px;
+  --typography-display-lg-weight: 400;
+  --typography-display-lg-leading: 1.2;
+  --typography-display-lg-tracking: 0;
+
   --typography-display-md-size: 32px;
+  --typography-display-md-weight: 400;
+  --typography-display-md-leading: 1.2;
+  --typography-display-md-tracking: 0;
+
   --typography-title-lg-size: 24px;
+  --typography-title-lg-weight: 400;
+  --typography-title-lg-leading: 1.35;
+  --typography-title-lg-tracking: 0.12px;
+
   --typography-title-md-size: 20px;
+  --typography-title-md-weight: 400;
+  --typography-title-md-leading: 1.5;
+  --typography-title-md-tracking: 0;
+
   --typography-title-sm-size: 18px;
+  --typography-title-sm-weight: 500;
+  --typography-title-sm-leading: 1.4;
+  --typography-title-sm-tracking: 0;
+
   --typography-label-md-size: 16px;
+  --typography-label-md-weight: 500;
+  --typography-label-md-leading: 1.4;
+  --typography-label-md-tracking: 0;
+
   --typography-button-size: 16px;
+  --typography-button-weight: 500;
+  --typography-button-leading: 1.4;
+  --typography-button-tracking: 0;
+
   --typography-body-md-size: 14px;
+  --typography-body-md-weight: 400;
+  --typography-body-md-leading: 1.25;
+  --typography-body-md-tracking: 0;
+
   --typography-caption-size: 14px;
+  --typography-caption-weight: 500;
+  --typography-caption-leading: 1.35;
+  --typography-caption-tracking: 0.16px;
+
   --typography-legal-size: 13.12px;
+  --typography-legal-weight: 600;
+  --typography-legal-leading: 1.2;
+  --typography-legal-tracking: 0;
+
+  /* Pricing dialect — Inter Display at unusual mid-weights. The
+     mid-weights only render on a variable font, so the stack leads
+     with the variable family and the fallbacks degrade to 500. */
+  --typography-pricing-family: 'Inter Display', 'Inter var', 'Inter', system-ui, sans-serif;
+
   --typography-pricing-display-size: 44.8px;
+  --typography-pricing-display-weight: 475;
+  --typography-pricing-display-leading: 1.1;
+  --typography-pricing-display-tracking: 0;
+
   --typography-pricing-section-size: 28px;
+  --typography-pricing-section-weight: 475;
+  --typography-pricing-section-leading: 1.2;
+  --typography-pricing-section-tracking: 0;
+
   --typography-pricing-card-title-size: 20px;
+  --typography-pricing-card-title-weight: 475;
+  --typography-pricing-card-title-leading: 1.3;
+  --typography-pricing-card-title-tracking: 0;
 
   /* ── Pill border tones (border-only, kept beside the token for
         the demo's pill component which needs a stronger edge than
@@ -143,13 +223,10 @@
   text-transform: uppercase;
   color: var(--colors-muted);
 }
+.pt-eyebrow--danger { color: var(--colors-danger); }
 
-/* Display-weight type per D4: 400, not 700. The dashboard's h1 is
-   a display size (24px) and follows the spec's "display-weight
-   type is intentionally not bold" principle. The h2 is a
-   sub-title and sits at 500. Buttons and eyebrow stay at 700. */
-.pt-h1 { font-size: var(--typography-title-lg-size); font-weight: 400; letter-spacing: -0.02em; }
-.pt-h2 { font-size: 15px; font-weight: 500; letter-spacing: -0.01em; }
+/* `.pt-h1` / `.pt-h2` live in the type-scale block below, grouped
+   onto their step so there is one definition per step of the scale. */
 .pt-muted { color: var(--colors-body); font-size: 13px; line-height: 1.65; }
 
 .pt-pill {
@@ -207,22 +284,77 @@
 }
 
 /* =================================================================
-   Airtable spec utility classes — display / title hierarchy.
-   The existing dashboard uses the .pt-h1 / .pt-h2 names; these
-   are the Airtable-spec-named equivalents available for the
-   post-demo marketing site and any future template work.
+   Type scale — every step of the spec's hierarchy table, one rule
+   per step, all four axes read from `:root`.
+
+   The dashboard's `.pt-h1` / `.pt-h2` are aliases grouped onto their
+   step rather than parallel hand-tuned rules, so a template can use
+   either name and land on the same type. Per D4 the page title is
+   `display-lg` and the section/card titles are `title-lg`.
 ================================================================= */
 
-.t-display-xl { font-size: var(--typography-display-xl-size); font-weight: 500; line-height: 1.1; letter-spacing: 0; }
-.t-display-lg { font-size: var(--typography-display-lg-size); font-weight: 400; line-height: 1.2; letter-spacing: 0; }
-.t-display-md { font-size: var(--typography-display-md-size); font-weight: 400; line-height: 1.2; letter-spacing: 0; }
-.t-title-lg { font-size: var(--typography-title-lg-size); font-weight: 400; line-height: 1.35; letter-spacing: 0.12px; }
-.t-title-md { font-size: var(--typography-title-md-size); font-weight: 400; line-height: 1.5; letter-spacing: 0; }
-.t-title-sm { font-size: var(--typography-title-sm-size); font-weight: 500; line-height: 1.4; letter-spacing: 0; }
-.t-label-md { font-size: var(--typography-label-md-size); font-weight: 500; line-height: 1.4; letter-spacing: 0; }
-.t-body-md { font-size: var(--typography-body-md-size); font-weight: 400; line-height: 1.25; letter-spacing: 0; }
-.t-caption { font-size: var(--typography-caption-size); font-weight: 500; line-height: 1.35; letter-spacing: 0.16px; }
-.t-legal { font-size: var(--typography-legal-size); font-weight: 600; line-height: 1.2; letter-spacing: 0; }
+.t-display-xl {
+  font-size: var(--typography-display-xl-size);
+  font-weight: var(--typography-display-xl-weight);
+  line-height: var(--typography-display-xl-leading);
+  letter-spacing: var(--typography-display-xl-tracking);
+}
+.t-display-lg,
+.pt-h1 {
+  font-size: var(--typography-display-lg-size);
+  font-weight: var(--typography-display-lg-weight);
+  line-height: var(--typography-display-lg-leading);
+  letter-spacing: var(--typography-display-lg-tracking);
+}
+.t-display-md {
+  font-size: var(--typography-display-md-size);
+  font-weight: var(--typography-display-md-weight);
+  line-height: var(--typography-display-md-leading);
+  letter-spacing: var(--typography-display-md-tracking);
+}
+.t-title-lg,
+.pt-h2 {
+  font-size: var(--typography-title-lg-size);
+  font-weight: var(--typography-title-lg-weight);
+  line-height: var(--typography-title-lg-leading);
+  letter-spacing: var(--typography-title-lg-tracking);
+}
+.t-title-md {
+  font-size: var(--typography-title-md-size);
+  font-weight: var(--typography-title-md-weight);
+  line-height: var(--typography-title-md-leading);
+  letter-spacing: var(--typography-title-md-tracking);
+}
+.t-title-sm {
+  font-size: var(--typography-title-sm-size);
+  font-weight: var(--typography-title-sm-weight);
+  line-height: var(--typography-title-sm-leading);
+  letter-spacing: var(--typography-title-sm-tracking);
+}
+.t-label-md {
+  font-size: var(--typography-label-md-size);
+  font-weight: var(--typography-label-md-weight);
+  line-height: var(--typography-label-md-leading);
+  letter-spacing: var(--typography-label-md-tracking);
+}
+.t-body-md {
+  font-size: var(--typography-body-md-size);
+  font-weight: var(--typography-body-md-weight);
+  line-height: var(--typography-body-md-leading);
+  letter-spacing: var(--typography-body-md-tracking);
+}
+.t-caption {
+  font-size: var(--typography-caption-size);
+  font-weight: var(--typography-caption-weight);
+  line-height: var(--typography-caption-leading);
+  letter-spacing: var(--typography-caption-tracking);
+}
+.t-legal {
+  font-size: var(--typography-legal-size);
+  font-weight: var(--typography-legal-weight);
+  line-height: var(--typography-legal-leading);
+  letter-spacing: var(--typography-legal-tracking);
+}
 
 /* =================================================================
    Buttons — Airtable button family.
@@ -243,9 +375,9 @@
   text-decoration: none;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background 0.1s ease;
 }
-.button-primary:hover { background: var(--colors-primary-active); }
+/* Default and Active/Pressed only. The system documents no hover
+   state and no transition timings — both are out of scope. */
 .button-primary:active { background: var(--colors-primary-active); }
 
 .button-secondary {
@@ -285,7 +417,8 @@
   padding: var(--spacing-sm) var(--spacing-lg);
   border-radius: var(--rounded-pill);
   background: var(--colors-canvas);
-  color: var(--colors-ink);
+  color: var(--colors-pricing-ink);
+  font-family: var(--typography-pricing-family);
   font-size: var(--typography-body-md-size);
   font-weight: 500;
   text-decoration: none;
@@ -436,21 +569,40 @@
 }
 
 /* =================================================================
-   Pricing sub-system — Inter Display + pill buttons. Tokens
-   added per D5; no pricing page yet, but the primitives are
-   here when one is built.
+   Pricing sub-system — Inter Display + pill buttons. Primitives
+   only per D5; no pricing page yet.
+
+   The dialect is opt-in: put `.pricing-surface` on the page wrapper
+   and the whole subtree picks up Inter Display, so the mid-weights
+   (475 / 575) resolve against a variable font instead of rounding to
+   the editorial body face.
 ================================================================= */
+
+.pricing-surface { font-family: var(--typography-pricing-family); }
+
+.t-pricing-display {
+  font-size: var(--typography-pricing-display-size);
+  font-weight: var(--typography-pricing-display-weight);
+  line-height: var(--typography-pricing-display-leading);
+  letter-spacing: var(--typography-pricing-display-tracking);
+}
+.t-pricing-section {
+  font-size: var(--typography-pricing-section-size);
+  font-weight: var(--typography-pricing-section-weight);
+  line-height: var(--typography-pricing-section-leading);
+  letter-spacing: var(--typography-pricing-section-tracking);
+}
 
 .pricing-tier-card {
   background: var(--colors-canvas);
-  color: var(--colors-ink);
+  color: var(--colors-pricing-ink);
   border-radius: var(--rounded-md);
   padding: var(--spacing-xl);
   border: 1px solid var(--colors-hairline);
 }
 .pricing-tier-card--featured {
   background: var(--colors-surface-soft);
-  color: var(--colors-ink);
+  color: var(--colors-pricing-ink);
   border-radius: var(--rounded-md);
   padding: var(--spacing-xl);
   border: 1px solid var(--colors-hairline);
@@ -458,9 +610,9 @@
 .pricing-tier-card .plan-name,
 .pricing-tier-card--featured .plan-name {
   font-size: var(--typography-pricing-card-title-size);
-  font-weight: 475;
-  line-height: 1.3;
-  letter-spacing: 0;
+  font-weight: var(--typography-pricing-card-title-weight);
+  line-height: var(--typography-pricing-card-title-leading);
+  letter-spacing: var(--typography-pricing-card-title-tracking);
 }
 
 /* =================================================================
@@ -501,11 +653,15 @@
   color: var(--colors-danger);
 }
 
+/* The briefing is the dashboard's signature surface (US3): cream on a
+   white canvas, so the reading column is the one band that breaks the
+   white rhythm. Flat by design — the color contrast carries it, so
+   there is no hairline outline, only the ink rail that anchors the
+   reading column. */
 .pta-briefing {
-  border: 1px solid var(--colors-hairline);
   border-left: 3px solid var(--colors-primary);
   border-radius: var(--rounded-lg);
-  background: var(--colors-canvas);
+  background: var(--colors-signature-cream);
   padding: var(--spacing-lg) var(--spacing-xxl);
   margin-bottom: var(--spacing-lg);
 }
@@ -558,6 +714,187 @@
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--spacing-md);
   margin-top: var(--spacing-md);
+}
+
+/* =================================================================
+   Dashboard — metric strip, emotion rows, setup forms, invite modal
+   and bot-config nudges.
+
+   These carried their whole appearance as inline styles in the
+   templates, on the Tailwind slate/amber/indigo ramp rather than the
+   editorial palette, which D6 forbids. The rules moved here so every
+   color resolves through a token. Sizing and grid inline styles stay
+   in the templates — D6 is about color.
+================================================================= */
+
+.pta-metric { text-align: center; }
+.pta-metric__label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-muted);
+  margin-bottom: 2px;
+}
+.pta-metric__value {
+  font-size: var(--typography-title-md-size);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--colors-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pta-emotion__label { font-size: 12px; font-weight: 600; color: var(--colors-body); }
+.pta-emotion__value {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--colors-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Field-group heading inside the setup + settings grids. */
+.pta-field-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-muted);
+  margin-bottom: 10px;
+}
+.pta-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--colors-body);
+  margin-bottom: var(--spacing-xxs);
+}
+.pta-hint { font-size: 11px; line-height: 1.4; color: var(--colors-muted); }
+.pta-hint--xs { font-size: 10px; }
+.pta-hint__strong { font-weight: 700; color: var(--colors-body); }
+
+/* The dashboard runs the spec's `.text-input` at a denser rhythm than
+   the marketing surfaces, so the density is a modifier rather than a
+   second input component. */
+.text-input--compact {
+  height: auto;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.text-input--multiline {
+  height: auto;
+  padding: var(--spacing-xs) 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.pta-chatlog {
+  margin-top: var(--spacing-sm);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: var(--spacing-xs);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-surface-soft);
+}
+.pta-chatlog__time { font-size: 9px; color: var(--colors-muted); margin-bottom: 2px; }
+
+.pta-modal {
+  border: none;
+  border-radius: var(--rounded-lg);
+  padding: 0;
+  max-width: 520px;
+  width: 90%;
+  box-shadow: var(--shadow-modal);
+}
+.pta-modal__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px var(--spacing-lg);
+  border-bottom: 1px solid var(--colors-hairline);
+}
+.pta-modal__title { flex: 1; margin: 0; font-size: 15px; font-weight: 700; }
+.pta-modal__close {
+  border: none;
+  background: transparent;
+  color: var(--colors-muted);
+  font-size: var(--typography-title-sm-size);
+  cursor: pointer;
+}
+.pta-modal__body { padding: 20px var(--spacing-lg); }
+.pta-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px var(--spacing-lg);
+  border-top: 1px solid var(--colors-hairline);
+}
+
+.pta-code-link {
+  display: block;
+  padding: 10px var(--spacing-sm);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.pta-code {
+  padding: 14px;
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  font-family: monospace;
+  font-size: var(--typography-title-lg-size);
+  font-weight: 700;
+  letter-spacing: 0.4em;
+  text-align: center;
+}
+
+/* Bot-config nudges. The crisis card speaks with the warn role; the
+   welcome card used Tailwind indigo, which US7 rules out of the
+   editorial chrome, so it speaks with the documented info role over a
+   soft surface instead of a bespoke indigo tint.
+
+   `.pta-nudge` is the block marker and carries no declarations of its
+   own: the parts below are shared, and only the role modifiers differ.
+   The markup keeps it so a reader can see the two forms are one
+   component. */
+.pta-nudge__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--spacing-xxs);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pta-nudge__icon { width: 12px; height: 12px; }
+.pta-nudge__submit {
+  width: 100%;
+  margin-top: var(--spacing-xs);
+  padding: var(--spacing-xs);
+  border-radius: var(--rounded-md);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pta-nudge--crisis .pta-nudge__label { color: var(--colors-warn); }
+.pta-nudge--crisis .pta-nudge__submit {
+  border: 1px solid var(--colors-pill-border-warn);
+  background: var(--colors-warn-soft);
+  color: var(--colors-warn);
+}
+.pta-nudge--welcome .pta-nudge__label { color: var(--colors-info); }
+.pta-nudge--welcome .pta-nudge__submit {
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-surface-soft);
+  color: var(--colors-info);
 }
 
 /* =================================================================
@@ -691,6 +1028,13 @@
 .ptl-cta--sm { padding: var(--spacing-xs) 15px; font-size: 13px; }
 .ptl-cta--ghost { background: transparent; color: var(--colors-ink); border: 1px solid var(--colors-hairline); }
 
+.ptl-footer {
+  padding-top: 28px;
+  padding-bottom: 28px;
+  font-size: 13px;
+  color: var(--colors-muted);
+}
+
 .ptla-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
@@ -698,11 +1042,15 @@
   align-items: center;
   padding: 80px 0;
 }
+/* The hero h1 is `display-lg`. It keeps a responsive floor so the
+   headline still fits a phone, but it tops out at the scale's step
+   instead of overshooting into `display-xl` (48px), which the spec
+   reserves for the articles surface. */
 .ptla-title {
-  font-size: clamp(34px, 4.4vw, 48px);
-  line-height: 1.12;
-  letter-spacing: -0.03em;
-  font-weight: 400;
+  font-size: clamp(34px, 4.4vw, var(--typography-display-lg-size));
+  font-weight: var(--typography-display-lg-weight);
+  line-height: var(--typography-display-lg-leading);
+  letter-spacing: var(--typography-display-lg-tracking);
   margin-bottom: var(--spacing-lg);
 }
 .ptla-lede { font-size: var(--typography-title-sm-size); line-height: 1.65; color: var(--colors-body); margin-bottom: var(--spacing-lg); max-width: 46ch; }
@@ -719,7 +1067,7 @@
   border: 1px solid var(--colors-hairline);
   border-radius: 14px;
   background: var(--colors-canvas);
-  box-shadow: 0 24px 48px -24px rgba(16, 24, 40, 0.24);
+  box-shadow: var(--shadow-lifted);
   overflow: hidden;
 }
 .ptla-shot__bar {
@@ -753,7 +1101,13 @@
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 40px;
 }
-.ptla-col h3 { font-size: var(--typography-label-md-size); font-weight: 700; margin-bottom: var(--spacing-xs); }
+/* `label-md` is a 500 step. D4 keeps 700 for the eyebrow and the
+   buttons only, so the column heads drop to the scale's weight. */
+.ptla-col h3 {
+  font-size: var(--typography-label-md-size);
+  font-weight: var(--typography-label-md-weight);
+  margin-bottom: var(--spacing-xs);
+}
 .ptla-col p { font-size: var(--typography-body-md-size); line-height: 1.65; color: var(--colors-body); }
 .ptla-num {
   font-size: 12px;
@@ -790,7 +1144,13 @@
   box-shadow: none;
   color: var(--colors-on-primary);
 }
-.app-sidebar__logo img { filter: none; }
+/* The mark is a near-black ink square, so the glyph has to be white.
+   `logo.svg` paints with `fill="currentColor"`, but the templates load
+   it through `<img src>` — an isolated document that never inherits
+   the `color` set above, so `currentColor` falls back to black and the
+   glyph disappears into the ink. Force it white with the same filter
+   the landing's `.ptl-brand__mark img` uses on the same surface. */
+.app-sidebar__logo img { filter: brightness(0) invert(1); }
 .app-sidebar__brand-name { color: var(--colors-ink); }
 .app-sidebar__brand-sub { color: var(--colors-muted); }
 .app-sidebar__section-title { color: var(--colors-muted); }
@@ -814,3 +1174,67 @@
 .app-sidebar__logout:hover { color: var(--colors-danger); }
 .app-topbar { background: var(--colors-canvas); border-bottom-color: var(--colors-hairline); }
 .app-content { background: var(--colors-canvas); }
+
+/* Topbar user menu. The markup carried this whole component as inline
+   styles with off-palette slate and red hexes, which D6 forbids; the
+   rules moved here so every color resolves through a token. The
+   entrance animation is pre-existing shell chrome (its keyframes live
+   in `app.css`), kept as-is — the editorial system documents no
+   animation of its own. */
+.app-usermenu { position: relative; }
+.app-usermenu__trigger {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.app-usermenu__trigger::-webkit-details-marker { display: none; }
+.app-usermenu__panel {
+  position: absolute;
+  top: calc(100% + var(--spacing-xs));
+  right: 0;
+  width: 220px;
+  padding: 6px;
+  z-index: 60;
+  list-style: none;
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-overlay);
+  animation: menu-in 0.15s ease;
+}
+.app-usermenu__head {
+  padding: 10px var(--spacing-sm);
+  border-bottom: 1px solid var(--colors-hairline);
+  margin-bottom: var(--spacing-xxs);
+}
+.app-usermenu__name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--colors-ink);
+}
+.app-usermenu__email {
+  font-size: 11px;
+  margin-top: 1px;
+  color: var(--colors-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-usermenu__foot {
+  border-top: 1px solid var(--colors-hairline);
+  margin-top: var(--spacing-xxs);
+  padding-top: var(--spacing-xxs);
+}
+.app-usermenu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--colors-body);
+  text-decoration: none;
+}
+.app-usermenu__item:hover { background: var(--colors-surface-soft); }
+.app-usermenu__item--danger { color: var(--colors-danger); font-weight: 600; }

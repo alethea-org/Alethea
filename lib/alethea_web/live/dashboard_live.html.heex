@@ -28,10 +28,10 @@
   <div class="ptd-head">
     <div>
       <p class="pt-eyebrow">Centro de Control</p>
-      
+
       <h1 class="pt-h1">{@current_professional.full_name || "Profesional Clínico"}</h1>
     </div>
-    
+
     <div style="display:flex; align-items:center; gap:14px;">
       <.live_component
         module={NotificationCenter}
@@ -40,10 +40,10 @@
       />
     </div>
   </div>
-   <%!-- ── Triage strip — critical alerts as chips ── --%>
+  <%!-- ── Triage strip — critical alerts as chips ── --%>
   <%= if @critical_patients != [] do %>
     <div class="pta-triage">
-      <span class="pt-eyebrow" style="color:#b91c1c;">Alertas críticas</span>
+      <span class="pt-eyebrow pt-eyebrow--danger">Alertas críticas</span>
       <.link
         :for={patient <- @critical_patients}
         patch={~p"/dashboard/patients/#{patient.id}"}
@@ -51,11 +51,12 @@
       >
         <span class="pt-avatar pt-avatar--risk" style="width:24px; height:24px; font-size:10px;">
           {initials(patient.alias)}
-        </span> {patient.alias}
+        </span>
+         {patient.alias}
       </.link>
     </div>
   <% end %>
-   <%!-- ── Picker toggle ── --%>
+  <%!-- ── Picker toggle ── --%>
   <div class="ptd-toggle" role="group" aria-label="Cómo elegir el paciente">
     <.link
       patch={picker_path(@selected_patient, "chips")}
@@ -70,7 +71,7 @@
       Semana
     </.link>
   </div>
-   <%!-- ── Picker: chips with search + patient list ── --%>
+  <%!-- ── Picker: chips with search + patient list ── --%>
   <div :if={@picker == "chips"} class="pta-picker">
     <.live_component
       module={AletheaWeb.DashboardLive.Components.PatientSearch}
@@ -81,17 +82,18 @@
     <div :if={@selected_patient} class="pta-chip pta-chip--active" style="cursor:default;">
       <span class="pt-avatar" style="width:24px; height:24px; font-size:10px;">
         {initials(@selected_patient.alias)}
-      </span> {@selected_patient.alias} · seleccionado
+      </span>
+       {@selected_patient.alias} · seleccionado
     </div>
   </div>
-   <%!-- ── Picker: week agenda ── --%>
+  <%!-- ── Picker: week agenda ── --%>
   <div :if={@picker == "week"} class="ptc-week">
     <div
       :for={day <- 1..7}
       class={["ptc-day", day == @today_day_of_week && "ptc-day--today"]}
     >
       <div class="ptc-day__name">{day_name(day)}</div>
-      
+
       <%= for patient <- Map.get(@by_day, day, []) do %>
         <.link
           patch={~p"/dashboard/patients/#{patient.id}"}
@@ -104,13 +106,13 @@
           {patient.alias} <small>{format_time(patient.session_time)}</small>
         </.link>
       <% end %>
-      
+
       <%= if Map.get(@by_day, day, []) == [] do %>
         <div class="ptc-slot" style="opacity:.5; cursor:default;">—</div>
       <% end %>
     </div>
   </div>
-   <%!-- ── Empty state — no patient selected ── --%>
+  <%!-- ── Empty state — no patient selected ── --%>
   <div :if={!@selected_patient} class="pt-card">
     <div class="pt-empty">
       {if @picker == "week",
@@ -118,13 +120,13 @@
         else: "Elegí un paciente arriba para leer su briefing de la semana."}
     </div>
   </div>
-   <%!-- ── Briefing body (when patient selected) ── --%>
+  <%!-- ── Briefing body (when patient selected) ── --%>
   <div :if={@selected_patient}>
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
       <h2 class="pt-h2">Briefing · {@selected_patient.alias}</h2>
-       <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
+      <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
     </div>
-     <%!-- Weekly pre-session report — article card --%>
+    <%!-- Weekly pre-session report — article card --%>
     <article
       id="weekly-pre-session-report"
       data-status-tone={status_tone(@weekly_summary)}
@@ -141,13 +143,13 @@
           {@weekly_summary.status_level}
         </span>
       </p>
-      
+
       <p :if={@weekly_summary} class="pta-briefing__text">{@weekly_summary.summary_text}</p>
-      
+
       <p :if={!@weekly_summary} class="pt-muted" style="font-style:italic;">
         Sin resumen semanal generado todavía.
       </p>
-       <%!-- Metric strip (the four from #115) — only when the report filled at least one --%>
+      <%!-- Metric strip (the four from #115) — only when the report filled at least one --%>
       <div
         :if={weekly_metrics?(@weekly_summary)}
         id="weekly-metrics"
@@ -175,26 +177,22 @@
         />
       </div>
     </article>
-     <%!-- Emotion trends — progress bars per emotion --%>
+    <%!-- Emotion trends — progress bars per emotion --%>
     <div :if={@emotion_rows != []} id="emotion-trends" class="pt-card">
       <div class="pt-card__head">
         <span class="pt-h2">Tendencias Emocionales</span>
         <span class="pt-eyebrow">Últimos 7 días</span>
       </div>
-      
+
       <div class="pt-card__body">
         <div style="display:flex; flex-direction:column; gap:10px;">
           <%= for emotion <- @emotion_rows do %>
             <div id={"emotion-row-#{emotion.key}"}>
               <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-                <span style="font-size:12px; font-weight:600; color:#475569;">
-                  {emotion.label}
-                </span>
-                <span class="pta-emotion__value">
-                  {emotion.percent_label}
-                </span>
+                <span class="pta-emotion__label">{emotion.label}</span>
+                <span class="pta-emotion__value">{emotion.percent_label}</span>
               </div>
-              
+
               <progress
                 class={"progress " <> emotion.progress_class}
                 value={emotion.percent}
@@ -207,24 +205,24 @@
         </div>
       </div>
     </div>
-     <%!-- Emotion chart — 7-day daily breakdown --%>
+    <%!-- Emotion chart — 7-day daily breakdown --%>
     <div id="emotion-chart" class="pt-card">
       <div class="pt-card__head">
         <span class="pt-h2">Evolución Emocional</span>
         <span class="pt-eyebrow">Últimos 7 días</span>
       </div>
-      
+
       <div class="pt-card__body">
         <EmotionChart.emotion_chart daily_data={@emotion_chart_data} />
       </div>
     </div>
-     <%!-- Session snapshots — past clinical sessions --%>
+    <%!-- Session snapshots — past clinical sessions --%>
     <h3 class="pt-h2" style="margin-bottom:14px;">Sesiones anteriores</h3>
-    
+
     <div :if={@session_summaries == []} class="pt-card">
       <div class="pt-empty">Sin sesiones con seguimiento clínico aún.</div>
     </div>
-    
+
     <div :if={@session_summaries != []} class="pta-timeline">
       <div :for={summary <- @session_summaries} class="pta-timeline__item">
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
@@ -233,31 +231,24 @@
             {summary.status_level}
           </span>
         </div>
-        
+
         <p class="pt-muted">{summary.summary_text}</p>
       </div>
     </div>
-     <%!-- Schedule form + chat decrypt (per-patient) --%>
+    <%!-- Schedule form + chat decrypt (per-patient) --%>
     <div class="pt-card" style="margin-top:20px;">
       <div class="pt-card__head"><span class="pt-h2">Sesión y chat</span></div>
-      
+
       <div
         class="pt-card__body"
         style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:20px;"
       >
         <.form for={%{}} id="schedule-form" phx-submit="save_session_schedule">
-          <h4 style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:10px;">
-            Horario de Sesión
-          </h4>
-          
+          <h4 class="pta-field-title">Horario de Sesión</h4>
+
           <div style="margin-bottom:8px;">
-            <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
-              Día
-            </label>
-            <select
-              name="day"
-              style="width:100%; padding:6px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; background:#fff; color:#334155;"
-            >
+            <label class="pta-label">Día</label>
+            <select name="day" class="text-input text-input--compact">
               <%= for {value, label} <- day_options() do %>
                 <option value={value} selected={@selected_patient.session_day_of_week == value}>
                   {label}
@@ -265,19 +256,17 @@
               <% end %>
             </select>
           </div>
-          
+
           <div style="margin-bottom:10px;">
-            <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">
-              Hora
-            </label>
+            <label class="pta-label">Hora</label>
             <input
               type="time"
               name="time"
               value={format_session_time(@selected_patient.session_time)}
-              style="width:100%; padding:6px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; background:#fff; color:#334155;"
+              class="text-input text-input--compact"
             />
           </div>
-          
+
           <button
             type="submit"
             class="btn btn-primary"
@@ -286,12 +275,10 @@
             Guardar cambios
           </button>
         </.form>
-        
+
         <div>
-          <h4 style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:10px;">
-            Historial Clínico
-          </h4>
-          
+          <h4 class="pta-field-title">Historial Clínico</h4>
+
           <button
             id="decrypt-chat-button"
             type="button"
@@ -304,17 +291,17 @@
             :if={@chat_decrypted}
             id="chat-history-panel"
             phx-update="stream"
-            style="margin-top:12px; max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:12px; background:#fafbfc; padding:8px;"
+            class="pta-chatlog"
           >
             <div
               :for={{id, msg} <- @streams.decrypted_messages}
               id={id}
               class={"chat " <> if(msg.direction == "inbound", do: "chat-start", else: "chat-end")}
             >
-              <div class="chat-header" style="font-size:9px; color:#94a3b8; margin-bottom:2px;">
+              <div class="chat-header pta-chatlog__time">
                 {Calendar.strftime(msg.timestamp, "%H:%M")}
               </div>
-              
+
               <div
                 class={"chat-bubble " <> if(msg.direction == "outbound", do: "chat-bubble-primary", else: "")}
                 style="font-size:12px; line-height:1.5;"
@@ -324,15 +311,13 @@
             </div>
           </div>
         </div>
-        
+
         <%!-- Telegram invite — per-patient status + invite/regenerate button.
              Sits in the same grid as Horario + Chat because all three are
              setup actions for the selected patient. --%>
         <div>
-          <h4 style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:10px;">
-            Telegram
-          </h4>
-          
+          <h4 class="pta-field-title">Telegram</h4>
+
           <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
             <span
               id={"tg-status-" <> @selected_patient.id}
@@ -434,7 +419,7 @@
               </button>
             </div>
           </section>
-          <p style="font-size:10px; color:#94a3b8; line-height:1.4; margin:0;">
+          <p class="pta-hint pta-hint--xs" style="margin:0;">
             Generá un enlace de Telegram para que el paciente se conecte a Alethea. El código de 6 dígitos vence a los 10 minutos.
           </p>
         </div>
@@ -442,62 +427,54 @@
     </div>
   </div>
   <%!-- ── Settings — professional-scoped bot config (collapsed) ── --%>
-  <%!-- ── Settings — professional-scoped bot config (collapsed) ── --%>
   <details class="pta-settings">
     <summary>Configuración de tu bot (aplica a todos tus pacientes)</summary>
-    
+
     <div class="pta-settings__grid">
-      <.form for={%{}} id="crisis-message-form" phx-submit="save_crisis_message">
-        <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-          <.icon name="hero-megaphone" style="width:12px; height:12px; color:#f59e0b;" />
-          <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#f59e0b;">
-            Mensaje de Contención
-          </span>
+      <.form
+        for={%{}}
+        id="crisis-message-form"
+        phx-submit="save_crisis_message"
+        class="pta-nudge pta-nudge--crisis"
+      >
+        <div class="pta-nudge__label">
+          <.icon name="hero-megaphone" class="pta-nudge__icon" />
+          <span>Mensaje de Contención</span>
         </div>
-        
-        <p style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:10px;">
+
+        <p class="pta-hint pta-hint--xs" style="margin-bottom:10px;">
           Enviado automáticamente en crisis detectada por la IA.
         </p>
-         <textarea
+        <textarea
           name="crisis_message"
           rows="4"
-          style="width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; line-height:1.5; resize:vertical; background:#fff; color:#334155; font-family:inherit;"
+          class="text-input text-input--multiline"
           placeholder="Ej: Entiendo que estás pasando por un momento difícil…"
         >{@current_professional.crisis_message}</textarea>
-        <button
-          type="submit"
-          style="width:100%; margin-top:8px; padding:8px; border:1px solid rgba(245,158,11,.3); border-radius:10px; background:rgba(245,158,11,.08); color:#b45309; font-size:12px; font-weight:600; cursor:pointer;"
-        >
-          Actualizar
-        </button>
+        <button type="submit" class="pta-nudge__submit">Actualizar</button>
       </.form>
-      
-      <.form for={%{}} id="welcome-message-form" phx-submit="save_welcome_message">
-        <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-          <.icon
-            name="hero-chat-bubble-left-right"
-            style="width:12px; height:12px; color:#6366f1;"
-          />
-          <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#6366f1;">
-            Mensaje de Bienvenida
-          </span>
+
+      <.form
+        for={%{}}
+        id="welcome-message-form"
+        phx-submit="save_welcome_message"
+        class="pta-nudge pta-nudge--welcome"
+      >
+        <div class="pta-nudge__label">
+          <.icon name="hero-chat-bubble-left-right" class="pta-nudge__icon" />
+          <span>Mensaje de Bienvenida</span>
         </div>
-        
-        <p style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:10px;">
+
+        <p class="pta-hint pta-hint--xs" style="margin-bottom:10px;">
           Enviado al vincular Telegram. Usá {"%{name}"} para incluir el nombre del paciente.
         </p>
-         <textarea
+        <textarea
           name="welcome_message"
           rows="4"
-          style="width:100%; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; line-height:1.5; resize:vertical; background:#fff; color:#334155; font-family:inherit;"
+          class="text-input text-input--multiline"
           placeholder="Ej: ¡Hola %{name}! Bienvenido a tu espacio…"
         >{@current_professional.welcome_message}</textarea>
-        <button
-          type="submit"
-          style="width:100%; margin-top:8px; padding:8px; border:1px solid rgba(99,102,241,.3); border-radius:10px; background:rgba(99,102,241,.08); color:#4338ca; font-size:12px; font-weight:600; cursor:pointer;"
-        >
-          Actualizar
-        </button>
+        <button type="submit" class="pta-nudge__submit">Actualizar</button>
       </.form>
     </div>
   </details>

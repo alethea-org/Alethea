@@ -94,62 +94,35 @@ defmodule AletheaWeb.Layouts do
           </button>
           <div class="app-topbar__spacer"></div>
            <%!-- User dropdown — opens downward, closes on second click --%>
-          <details id="user-menu" style="position:relative;">
-            <summary
-              class="app-topbar__avatar"
-              style="list-style:none; cursor:pointer; user-select:none;"
-            >
-              {initials(assigns)}
-            </summary>
+          <details id="user-menu" class="app-usermenu">
+            <summary class="app-topbar__avatar app-usermenu__trigger">{initials(assigns)}</summary>
             
-            <ul
-              id="user-menu-list"
-              style="
-                position:absolute;
-                top:calc(100% + 8px);
-                right:0;
-                width:220px;
-                background:#fff;
-                border-radius:14px;
-                border:1px solid #e2e8f0;
-                box-shadow:0 8px 32px rgba(15,23,42,.1), 0 1px 4px rgba(0,0,0,.04);
-                padding:6px;
-                z-index:60;
-                list-style:none;
-                animation:menu-in .15s ease;
-              "
-            >
-              <li style="padding:10px 12px; border-bottom:1px solid #f1f5f9; margin-bottom:4px;">
-                <div style="font-size:12px; font-weight:700; color:#1e293b;">{name(assigns)}</div>
+            <ul id="user-menu-list" class="app-usermenu__panel">
+              <li class="app-usermenu__head">
+                <div class="app-usermenu__name">{name(assigns)}</div>
                 
-                <div style="font-size:11px; color:#94a3b8; margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                <div class="app-usermenu__email">
                   {assigns[:current_professional] && assigns[:current_professional].email}
                 </div>
               </li>
               
               <li>
-                <.link
-                  navigate={~p"/dashboard"}
-                  style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#334155; font-weight:500; transition:background .1s;"
-                >
+                <.link navigate={~p"/dashboard"} class="app-usermenu__item">
                   <.icon name="hero-presentation-chart-line" class="size-4" /> Dashboard
                 </.link>
               </li>
               
               <li>
-                <.link
-                  navigate={~p"/patients"}
-                  style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#334155; font-weight:500; transition:background .1s;"
-                >
+                <.link navigate={~p"/patients"} class="app-usermenu__item">
                   <.icon name="hero-users" class="size-4" /> Mis Pacientes
                 </.link>
               </li>
               
-              <li style="border-top:1px solid #f1f5f9; margin-top:4px; padding-top:4px;">
+              <li class="app-usermenu__foot">
                 <.link
                   href={~p"/logout"}
                   method="delete"
-                  style="font-size:13px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px; text-decoration:none; color:#ef4444; font-weight:600;"
+                  class="app-usermenu__item app-usermenu__item--danger"
                 >
                   <.icon name="hero-arrow-left-on-rectangle" class="size-4" /> Cerrar sesión
                 </.link>
