@@ -202,7 +202,7 @@
                   {emotion.label}
                 </span>
                 <span style="font-size:12px; font-weight:700; color:#1e293b; font-variant-numeric:tabular-nums;">
-                  {emotion.percent}%
+                  {emotion.percent_label}
                 </span>
               </div>
               <progress
@@ -360,6 +360,84 @@
               {tg_button_label(@telegram_statuses, @selected_patient.id, @invited_ids)}
             </button>
           </div>
+          <section
+            :if={@invite_panel && @invite_panel.patient_id == @selected_patient.id}
+            id="telegram-invite-panel"
+            role="region"
+            aria-live="polite"
+            aria-labelledby="invite-panel-title"
+            style="margin:0 0 12px; padding:clamp(14px, 3vw, 20px); border:1px solid #bae6fd; border-left:4px solid #0284c7; border-radius:12px; background:#f0f9ff; box-shadow:0 8px 24px rgba(14, 116, 144, 0.08);"
+          >
+            <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px;">
+              <div>
+                <h3
+                  id="invite-panel-title"
+                  style="font-size:14px; font-weight:700; color:#0f172a; margin:0 0 4px;"
+                >
+                  Invitación para
+                  <span id="invite-patient-alias">{@invite_panel.patient_alias}</span>
+                </h3>
+                <p style="font-size:11px; color:#475569; line-height:1.4; margin:0;">
+                  Compartí una de estas opciones directamente con el paciente.
+                </p>
+              </div>
+              <button
+                id="invite-dismiss"
+                type="button"
+                phx-click="dismiss_invite"
+                class="pt-btn pt-btn--ghost"
+                aria-label="Ocultar invitación"
+              >
+                Ocultar
+              </button>
+            </div>
+
+            <p
+              :if={@invite_panel.deep_link}
+              style="font-size:11px; color:#64748b; margin:0 0 8px;"
+            >
+              Enlace de Telegram
+            </p>
+            <.link
+              :if={@invite_panel.deep_link}
+              id="invite-deep-link"
+              href={@invite_panel.deep_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              style="display:block; max-width:100%; padding:10px 12px; border:1px solid #bae6fd; border-radius:8px; background:#fff; color:#0f4c5c; font-family:monospace; font-size:12px; overflow-wrap:anywhere; margin-bottom:16px;"
+            >
+              {@invite_panel.deep_link}
+            </.link>
+
+            <p style="font-size:11px; color:#64748b; margin:0 0 8px;">
+              Código de 6 dígitos
+            </p>
+            <div
+              id="invite-six-digit"
+              style="max-width:100%; padding:14px 10px; border:1px solid #bae6fd; border-radius:10px; background:#fff; font-family:monospace; font-size:clamp(20px, 6vw, 28px); font-weight:700; letter-spacing:clamp(0.16em, 2vw, 0.4em); text-align:center; color:#0f172a; margin-bottom:14px; overflow-wrap:anywhere;"
+            >
+              {@invite_panel.six_digit_code}
+            </div>
+
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+              <p style="font-size:11px; color:#475569; line-height:1.4; margin:0;">
+                Vence a las
+                <span id="invite-expires-at" style="font-weight:700; color:#334155;">
+                  {Calendar.strftime(@invite_panel.expires_at, "%H:%M")}
+                </span>
+                — el paciente tiene 10 minutos para usarlo.
+              </p>
+              <button
+                id="invite-regenerate"
+                type="button"
+                phx-click="regenerate_invite"
+                phx-value-id={@invite_panel.patient_id}
+                class="pt-btn"
+              >
+                Regenerar
+              </button>
+            </div>
+          </section>
           <p style="font-size:10px; color:#94a3b8; line-height:1.4; margin:0;">
             Generá un enlace de Telegram para que el paciente se conecte a Alethea. El código de 6 dígitos vence a los 10 minutos.
           </p>
@@ -367,71 +445,6 @@
       </div>
     </div>
   </div>
-
-  <%!-- ── Telegram invite modal (renders when @invite_modal is set) ── --%>
-  <dialog
-    :if={@invite_modal}
-    id="invite-modal"
-    open
-    style="border:none; border-radius:16px; padding:0; max-width:520px; width:90%; box-shadow:0 24px 64px rgba(15,23,42,.35);"
-  >
-    <div style="padding:20px 24px; border-bottom:1px solid #f1f5f9; display:flex; align-items:center; gap:10px;">
-      <h3 style="font-size:15px; font-weight:700; margin:0; flex:1;">
-        Invitar a <span id="invite-patient-alias">{@invite_modal.patient_alias}</span>
-      </h3>
-      <button
-        id="invite-close"
-        type="button"
-        phx-click="close_invite_modal"
-        style="border:none; background:transparent; color:#64748b; font-size:18px; cursor:pointer;"
-      >
-        ×
-      </button>
-    </div>
-    <div style="padding:20px 24px;">
-      <p :if={@invite_modal.deep_link} style="font-size:11px; color:#94a3b8; margin:0 0 8px;">
-        Enlace de Telegram
-      </p>
-      <.link
-        :if={@invite_modal.deep_link}
-        id="invite-deep-link"
-        href={@invite_modal.deep_link}
-        target="_blank"
-        style="display:block; padding:10px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; color:#1e293b; font-family:monospace; font-size:12px; word-break:break-all; margin-bottom:16px;"
-      >
-        {@invite_modal.deep_link}
-      </.link>
-
-      <p style="font-size:11px; color:#94a3b8; margin:0 0 8px;">
-        Código de 6 dígitos
-      </p>
-      <div
-        id="invite-six-digit"
-        style="padding:14px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; font-family:monospace; font-size:24px; font-weight:700; letter-spacing:0.4em; text-align:center; color:#1e293b; margin-bottom:16px;"
-      >
-        {@invite_modal.six_digit_code}
-      </div>
-
-      <p style="font-size:11px; color:#94a3b8; margin:0;">
-        Vence a las
-        <span id="invite-expires-at" style="font-weight:700; color:#475569;">
-          {Calendar.strftime(@invite_modal.expires_at, "%H:%M")}
-        </span>
-        — el paciente tiene 10 minutos para usarlo.
-      </p>
-    </div>
-    <div style="padding:14px 24px; border-top:1px solid #f1f5f9; display:flex; justify-content:flex-end;">
-      <button
-        id="invite-regenerate"
-        type="button"
-        phx-click="regenerate_invite"
-        phx-value-id={@invite_modal.patient_id}
-        class="pt-btn"
-      >
-        Regenerar
-      </button>
-    </div>
-  </dialog>
 
   <%!-- ── Settings — professional-scoped bot config (collapsed) ── --%>
   <details class="pta-settings">

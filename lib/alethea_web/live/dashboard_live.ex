@@ -79,7 +79,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:foundation_professional, foundation_pro)
       |> assign(:telegram_statuses, telegram_statuses)
       |> assign(:invited_ids, MapSet.new())
-      |> assign(:invite_modal, nil)
+      |> assign(:invite_panel, nil)
       |> stream(:decrypted_messages, [])
 
     {:ok, socket}
@@ -248,7 +248,7 @@ defmodule AletheaWeb.DashboardLive do
   # Telegram invite flow (feature: patient telegram invites). Both the
   # header button and the sidebar row buttons (which bubble up from the
   # PatientSearch LiveComponent, since it does not handle this event)
-  # land here. Regenerate re-opens the modal minting a fresh pair of
+  # land here. Regenerate refreshes the panel with a fresh pair of
   # codes in real mode; mock mode reuses the static payload (D5).
   def handle_event("invite_patient", %{"id" => patient_id}, socket) do
     invite_patient_to_telegram(socket, patient_id)
@@ -258,8 +258,8 @@ defmodule AletheaWeb.DashboardLive do
     invite_patient_to_telegram(socket, patient_id)
   end
 
-  def handle_event("close_invite_modal", _params, socket) do
-    {:noreply, assign(socket, :invite_modal, nil)}
+  def handle_event("dismiss_invite", _params, socket) do
+    {:noreply, assign(socket, :invite_panel, nil)}
   end
 
   defp decrypt_real_messages(patient, professional_kek) do
@@ -304,20 +304,15 @@ defmodule AletheaWeb.DashboardLive do
     else
       socket =
         if socket.assigns.use_mock_data do
-          open_invite_modal(socket, patient, MockData.mock_invite_payload(patient))
+          show_invite_panel(socket, patient, MockData.mock_invite_payload(patient))
         else
-          case socket.assigns.foundation_professional do
-            nil ->
-              put_flash(
-                socket,
-                :error,
-                "No se pudo generar la invitación. Configuración de Fundación pendiente."
-              )
-
-            foundation_pro ->
+          case foundation_professional_for_invite(socket) do
+            {:ok, foundation_pro} ->
               case FoundationAccounts.invite_patient_to_telegram(patient.id, foundation_pro) do
                 {:ok, %{deep_link_token: token, six_digit_code: code, expires_at: expires_at}} ->
-                  open_invite_modal(socket, patient, %{
+                  socket
+                  |> assign(:foundation_professional, foundation_pro)
+                  |> show_invite_panel(patient, %{
                     deep_link_token: token,
                     six_digit_code: code,
                     expires_at: expires_at
@@ -329,6 +324,9 @@ defmodule AletheaWeb.DashboardLive do
                 {:error, _changeset} ->
                   put_flash(socket, :error, "No se pudo generar la invitación.")
               end
+
+            {:error, _changeset} ->
+              put_flash(socket, :error, "No se pudo generar la invitación.")
           end
         end
 
@@ -336,16 +334,28 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
-  # Both the mock and real branches converge here: the modal state is a
+  defp foundation_professional_for_invite(socket) do
+    case socket.assigns.foundation_professional do
+      nil ->
+        FoundationAccounts.find_or_provision_foundation_professional(
+          socket.assigns.current_professional
+        )
+
+      foundation_pro ->
+        {:ok, foundation_pro}
+    end
+  end
+
+  # Both the mock and real branches converge here: the panel state is a
   # plain map and the template renders whatever the caller supplied.
-  defp open_invite_modal(socket, patient, %{
+  defp show_invite_panel(socket, patient, %{
          deep_link_token: token,
          six_digit_code: code,
          expires_at: expires_at
        }) do
     socket
     |> assign(
-      :invite_modal,
+      :invite_panel,
       %{
         patient_id: patient.id,
         patient_alias: patient.alias,
@@ -359,7 +369,7 @@ defmodule AletheaWeb.DashboardLive do
 
   # D6: the web layer composes the deep link from the BotConfig
   # bot_username (test/dev/prod env row). Missing config -> nil, and
-  # the modal then shows the 6-digit code only.
+  # the panel then shows the 6-digit code only.
   defp telegram_deep_link(token) when is_binary(token) do
     case BotConfig.for_env(to_string(Mix.env())) do
       {:ok, %BotConfig{bot_username: username}} when is_binary(username) and username != "" ->
@@ -540,6 +550,16 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  def handle_info({:emotion_trends_updated, patient_id}, socket) do
+    case socket.assigns.selected_patient do
+      %{id: ^patient_id} = patient ->
+        {:noreply, load_patient_details(socket, patient)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_info(_message, socket), do: {:noreply, socket}
 
   defp upsert_critical_patient(patients, patient) do
@@ -569,6 +589,7 @@ defmodule AletheaWeb.DashboardLive do
         key: key,
         label: format_emotion_label(key),
         percent: round((Map.get(trend, :score) || 0) * 100),
+        percent_label: format_trend_percentage(Map.get(trend, :score)),
         progress_class: emotion_progress_class(key)
       }
     end)
@@ -581,6 +602,18 @@ defmodule AletheaWeb.DashboardLive do
   defp format_emotion_label("fear"), do: "Miedo"
   defp format_emotion_label("neutral"), do: "Neutro"
   defp format_emotion_label(other), do: String.capitalize(other)
+
+  defp format_trend_percentage(score) when is_number(score) do
+    percent = round(score * 100)
+
+    if score > 0 and percent == 0 do
+      "<1%"
+    else
+      "#{percent}%"
+    end
+  end
+
+  defp format_trend_percentage(_), do: "0%"
 
   defp emotion_progress_class("joy"), do: "progress-success"
   defp emotion_progress_class("sadness"), do: "progress-info"

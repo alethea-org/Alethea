@@ -134,7 +134,7 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
           session.id
         )
 
-      %{message: message}
+      %{message: message, patient: patient, professional: professional}
     end
 
     test "canonical success inserts analysis and derived trends", %{message: message} do
@@ -156,6 +156,31 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
       assert analysis.joy_score == 0.8
       assert Repo.aggregate(Trend, :count) > 0
       assert analysis.message_id in Repo.all(from a in EmotionAnalysis, select: a.message_id)
+    end
+
+    test "notifies the owning professional after persisting analysis and trends", %{
+      message: message,
+      patient: patient,
+      professional: professional
+    } do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "patients:#{professional.id}")
+
+      expect(Alethea.AI.EmotionAnalyzerMock, :analyze_batch, fn _texts ->
+        {:ok,
+         [
+           %{label: "joy", score: 0.8},
+           %{label: "sadness", score: 0.05},
+           %{label: "anger", score: 0.05},
+           %{label: "fear", score: 0.05},
+           %{label: "neutral", score: 0.05}
+         ]}
+      end)
+
+      assert {:ok, _analysis} =
+               EmotionAnalysisWorker.perform(%Oban.Job{args: %{"message_id" => message.id}})
+
+      patient_id = patient.id
+      assert_receive {:emotion_trends_updated, ^patient_id}
     end
 
     test "unavailable or malformed analysis inserts neither analysis nor trends", %{
