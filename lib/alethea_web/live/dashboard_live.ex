@@ -716,7 +716,7 @@ defmodule AletheaWeb.DashboardLive do
     ~H"""
     <div id={@id} class="pta-metric">
       <div class="pta-metric__label">{@label}</div>
-      
+
       <div class="pta-metric__value">{@value}</div>
     </div>
     """

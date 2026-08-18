@@ -27,17 +27,17 @@ defmodule AletheaWeb.Layouts do
       <aside id="app-sidebar" class="app-sidebar" role="navigation" aria-label="Main navigation">
         <div class="app-sidebar__header">
           <div class="app-sidebar__logo"><img src={~p"/images/logo.svg"} alt="" width="18" /></div>
-          
+
           <div>
             <div class="app-sidebar__brand-name">Alethea</div>
-            
+
             <div class="app-sidebar__brand-sub">Centro de Control</div>
           </div>
         </div>
-        
+
         <nav class="app-sidebar__nav">
           <p class="app-sidebar__section-title">Principal</p>
-          
+
           <%= for item <- nav_items() do %>
             <.link
               navigate={item.path}
@@ -51,17 +51,17 @@ defmodule AletheaWeb.Layouts do
             </.link>
           <% end %>
         </nav>
-        
+
         <div class="app-sidebar__footer">
           <div class="app-sidebar__user">
             <div class="app-sidebar__avatar">{initials(assigns)}</div>
-            
+
             <div style="min-width:0; flex:1; overflow:hidden;">
               <div class="app-sidebar__user-name">{name(assigns)}</div>
-              
+
               <div class="app-sidebar__user-role">Psicólogo Clínico</div>
             </div>
-            
+
             <.link
               href={~p"/logout"}
               method="delete"
@@ -73,14 +73,14 @@ defmodule AletheaWeb.Layouts do
           </div>
         </div>
       </aside>
-       <%!-- Mobile overlay — closes sidebar --%>
+      <%!-- Mobile overlay — closes sidebar --%>
       <div
         id="sidebar-overlay"
         class="sidebar-overlay"
         phx-click={JS.remove_class("app-shell--sidebar-open", to: "#app-shell")}
       >
       </div>
-       <%!-- ═══ MAIN ═══ --%>
+      <%!-- ═══ MAIN ═══ --%>
       <div class="app-main">
         <%!-- Topbar --%>
         <header class="app-topbar">
@@ -93,31 +93,31 @@ defmodule AletheaWeb.Layouts do
             <.icon name="hero-bars-3" class="size-5" />
           </button>
           <div class="app-topbar__spacer"></div>
-           <%!-- User dropdown — opens downward, closes on second click --%>
+          <%!-- User dropdown — opens downward, closes on second click --%>
           <details id="user-menu" class="app-usermenu">
             <summary class="app-topbar__avatar app-usermenu__trigger">{initials(assigns)}</summary>
-            
+
             <ul id="user-menu-list" class="app-usermenu__panel">
               <li class="app-usermenu__head">
                 <div class="app-usermenu__name">{name(assigns)}</div>
-                
+
                 <div class="app-usermenu__email">
                   {assigns[:current_professional] && assigns[:current_professional].email}
                 </div>
               </li>
-              
+
               <li>
                 <.link navigate={~p"/dashboard"} class="app-usermenu__item">
                   <.icon name="hero-presentation-chart-line" class="size-4" /> Dashboard
                 </.link>
               </li>
-              
+
               <li>
                 <.link navigate={~p"/patients"} class="app-usermenu__item">
                   <.icon name="hero-users" class="size-4" /> Mis Pacientes
                 </.link>
               </li>
-              
+
               <li class="app-usermenu__foot">
                 <.link
                   href={~p"/logout"}
@@ -130,11 +130,11 @@ defmodule AletheaWeb.Layouts do
             </ul>
           </details>
         </header>
-         <%!-- Page content --%>
+        <%!-- Page content --%>
         <main class="app-content">{@inner_content}</main>
       </div>
     </div>
-     <.flash_group flash={@flash} />
+    <.flash_group flash={@flash} />
     """
   end
 
