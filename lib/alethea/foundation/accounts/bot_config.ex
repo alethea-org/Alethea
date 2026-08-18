@@ -109,8 +109,11 @@ defmodule Alethea.Foundation.Accounts.BotConfig do
   Returns the `BotConfig` row for the given env, or `:not_found` if none
   exists. The env is the canonical string (`"dev"`, `"test"`, `"prod"`).
   """
-  def for_env(env) when is_binary(env) do
-    case Repo.get_by(__MODULE__, env: env) do
+  def for_env(env), do: for_env(env, [])
+
+  @doc false
+  def for_env(env, opts) when is_binary(env) and is_list(opts) do
+    case Repo.get_by(__MODULE__, [env: env], opts) do
       nil -> :not_found
       %__MODULE__{} = bot_config -> {:ok, bot_config}
     end
