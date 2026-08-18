@@ -86,6 +86,7 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
       {:ok, saved_analysis} ->
         # Actualizar tendencias clínicas
         Clinical.save_trends_from_analysis(saved_analysis, message.patient_id)
+        notify_dashboard(message.patient_id)
 
         Logger.info("EmotionAnalysisWorker: análisis guardado para mensaje #{message.id}")
 
@@ -94,6 +95,20 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
       {:error, changeset} ->
         Logger.error("EmotionAnalysisWorker: error guardando análisis: #{inspect(changeset)}")
         {:error, changeset}
+    end
+  end
+
+  defp notify_dashboard(patient_id) do
+    case Repo.get(Alethea.Accounts.Patient, patient_id) do
+      %Alethea.Accounts.Patient{professional_id: professional_id} ->
+        Phoenix.PubSub.broadcast(
+          Alethea.PubSub,
+          "patients:#{professional_id}",
+          {:emotion_trends_updated, patient_id}
+        )
+
+      nil ->
+        :ok
     end
   end
 end

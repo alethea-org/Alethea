@@ -2,6 +2,35 @@ import Config
 
 Alethea.RuntimeEnv.load_dotenv(".env")
 
+if config_env() == :dev do
+  telegram_client =
+    case System.get_env("TELEGRAM_CLIENT_ADAPTER") do
+      "req" -> Alethea.Telegram.Client.Req
+      _ -> Alethea.Telegram.Client.Fake
+    end
+
+  config :alethea, :telegram_client, telegram_client
+end
+
+if config_env() in [:dev, :prod] do
+  real_telegram_client? =
+    config_env() == :prod or System.get_env("TELEGRAM_CLIENT_ADAPTER") == "req"
+
+  case System.get_env("TELEGRAM_CHAT_ID_PEPPER") do
+    pepper when is_binary(pepper) and byte_size(pepper) > 0 ->
+      if String.trim(pepper) == "" and real_telegram_client? do
+        raise "TELEGRAM_CHAT_ID_PEPPER is missing or empty while the real Telegram client is enabled"
+      end
+
+      if String.trim(pepper) != "", do: config(:alethea, :telegram_chat_id_pepper, pepper)
+
+    _missing ->
+      if real_telegram_client? do
+        raise "TELEGRAM_CHAT_ID_PEPPER is missing or empty while the real Telegram client is enabled"
+      end
+  end
+end
+
 if config_env() in [:dev, :prod] do
   config :alethea, Alethea.AI.EmotionAnalyzer,
     base_url: System.get_env("EMOTION_SIDECAR_URL", "http://127.0.0.1:8080"),

@@ -7,6 +7,7 @@ defmodule AletheaWeb.DashboardLiveTest do
   import Alethea.FoundationTestHelper
 
   alias Alethea.Accounts
+  alias Alethea.Clinical.Trend
   alias Alethea.Foundation.Accounts.Patient, as: FoundationPatient
   alias Alethea.Foundation.Accounts.PatientAuthCode
   alias Alethea.Jobs.TelegramOutboundWorker
@@ -86,6 +87,78 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert render(view) =~ "Horario de sesión actualizado correctamente"
       assert render(view) =~ "Martes"
+    end
+  end
+
+  describe "emotion trend updates (real mode)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional)
+      other_patient = legacy_patient_fixture(professional)
+
+      %{patient: patient, other_patient: other_patient}
+    end
+
+    test "renders a positive sub-percent trend as less than one percent", %{
+      conn: conn,
+      patient: patient
+    } do
+      save_trend(patient, "anger", 0.004)
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#emotion-row-anger", "<1%")
+    end
+
+    test "reloads the selected patient's trends after its update notification", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      save_trend(patient, "anger", 0.004)
+
+      Phoenix.PubSub.broadcast(
+        Alethea.PubSub,
+        "patients:#{professional.id}",
+        {:emotion_trends_updated, patient.id}
+      )
+
+      assert has_element?(view, "#emotion-row-anger", "<1%")
+    end
+
+    test "does not reload trends when another patient is updated", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      other_patient: other_patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      save_trend(patient, "anger", 0.004)
+
+      Phoenix.PubSub.broadcast(
+        Alethea.PubSub,
+        "patients:#{professional.id}",
+        {:emotion_trends_updated, other_patient.id}
+      )
+
+      refute has_element?(view, "#emotion-row-anger")
+    end
+
+    defp save_trend(patient, label, score) do
+      %Trend{}
+      |> Trend.changeset(%{
+        indicator_name: label,
+        score: score,
+        delta: 0.0,
+        recorded_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        patient_id: patient.id
+      })
+      |> Repo.insert!()
     end
   end
 
@@ -433,7 +506,7 @@ defmodule AletheaWeb.DashboardLiveTest do
       refute has_element?(view, "#tg-btn-#{patient.id}", "Regenerar")
     end
 
-    test "R6 invites the patient and opens the modal with deep link, code and expiry", %{
+    test "R6 renders an inline invite panel with deep link, code and expiry", %{
       conn: conn,
       patient: patient,
       foundation_pro: foundation_pro
@@ -442,7 +515,8 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       view |> element("#tg-btn-#{patient.id}") |> render_click()
 
-      assert has_element?(view, "#invite-modal")
+      assert has_element?(view, "#telegram-invite-panel")
+      refute has_element?(view, "dialog#telegram-invite-panel")
 
       # Deep link composed in the WEB layer from the test-env BotConfig
       # bot_username + the domain-minted token (D6)
@@ -462,7 +536,7 @@ defmodule AletheaWeb.DashboardLiveTest do
       assert fp.alias == patient.alias
       assert Repo.aggregate(FoundationPatient, :count, :id) == 1
 
-      # The modal shows the very codes the domain minted, with a 10-min TTL
+      # The panel shows the very codes the domain minted, with a 10-min TTL
       six_digit = latest_code(fp.id, "six_digit")
       deep_link = latest_code(fp.id, "deep_link")
 
@@ -488,17 +562,27 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       # The button adapts to Regenerate for the just-invited patient
       assert has_element?(view, "#tg-btn-#{patient.id}", "Regenerar")
+
+      view |> element("#invite-regenerate") |> render_click()
+
+      assert has_element?(view, "#telegram-invite-panel")
+      assert has_element?(view, "#invite-deep-link")
+      assert has_element?(view, "#invite-six-digit")
+      assert Repo.aggregate(PatientAuthCode, :count, :id) == 4
     end
 
-    test "R6 closes the modal without any side effect", %{conn: conn, patient: patient} do
+    test "R6 dismisses the panel without revoking the invite", %{conn: conn, patient: patient} do
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
 
       view |> element("#tg-btn-#{patient.id}") |> render_click()
-      assert has_element?(view, "#invite-modal")
+      assert has_element?(view, "#telegram-invite-panel")
+      assert Repo.aggregate(PatientAuthCode, :count, :id) == 2
 
-      view |> element("#invite-close") |> render_click()
+      view |> element("#invite-dismiss") |> render_click()
 
-      refute has_element?(view, "#invite-modal")
+      refute has_element?(view, "#telegram-invite-panel")
+      assert has_element?(view, "#tg-btn-#{patient.id}", "Regenerar")
+      assert Repo.aggregate(PatientAuthCode, :count, :id) == 2
     end
 
     defp latest_code(patient_id, kind) do
@@ -512,7 +596,7 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
-  describe "Telegram invite without a foundation professional (real mode)" do
+  describe "Telegram invite lazy-provisions a foundation professional (real mode)" do
     setup %{professional: professional} do
       Application.put_env(:alethea, :use_mock_data, false)
       on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
@@ -521,15 +605,24 @@ defmodule AletheaWeb.DashboardLiveTest do
       %{patient: patient}
     end
 
-    test "shows an error flash and never mints codes", %{conn: conn, patient: patient} do
+    test "provisions the bridge at invite time and renders the panel", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      bot_config_fixture()
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
 
       view |> element("#tg-btn-#{patient.id}") |> render_click()
 
-      assert render(view) =~ "No se pudo generar la invitación"
-      refute has_element?(view, "#invite-modal")
-      assert Repo.aggregate(FoundationPatient, :count, :id) == 0
-      assert Repo.aggregate(PatientAuthCode, :count, :id) == 0
+      assert has_element?(view, "#telegram-invite-panel")
+
+      assert {:ok, foundation_pro} =
+               Alethea.Foundation.Accounts.professional_by_email(professional.email)
+
+      assert foundation_pro.legacy_professional_id == professional.id
+      assert Repo.aggregate(FoundationPatient, :count, :id) == 1
+      assert Repo.aggregate(PatientAuthCode, :count, :id) == 2
     end
   end
 
@@ -540,7 +633,7 @@ defmodule AletheaWeb.DashboardLiveTest do
       :ok
     end
 
-    test "shows not-connected status and opens the mock invite modal without DB writes", %{
+    test "shows not-connected status and renders the mock invite panel without DB writes", %{
       conn: conn
     } do
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
@@ -551,7 +644,7 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       view |> element("#tg-btn-p1") |> render_click()
 
-      assert has_element?(view, "#invite-modal")
+      assert has_element?(view, "#telegram-invite-panel")
       assert has_element?(view, "#invite-patient-alias", "Lucca")
       assert has_element?(view, "#invite-six-digit", "123456")
       assert has_element?(view, "#invite-expires-at")
@@ -561,6 +654,25 @@ defmodule AletheaWeb.DashboardLiveTest do
       # Mock mode never touches the real invite path (D5): zero foundation rows
       assert Repo.aggregate(FoundationPatient, :count, :id) == 0
       assert Repo.aggregate(PatientAuthCode, :count, :id) == 0
+    end
+
+    test "renders the invite as an accessible inline disclosure and dismisses it", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view |> element("#tg-btn-p1") |> render_click()
+
+      assert has_element?(
+               view,
+               "section#telegram-invite-panel[role='region'][aria-live='polite']"
+             )
+
+      refute has_element?(view, "#telegram-invite-panel dialog")
+      refute has_element?(view, "#telegram-invite-panel .modal-backdrop")
+      assert has_element?(view, "#invite-dismiss")
+
+      view |> element("#invite-dismiss") |> render_click()
+
+      refute has_element?(view, "#telegram-invite-panel")
     end
   end
 end

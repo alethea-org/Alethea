@@ -47,4 +47,6 @@ node_modules/
 # Agent/runner state and local caches
 /.atl/
 /.pi/
+/.codegraph/
+__pycache__/
 opencode.jsonc
