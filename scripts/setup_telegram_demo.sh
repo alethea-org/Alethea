@@ -184,7 +184,7 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=7
+TOTAL_STAGES=10
 
 fail() {
   printf '  %sError:%s %s\n' "$RED" "$RESET" "$1" >&2
@@ -344,12 +344,11 @@ else
   say "Ollama is reachable and phi4-mini is available."
 fi
 
-if ! command -v cloudflared >/dev/null 2>&1; then
-  warn "cloudflared is missing. Follow the official install guide:"
-  note "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+if ! command -v ngrok >/dev/null 2>&1; then
+  warn "ngrok is required to expose Phoenix to Telegram. Install and authenticate it, then rerun."
   prerequisite_failed=1
 else
-  say "cloudflared is installed."
+  say "ngrok is installed."
 fi
 
 if (( prerequisite_failed )); then
@@ -441,8 +440,8 @@ unset DEMO_BOOTSTRAP_OUTPUT output_line
 say "Captured the short-lived onboarding URL without printing or persisting it."
 warn "The onboarding credential expires after 10 minutes. Continue without delay."
 
-# ── Stage 5: long-lived local processes ────────────────────────────────────
-stage "Start the sidecar, Phoenix, and a Cloudflare quick tunnel"
+# ── Stage 5: sidecar readiness ─────────────────────────────────────────────
+stage "Start and verify the emotion sidecar"
 say "Use separate terminals so process ownership and cleanup remain explicit."
 step "Terminal 1, from this repository: docker compose run --rm --publish 127.0.0.1:8080:8080 emotion-sidecar"
 step "Keep the sidecar running. Its first model download and startup may take several minutes."
@@ -451,21 +450,40 @@ if ! curl -fsS http://127.0.0.1:8080/health/ready >/dev/null; then
   fail "The emotion sidecar is not ready. Keep Terminal 1 running, wait for startup, and rerun this wizard."
 fi
 say "The persistent emotion sidecar is ready. No journal content was sent during this check."
+
+# ── Stage 6: Phoenix ───────────────────────────────────────────────────────
+stage "Start and verify Phoenix"
 step "Terminal 2, from this repository: mix phx.server"
-step "Wait until Phoenix is listening on http://localhost:4000."
-step "Terminal 3: cloudflared tunnel --url http://localhost:4000"
-step "Copy the generated https://...trycloudflare.com URL."
-warn "Keep all three terminals running and keep this machine awake for the entire demo."
+pause "When Phoenix is listening, press Enter to verify local health and readiness."
+if ! curl -fsS -o /dev/null http://127.0.0.1:4000/health; then
+  fail "Phoenix health is unreachable. Keep Terminal 2 running and resolve it before continuing."
+fi
+if ! curl -fsS -o /dev/null http://127.0.0.1:4000/health/ready; then
+  fail "Phoenix is not ready. Confirm database and sidecar readiness, then retry."
+fi
+say "Phoenix health and readiness checks passed."
+
+# ── Stage 7: ngrok ─────────────────────────────────────────────────────────
+stage "Start an ngrok tunnel"
+step "Terminal 3: ngrok http 4000"
+step "Copy the HTTPS base URL shown by ngrok, without a trailing slash."
+warn "Keep the sidecar, Phoenix, and ngrok terminals running and keep this machine awake for the demo."
+
+# ── Stage 8: public health and readiness ───────────────────────────────────
+stage "Verify public health and readiness"
 printf '  %sPaste the public HTTPS base URL:%s ' "$BOLD" "$RESET"
 read -r PUBLIC_BASE_URL || true
 PUBLIC_BASE_URL=${PUBLIC_BASE_URL%/}
 [[ "$PUBLIC_BASE_URL" =~ ^https://[^/]+$ ]] || fail "Enter only the public HTTPS base URL, without a path."
 if ! curl -fsS -o /dev/null "$PUBLIC_BASE_URL/health"; then
-  fail "The public health endpoint is unreachable. Check Phoenix and cloudflared, then retry."
+  fail "The public health endpoint is unreachable. Check Phoenix and ngrok, then retry."
 fi
-say "The public tunnel reaches Alethea's health endpoint."
+if ! curl -fsS -o /dev/null "$PUBLIC_BASE_URL/health/ready"; then
+  fail "The public readiness endpoint is unreachable. Do not register the webhook until it succeeds."
+fi
+say "The public ngrok endpoint passed health and readiness checks."
 
-# ── Stage 6: Telegram webhook registration ─────────────────────────────────
+# ── Stage 9: Telegram webhook registration ─────────────────────────────────
 stage "Register the Telegram webhook"
 WEBHOOK_URL="$PUBLIC_BASE_URL/webhooks/telegram"
 say "Registering the webhook with the same temporary token and secret used for BotConfig."
@@ -490,7 +508,7 @@ fi
 unset TELEGRAM_RESPONSE TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET
 say "Telegram accepted the webhook. Temporary bot credentials were cleared from the wizard process."
 
-# ── Stage 7: onboarding and redacted verification ──────────────────────────
+# ── Stage 10: onboarding and redacted verification ─────────────────────────
 stage "Onboard and verify one synthetic message"
 warn "REAL PATIENT DATA IS PROHIBITED. Use only the fixed synthetic demo identity."
 open_url "$ALETHEA_TELEGRAM_ONBOARDING_URL"
@@ -498,16 +516,17 @@ unset ALETHEA_TELEGRAM_ONBOARDING_URL
 step "In Telegram, open the bot and send the prefilled /start command."
 step "Wait for the synthetic onboarding confirmation."
 step "Send one safe synthetic journal entry, for example: 'Today I took a short walk and felt calmer afterward.'"
-step "Wait for the AI-generated Telegram reply. Do not send crisis content or identifying details."
+step "Wait for the AI-generated Telegram reply. Do not send crisis content, identifying details, or retries."
+note "If no reply arrives, stop sending messages. Confirm Ollama is running and phi4-mini is available, then restart Phoenix after restoring the local LLM."
 pause "After the reply arrives, press Enter for redacted verification commands."
 
 say "Run these from the repository in a third terminal. They never select message bodies, chat IDs, tokens, or AI response text:"
 note "Oban inbound/outbound and emotion jobs:"
-say "psql \"\${DATABASE_URL:-postgresql://postgres:postgres@localhost/alethea_dev}\" -c \"SELECT id, queue, worker, state, attempt, max_attempts, inserted_at, completed_at FROM oban_jobs WHERE worker IN ('Alethea.Jobs.TelegramOnboardingWorker', 'Alethea.Jobs.TelegramMessageWorker', 'Alethea.Jobs.TelegramOutboundWorker', 'AletheaJobs.EmotionAnalysisWorker') ORDER BY id DESC LIMIT 20;\""
+say "psql \"\$DATABASE_URL\" -c \"SELECT id, queue, worker, state, attempt, max_attempts, inserted_at, completed_at FROM oban_jobs WHERE worker IN ('Alethea.Jobs.TelegramOnboardingWorker', 'Alethea.Jobs.TelegramMessageWorker', 'Alethea.Jobs.TelegramOutboundWorker', 'AletheaJobs.EmotionAnalysisWorker') ORDER BY id DESC LIMIT 20;\""
 note "Latest Telegram message metadata and AI diagnosis anchor (content remains encrypted/unselected):"
-say "psql \"\${DATABASE_URL:-postgresql://postgres:postgres@localhost/alethea_dev}\" -c \"SELECT id, direction, behavior_type, (telegram_message_id IS NOT NULL) AS telegram_inbound, inserted_at FROM messages ORDER BY inserted_at DESC LIMIT 5; SELECT message_id, model_version, inserted_at FROM ai_diagnoses WHERE message_id = (SELECT id FROM messages WHERE telegram_message_id IS NOT NULL ORDER BY inserted_at DESC LIMIT 1) ORDER BY inserted_at DESC;\""
+say "psql \"\$DATABASE_URL\" -c \"SELECT id, direction, behavior_type, (telegram_message_id IS NOT NULL) AS telegram_inbound, inserted_at FROM messages ORDER BY inserted_at DESC LIMIT 5; SELECT message_id, model_version, inserted_at FROM ai_diagnoses WHERE message_id = (SELECT id FROM messages WHERE telegram_message_id IS NOT NULL ORDER BY inserted_at DESC LIMIT 1) ORDER BY inserted_at DESC;\""
 note "Emotion metrics for the latest Telegram inbound message:"
-say "psql \"\${DATABASE_URL:-postgresql://postgres:postgres@localhost/alethea_dev}\" -c \"SELECT message_id, model_version, dominant_label, confidence, joy_score, sadness_score, anger_score, fear_score, neutral_score, processed_at FROM emotion_analyses WHERE message_id = (SELECT id FROM messages WHERE telegram_message_id IS NOT NULL ORDER BY inserted_at DESC LIMIT 1);\""
-warn "If the quick-tunnel URL changes, rerun this wizard to register the new webhook and mint a fresh onboarding link."
+say "psql \"\$DATABASE_URL\" -c \"SELECT message_id, model_version, dominant_label, confidence, joy_score, sadness_score, anger_score, fear_score, neutral_score, processed_at FROM emotion_analyses WHERE message_id = (SELECT id FROM messages WHERE telegram_message_id IS NOT NULL ORDER BY inserted_at DESC LIMIT 1);\""
+warn "If the ngrok URL changes, rerun this wizard to register the new webhook and mint a fresh onboarding link."
 
 finish
