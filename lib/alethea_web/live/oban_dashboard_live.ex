@@ -3,11 +3,17 @@ defmodule AletheaWeb.ObanDashboardLive do
   Oban Dashboard LiveView for authenticated professionals.
 
   Shows job queues, states, and allows cancel/retry operations.
+
+  The page used to be written in Tailwind utility classes, which the
+  app does not compile — every `bg-gray-50`, `rounded-lg` and
+  `text-xs` on it resolved to nothing, so the operational surface
+  rendered as an unstyled HTML table. It now speaks the editorial
+  system's data-table, stat-strip and pill components.
   """
 
   use AletheaWeb, :live_view
 
-  import Ecto.Query, only: [where: 2, order_by: 2, limit: 2]
+  import Ecto.Query, only: [where: 2, where: 3, order_by: 2, limit: 2]
 
   alias Oban.Job
   alias Alethea.Repo
@@ -36,6 +42,11 @@ defmodule AletheaWeb.ObanDashboardLive do
      |> assign(:page_title, "Oban Dashboard")
      |> assign(:queues, @queues)
      |> assign(:states, @states)
+     # Without this the first render raises: `render/1` reads
+     # `@selected_job` before any `view_job` event can assign it.
+     |> assign(:selected_job, nil)
+     |> assign(:selected_queue, "all")
+     |> assign(:selected_state, "all")
      |> stream(:jobs, [])
      |> load_jobs()}
   end
@@ -55,219 +66,179 @@ defmodule AletheaWeb.ObanDashboardLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="p-6">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Oban Dashboard</h1>
-        <%= if @selected_job do %>
-          <button
-            type="button"
-            class="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded"
-            phx-click="close_job_details"
-          >
-            Close Details
-          </button>
-        <% end %>
-      </div>
-      
-    <!-- Filters -->
-      <div class="flex gap-4 mb-6">
+    <div class="pt ptd-wrap">
+      <%!-- ── Header ── --%>
+      <div class="ptd-head">
         <div>
-          <label class="block text-sm font-medium mb-1">Queue</label>
-          <select
-            class="rounded border-gray-300"
-            phx-change="filter_queue"
-          >
-            <option value="all" selected={@selected_queue == "all"}>All Queues</option>
-            <%= for queue <- @queues do %>
-              <option value={queue} selected={@selected_queue == queue}>
-                {queue}
-              </option>
-            <% end %>
-          </select>
+          <p class="pt-eyebrow">Operaciones</p>
+
+          <h1 class="pt-h1">Cola de trabajos</h1>
         </div>
 
-        <div>
-          <label class="block text-sm font-medium mb-1">State</label>
-          <select
-            class="rounded border-gray-300"
-            phx-change="filter_state"
-          >
-            <option value="all" selected={@selected_state == "all"}>All States</option>
-            <%= for state <- @states do %>
-              <option value={state} selected={@selected_state == state}>
-                {state}
-              </option>
-            <% end %>
-          </select>
-        </div>
-
-        <div class="flex items-end">
-          <button
-            type="button"
-            class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-            phx-click="refresh"
-          >
-            Refresh
+        <div class="page-head__actions">
+          <button type="button" phx-click="refresh" class="button-secondary button-secondary--sm">
+            <.icon name="hero-arrow-path" class="size-4" style="margin-right:6px;" /> Actualizar
           </button>
         </div>
       </div>
-      
-    <!-- Queue Stats -->
-      <div class="grid grid-cols-5 gap-4 mb-6">
-        <%= for queue <- @queues do %>
-          <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-sm text-gray-500">{queue}</div>
-            <div class="text-2xl font-bold">{get_queue_count(@queue_stats, queue)}</div>
-          </div>
-        <% end %>
+      <%!-- ── Queue counters (available + scheduled + executing) ── --%>
+      <div class="stat-strip" style="margin-bottom:24px;">
+        <div :for={queue <- @queues} class="stat-tile">
+          <div class="stat-tile__label">{queue}</div>
+
+          <div class="stat-tile__value">{get_queue_count(@queue_stats, queue)}</div>
+
+          <div class="stat-tile__desc">Pendientes</div>
+        </div>
       </div>
-      
-    <!-- Job List -->
-      <div class="bg-white rounded-lg shadow overflow-hidden">
-        <table class="w-full">
-          <thead class="bg-gray-50">
+      <%!-- ── Filters ── --%>
+      <div class="cmdbar">
+        <div class="cmdbar__sort">
+          <label for="filter-queue">Cola</label>
+          <select id="filter-queue" name="queue" phx-change="filter_queue" class="text-input">
+            <option value="all" selected={@selected_queue == "all"}>Todas</option>
+
+            <option :for={queue <- @queues} value={queue} selected={@selected_queue == "#{queue}"}>
+              {queue}
+            </option>
+          </select>
+        </div>
+
+        <div class="cmdbar__divider"></div>
+
+        <div class="cmdbar__sort">
+          <label for="filter-state">Estado</label>
+          <select id="filter-state" name="state" phx-change="filter_state" class="text-input">
+            <option value="all" selected={@selected_state == "all"}>Todos</option>
+
+            <option :for={state <- @states} value={state} selected={@selected_state == "#{state}"}>
+              {state}
+            </option>
+          </select>
+        </div>
+      </div>
+      <%!-- ── Job list ── --%>
+      <div class="data-table-wrap">
+        <table class="data-table">
+          <thead>
             <tr>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Queue</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Worker</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">State</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Args</th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Attempts
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+              <th>ID</th>
+
+              <th>Cola</th>
+
+              <th>Worker</th>
+
+              <th>Estado</th>
+
+              <th>Args</th>
+
+              <th>Intentos</th>
+
+              <th><span class="sr-only">Acciones</span></th>
             </tr>
           </thead>
-          <tbody id="jobs" phx-update="stream" class="divide-y divide-gray-200">
-            <%= for {id, job} <- @streams.jobs do %>
-              <tr id={id}>
-                <td class="px-4 py-3 text-sm">{job.id}</td>
-                <td class="px-4 py-3 text-sm">{job.queue}</td>
-                <td class="px-4 py-3 text-sm">{job.worker}</td>
-                <td class="px-4 py-3">
-                  <span class={[
-                    "px-2 py-1 text-xs rounded-full",
-                    state_color(job.state)
-                  ]}>
-                    {job.state}
-                  </span>
-                </td>
-                <td class="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
-                  {inspect(job.args)}
-                </td>
-                <td class="px-4 py-3 text-sm">
-                  {job.attempt}{if job.max_attempts, do: "/#{job.max_attempts}"}
-                </td>
-                <td class="px-4 py-3 text-sm">
-                  <div class="flex gap-2">
-                    <button
-                      type="button"
-                      class="text-blue-600 hover:text-blue-800"
-                      phx-click="view_job"
-                      phx-value-job-id={job.id}
-                    >
-                      View
-                    </button>
-                    <%= if job.state in [:available, :scheduled, :retryable] do %>
-                      <button
-                        type="button"
-                        class="text-red-600 hover:text-red-800"
-                        phx-click="cancel_job"
-                        phx-value-job-id={job.id}
-                      >
-                        Cancel
-                      </button>
-                    <% end %>
-                    <%= if job.state == :discarded do %>
-                      <button
-                        type="button"
-                        class="text-green-600 hover:text-green-800"
-                        phx-click="retry_job"
-                        phx-value-job-id={job.id}
-                      >
-                        Retry
-                      </button>
-                    <% end %>
-                  </div>
-                </td>
-              </tr>
-            <% end %>
+
+          <tbody id="jobs" phx-update="stream">
+            <tr :for={{dom_id, job} <- @streams.jobs} id={dom_id}>
+              <td style="font-variant-numeric:tabular-nums;">{job.id}</td>
+
+              <td>{job.queue}</td>
+
+              <td>{job.worker}</td>
+
+              <td><span class={"pt-pill " <> state_pill(job.state)}>{job.state}</span></td>
+
+              <td class="data-table__mono">{inspect(job.args)}</td>
+
+              <td style="font-variant-numeric:tabular-nums;">
+                {job.attempt}{if job.max_attempts, do: "/#{job.max_attempts}"}
+              </td>
+
+              <td>
+                <div class="data-table__actions">
+                  <button
+                    type="button"
+                    class="link-button"
+                    phx-click="view_job"
+                    phx-value-job_id={job.id}
+                  >
+                    Ver
+                  </button>
+                  <button
+                    :if={job.state in ["available", "scheduled", "retryable"]}
+                    type="button"
+                    class="link-button link-button--danger"
+                    phx-click="cancel_job"
+                    phx-value-job_id={job.id}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    :if={job.state == "discarded"}
+                    type="button"
+                    class="link-button link-button--ok"
+                    phx-click="retry_job"
+                    phx-value-job_id={job.id}
+                  >
+                    Reintentar
+                  </button>
+                </div>
+              </td>
+            </tr>
           </tbody>
         </table>
-
-        <%= if @streams.jobs == [] do %>
-          <div class="p-6 text-center text-gray-500">
-            No jobs found matching the current filters.
-          </div>
-        <% end %>
       </div>
-      
-    <!-- Job Details Modal -->
-      <%= if @selected_job do %>
-        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div class="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-            <h2 class="text-xl font-bold mb-4">Job Details</h2>
-            <dl class="space-y-3">
-              <div class="flex">
-                <dt class="font-medium w-32">ID:</dt>
-                <dd>{@selected_job.id}</dd>
-              </div>
-              <div class="flex">
-                <dt class="font-medium w-32">Worker:</dt>
-                <dd>{@selected_job.worker}</dd>
-              </div>
-              <div class="flex">
-                <dt class="font-medium w-32">Queue:</dt>
-                <dd>{@selected_job.queue}</dd>
-              </div>
-              <div class="flex">
-                <dt class="font-medium w-32">State:</dt>
-                <dd>{@selected_job.state}</dd>
-              </div>
-              <div class="flex">
-                <dt class="font-medium w-32">Attempt:</dt>
-                <dd>{@selected_job.attempt}/{@selected_job.max_attempts}</dd>
-              </div>
-              <div class="flex">
-                <dt class="font-medium w-32">Args:</dt>
-                <dd class="bg-gray-100 p-2 rounded text-sm">
-                  {inspect(@selected_job.args, pretty: true)}
-                </dd>
-              </div>
-              <div class="flex">
-                <dt class="font-medium w-32">Meta:</dt>
-                <dd class="bg-gray-100 p-2 rounded text-sm">
-                  {inspect(@selected_job.meta, pretty: true)}
-                </dd>
-              </div>
-              <%= if @selected_job.attempted_by do %>
-                <div class="flex">
-                  <dt class="font-medium w-32">Attempted By:</dt>
-                  <dd>{@selected_job.attempted_by}</dd>
-                </div>
-              <% end %>
-              <%= if @selected_job.completed_at do %>
-                <div class="flex">
-                  <dt class="font-medium w-32">Completed At:</dt>
-                  <dd>{@selected_job.completed_at}</dd>
-                </div>
-              <% end %>
-            </dl>
-          </div>
+      <%!-- ── Job details ── --%>
+      <dialog :if={@selected_job} id="job-details" open class="pta-modal">
+        <div class="pta-modal__head">
+          <h3 class="pta-modal__title">Trabajo #{@selected_job.id}</h3>
+
+          <button
+            type="button"
+            phx-click="close_job_details"
+            aria-label="Cerrar"
+            class="pta-modal__close"
+          >
+            <.icon name="hero-x-mark" class="size-4" />
+          </button>
         </div>
-      <% end %>
+
+        <div class="pta-modal__body">
+          <.list>
+            <:item title="Worker">{@selected_job.worker}</:item>
+
+            <:item title="Cola">{@selected_job.queue}</:item>
+
+            <:item title="Estado">{@selected_job.state}</:item>
+
+            <:item title="Intentos">{@selected_job.attempt}/{@selected_job.max_attempts}</:item>
+
+            <:item title="Args">{inspect(@selected_job.args, pretty: true)}</:item>
+
+            <:item title="Meta">{inspect(@selected_job.meta, pretty: true)}</:item>
+          </.list>
+
+          <p :if={@selected_job.attempted_by} class="pta-hint" style="margin-top:12px;">
+            Ejecutado por {@selected_job.attempted_by}
+          </p>
+
+          <p :if={@selected_job.completed_at} class="pta-hint">
+            Completado el {@selected_job.completed_at}
+          </p>
+        </div>
+      </dialog>
     </div>
     """
   end
 
   @impl true
   def handle_event("filter_queue", %{"queue" => queue}, socket) do
-    params = %{socket.assigns.selected_state => socket.assigns.selected_state, "queue" => queue}
+    params = %{"queue" => queue, "state" => socket.assigns.selected_state}
     {:noreply, push_patch(socket, to: path_with_params(socket, params))}
   end
 
   def handle_event("filter_state", %{"state" => state}, socket) do
-    params = %{"queue" => socket.assigns.selected_queue, state => state}
+    params = %{"queue" => socket.assigns.selected_queue, "state" => state}
     {:noreply, push_patch(socket, to: path_with_params(socket, params))}
   end
 
@@ -294,7 +265,7 @@ defmodule AletheaWeb.ObanDashboardLive do
     {:noreply,
      socket
      |> assign(:selected_job, nil)
-     |> put_flash(:info, "Job cancelled successfully")
+     |> put_flash(:info, "Trabajo cancelado")
      |> load_jobs()}
   end
 
@@ -306,13 +277,13 @@ defmodule AletheaWeb.ObanDashboardLive do
         {:noreply,
          socket
          |> assign(:selected_job, nil)
-         |> put_flash(:info, "Job retried successfully")
+         |> put_flash(:info, "Trabajo reencolado")
          |> load_jobs()}
 
       {:error, reason} ->
         {:noreply,
          socket
-         |> put_flash(:error, "Failed to retry job: #{inspect(reason)}")}
+         |> put_flash(:error, "No se pudo reintentar el trabajo: #{inspect(reason)}")}
     end
   end
 
@@ -326,24 +297,29 @@ defmodule AletheaWeb.ObanDashboardLive do
       |> order_by(desc: :id)
       |> limit(100)
       |> Repo.all()
-      |> Enum.map(fn job -> {job.id, job} end)
 
+    # `oban_jobs.queue` and `.state` are string columns. Passing the
+    # atoms from @queues / @states straight into the query raised
+    # `Ecto.Query.CastError` on mount, so the page never rendered at
+    # all — the restyle only made the crash visible sooner.
     queue_stats =
       @queues
       |> Enum.map(fn q ->
         count =
           Job
-          |> where(queue: ^q)
-          |> where(state: [:available, :scheduled, :executing])
+          |> where(queue: ^to_string(q))
+          |> where([j], j.state in ["available", "scheduled", "executing"])
           |> Repo.aggregate(:count)
 
         {q, count}
       end)
       |> Map.new()
 
+    # `stream/3` wants the structs themselves and derives each DOM id
+    # from `:id`. The list used to be mapped to `{id, job}` tuples
+    # first, which `stream/3` rejects — the page raised on mount.
     socket
-    |> stream(:jobs, [], reset: true)
-    |> stream(:jobs, jobs)
+    |> stream(:jobs, jobs, reset: true)
     |> assign(:queue_stats, queue_stats)
   end
 
@@ -366,11 +342,12 @@ defmodule AletheaWeb.ObanDashboardLive do
     Map.get(stats, queue, 0)
   end
 
-  defp state_color("available"), do: "bg-green-100 text-green-800"
-  defp state_color("scheduled"), do: "bg-blue-100 text-blue-800"
-  defp state_color("executing"), do: "bg-yellow-100 text-yellow-800"
-  defp state_color("retryable"), do: "bg-orange-100 text-orange-800"
-  defp state_color("completed"), do: "bg-gray-100 text-gray-800"
-  defp state_color("discarded"), do: "bg-red-100 text-red-800"
-  defp state_color(_), do: "bg-gray-100 text-gray-800"
+  # Oban stores `state` as a string column, so the clauses match
+  # strings — the previous atom clauses never matched and every job
+  # fell through to the neutral tone.
+  defp state_pill("available"), do: "pt-pill--ok"
+  defp state_pill("executing"), do: "pt-pill--warn"
+  defp state_pill("retryable"), do: "pt-pill--warn"
+  defp state_pill("discarded"), do: "pt-pill--danger"
+  defp state_pill(_), do: "pt-pill--neutral"
 end

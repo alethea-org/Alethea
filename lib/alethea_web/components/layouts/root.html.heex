@@ -1,5 +1,13 @@
+<%!--
+  Root layout — the HTML document shell for every authenticated page.
+
+  The document loads two stylesheets and nothing else: `app.css`
+  (shell structure) and `editorial.css` (the design system's tokens
+  and components). There is no CSS framework CDN behind the app —
+  every class the templates use is defined in those two files.
+--%>
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="es">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,20 +15,20 @@
     <.live_title default="Alethea" suffix=" · Centro de Control">
       {assigns[:page_title]}
     </.live_title>
+    <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap"
       rel="stylesheet"
-    />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flyonui/dist/full.min.css" />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/default.css"} />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    /> <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/editorial.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix.js"}>
     </script>
+
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix_html.js"}>
     </script>
+
     <script
       defer
       phx-track-static
@@ -28,12 +36,10 @@
       src={~p"/assets/js/phoenix_live_view.js"}
     >
     </script>
+
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/flyonui/dist/js/flyonui.js">
-    </script>
   </head>
-  <body>
-    {@inner_content}
-  </body>
+
+  <body>{@inner_content}</body>
 </html>

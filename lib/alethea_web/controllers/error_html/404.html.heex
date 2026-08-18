@@ -1,0 +1,36 @@
+<%!--
+  404 — rendered with `layout: false` (see `config/config.exs`), so
+  the template is a complete document. It links the same two
+  stylesheets the rest of the app loads and speaks the editorial
+  system: white canvas, display type, primary/secondary button pair.
+--%>
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Página no encontrada · Alethea</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/css/app.css" />
+    <link rel="stylesheet" href="/assets/css/editorial.css" />
+  </head>
+
+  <body>
+    <main class="ptl">
+      <div class="ptl-shell error-page">
+        <p class="pt-eyebrow">Error 404</p>
+
+        <h1 class="ptla-title">Esta página no existe.</h1>
+
+        <p class="ptla-lede">
+          El enlace puede haber cambiado o el recurso ya no está disponible.
+        </p>
+
+        <div class="ptla-actions">
+          <a href="/" class="button-primary">Volver al inicio</a>
+          <a href="/dashboard" class="button-secondary">Ir al panel</a>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,32 +1,19 @@
 defmodule AletheaWeb.CoreComponents do
   @moduledoc """
-  Provides core UI components.
+  The application's core UI components.
 
-  At first glance, this module may seem daunting, but its goal is to provide
-  core building blocks for your application, such as tables, forms, and
-  inputs. The components consist mostly of markup and are well-documented
-  with doc strings and declarative assigns. You may customize and style
-  them in any way you want, based on your application growth and needs.
+  Every component here renders classes defined in
+  `priv/static/assets/css/editorial.css` — the implementation of the
+  editorial design system documented in `docs/design/DESIGN.md`.
+  There is no utility-class framework and no component CDN behind
+  the app, so a class that is not in that file paints nothing.
 
-  The foundation for styling is Tailwind CSS, a utility-first CSS framework,
-  augmented with daisyUI, a Tailwind CSS plugin that provides UI components
-  and themes. Here are useful references:
-
-    * [daisyUI](https://daisyui.com/docs/intro/) - a good place to get
-      started and see the available components.
-
-    * [Tailwind CSS](https://tailwindcss.com) - the foundational framework
-      we build on. You will use it for layout, sizing, flexbox, grid, and
-      spacing.
-
-    * [Heroicons](https://heroicons.com) - see `icon/1` for usage.
-
-    * [Phoenix.Component](https://hexdocs.pm/phoenix_live_view/Phoenix.Component.html) -
-      the component system used by Phoenix. Some components, such as `<.link>`
-      and `<.form>`, are defined there.
-
+  Icons live in `AletheaWeb.Icons` and are imported alongside this
+  module; call them as `<.icon name="hero-…" />`.
   """
   use Phoenix.Component
+
+  import AletheaWeb.Icons
 
   alias Phoenix.LiveView.JS
 
@@ -55,20 +42,17 @@ defmodule AletheaWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class="toast toast-top toast-end z-50 cursor-pointer"
+      class={["flash", @kind == :info && "flash--info", @kind == :error && "flash--error"]}
       {@rest}
     >
-      <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap shadow-2xl rounded-2xl border border-base-content/10",
-        @kind == :info && "alert-info bg-info/10 text-info",
-        @kind == :error && "alert-error bg-error/10 text-error"
-      ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
-          <p :if={@title} class="font-bold text-xs uppercase tracking-wider">{@title}</p>
-          <p class="text-sm font-medium">{msg}</p>
-        </div>
+      <.icon
+        name={if @kind == :info, do: "hero-information-circle", else: "hero-exclamation-circle"}
+        class="flash__icon"
+      />
+      <div>
+        <p :if={@title} class="flash__title">{@title}</p>
+
+        <p class="flash__msg">{msg}</p>
       </div>
     </div>
     """
@@ -77,6 +61,10 @@ defmodule AletheaWeb.CoreComponents do
   @doc """
   Renders a button with navigation support.
 
+  The `variant` picks which of the documented button roles the
+  element speaks with: `primary` is the near-black brand action
+  (one per viewport), `secondary` is the white hairline pair.
+
   ## Examples
 
       <.button>Send!</.button>
@@ -84,28 +72,24 @@ defmodule AletheaWeb.CoreComponents do
       <.button navigate={~p"/"}>Home</.button>
   """
   attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
-  attr :class, :any
-  attr :variant, :string, values: ~w(primary)
+  attr :class, :any, default: nil
+  attr :variant, :string, default: "primary", values: ~w(primary secondary)
+  attr :size, :string, default: "md", values: ~w(md sm)
   slot :inner_block, required: true
 
   def button(assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
-    variant_class = Map.fetch!(variants, assigns[:variant])
+    base = if assigns.variant == "secondary", do: "button-secondary", else: "button-primary"
 
     assigns =
-      assign(assigns, :class, ["btn", variant_class, assigns[:class]])
+      assign(assigns, :class, [base, assigns.size == "sm" && "#{base}--sm", assigns.class])
 
     if assigns.rest[:href] || assigns.rest[:navigate] || assigns.rest[:patch] do
       ~H"""
-      <.link class={@class} {@rest}>
-        {render_slot(@inner_block)}
-      </.link>
+      <.link class={@class} {@rest}>{render_slot(@inner_block)}</.link>
       """
     else
       ~H"""
-      <button class={@class} {@rest}>
-        {render_slot(@inner_block)}
-      </button>
+      <button class={@class} {@rest}>{render_slot(@inner_block)}</button>
       """
     end
   end
@@ -168,8 +152,8 @@ defmodule AletheaWeb.CoreComponents do
   attr :prompt, :string, default: nil, doc: "the prompt for select inputs"
   attr :options, :list, doc: "the options to pass to Phoenix.HTML.Form.options_for_select/2"
   attr :multiple, :boolean, default: false, doc: "the multiple flag for select inputs"
+  attr :hint, :string, default: nil, doc: "help text rendered under the control"
   attr :class, :any, default: nil, doc: "the input class to use over defaults"
-  attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
 
   attr :rest, :global,
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
@@ -199,8 +183,8 @@ defmodule AletheaWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
+    <div class="field">
+      <label for={@id} class="checkbox-row">
         <input
           type="hidden"
           name={@name}
@@ -208,17 +192,15 @@ defmodule AletheaWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
-          <input
-            type="checkbox"
-            id={@id}
-            name={@name}
-            value="true"
-            checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
-            {@rest}
-          />{@label}
-        </span>
+        <input
+          type="checkbox"
+          id={@id}
+          name={@name}
+          value="true"
+          checked={@checked}
+          class={@class}
+          {@rest}
+        /> <span>{@label}</span>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
@@ -227,20 +209,20 @@ defmodule AletheaWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
-        <select
-          id={@id}
-          name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
-          multiple={@multiple}
-          {@rest}
-        >
-          <option :if={@prompt} value="">{@prompt}</option>
-          {Phoenix.HTML.Form.options_for_select(@options, @value)}
-        </select>
-      </label>
+    <div class="field">
+      <label :if={@label} for={@id} class="field__label">{@label}</label>
+      <select
+        id={@id}
+        name={@name}
+        class={[@class || "text-input", @errors != [] && "text-input--error"]}
+        multiple={@multiple}
+        {@rest}
+      >
+        <option :if={@prompt} value="">{@prompt}</option>
+        {Phoenix.HTML.Form.options_for_select(@options, @value)}
+      </select>
+      <p :if={@hint && @errors == []} class="field__hint">{@hint}</p>
+
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -248,19 +230,18 @@ defmodule AletheaWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
-        <textarea
-          id={@id}
-          name={@name}
-          class={[
-            @class || "w-full textarea",
-            @errors != [] && (@error_class || "textarea-error")
-          ]}
-          {@rest}
-        >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
-      </label>
+    <div class="field">
+      <label :if={@label} for={@id} class="field__label">{@label}</label> <textarea
+        id={@id}
+        name={@name}
+        class={[
+          @class || "text-input text-input--multiline",
+          @errors != [] && "text-input--error"
+        ]}
+        {@rest}
+      >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
+      <p :if={@hint && @errors == []} class="field__hint">{@hint}</p>
+
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -269,21 +250,18 @@ defmodule AletheaWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
-        <input
-          type={@type}
-          name={@name}
-          id={@id}
-          value={Phoenix.HTML.Form.normalize_value(@type, @value)}
-          class={[
-            @class || "w-full input",
-            @errors != [] && (@error_class || "input-error")
-          ]}
-          {@rest}
-        />
-      </label>
+    <div class="field">
+      <label :if={@label} for={@id} class="field__label">{@label}</label>
+      <input
+        type={@type}
+        name={@name}
+        id={@id}
+        value={Phoenix.HTML.Form.normalize_value(@type, @value)}
+        class={[@class || "text-input", @errors != [] && "text-input--error"]}
+        {@rest}
+      />
+      <p :if={@hint && @errors == []} class="field__hint">{@hint}</p>
+
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -296,17 +274,18 @@ defmodule AletheaWeb.CoreComponents do
 
   def error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
-      <.icon name="hero-exclamation-circle" class="size-5" />
-      {render_slot(@inner_block)}
+    <p class="field__error">
+      <.icon name="hero-exclamation-circle" class="size-3" /> {render_slot(@inner_block)}
     </p>
     """
   end
 
   @doc """
-  Renders a header with title.
+  Renders the editorial page header: eyebrow, display title and an
+  optional action cluster.
   """
   slot :inner_block, required: true
+  slot :eyebrow
   slot :subtitle
   slot :actions
 
@@ -315,23 +294,16 @@ defmodule AletheaWeb.CoreComponents do
 
   def header(assigns) do
     ~H"""
-    <header
-      class={[
-        @actions != [] && "flex items-center justify-between gap-6",
-        "pb-4",
-        @class
-      ]}
-      {@rest}
-    >
+    <header class={["page-head", @class]} {@rest}>
       <div>
-        <h1 class="text-lg font-semibold leading-8">
-          {render_slot(@inner_block)}
-        </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
-          {render_slot(@subtitle)}
-        </p>
+        <p :if={@eyebrow != []} class="pt-eyebrow">{render_slot(@eyebrow)}</p>
+
+        <h1 class="pt-h1">{render_slot(@inner_block)}</h1>
+
+        <p :if={@subtitle != []} class="pt-muted">{render_slot(@subtitle)}</p>
       </div>
-      <div class="flex-none">{render_slot(@actions)}</div>
+
+      <div :if={@actions != []} class="page-head__actions">{render_slot(@actions)}</div>
     </header>
     """
   end
@@ -368,34 +340,33 @@ defmodule AletheaWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="table table-zebra">
-      <thead>
-        <tr>
-          <th :for={col <- @col}>{col[:label]}</th>
-          <th :if={@action != []}>
-            <span class="sr-only">Actions</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
-          <td
-            :for={col <- @col}
-            phx-click={@row_click && @row_click.(row)}
-            class={@row_click && "hover:cursor-pointer"}
-          >
-            {render_slot(col, @row_item.(row))}
-          </td>
-          <td :if={@action != []} class="w-0 font-semibold">
-            <div class="flex gap-4">
-              <%= for action <- @action do %>
-                {render_slot(action, @row_item.(row))}
-              <% end %>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="data-table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th :for={col <- @col}>{col[:label]}</th>
+
+            <th :if={@action != []}><span class="sr-only">Acciones</span></th>
+          </tr>
+        </thead>
+
+        <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
+          <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
+            <td :for={col <- @col} phx-click={@row_click && @row_click.(row)}>
+              {render_slot(col, @row_item.(row))}
+            </td>
+
+            <td :if={@action != []}>
+              <div class="data-table__actions">
+                <%= for action <- @action do %>
+                  {render_slot(action, @row_item.(row))}
+                <% end %>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     """
   end
 
@@ -415,66 +386,24 @@ defmodule AletheaWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="list">
-      <li :for={item <- @item} class="list-row">
-        <div class="list-col-grow">
-          <div class="font-bold">{item.title}</div>
-          <div>{render_slot(item)}</div>
-        </div>
-      </li>
-    </ul>
-    """
-  end
+    <dl class="detail-list">
+      <div :for={item <- @item} class="detail-list__row">
+        <dt>{item.title}</dt>
 
-  @doc """
-  Renders a [Heroicon](https://heroicons.com).
-
-  Heroicons come in three styles – outline, solid, and mini.
-  By default, the outline style is used, but solid and mini may
-  be applied by using the `-solid` and `-mini` suffix.
-
-  You can customize the size and colors of the icons by setting
-  width, height, and background color classes.
-
-  Icons are extracted from the `deps/heroicons` directory and bundled within
-  your compiled app.css by the plugin in `assets/vendor/heroicons.js`.
-
-  ## Examples
-
-      <.icon name="hero-x-mark" />
-      <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
-  """
-  attr :name, :string, required: true
-  attr :class, :any, default: "size-4"
-  attr :rest, :global
-
-  def icon(%{name: "hero-" <> _} = assigns) do
-    ~H"""
-    <span class={[@name, @class]} {@rest} />
+        <dd>{render_slot(item)}</dd>
+      </div>
+    </dl>
     """
   end
 
   ## JS Commands
 
   def show(js \\ %JS{}, selector) do
-    JS.show(js,
-      to: selector,
-      time: 300,
-      transition:
-        {"transition-all ease-out duration-300",
-         "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95",
-         "opacity-100 translate-y-0 sm:scale-100"}
-    )
+    JS.show(js, to: selector, time: 200)
   end
 
   def hide(js \\ %JS{}, selector) do
-    JS.hide(js,
-      to: selector,
-      time: 200,
-      transition:
-        {"transition-all ease-in duration-200", "opacity-100 translate-y-0 sm:scale-100",
-         "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"}
-    )
+    JS.hide(js, to: selector, time: 150)
   end
 
   @doc """
@@ -528,12 +457,8 @@ defmodule AletheaWeb.CoreComponents do
   def simple_form(assigns) do
     ~H"""
     <.form :let={f} for={@for} as={@as} {@rest}>
-      <div class="space-y-8">
-        {render_slot(@inner_block, f)}
-        <div :for={action <- @actions} class="mt-2 flex items-center justify-between gap-6">
-          {render_slot(action, f)}
-        </div>
-      </div>
+      {render_slot(@inner_block, f)}
+      <div :for={action <- @actions} class="form-actions">{render_slot(action, f)}</div>
     </.form>
     """
   end
@@ -556,6 +481,7 @@ defmodule AletheaWeb.CoreComponents do
   """
   attr :id, :string, required: true
   attr :show, :boolean, default: false
+  attr :title, :string, default: nil
   attr :on_cancel, Phoenix.LiveView.JS, default: %JS{}
   slot :inner_block, required: true
 
@@ -563,50 +489,43 @@ defmodule AletheaWeb.CoreComponents do
     ~H"""
     <dialog
       id={@id}
-      class="modal"
+      class="pta-modal"
       onclose={render_slot(@on_cancel)}
       phx-mounted={@show && show_modal(@id)}
       phx-remove={hide_modal(@id)}
     >
-      <div class="modal-box max-w-2xl">
-        <form method="dialog">
-          <button
-            class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-            phx-click={JS.exec(@on_cancel, "phx-remove") |> hide_modal(@id)}
-          >
-            ✕
-          </button>
-        </form>
-        {render_slot(@inner_block)}
+      <div class="pta-modal__head">
+        <h3 class="pta-modal__title">{@title}</h3>
+
+        <button
+          type="button"
+          class="pta-modal__close"
+          aria-label="Cerrar"
+          phx-click={JS.exec(@on_cancel, "phx-remove") |> hide_modal(@id)}
+        >
+          <.icon name="hero-x-mark" class="size-4" />
+        </button>
       </div>
-      <form method="dialog" class="modal-backdrop">
-        <button phx-click={JS.exec(@on_cancel, "phx-remove") |> hide_modal(@id)}>close</button>
-      </form>
+
+      <div class="pta-modal__body">{render_slot(@inner_block)}</div>
     </dialog>
     """
   end
 
   @doc """
-  Renders a badge.
+  Renders a status pill.
+
+  The color maps to the documented semantic roles, never to a new
+  accent: `ok` is the success role, `warn` the warn role, `danger`
+  the danger role, `neutral` the soft surface.
   """
-  attr :color, :atom, default: :gray, values: [:green, :gray, :red, :yellow, :blue]
+  attr :tone, :atom, default: :neutral, values: [:ok, :warn, :danger, :neutral]
+  attr :rest, :global
   slot :inner_block, required: true
 
   def badge(assigns) do
-    colors = %{
-      green: "badge-success",
-      gray: "badge-ghost",
-      red: "badge-error",
-      yellow: "badge-warning",
-      blue: "badge-info"
-    }
-
-    assigns = assign(assigns, :color_class, colors[assigns.color])
-
     ~H"""
-    <span class={["badge", @color_class]}>
-      {render_slot(@inner_block)}
-    </span>
+    <span class={["pt-pill", "pt-pill--#{@tone}"]} {@rest}>{render_slot(@inner_block)}</span>
     """
   end
 

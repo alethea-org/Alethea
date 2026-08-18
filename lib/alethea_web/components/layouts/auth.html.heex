@@ -1,8 +1,10 @@
 <%!--
-  Auth root layout — full HTML document for login/register.
-  Includes same fonts and assets as root.html.heex but with a
-  centered auth shell instead of the app sidebar/topbar.
-  Flash is handled by each template directly (no flash_group here).
+  Auth root layout — the HTML document for login / register.
+
+  `#auth-layout` is the two-column editorial split (ink signature
+  panel + white form canvas); each template fills both columns.
+  Flash is handled by the templates themselves, so there is no
+  `flash_group` here.
 --%>
 <!DOCTYPE html>
 <html lang="es">
@@ -13,20 +15,20 @@
     <.live_title default="Alethea" suffix=" · Centro de Control">
       {assigns[:page_title]}
     </.live_title>
+    <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap"
       rel="stylesheet"
-    />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flyonui/dist/full.min.css" />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/default.css"} />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    /> <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/editorial.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix.js"}>
     </script>
+
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix_html.js"}>
     </script>
+
     <script
       defer
       phx-track-static
@@ -34,12 +36,12 @@
       src={~p"/assets/js/phoenix_live_view.js"}
     >
     </script>
+
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
   </head>
+
   <body>
-    <div id="auth-layout">
-      {@inner_content}
-    </div>
+    <div id="auth-layout">{@inner_content}</div>
   </body>
 </html>

@@ -1,15 +1,32 @@
 /* ================================================================
    Alethea — App Shell CSS
-   No Tailwind compiler. All layout is done here.
-   FlyonUI CDN handles component classes (card, badge, progress…).
+
+   Structure only: the sidebar/topbar/content chrome and the auth
+   shell. Every color, radius, spacing and type step resolves through
+   the editorial tokens declared on `:root` in `editorial.css`
+   (custom properties resolve at computed-value time, so the load
+   order between the two files does not matter).
+
+   There is no CSS framework behind this file. Component appearance
+   lives in `editorial.css`; this file only positions things.
    ================================================================ */
 
 /* === Base === */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; }
+
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background: #f8fafc;
+  font-family: 'Inter Display', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+  font-size: var(--typography-body-md-size);
+  line-height: var(--typography-body-md-leading);
+  color: var(--colors-body);
+  background: var(--colors-canvas);
+  -webkit-font-smoothing: antialiased;
 }
+
+img, svg { display: block; max-width: 100%; }
 
 /* === App Shell (flex row: sidebar + main) === */
 .app-shell {
@@ -21,8 +38,8 @@ body {
 .app-sidebar {
   width: 256px;
   flex-shrink: 0;
-  background: #ffffff;
-  border-right: 1px solid #e2e8f0;
+  background: var(--colors-canvas);
+  border-right: 1px solid var(--colors-hairline);
   display: flex;
   flex-direction: column;
   position: sticky;
@@ -36,232 +53,242 @@ body {
 .app-sidebar__header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 16px;
-  border-bottom: 1px solid #f1f5f9;
+  gap: var(--spacing-sm);
+  height: 64px;
+  padding: 0 var(--spacing-md);
+  border-bottom: 1px solid var(--colors-hairline);
   flex-shrink: 0;
 }
 
 .app-sidebar__logo {
-  width: 32px; height: 32px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 2px 8px rgba(99,102,241,.25);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--rounded-md);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
+/* `logo.svg` paints with `currentColor`, but it loads through `<img src>`
+   — an isolated document that never inherits the `color` above — so the
+   glyph would fall back to black on the ink tile. The filter is the only
+   way to force it white without inlining the SVG in every template. */
 .app-sidebar__logo img { filter: brightness(0) invert(1); }
 
 .app-sidebar__brand-name {
-  font-size: 15px; font-weight: 700; color: #1e293b;
-  letter-spacing: -0.02em;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--colors-ink);
+  letter-spacing: -0.01em;
 }
 .app-sidebar__brand-sub {
-  font-size: 9px; color: #94a3b8; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: 10px;
+  color: var(--colors-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 /* Nav items */
-.app-sidebar__nav { padding: 12px 10px; flex: 1; }
+.app-sidebar__nav { padding: var(--spacing-md) var(--spacing-sm); flex: 1; }
 
 .app-sidebar__section-title {
-  font-size: 9px; color: #cbd5e1; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.08em;
-  padding: 0 12px; margin: 0 0 8px;
+  font-size: 10px;
+  color: var(--colors-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0 var(--spacing-sm);
+  margin: 0 0 var(--spacing-xs);
 }
 
 .app-sidebar__link {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px; border-radius: 10px; margin-bottom: 2px;
-  font-size: 13px; font-weight: 500; text-decoration: none;
-  color: #64748b; border: 1px solid transparent;
-  transition: all 0.15s ease;
-}
-.app-sidebar__link:hover {
-  background: #f1f5f9; color: #334155;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 10px var(--spacing-sm);
+  border-radius: var(--rounded-md);
+  margin-bottom: 2px;
+  font-size: var(--typography-body-md-size);
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--colors-body);
+  border: 1px solid transparent;
 }
 .app-sidebar__link--active {
-  background: #eef2ff; color: #4f46e5;
-  font-weight: 600; border-color: #e0e7ff;
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+  border-color: var(--colors-hairline);
 }
 
 /* User footer */
 .app-sidebar__footer {
-  padding: 12px; border-top: 1px solid #f1f5f9; flex-shrink: 0;
+  padding: var(--spacing-sm);
+  border-top: 1px solid var(--colors-hairline);
+  flex-shrink: 0;
 }
 .app-sidebar__user {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px; border-radius: 12px;
-  background: #f8fafc; border: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 10px;
+  border-radius: var(--rounded-md);
+  background: var(--colors-surface-soft);
+  border: 1px solid var(--colors-hairline);
 }
 .app-sidebar__avatar {
-  width: 34px; height: 34px; border-radius: 9px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0; box-shadow: 0 2px 6px rgba(99,102,241,.2);
-  font-size: 11px; font-weight: 700; color: #fff;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--rounded-full);
+  background: var(--colors-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--colors-on-primary);
 }
 .app-sidebar__user-name {
-  font-size: 12px; font-weight: 700; color: #1e293b;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--colors-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .app-sidebar__user-role {
-  font-size: 9px; color: #94a3b8; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.04em;
+  font-size: 10px;
+  color: var(--colors-muted);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 .app-sidebar__logout {
-  color: #94a3b8; display: flex; text-decoration: none;
-  padding: 4px; border-radius: 6px; flex-shrink: 0;
-  transition: color 0.15s;
+  color: var(--colors-muted);
+  display: flex;
+  text-decoration: none;
+  padding: var(--spacing-xxs);
+  border-radius: var(--rounded-sm);
+  flex-shrink: 0;
 }
-.app-sidebar__logout:hover { color: #ef4444; }
 
 /* Sidebar overlay (mobile only) */
 .sidebar-overlay {
   display: none;
-  position: fixed; inset: 0; z-index: 40;
-  background: rgba(15,23,42,0.4);
-  backdrop-filter: blur(2px);
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(24, 29, 38, 0.4);
 }
 
 /* Hamburger button — hidden on desktop, shown on mobile */
 .sidebar-hamburger {
   display: none;
-  background: none; border: none; cursor: pointer;
-  color: #64748b; padding: 6px; border-radius: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--colors-muted);
+  padding: 6px;
+  border-radius: var(--rounded-sm);
 }
-.sidebar-hamburger:hover { background: #f1f5f9; }
 
 /* === Main content area === */
 .app-main {
-  flex: 1; min-width: 0;
-  display: flex; flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-topbar {
-  height: 56px; background: #fff;
-  border-bottom: 1px solid #e2e8f0;
-  display: flex; align-items: center;
-  padding: 0 20px; gap: 12px;
-  position: sticky; top: 0; z-index: 20;
+  height: 64px;
+  background: var(--colors-canvas);
+  border-bottom: 1px solid var(--colors-hairline);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--spacing-lg);
+  gap: var(--spacing-sm);
+  position: sticky;
+  top: 0;
+  z-index: 20;
   flex-shrink: 0;
 }
 .app-topbar__spacer { flex: 1; }
 
 .app-topbar__avatar {
-  width: 34px; height: 34px; border-radius: 9px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; color: #fff;
-  cursor: pointer; border: none;
-  box-shadow: 0 2px 6px rgba(99,102,241,.2);
+  width: 34px;
+  height: 34px;
+  border-radius: var(--rounded-full);
+  background: var(--colors-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--colors-on-primary);
+  cursor: pointer;
+  border: none;
 }
 
 .app-content {
-  flex: 1; padding: 24px; overflow-x: hidden;
+  flex: 1;
+  padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-xxl);
+  background: var(--colors-canvas);
+  overflow-x: hidden;
 }
 
 /* ─── MOBILE (< 1024px) ─── */
 @media (max-width: 1023px) {
-  /* Sidebar: off-screen by default */
   .app-sidebar {
     position: fixed;
-    top: 0; left: 0; bottom: 0;
+    top: 0;
+    left: 0;
+    bottom: 0;
     z-index: 50;
     transform: translateX(-100%);
     transition: transform 0.25s ease;
-    box-shadow: 4px 0 24px rgba(15,23,42,.08);
+    box-shadow: var(--shadow-overlay);
     height: 100%;
   }
 
-  /* When sidebar-open is toggled: slide in */
-  .app-shell--sidebar-open .app-sidebar {
-    transform: translateX(0);
-  }
-
-  /* Show overlay when sidebar is open */
-  .app-shell--sidebar-open .sidebar-overlay {
-    display: block;
-  }
-
-  /* Show hamburger on mobile */
-  .sidebar-hamburger {
-    display: flex;
-  }
-}
-
-/* === Dashboard specific === */
-.dashboard-grid {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
-}
-
-.dashboard-sidebar {
-  width: 260px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  position: sticky;
-  top: 80px;
-}
-
-.dashboard-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.dashboard-detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 220px;
-  gap: 16px;
-}
-
-@media (max-width: 1279px) {
-  .dashboard-detail-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 1023px) {
-  .dashboard-grid {
-    flex-direction: column;
-  }
-  .dashboard-sidebar {
-    width: 100%;
-    position: static;
-  }
+  .app-shell--sidebar-open .app-sidebar { transform: translateX(0); }
+  .app-shell--sidebar-open .sidebar-overlay { display: block; }
+  .sidebar-hamburger { display: flex; }
+  .app-content { padding: var(--spacing-lg) var(--spacing-md) var(--spacing-xl); }
 }
 
 /* Small helpers */
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.animate-pulse-dot {
-  animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 @keyframes menu-in {
   from { opacity: 0; transform: translateY(-6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* === Auth layout (login / register) === */
+/* === Auth shell (login / register) ===
+   Two-column editorial split: an ink signature panel on the left and
+   the white form canvas on the right. No gradient backdrop — the
+   system's hero atmosphere is whitespace and color-block contrast. */
 #auth-layout {
   min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 20px 40px;
-  background: #f1f5f9;
-  background-image:
-    radial-gradient(ellipse at 20% 50%, rgba(99,102,241,.07) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, .05) 0%, transparent 55%),
-    radial-gradient(ellipse at 60% 85%, rgba(99,102,241,.04) 0%, transparent 50%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  background: var(--colors-canvas);
 }
 
+@media (max-width: 1023px) {
+  #auth-layout { grid-template-columns: minmax(0, 1fr); }
+}

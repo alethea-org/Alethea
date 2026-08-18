@@ -1,29 +1,26 @@
 <%!-- ═══════════════════════════════════════════════════════════
-     Alethea · Landing — Editorial two-column hero (#21)
+     Alethea · Landing — editorial long-scroll.
 
-     The editorial design that won the #116 prototype exploration
-     (variant A — "Editorial — dos columnas"). The structural change
-     from the old landing:
+     The page follows the design system's section rhythm: no two
+     consecutive bands share a surface, and every major band carries
+     the 96px vertical constant (`.band`).
 
-       • Hero: two-column. Left has the eyebrow, display h1, lede,
-         the two CTAs and a privacy proof line. Right has a
-         decorative "screenshot" mock that sketches the dashboard
-         without being interactive.
-       • Three-step band: 01 / 02 / 03 explains the onboarding
-         (invite, write, read summary) — replaces the old
-         six-feature grid.
-       • Footer: a single privacy line.
+       white hero  →  coral + forest signature split
+                   →  white three-step body
+                   →  cream callout band
+                   →  dark navy CTA card
+                   →  light gray CTA strip
+                   →  footer
 
-     The old features grid (six cards) and the gradient CTA section
-     are gone — they were inline-styled in `landing-*` classes that
-     are no longer used. The new layout uses the editorial
-     `ptl-*` / `ptla-*` classes from editorial.css.
+     There is no gradient, mesh or atmospheric backdrop anywhere:
+     the hero is white canvas and the brand voltage lives entirely
+     in the signature surface cards.
 ═══════════════════════════════════════════════════════════════ --%>
 <div class="ptl">
   <div class="ptl-shell">
     <nav class="ptl-nav">
       <.link navigate={~p"/"} class="ptl-brand">
-        <span class="ptl-brand__mark"><img src={~p"/images/logo.svg"} alt="" width="16" /></span>
+        <span class="ptl-brand__mark"><img src={~p"/images/logo.svg"} alt="" width="17" /></span>
         Alethea
       </.link>
       <div class="ptl-navlinks">
@@ -45,8 +42,8 @@
         </p>
 
         <div class="ptla-actions">
-          <.link navigate={~p"/register"} class="ptl-cta">Crear cuenta</.link>
-          <.link navigate={~p"/login"} class="ptl-cta ptl-cta--ghost">Ya tengo cuenta</.link>
+          <.link navigate={~p"/register"} class="button-primary">Crear cuenta</.link>
+          <.link navigate={~p"/login"} class="button-secondary">Ya tengo cuenta</.link>
         </div>
 
         <p class="ptla-proof">
@@ -77,36 +74,192 @@
       </div>
     </section>
   </div>
+  <%!-- ── Signature split — the page's first voltage moment ── --%>
+  <section class="band band--tight">
+    <div class="ptl-shell signature-split">
+      <article class="signature-coral-card">
+        <h2 class="signature-title">El registro crudo, ya convertido en historia clínica.</h2>
 
-  <section class="ptla-band">
-    <div class="ptl-shell ptla-cols">
-      <div class="ptla-col">
-        <span class="ptla-num">01</span>
-        <h3>Invitás al paciente</h3>
+        <p>Lo que el paciente escribe durante la semana entra al pipeline de
+          inferencia y sale como registro estructurado: sentimiento, tendencias
+          de conducta y eventos de crisis, cada uno anclado al mensaje que lo
+          originó.</p>
 
-        <p>Generás un enlace de Telegram desde el panel. El paciente entra sin app,
-          sin usuario y sin contraseña.</p>
+        <div class="signature-actions">
+          <.link navigate={~p"/register"} class="button-secondary-on-dark">Crear cuenta</.link>
+        </div>
+      </article>
+
+      <article class="signature-forest-card">
+        <h2 class="signature-title">Espontáneo o elicitado, siempre distinguido.</h2>
+
+        <p>Cada conducta registrada queda etiquetada según si la trajo el paciente
+          o la provocó una pregunta del asistente. La diferencia importa en la
+          lectura clínica, así que el sistema nunca la borra.</p>
+      </article>
+    </div>
+  </section>
+  <%!-- ── White body — the three-step onboarding ── --%>
+  <section class="band">
+    <div class="ptl-shell">
+      <div class="band__head">
+        <h2 class="band__title">Tres pasos entre la invitación y el briefing.</h2>
+
+        <p class="band__lede">
+          Sin app que instalar, sin usuario que recordar y sin fricción para el
+          paciente.
+        </p>
       </div>
 
-      <div class="ptla-col">
-        <span class="ptla-num">02</span>
-        <h3>Escribe durante la semana</h3>
+      <div class="demo-grid">
+        <article class="demo-grid-card">
+          <span class="ptla-num">01</span>
+          <h3 class="demo-grid-card__title">Invitás al paciente</h3>
 
-        <p>La IA acompaña con un tono clínicamente neutro y distingue lo espontáneo
-          de lo elicitado en el registro.</p>
-      </div>
+          <p class="demo-grid-card__text">
+            Generás un enlace de Telegram desde el panel. El paciente entra sin
+            app, sin usuario y sin contraseña.
+          </p>
+        </article>
 
-      <div class="ptla-col">
-        <span class="ptla-num">03</span>
-        <h3>Leés el resumen</h3>
+        <article class="demo-grid-card">
+          <span class="ptla-num">02</span>
+          <h3 class="demo-grid-card__title">Escribe durante la semana</h3>
 
-        <p>Resumen semanal con métricas emocionales y alertas de riesgo, con enlace
-          al mensaje que originó cada insight.</p>
+          <p class="demo-grid-card__text">
+            La IA acompaña con un tono clínicamente neutro y distingue lo
+            espontáneo de lo elicitado en el registro.
+          </p>
+        </article>
+
+        <article class="demo-grid-card">
+          <span class="ptla-num">03</span>
+          <h3 class="demo-grid-card__title">Leés el resumen</h3>
+
+          <p class="demo-grid-card__text">
+            Resumen semanal con métricas emocionales y alertas de riesgo, con
+            enlace al mensaje que originó cada insight.
+          </p>
+        </article>
       </div>
     </div>
   </section>
+  <%!-- ── Cream callout band ── --%>
+  <section class="band band--tight">
+    <div class="ptl-shell">
+      <div class="cream-callout-card">
+        <h2 class="band__title">Lo que ves al abrir el briefing.</h2>
 
+        <p class="band__lede" style="margin-bottom:24px;">
+          Una sola columna de lectura, en el orden en que preparás la sesión.
+        </p>
+
+        <div class="demo-grid">
+          <div class="demo-grid-card">
+            <h3 class="demo-grid-card__title">Resumen semanal</h3>
+
+            <p class="demo-grid-card__text">
+              El texto del período con su nivel de estado y la fecha de cierre.
+            </p>
+          </div>
+
+          <div class="demo-grid-card">
+            <h3 class="demo-grid-card__title">Cuatro métricas</h3>
+
+            <p class="demo-grid-card__text">
+              Ansiedad, social, eventos de crisis y sesiones registradas.
+            </p>
+          </div>
+
+          <div class="demo-grid-card">
+            <h3 class="demo-grid-card__title">Tendencias</h3>
+
+            <p class="demo-grid-card__text">
+              Distribución emocional de los últimos siete días, día por día.
+            </p>
+          </div>
+
+          <div class="demo-grid-card">
+            <h3 class="demo-grid-card__title">Historial cifrado</h3>
+
+            <p class="demo-grid-card__text">
+              El chat se descifra bajo demanda y cada apertura queda auditada.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <%!-- ── Dark navy CTA card ── --%>
+  <section class="band band--tight">
+    <div class="ptl-shell">
+      <article class="hero-card-dark">
+        <h2 class="signature-title">Ningún insight sin su mensaje de origen.</h2>
+
+        <p>Todo dato que aparece en el panel apunta al mensaje que lo produjo. Si
+          una tendencia no se puede rastrear hasta el registro del paciente, no
+          se muestra.</p>
+
+        <div class="signature-actions">
+          <.link navigate={~p"/register"} class="button-secondary-on-dark">Empezar ahora</.link>
+        </div>
+      </article>
+    </div>
+  </section>
+  <%!-- ── Light gray CTA strip ── --%>
+  <section class="band band--tight">
+    <div class="ptl-shell">
+      <div class="cta-band-light">
+        <h2 class="cta-band-light__title">Empezá a preparar sesiones con Alethea.</h2>
+
+        <p class="cta-band-light__text">
+          Creá tu cuenta profesional, invitá al primer paciente y leé su primer
+          resumen la semana que viene.
+        </p>
+        <.link navigate={~p"/register"} class="button-primary">Crear cuenta</.link>
+      </div>
+    </div>
+  </section>
+  <%!-- ── Footer ── --%>
   <footer class="ptl-shell ptl-footer">
-    Alethea — Centro de Control Clínico · Cifrado por paciente
+    <div class="footer-cols">
+      <div>
+        <h4>Plataforma</h4>
+
+        <ul>
+          <li><span>Diario clínico</span></li>
+
+          <li><span>Resumen semanal</span></li>
+
+          <li><span>Tendencias emocionales</span></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>Privacidad</h4>
+
+        <ul>
+          <li><span>Cifrado por paciente</span></li>
+
+          <li><span>Borrado criptográfico</span></li>
+
+          <li><span>Auditoría de descifrado</span></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>Cuenta</h4>
+
+        <ul>
+          <li><.link navigate={~p"/login"}>Iniciar sesión</.link></li>
+
+          <li><.link navigate={~p"/register"}>Crear cuenta</.link></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-legal">
+      <span>Alethea — Centro de Control Clínico</span> <span>Cifrado a nivel de paciente</span>
+    </div>
   </footer>
 </div>

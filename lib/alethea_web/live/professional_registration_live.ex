@@ -1,4 +1,12 @@
 defmodule AletheaWeb.ProfessionalRegistrationLive do
+  @moduledoc """
+  LiveView registration screen.
+
+  Not reachable from `AletheaWeb.Router` — `GET /register` is served
+  by `AletheaWeb.RegistrationController`. It is restyled here so no
+  surface in the tree carries the old chrome, but it should be
+  deleted rather than kept in parallel with the controller-based page.
+  """
   use Phoenix.LiveView
 
   import Phoenix.Component
@@ -15,56 +23,40 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      id="auth-layout"
-      style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); padding:20px;"
-    >
-      <div id="register-page" style="width:100%; max-width:400px;">
-        <%!-- Brand header --%>
-        <div style="text-align:center; margin-bottom:32px;">
-          <div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; background:linear-gradient(135deg, #6366f1, #818cf8); border-radius:16px; box-shadow:0 4px 14px rgba(99,102,241,.3); margin-bottom:16px;">
-            <svg
-              width="28"
-              height="28"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#fff"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
-          </div>
-          <h1 style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-bottom:4px;">
-            Alethea
-          </h1>
-          <p style="font-size:13px; color:#64748b;">Centro de Control Clínico</p>
+    <div id="auth-layout">
+      <section class="auth-panel">
+        <span class="auth-panel__brand">Alethea</span>
+        <div>
+          <h2 class="auth-panel__title">Una cuenta, todo el seguimiento.</h2>
+
+          <p class="auth-panel__lede">
+            Invitás al paciente por Telegram, la conversación se cifra con su
+            propia clave y vos leés el resumen semanal antes de la sesión.
+          </p>
         </div>
 
-        <%!-- Register card --%>
-        <div style="background:#fff; border-radius:20px; padding:32px; box-shadow:0 4px 24px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04); border:1px solid rgba(226,232,240,.8);">
-          <h2 style="font-size:17px; font-weight:700; color:#1e293b; margin-bottom:24px; text-align:center;">
-            Registrar cuenta
-          </h2>
+        <p class="auth-panel__proof">
+          El borrado de datos es criptográfico: se destruye la clave del paciente
+          en la bóveda, no se borran filas.
+        </p>
+      </section>
+
+      <section class="auth-form-side">
+        <div id="register-page" class="auth-form">
+          <p class="pt-eyebrow">Cuenta profesional</p>
+
+          <h1 class="auth-form__title">Registrar cuenta</h1>
+
+          <p class="auth-form__sub">Completá los datos para acceder a Alethea.</p>
 
           <.form
             for={@changeset}
             phx-submit="save"
             phx-change="validate"
-            style="display:flex; flex-direction:column; gap:20px;"
             id="registration-form"
           >
-            <%!-- Email field --%>
-            <div>
-              <label
-                for="email"
-                style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px;"
-              >
-                Correo electrónico
-              </label>
+            <div class="field">
+              <label for="email" class="field__label">Correo electrónico</label>
               <input
                 type="email"
                 name="professional[email]"
@@ -73,24 +65,15 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 placeholder="tu@email.com"
                 autocomplete="email"
                 value={Ecto.Changeset.get_field(@changeset, :email)}
-                style="width:100%; padding:10px 14px; border:1.5px solid #e2e8f0; border-radius:12px; font-size:14px; color:#1e293b; background:#fff; outline:none;"
+                class="text-input"
               />
-              <p
-                :for={error <- Keyword.get_values(@changeset.errors, :email)}
-                style="margin-top:4px; font-size:11px; color:#dc2626;"
-              >
-                {elem(error, 0)}
+              <p :for={{msg, _} <- Keyword.get_values(@changeset.errors, :email)} class="field__error">
+                {msg}
               </p>
             </div>
 
-            <%!-- Full name field --%>
-            <div>
-              <label
-                for="full_name"
-                style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px;"
-              >
-                Nombre completo
-              </label>
+            <div class="field">
+              <label for="full_name" class="field__label">Nombre completo</label>
               <input
                 type="text"
                 name="professional[full_name]"
@@ -99,24 +82,18 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 placeholder="Tu nombre"
                 autocomplete="name"
                 value={Ecto.Changeset.get_field(@changeset, :full_name)}
-                style="width:100%; padding:10px 14px; border:1.5px solid #e2e8f0; border-radius:12px; font-size:14px; color:#1e293b; background:#fff; outline:none;"
+                class="text-input"
               />
               <p
-                :for={error <- Keyword.get_values(@changeset.errors, :full_name)}
-                style="margin-top:4px; font-size:11px; color:#dc2626;"
+                :for={{msg, _} <- Keyword.get_values(@changeset.errors, :full_name)}
+                class="field__error"
               >
-                {elem(error, 0)}
+                {msg}
               </p>
             </div>
 
-            <%!-- Password field --%>
-            <div>
-              <label
-                for="password"
-                style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px;"
-              >
-                Contraseña
-              </label>
+            <div class="field">
+              <label for="password" class="field__label">Contraseña</label>
               <input
                 type="password"
                 name="professional[password]"
@@ -124,42 +101,25 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 required
                 placeholder="••••••••"
                 autocomplete="new-password"
-                style="width:100%; padding:10px 14px; border:1.5px solid #e2e8f0; border-radius:12px; font-size:14px; color:#1e293b; background:#fff; outline:none;"
+                class="text-input"
               />
-              <p style="margin-top:4px; font-size:11px; color:#94a3b8;">
-                La contraseña debe tener al menos 12 caracteres.
-              </p>
+              <p class="field__hint">La contraseña debe tener al menos 12 caracteres.</p>
+
               <p
-                :for={error <- Keyword.get_values(@changeset.errors, :password)}
-                style="margin-top:4px; font-size:11px; color:#dc2626;"
+                :for={{msg, _} <- Keyword.get_values(@changeset.errors, :password)}
+                class="field__error"
               >
-                {elem(error, 0)}
+                {msg}
               </p>
             </div>
-
-            <%!-- Submit button --%>
-            <button
-              type="submit"
-              style="width:100%; padding:12px; background:linear-gradient(135deg, #6366f1, #818cf8); color:#fff; font-size:14px; font-weight:600; border:none; border-radius:12px; cursor:pointer; box-shadow:0 2px 8px rgba(99,102,241,.3);"
-            >
-              Crear cuenta
-            </button>
+            <button type="submit" class="button-primary button-primary--block">Crear cuenta</button>
           </.form>
+
+          <p class="auth-form__foot">¿Ya tenés cuenta? <a href="/login">Iniciá sesión</a></p>
+
+          <p class="auth-form__note">Cifrado a nivel de paciente</p>
         </div>
-
-        <%!-- Login link --%>
-        <p style="text-align:center; margin-top:20px; font-size:13px; color:#64748b;">
-          ¿Ya tenés cuenta?
-          <a href="/login" style="color:#6366f1; font-weight:600; text-decoration:none;">
-            Iniciá sesión
-          </a>
-        </p>
-
-        <%!-- Security note --%>
-        <p style="text-align:center; margin-top:12px; font-size:11px; color:#94a3b8;">
-          Tus datos están protegidos con cifrado de extremo a extremo
-        </p>
-      </div>
+      </section>
     </div>
     """
   end
