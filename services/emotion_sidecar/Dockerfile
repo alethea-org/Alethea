@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/home/sidecar/.cache/huggingface
 
-RUN useradd --create-home --uid 10001 sidecar
+RUN useradd --create-home --uid 10001 sidecar \
+    && install --directory --owner=sidecar --group=sidecar "$HF_HOME"
 
 WORKDIR /app
 COPY requirements.txt ./
