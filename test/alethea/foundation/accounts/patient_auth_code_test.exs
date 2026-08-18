@@ -114,13 +114,23 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       assert reloaded.last_attempt_ip == nil
     end
 
-    test "code at the +1s boundary is still valid (TTL exclusive of the boundary)", %{
+    test "code with at least one full second remaining is valid", %{
       auth_code: auth_code
     } do
-      future = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.truncate(:second)
+      future = DateTime.utc_now() |> DateTime.add(2, :second) |> DateTime.truncate(:second)
       set_expires_at(auth_code, future)
 
       assert :ok =
+               PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.2.3.4",
+                 kind: "deep_link"
+               )
+    end
+
+    test "code at its TTL boundary is expired", %{auth_code: auth_code} do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      set_expires_at(auth_code, now)
+
+      assert :expired =
                PatientAuthCode.verify_patient_auth_code(auth_code.code, "1.2.3.4",
                  kind: "deep_link"
                )
