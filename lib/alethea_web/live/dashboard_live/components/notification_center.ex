@@ -1,4 +1,12 @@
 defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
+  @moduledoc """
+  The dashboard's notification bell and its dropdown panel.
+
+  Severity is carried by a dot in one of the documented semantic
+  roles (`status-dot--risk` / `--warn` / `--info`) rather than by a
+  bespoke hex, so a new alert level is a role decision, not a color
+  decision.
+  """
   use AletheaWeb, :live_component
 
   @page_size 10
@@ -75,137 +83,101 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
       |> assign(:page_items, page_items)
 
     ~H"""
-    <div style="position:relative;">
-      <%!-- Bell button --%>
+    <div class="notif">
       <button
+        type="button"
         phx-click="toggle_panel"
         phx-target={@myself}
-        style={
-          "position:relative; display:flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:10px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; transition:background .15s;" <>
-          if(@show_panel, do: "background:#eef2ff; border-color:#818cf8;", else: "")
-        }
+        class={["notif__bell", @show_panel && "notif__bell--on"]}
         aria-label="Notificaciones"
+        aria-expanded={to_string(@show_panel)}
       >
-        <.icon name="hero-bell" style="width:20px; height:20px; color:#4b5563;" />
-        <span
-          :if={@unread_count > 0}
-          style="position:absolute; top:-4px; right:-4px; min-width:16px; height:16px; border-radius:8px; background:#ef4444; color:#fff; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 3px; border:1.5px solid #fff;"
-        >
-          {min(@unread_count, 99)}
-        </span>
+        <.icon name="hero-bell" class="size-5" />
+        <span :if={@unread_count > 0} class="notif__count">{min(@unread_count, 99)}</span>
       </button>
-
-      <%!-- Dropdown panel --%>
-      <div
-        :if={@show_panel}
-        id={"#{@id}-panel"}
-        style="position:absolute; right:0; top:calc(100% + 6px); z-index:50; width:320px; border:1px solid #e2e8f0; border-radius:16px; background:#fff; box-shadow:0 8px 24px rgba(0,0,0,.10); overflow:hidden;"
-      >
-        <%!-- Panel header --%>
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #f1f5f9; background:#fafbfc;">
-          <div style="display:flex; align-items:center; gap:6px;">
-            <.icon name="hero-bell" style="width:13px; height:13px; color:#6366f1;" />
-            <span style="font-size:11px; font-weight:700; color:#1e293b;">Notificaciones</span>
-            <span
-              :if={@unread_count > 0}
-              class="badge badge-error"
-              style="font-size:9px; font-weight:700; min-width:18px;"
-            >
-              {@unread_count}
-            </span>
-          </div>
-          <div style="display:flex; align-items:center; gap:6px;">
+      <div :if={@show_panel} id={"#{@id}-panel"} class="notif__panel">
+        <div class="notif__head">
+          <span class="pt-eyebrow">Notificaciones</span>
+          <div style="display:flex; align-items:center; gap:8px;">
             <button
               :if={@unread_count > 0}
+              type="button"
               phx-click="mark_all_read"
               phx-target={@myself}
-              style="font-size:10px; color:#6366f1; font-weight:600; background:none; border:none; cursor:pointer; padding:2px 6px; border-radius:6px;"
+              class="link-button"
             >
               Leer todo
             </button>
             <button
+              type="button"
               phx-click="close_panel"
               phx-target={@myself}
-              style="display:flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px; border:none; background:none; cursor:pointer; color:#94a3b8;"
+              class="notif__icon-btn"
+              aria-label="Cerrar notificaciones"
             >
-              <.icon name="hero-x-mark" style="width:13px; height:13px;" />
+              <.icon name="hero-x-mark" class="size-4" />
             </button>
           </div>
         </div>
 
-        <%!-- Empty state --%>
-        <div :if={@page_items == []} style="padding:32px 16px; text-align:center;">
-          <.icon
-            name="hero-bell-slash"
-            style="width:24px; height:24px; color:#cbd5e1; margin:0 auto 8px; display:block;"
-          />
-          <p style="font-size:12px; color:#94a3b8;">Sin notificaciones</p>
+        <div :if={@page_items == []} class="empty-state" style="border:none; padding:32px 16px;">
+          <.icon name="hero-bell-slash" class="empty-state__icon" />
+          <p class="empty-state__text" style="margin-bottom:0;">Sin notificaciones</p>
         </div>
 
-        <%!-- Notification list --%>
         <div :if={@page_items != []}>
-          <%= for notif <- @page_items do %>
-            <div
-              id={"notif-#{notif.id}"}
-              style={
-                "display:flex; align-items:flex-start; gap:10px; padding:10px 14px; border-bottom:1px solid #f8fafc; transition:background .12s;" <>
-                if(notif.read, do: "", else: "background:rgba(99,102,241,.03);")
-              }
+          <div
+            :for={notif <- @page_items}
+            id={"notif-#{notif.id}"}
+            class={["notif__item", !notif.read && "notif__item--unread"]}
+          >
+            <span
+              class={"status-dot " <> severity_dot(notif.severity)}
+              style="margin-top:6px;"
             >
-              <%!-- Severity dot --%>
-              <div style="flex-shrink:0; padding-top:2px;">
-                <span style={"width:8px; height:8px; border-radius:50%; display:block; background:#{severity_color(notif.severity)};"}>
-                </span>
-              </div>
+            </span>
+            <div style="flex:1; min-width:0;">
+              <p class="notif__msg">{notif.message}</p>
 
-              <%!-- Content --%>
-              <div style="flex:1; min-width:0;">
-                <p style={"font-size:12px; line-height:1.4; color:#334155; " <> if(notif.read, do: "", else: "font-weight:500;")}>
-                  {notif.message}
-                </p>
-                <p style="font-size:10px; color:#94a3b8; margin-top:2px;">
-                  {relative_time(notif.inserted_at)}
-                </p>
-              </div>
-
-              <%!-- Mark read --%>
-              <button
-                :if={!notif.read}
-                phx-click="mark_read"
-                phx-value-id={notif.id}
-                phx-target={@myself}
-                title="Marcar como leído"
-                style="flex-shrink:0; padding-top:2px; background:none; border:none; cursor:pointer; color:#94a3b8; display:flex; align-items:center;"
-              >
-                <.icon name="hero-check" style="width:13px; height:13px;" />
-              </button>
+              <p class="notif__time">{relative_time(notif.inserted_at)}</p>
             </div>
-          <% end %>
+
+            <button
+              :if={!notif.read}
+              type="button"
+              phx-click="mark_read"
+              phx-value-id={notif.id}
+              phx-target={@myself}
+              title="Marcar como leído"
+              aria-label="Marcar como leído"
+              class="notif__icon-btn"
+            >
+              <.icon name="hero-check" class="size-4" />
+            </button>
+          </div>
         </div>
 
-        <%!-- Pagination --%>
-        <div
-          :if={@total_pages > 1}
-          style="display:flex; align-items:center; justify-content:space-between; padding:8px 14px; border-top:1px solid #f1f5f9; background:#fafbfc;"
-        >
+        <div :if={@total_pages > 1} class="notif__foot">
           <button
+            type="button"
             phx-click="prev_page"
             phx-target={@myself}
             disabled={@current_page == 1}
-            style={"display:flex; align-items:center; gap:3px; font-size:10px; color:#64748b; background:none; border:none; cursor:pointer; " <> if(@current_page == 1, do: "opacity:0.4; cursor:default;", else: "")}
+            class="link-button"
+            style={@current_page == 1 && "opacity:.4; cursor:default;"}
           >
-            <.icon name="hero-chevron-left" style="width:12px; height:12px;" /> Anterior
+            Anterior
           </button>
-          <span style="font-size:10px; color:#94a3b8; font-variant-numeric:tabular-nums;">
-            {@current_page} / {@total_pages}
-          </span>
+          <span style="font-variant-numeric:tabular-nums;">{@current_page} / {@total_pages}</span>
           <button
+            type="button"
             phx-click="next_page"
             phx-target={@myself}
             disabled={@current_page == @total_pages}
-            style={"display:flex; align-items:center; gap:3px; font-size:10px; color:#64748b; background:none; border:none; cursor:pointer; " <> if(@current_page == @total_pages, do: "opacity:0.4; cursor:default;", else: "")}
+            class="link-button"
+            style={@current_page == @total_pages && "opacity:.4; cursor:default;"}
           >
-            Siguiente <.icon name="hero-chevron-right" style="width:12px; height:12px;" />
+            Siguiente
           </button>
         </div>
       </div>
@@ -262,9 +234,9 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
   defp notification_message(:patient_created, _), do: "Nuevo paciente registrado"
   defp notification_message(_, _), do: "Nueva notificación"
 
-  defp severity_color(:critical), do: "#ef4444"
-  defp severity_color(:warning), do: "#f59e0b"
-  defp severity_color(:info), do: "#3b82f6"
+  defp severity_dot(:critical), do: "status-dot--risk"
+  defp severity_dot(:warning), do: "status-dot--warn"
+  defp severity_dot(:info), do: "status-dot--info"
 
   defp relative_time(dt) do
     diff = DateTime.diff(DateTime.utc_now(), dt, :second)

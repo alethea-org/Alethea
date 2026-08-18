@@ -6,8 +6,9 @@ defmodule AletheaWeb.Layouts do
   - `auth.html.heex` — Minimal centered layout for login/register
   - `app.html.heex` — Sidebar + topbar shell for authenticated pages
 
-  All positioning uses CSS classes defined in `app.css`.
-  Component styling uses FlyonUI semantic classes from CDN.
+  All positioning uses CSS classes defined in `app.css`; component
+  appearance comes from `editorial.css`. The app loads no CSS
+  framework and no component CDN.
   """
   use AletheaWeb, :html
 
@@ -145,7 +146,7 @@ defmodule AletheaWeb.Layouts do
 
   def flash_group(assigns) do
     ~H"""
-    <div id={@id} aria-live="polite">
+    <div id={@id} class="flash-stack" aria-live="polite">
       <.flash kind={:info} flash={@flash} /> <.flash kind={:error} flash={@flash} />
     </div>
     """

@@ -1,4 +1,12 @@
 defmodule AletheaWeb.LoginLive do
+  @moduledoc """
+  LiveView login screen.
+
+  Not reachable from `AletheaWeb.Router` — `GET /login` is served by
+  `AletheaWeb.SessionController`. It is restyled here so no surface in
+  the tree carries the old chrome, but it should be deleted rather
+  than kept in parallel with the controller-based page.
+  """
   use Phoenix.LiveView
 
   import Phoenix.LiveView
@@ -12,64 +20,35 @@ defmodule AletheaWeb.LoginLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      id="auth-layout"
-      style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); padding:20px;"
-    >
-      <div id="login-page" style="width:100%; max-width:400px;">
-        <%!-- Brand header --%>
-        <div style="text-align:center; margin-bottom:32px;">
-          <div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; background:linear-gradient(135deg, #6366f1, #818cf8); border-radius:16px; box-shadow:0 4px 14px rgba(99,102,241,.3); margin-bottom:16px;">
-            <svg
-              width="28"
-              height="28"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#fff"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
-          </div>
-          <h1 style="font-size:24px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-bottom:4px;">
-            Alethea
-          </h1>
-          <p style="font-size:13px; color:#64748b;">Centro de Control Clínico</p>
+    <div id="auth-layout">
+      <section class="auth-panel">
+        <span class="auth-panel__brand">Alethea</span>
+        <div>
+          <h2 class="auth-panel__title">La semana del paciente, ya leída.</h2>
+
+          <p class="auth-panel__lede">El registro diario entre sesiones llega convertido en un resumen
+            clínico con métricas y tendencias.</p>
         </div>
 
-        <%!-- Login card --%>
-        <div style="background:#fff; border-radius:20px; padding:32px; box-shadow:0 4px 24px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04); border:1px solid rgba(226,232,240,.8);">
-          <h2 style="font-size:17px; font-weight:700; color:#1e293b; margin-bottom:24px; text-align:center;">
-            Iniciar sesión
-          </h2>
+        <p class="auth-panel__proof">
+          Cada paciente tiene su propia clave de cifrado. Ni el equipo de Alethea
+          ni terceros pueden leer el contenido clínico.
+        </p>
+      </section>
 
-          <.form
-            for={%{}}
-            as={:professional}
-            phx-submit="login"
-            id="login-form"
-            style="display:flex; flex-direction:column; gap:20px;"
-          >
-            <%!-- Error message --%>
-            <div
-              :if={@flash["error"]}
-              style="padding:12px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; color:#dc2626; font-size:13px;"
-            >
-              {@flash["error"]}
-            </div>
+      <section class="auth-form-side">
+        <div id="login-page" class="auth-form">
+          <p class="pt-eyebrow">Centro de Control Clínico</p>
 
-            <%!-- Email field --%>
-            <div>
-              <label
-                for="email"
-                style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px;"
-              >
-                Correo electrónico
-              </label>
+          <h1 class="auth-form__title">Iniciar sesión</h1>
+
+          <p class="auth-form__sub">Ingresá tus credenciales para continuar.</p>
+
+          <div :if={@flash["error"]} class="notice notice--error"><span>{@flash["error"]}</span></div>
+
+          <.form for={%{}} as={:professional} phx-submit="login" id="login-form">
+            <div class="field">
+              <label for="email" class="field__label">Correo electrónico</label>
               <input
                 type="email"
                 name="professional[email]"
@@ -77,18 +56,12 @@ defmodule AletheaWeb.LoginLive do
                 required
                 placeholder="tu@email.com"
                 autocomplete="email"
-                style="width:100%; padding:10px 14px; border:1.5px solid #e2e8f0; border-radius:12px; font-size:14px; color:#1e293b; background:#fff; outline:none;"
+                class="text-input"
               />
             </div>
 
-            <%!-- Password field --%>
-            <div>
-              <label
-                for="password"
-                style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px;"
-              >
-                Contraseña
-              </label>
+            <div class="field">
+              <label for="password" class="field__label">Contraseña</label>
               <input
                 type="password"
                 name="professional[password]"
@@ -96,33 +69,17 @@ defmodule AletheaWeb.LoginLive do
                 required
                 placeholder="••••••••"
                 autocomplete="current-password"
-                style="width:100%; padding:10px 14px; border:1.5px solid #e2e8f0; border-radius:12px; font-size:14px; color:#1e293b; background:#fff; outline:none;"
+                class="text-input"
               />
             </div>
-
-            <%!-- Submit button --%>
-            <button
-              type="submit"
-              style="width:100%; padding:12px; background:linear-gradient(135deg, #6366f1, #818cf8); color:#fff; font-size:14px; font-weight:600; border:none; border-radius:12px; cursor:pointer; box-shadow:0 2px 8px rgba(99,102,241,.3);"
-            >
-              Ingresar
-            </button>
+            <button type="submit" class="button-primary button-primary--block">Ingresar</button>
           </.form>
+
+          <p class="auth-form__foot">¿No tenés cuenta? <a href="/register">Registrate acá</a></p>
+
+          <p class="auth-form__note">Cifrado a nivel de paciente</p>
         </div>
-
-        <%!-- Register link --%>
-        <p style="text-align:center; margin-top:20px; font-size:13px; color:#64748b;">
-          ¿No tenés cuenta?
-          <a href="/register" style="color:#6366f1; font-weight:600; text-decoration:none;">
-            Registrate aquí
-          </a>
-        </p>
-
-        <%!-- Security note --%>
-        <p style="text-align:center; margin-top:12px; font-size:11px; color:#94a3b8;">
-          Tus datos están protegidos con cifrado de extremo a extremo
-        </p>
-      </div>
+      </section>
     </div>
     """
   end

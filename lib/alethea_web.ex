@@ -17,7 +17,7 @@ defmodule AletheaWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images favicon.ico robots.txt)
+  def static_paths, do: ~w(assets fonts images favicon.svg robots.txt)
 
   def router do
     quote do
@@ -84,6 +84,8 @@ defmodule AletheaWeb do
       import Phoenix.HTML
       # Core UI components
       import AletheaWeb.CoreComponents
+      # Inline SVG icon set (`<.icon name="hero-…" />`)
+      import AletheaWeb.Icons
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

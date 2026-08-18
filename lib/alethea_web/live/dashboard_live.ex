@@ -393,8 +393,8 @@ defmodule AletheaWeb.DashboardLive do
 
   defp tg_status_class(statuses, patient_id) do
     case tg_status(statuses, patient_id) do
-      :connected -> "badge badge-success"
-      _ -> "badge badge-ghost"
+      :connected -> "pt-pill pt-pill--ok"
+      _ -> "pt-pill pt-pill--neutral"
     end
   end
 
@@ -590,7 +590,7 @@ defmodule AletheaWeb.DashboardLive do
         label: format_emotion_label(key),
         percent: round((Map.get(trend, :score) || 0) * 100),
         percent_label: format_trend_percentage(Map.get(trend, :score)),
-        progress_class: emotion_progress_class(key)
+        meter_class: emotion_meter_class(key)
       }
     end)
     |> Enum.sort_by(& &1.percent, :desc)
@@ -615,12 +615,15 @@ defmodule AletheaWeb.DashboardLive do
 
   defp format_trend_percentage(_), do: "0%"
 
-  defp emotion_progress_class("joy"), do: "progress-success"
-  defp emotion_progress_class("sadness"), do: "progress-info"
-  defp emotion_progress_class("anger"), do: "progress-error"
-  defp emotion_progress_class("fear"), do: "progress-warning"
-  defp emotion_progress_class("neutral"), do: "progress-ghost"
-  defp emotion_progress_class(_), do: ""
+  # The meter fill speaks with the signature palette, not with a CDN
+  # progress-bar variant: forest for joy, info for sadness, coral for
+  # anger, mustard for fear, and the muted border tone for neutral.
+  defp emotion_meter_class("joy"), do: "meter__fill--joy"
+  defp emotion_meter_class("sadness"), do: "meter__fill--sadness"
+  defp emotion_meter_class("anger"), do: "meter__fill--anger"
+  defp emotion_meter_class("fear"), do: "meter__fill--fear"
+  defp emotion_meter_class("neutral"), do: "meter__fill--neutral"
+  defp emotion_meter_class(_), do: ""
 
   defp calculate_mood_signal(trends, patient) do
     predominant =

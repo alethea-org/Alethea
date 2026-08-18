@@ -1,4 +1,18 @@
 defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
+  @moduledoc """
+  The caseload picker at the top of the dashboard.
+
+  The controls sit in a single horizontal command bar and the
+  caseload renders as a card grid underneath. The previous layout
+  stacked the panel title, the search box, three filter chips and a
+  sort select as five rows inside a narrow scrolling column, so a
+  professional with one patient read five rows of chrome before
+  reaching the only card that mattered.
+
+  Filters are progressive disclosure: the chips live in a popover
+  whose trigger carries the active count, so an untouched filter set
+  costs one control instead of a row.
+  """
   use AletheaWeb, :live_component
 
   @valid_filters ~w(active needs_attention archived)
@@ -67,28 +81,14 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
       |> assign(:filtered, filtered)
       |> assign(:filter_labels, @filter_labels)
       |> assign(:sort_labels, @sort_labels)
+      |> assign(:active_filter_count, MapSet.size(assigns.active_filters))
 
     ~H"""
-    <div style="border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; background:#fff;">
-      <%!-- Search + controls bar --%>
-      <div style="padding:10px 14px; border-bottom:1px solid #f1f5f9; background:#fafbfc; display:flex; flex-direction:column; gap:8px;">
-        <%!-- Header row --%>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <.icon name="hero-users" style="width:14px; height:14px; color:#94a3b8; flex-shrink:0;" />
-          <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#64748b; flex:1;">
-            Mis Pacientes
-          </span>
-          <span style="font-size:10px; color:#94a3b8; font-variant-numeric:tabular-nums;">
-            {length(@filtered)}/{length(@patients)}
-          </span>
-        </div>
-
-        <%!-- Search input --%>
-        <div style="position:relative;">
-          <.icon
-            name="hero-magnifying-glass"
-            style="position:absolute; left:8px; top:50%; transform:translateY(-50%); width:13px; height:13px; color:#94a3b8; pointer-events:none;"
-          />
+    <div>
+      <%!-- ── Command bar — one row for every control ── --%>
+      <div class="cmdbar">
+        <div class="cmdbar__search">
+          <.icon name="hero-magnifying-glass" class="cmdbar__search-icon" />
           <input
             type="text"
             name="q"
@@ -98,84 +98,104 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             phx-target={@myself}
             phx-debounce="300"
             autocomplete="off"
-            style="width:100%; padding:6px 10px 6px 28px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; background:#fff; color:#334155; outline:none; box-sizing:border-box;"
+            aria-label="Buscar paciente por alias"
+            class="text-input"
           />
         </div>
+        <span class="cmdbar__count">{length(@filtered)} de {length(@patients)}</span>
+        <div class="cmdbar__divider"></div>
 
-        <%!-- Filter chips — AND logic --%>
-        <div style="display:flex; gap:4px; flex-wrap:wrap;">
-          <%= for {key, label} <- @filter_labels do %>
-            <button
-              phx-click="toggle_filter"
-              phx-value-filter={key}
-              phx-target={@myself}
-              style={chip_style(MapSet.member?(@active_filters, key))}
-            >
-              {label}
-            </button>
-          <% end %>
-        </div>
+        <details class="filter-menu" id={"#{@id}-filters"}>
+          <summary>
+            Filtros
+            <span :if={@active_filter_count > 0} class="filter-badge">{@active_filter_count}</span>
+          </summary>
 
-        <%!-- Sort select --%>
-        <div style="display:flex; align-items:center; gap:6px;">
-          <span style="font-size:10px; color:#94a3b8; white-space:nowrap;">Ordenar:</span>
+          <div class="filter-menu__panel">
+            <p class="filter-menu__title">Estado del paciente</p>
+
+            <div class="filter-menu__chips">
+              <button
+                :for={{key, label} <- @filter_labels}
+                type="button"
+                phx-click="toggle_filter"
+                phx-value-filter={key}
+                phx-target={@myself}
+                aria-pressed={to_string(MapSet.member?(@active_filters, key))}
+                class={[
+                  "filter-chip",
+                  MapSet.member?(@active_filters, key) && "filter-chip--on"
+                ]}
+              >
+                {label}
+              </button>
+            </div>
+          </div>
+        </details>
+
+        <div class="cmdbar__sort">
+          <label for={"#{@id}-sort"}>Ordenar</label>
           <select
+            id={"#{@id}-sort"}
             name="sort"
             phx-change="set_sort"
             phx-target={@myself}
-            style="flex:1; padding:4px 8px; border:1px solid #e2e8f0; border-radius:6px; font-size:11px; background:#fff; color:#334155; cursor:pointer;"
+            class="text-input"
           >
-            <%= for {key, label} <- @sort_labels do %>
-              <option value={key} selected={@sort == key}>{label}</option>
-            <% end %>
+            <option :for={{key, label} <- @sort_labels} value={key} selected={@sort == key}>
+              {label}
+            </option>
           </select>
         </div>
       </div>
+      <%!-- ── Caseload grid ── --%>
+      <div :if={@filtered == []} class="empty-state">
+        <.icon name="hero-magnifying-glass" class="empty-state__icon" />
+        <p class="empty-state__title">Sin resultados</p>
 
-      <%!-- Patient list --%>
-      <nav id={"#{@id}-results"}>
-        <div :if={@filtered == []} style="padding:32px 16px; text-align:center;">
-          <.icon
-            name="hero-magnifying-glass"
-            style="width:24px; height:24px; color:#cbd5e1; margin:0 auto 8px; display:block;"
-          />
-          <p style="font-size:12px; color:#94a3b8;">Sin resultados</p>
-        </div>
+        <p class="empty-state__text">
+          Ningún paciente coincide con la búsqueda o los filtros activos.
+        </p>
+      </div>
 
-        <%= for patient <- @filtered do %>
-          <.link
-            patch={~p"/dashboard/patients/#{patient.id}"}
-            id={"ps-patient-#{patient.id}"}
-            style={patient_row_style(@selected_patient_id == patient.id)}
-          >
-            <div style={avatar_style(@selected_patient_id == patient.id)}>
-              <span style={avatar_text_style(@selected_patient_id == patient.id)}>
-                {patient.alias
-                |> String.split()
-                |> Enum.map(&String.first/1)
-                |> Enum.take(2)
-                |> Enum.join()
-                |> String.upcase()}
-              </span>
-            </div>
-
-            <div style="min-width:0; flex:1;">
-              <div style="font-size:13px; font-weight:600; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                {patient.alias}
-              </div>
-              <div style="font-size:10px; color:#94a3b8; margin-top:1px;">
-                {status_label(patient)}
-              </div>
-            </div>
-
-            <span
-              :if={patient.urgent_intervention}
-              style="width:8px; height:8px; border-radius:50%; background:#ef4444; flex-shrink:0;"
-              class="animate-pulse-dot"
-            >
+      <nav :if={@filtered != []} id={"#{@id}-results"} class="patient-grid">
+        <.link
+          :for={patient <- @filtered}
+          patch={~p"/dashboard/patients/#{patient.id}"}
+          id={"ps-patient-#{patient.id}"}
+          class={[
+            "patient-card",
+            @selected_patient_id == patient.id && "patient-card--on",
+            patient.urgent_intervention && "patient-card--risk"
+          ]}
+        >
+          <div class="patient-card__head">
+            <span class={[
+              "pt-avatar patient-card__avatar",
+              patient.urgent_intervention && "pt-avatar--risk"
+            ]}>
+              {initials(patient.alias)}
             </span>
-          </.link>
-        <% end %>
+            <div style="min-width:0;">
+              <div class="patient-card__name">{patient.alias}</div>
+
+              <div class="patient-card__meta">{schedule_label(patient)}</div>
+            </div>
+          </div>
+
+          <div class="patient-card__foot">
+            <span style="display:flex; align-items:center; gap:6px; font-size:12px;">
+              <span class={"status-dot " <> status_dot(patient)}></span> {status_label(patient)}
+            </span>
+            <span :if={@selected_patient_id == patient.id} class="pt-pill pt-pill--neutral">
+              En briefing
+            </span>
+          </div>
+        </.link>
+        <.link navigate={~p"/patients/new"} class="patient-card patient-card--new">
+          <.icon name="hero-user-plus" class="size-5" /> <strong>Nuevo paciente</strong>
+          <span style="font-size:12px;">Se crea con su propia clave de cifrado.</span>
+        </.link>
       </nav>
     </div>
     """
@@ -221,43 +241,35 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
   defp sort_patients(patients, _), do: patients
 
   # ---------------------------------------------------------------------------
-  # Style helpers (keep interpolation out of template for readability)
+  # Presentation helpers
   # ---------------------------------------------------------------------------
 
-  defp chip_style(true),
-    do:
-      "padding:3px 8px; border-radius:6px; font-size:10px; font-weight:600; cursor:pointer; border:1px solid #6366f1; background:#eef2ff; color:#6366f1;"
+  defp initials(alias_name) when is_binary(alias_name) do
+    alias_name
+    |> String.split()
+    |> Enum.map(&String.first/1)
+    |> Enum.take(2)
+    |> Enum.join()
+    |> String.upcase()
+  end
 
-  defp chip_style(false),
-    do:
-      "padding:3px 8px; border-radius:6px; font-size:10px; font-weight:600; cursor:pointer; border:1px solid #e2e8f0; background:#fff; color:#64748b;"
+  defp initials(_), do: "?"
 
-  defp patient_row_style(true),
-    do:
-      "display:flex; align-items:center; gap:10px; padding:10px 14px; text-decoration:none; transition:background .15s; border-bottom:1px solid #f8fafc; background:#eef2ff; border-left:3px solid #6366f1;"
+  # The card splits what the old single line conflated: when the next
+  # session lands is a schedule fact, how the patient is doing is a
+  # clinical one. They now read on separate lines.
+  defp schedule_label(%{session_day_of_week: d, session_time: t}) when not is_nil(d),
+    do: "#{format_day(d)} · #{format_time(t)}"
 
-  defp patient_row_style(false),
-    do:
-      "display:flex; align-items:center; gap:10px; padding:10px 14px; text-decoration:none; transition:background .15s; border-bottom:1px solid #f8fafc; border-left:3px solid transparent;"
-
-  defp avatar_style(true),
-    do:
-      "width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; background:rgba(99,102,241,.12);"
-
-  defp avatar_style(false),
-    do:
-      "width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; background:#f1f5f9;"
-
-  defp avatar_text_style(true), do: "font-size:10px; font-weight:700; color:#6366f1;"
-  defp avatar_text_style(false), do: "font-size:10px; font-weight:700; color:#64748b;"
+  defp schedule_label(_), do: "Sin horario"
 
   defp status_label(%{urgent_intervention: true}), do: "Intervención urgente"
   defp status_label(%{status: "archived"}), do: "Archivado"
+  defp status_label(_), do: "En seguimiento"
 
-  defp status_label(%{session_day_of_week: d, session_time: t}) when not is_nil(d),
-    do: "#{format_day(d)} · #{format_time(t)}"
-
-  defp status_label(_), do: "Sin horario"
+  defp status_dot(%{urgent_intervention: true}), do: "status-dot--risk"
+  defp status_dot(%{status: "archived"}), do: "status-dot"
+  defp status_dot(_), do: "status-dot--ok"
 
   defp format_day(1), do: "Lun"
   defp format_day(2), do: "Mar"

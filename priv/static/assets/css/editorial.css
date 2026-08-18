@@ -256,32 +256,7 @@
 }
 .pt-avatar--risk { background: var(--colors-danger-soft); color: var(--colors-danger); }
 
-.pt-empty {
-  padding: var(--spacing-xl) var(--spacing-lg);
-  text-align: center;
-  color: var(--colors-muted);
-  font-size: 13px;
-}
 
-.pt-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-xs) var(--spacing-md);
-  border-radius: var(--rounded-md);
-  border: 1px solid var(--colors-hairline);
-  background: var(--colors-canvas);
-  color: var(--colors-ink);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: none;
-}
-.pt-btn--ghost {
-  background: transparent;
-  border-color: var(--colors-hairline);
-  color: var(--colors-body);
-}
 
 /* =================================================================
    Type scale — every step of the spec's hierarchy table, one rule
@@ -621,13 +596,6 @@
    in this commit; only the underlying token references moved.
 ================================================================= */
 
-.pta-picker {
-  display: flex;
-  gap: var(--spacing-xs);
-  overflow-x: auto;
-  padding-bottom: 10px;
-  margin-bottom: var(--spacing-lg);
-}
 .pta-chip {
   display: flex;
   align-items: center;
@@ -641,11 +609,6 @@
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-}
-.pta-chip--active {
-  border-color: var(--colors-primary);
-  background: var(--colors-surface-soft);
-  color: var(--colors-primary);
 }
 .pta-chip--risk {
   border-color: var(--colors-pill-border-danger);
@@ -1122,71 +1085,24 @@
   .ptla-hero { grid-template-columns: minmax(0, 1fr); gap: 36px; padding: var(--spacing-xxl) 0; }
 }
 
+
 /* =================================================================
-   App shell — sidebar + topbar.
-   `app.css` still styles the shell with the old chrome (purple
-   gradient on the logo + avatar, indigo on the active link). The
-   block below re-skins the shell to the editorial palette so the
-   chrome matches the dashboard body and the home. Loaded after
-   `app.css` per the layout bundle, so same specificity means
-   editorial wins.
+   App shell chrome that has no structural counterpart in `app.css`.
+
+   `app.css` positions the sidebar, topbar and content column and
+   already reads every color from the tokens above. What lives here
+   is the chrome that is a *component*, not a layout: the topbar user
+   menu and the pointer affordances the shell needs but the marketing
+   system never documents (the no-hover policy covers the marketing
+   surfaces; an application shell still needs pointer feedback).
 ================================================================= */
 
-.app-sidebar {
-  background: var(--colors-canvas);
-  border-right-color: var(--colors-hairline);
-}
-.app-sidebar__header { border-bottom-color: var(--colors-hairline); }
-.app-sidebar__logo,
-.app-sidebar__avatar,
-.app-topbar__avatar {
-  background: var(--colors-primary);
-  box-shadow: none;
-  color: var(--colors-on-primary);
-}
-/* The mark is a near-black ink square, so the glyph has to be white.
-   `logo.svg` paints with `fill="currentColor"`, but the templates load
-   it through `<img src>` — an isolated document that never inherits
-   the `color` set above, so `currentColor` falls back to black and the
-   glyph disappears into the ink. Force it white with the same filter
-   the landing's `.ptl-brand__mark img` uses on the same surface. */
-.app-sidebar__logo img { filter: brightness(0) invert(1); }
-.app-sidebar__brand-name { color: var(--colors-ink); }
-.app-sidebar__brand-sub { color: var(--colors-muted); }
-.app-sidebar__section-title { color: var(--colors-muted); }
-.app-sidebar__link { color: var(--colors-body); }
-.app-sidebar__link:hover {
-  background: var(--colors-surface-soft);
-  color: var(--colors-ink);
-}
-.app-sidebar__link--active {
-  background: var(--colors-surface-soft);
-  color: var(--colors-ink);
-  border-color: var(--colors-hairline);
-  font-weight: 600;
-}
-.app-sidebar__user {
-  background: var(--colors-surface-soft);
-  border-color: var(--colors-hairline);
-}
-.app-sidebar__user-name { color: var(--colors-ink); }
-.app-sidebar__logout { color: var(--colors-muted); }
+.app-sidebar__link:hover { background: var(--colors-surface-soft); color: var(--colors-ink); }
 .app-sidebar__logout:hover { color: var(--colors-danger); }
-.app-topbar { background: var(--colors-canvas); border-bottom-color: var(--colors-hairline); }
-.app-content { background: var(--colors-canvas); }
+.sidebar-hamburger:hover { background: var(--colors-surface-soft); }
 
-/* Topbar user menu. The markup carried this whole component as inline
-   styles with off-palette slate and red hexes, which D6 forbids; the
-   rules moved here so every color resolves through a token. The
-   entrance animation is pre-existing shell chrome (its keyframes live
-   in `app.css`), kept as-is — the editorial system documents no
-   animation of its own. */
 .app-usermenu { position: relative; }
-.app-usermenu__trigger {
-  list-style: none;
-  cursor: pointer;
-  user-select: none;
-}
+.app-usermenu__trigger { list-style: none; cursor: pointer; user-select: none; }
 .app-usermenu__trigger::-webkit-details-marker { display: none; }
 .app-usermenu__panel {
   position: absolute;
@@ -1207,13 +1123,9 @@
   border-bottom: 1px solid var(--colors-hairline);
   margin-bottom: var(--spacing-xxs);
 }
-.app-usermenu__name {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--colors-ink);
-}
+.app-usermenu__name { font-size: 13px; font-weight: 500; color: var(--colors-ink); }
 .app-usermenu__email {
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 1px;
   color: var(--colors-muted);
   overflow: hidden;
@@ -1231,10 +1143,1007 @@
   gap: var(--spacing-xs);
   padding: var(--spacing-xs) var(--spacing-sm);
   border-radius: var(--rounded-sm);
-  font-size: 13px;
+  font-size: var(--typography-body-md-size);
   font-weight: 500;
   color: var(--colors-body);
   text-decoration: none;
 }
 .app-usermenu__item:hover { background: var(--colors-surface-soft); }
-.app-usermenu__item--danger { color: var(--colors-danger); font-weight: 600; }
+.app-usermenu__item--danger { color: var(--colors-danger); }
+
+/* =================================================================
+   Button size + width modifiers.
+
+   The spec fixes the button family's appearance; an application
+   surface still needs a dense variant for toolbars and a full-width
+   variant for the auth forms. Both keep the documented radius, type
+   step and color roles — only the box changes.
+================================================================= */
+
+.button-primary--sm,
+.button-secondary--sm {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--typography-body-md-size);
+  border-radius: var(--rounded-md);
+}
+.button-primary--block,
+.button-secondary--block { width: 100%; }
+.button-primary[disabled],
+.button-secondary[disabled] { opacity: 0.5; cursor: default; }
+.button-secondary[disabled] { border-color: var(--colors-border-strong); }
+
+/* =================================================================
+   Auth surfaces — the editorial split.
+
+   Left: an ink signature panel (the brand voltage moment on an
+   otherwise white product). Right: the white form canvas. Nothing
+   in between: no gradient, no stacked card shadow.
+================================================================= */
+
+.auth-panel {
+  background: var(--colors-surface-dark);
+  color: var(--colors-on-dark);
+  padding: var(--spacing-xxl);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--spacing-xxl);
+}
+.auth-panel__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--colors-on-dark);
+  text-decoration: none;
+  font-size: var(--typography-title-sm-size);
+  font-weight: 500;
+}
+.auth-panel__mark {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--rounded-md);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.auth-panel__mark img { filter: brightness(0) invert(1); }
+.auth-panel__title {
+  font-size: var(--typography-display-md-size);
+  font-weight: var(--typography-display-md-weight);
+  line-height: var(--typography-display-md-leading);
+  max-width: 18ch;
+}
+.auth-panel__lede {
+  margin-top: var(--spacing-md);
+  font-size: var(--typography-title-sm-size);
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--colors-on-dark-soft);
+  max-width: 40ch;
+}
+.auth-panel__proof {
+  font-size: var(--typography-body-md-size);
+  line-height: 1.6;
+  color: var(--colors-on-dark-soft);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  max-width: 46ch;
+}
+
+.auth-form-side {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xxl) var(--spacing-lg);
+  background: var(--colors-canvas);
+}
+.auth-form { width: 100%; max-width: 380px; }
+.auth-form__title {
+  font-size: var(--typography-title-lg-size);
+  font-weight: var(--typography-title-lg-weight);
+  line-height: var(--typography-title-lg-leading);
+  color: var(--colors-ink);
+  margin-top: var(--spacing-sm);
+}
+.auth-form__sub {
+  margin-top: var(--spacing-xs);
+  margin-bottom: var(--spacing-xl);
+  font-size: var(--typography-body-md-size);
+  line-height: 1.6;
+  color: var(--colors-muted);
+}
+.auth-form__foot {
+  margin-top: var(--spacing-lg);
+  font-size: var(--typography-body-md-size);
+  color: var(--colors-muted);
+}
+.auth-form__foot a { color: var(--colors-link); font-weight: 500; text-decoration: none; }
+.auth-form__note {
+  margin-top: var(--spacing-xl);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--colors-hairline);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--colors-muted);
+}
+
+@media (max-width: 1023px) {
+  .auth-panel {
+    padding: var(--spacing-xl) var(--spacing-lg);
+    gap: var(--spacing-lg);
+  }
+  .auth-panel__lede,
+  .auth-panel__proof { display: none; }
+  .auth-form-side { padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-xxl); }
+}
+
+/* =================================================================
+   Forms — label / control / hint / error.
+
+   One field component for every surface. `.text-input` above is the
+   control; `.field` is the stack around it.
+================================================================= */
+
+.field { margin-bottom: var(--spacing-md); }
+.field__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--colors-muted);
+}
+.field__hint { margin-top: 6px; font-size: 12px; line-height: 1.4; color: var(--colors-muted); }
+.field__error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--colors-danger);
+}
+.text-input--error { border-color: var(--colors-danger); }
+.text-input:disabled { background: var(--colors-surface-soft); color: var(--colors-muted); }
+
+select.text-input {
+  appearance: none;
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px 14px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2341454d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  padding-right: var(--spacing-xl);
+  cursor: pointer;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
+  font-size: var(--typography-body-md-size);
+  color: var(--colors-body);
+  cursor: pointer;
+}
+.checkbox-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--colors-primary);
+  cursor: pointer;
+}
+
+/* =================================================================
+   Flash — a hairline notice pinned top-right. The marketing system
+   documents no toast, so this borrows the card's shape and the
+   semantic roles rather than inventing a new accent.
+================================================================= */
+
+.flash-stack {
+  position: fixed;
+  top: var(--spacing-md);
+  right: var(--spacing-md);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  max-width: min(360px, calc(100vw - 32px));
+}
+.flash {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  box-shadow: var(--shadow-overlay);
+  cursor: pointer;
+}
+.flash__title {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.flash__msg { font-size: var(--typography-body-md-size); line-height: 1.5; color: var(--colors-body); }
+.flash__icon { flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
+.flash--info { border-color: var(--colors-info-border); }
+.flash--info .flash__title,
+.flash--info .flash__icon { color: var(--colors-info); }
+.flash--error { border-color: var(--colors-pill-border-danger); }
+.flash--error .flash__title,
+.flash--error .flash__icon { color: var(--colors-danger); }
+
+/* Inline notice — the same roles inside the page flow. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--colors-hairline);
+  font-size: var(--typography-body-md-size);
+  line-height: 1.5;
+  margin-bottom: var(--spacing-md);
+}
+.notice--error {
+  border-color: var(--colors-pill-border-danger);
+  background: var(--colors-danger-soft);
+  color: var(--colors-danger);
+}
+.notice--success {
+  border-color: var(--colors-pill-border-ok);
+  background: var(--colors-success-soft);
+  color: var(--colors-success);
+}
+.notice--info { background: var(--colors-surface-soft); color: var(--colors-body); }
+.notice__icon { flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
+
+/* =================================================================
+   Page head — the editorial header every application page opens
+   with: eyebrow, display title, optional action cluster.
+================================================================= */
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--spacing-xl);
+}
+.page-head__actions { display: flex; align-items: center; gap: var(--spacing-sm); }
+
+/* =================================================================
+   Command bar — one horizontal control row.
+
+   Replaces the stacked search / chips / sort column: the controls
+   occupy a single band so the content below starts immediately.
+   The filter set is progressive disclosure — the chips only
+   materialise when the professional opens the popover.
+================================================================= */
+
+.cmdbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+  padding: var(--spacing-xs);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  margin-bottom: var(--spacing-lg);
+}
+.cmdbar__search { position: relative; flex: 1 1 220px; min-width: 180px; }
+.cmdbar__search .text-input { height: 40px; padding-left: 36px; border-color: transparent; }
+.cmdbar__search .text-input:focus { border-color: var(--colors-info-border); }
+.cmdbar__search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--colors-muted);
+  pointer-events: none;
+}
+.cmdbar__count {
+  font-size: 12px;
+  color: var(--colors-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 0 var(--spacing-xs);
+  white-space: nowrap;
+}
+.cmdbar__divider {
+  width: 1px;
+  height: 24px;
+  background: var(--colors-hairline);
+  flex-shrink: 0;
+}
+.cmdbar__sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--colors-muted);
+}
+.cmdbar__sort .text-input {
+  height: 40px;
+  width: auto;
+  border-color: transparent;
+  font-size: var(--typography-body-md-size);
+}
+
+.filter-menu { position: relative; }
+.filter-menu > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 var(--spacing-sm);
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  color: var(--colors-body);
+  font-size: var(--typography-body-md-size);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-menu > summary::-webkit-details-marker { display: none; }
+.filter-menu[open] > summary { background: var(--colors-surface-soft); color: var(--colors-ink); }
+.filter-menu__panel {
+  position: absolute;
+  top: calc(100% + var(--spacing-xs));
+  left: 0;
+  z-index: 60;
+  min-width: 210px;
+  padding: var(--spacing-sm);
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-overlay);
+  animation: menu-in 0.15s ease;
+}
+.filter-menu__title {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--colors-muted);
+  margin-bottom: var(--spacing-xs);
+}
+.filter-menu__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.filter-chip {
+  padding: 5px 10px;
+  border-radius: var(--rounded-sm);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  color: var(--colors-body);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.filter-chip--on {
+  border-color: var(--colors-primary);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+}
+.filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--rounded-pill);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* =================================================================
+   Patient grid — the caseload as demo-grid cards.
+
+   Card heights follow their own content (the spec's uneven-height
+   rule); the grid only fixes the columns.
+================================================================= */
+
+.patient-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+.patient-card {
+  display: block;
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-canvas);
+  text-decoration: none;
+  color: inherit;
+}
+.patient-card--on {
+  border-color: var(--colors-primary);
+  background: var(--colors-surface-soft);
+}
+.patient-card--risk {
+  background: var(--colors-danger-soft);
+  border-color: var(--colors-pill-border-danger);
+}
+.patient-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--spacing-sm);
+}
+.patient-card__avatar { width: 36px; height: 36px; font-size: 12px; flex-shrink: 0; }
+.patient-card__name {
+  font-size: var(--typography-label-md-size);
+  font-weight: var(--typography-label-md-weight);
+  color: var(--colors-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.patient-card__meta { font-size: 12px; color: var(--colors-muted); margin-top: 1px; }
+/* The foot carries two labels of unpredictable length ("Intervención
+   urgente" next to a state pill), so it wraps rather than squeezing
+   either one into two cramped lines. */
+.patient-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px var(--spacing-xs);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--colors-hairline);
+}
+.patient-card__foot .pt-pill { white-space: nowrap; }
+.patient-card--risk .patient-card__foot { border-top-color: var(--colors-pill-border-danger); }
+
+.patient-card--new {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  border-style: dashed;
+  color: var(--colors-muted);
+  min-height: 120px;
+}
+.patient-card--new strong {
+  display: block;
+  font-size: var(--typography-label-md-size);
+  font-weight: var(--typography-label-md-weight);
+  color: var(--colors-ink);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--rounded-full);
+  flex-shrink: 0;
+  display: inline-block;
+  background: var(--colors-border-strong);
+}
+.status-dot--risk { background: var(--colors-danger); }
+.status-dot--warn { background: var(--colors-warn); }
+.status-dot--ok { background: var(--colors-success); }
+.status-dot--info { background: var(--colors-info); }
+
+/* =================================================================
+   Empty states — a hairline frame, never a dashed novelty box.
+================================================================= */
+
+.empty-state {
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  padding: var(--spacing-xxl) var(--spacing-lg);
+  text-align: center;
+}
+.empty-state__icon {
+  width: 24px;
+  height: 24px;
+  color: var(--colors-border-strong);
+  margin: 0 auto var(--spacing-sm);
+}
+.empty-state__title {
+  font-size: var(--typography-label-md-size);
+  font-weight: var(--typography-label-md-weight);
+  color: var(--colors-ink);
+  margin-bottom: var(--spacing-xxs);
+}
+.empty-state__text {
+  font-size: var(--typography-body-md-size);
+  line-height: 1.6;
+  color: var(--colors-muted);
+  max-width: 46ch;
+  margin: 0 auto var(--spacing-md);
+}
+
+/* =================================================================
+   Stat strip — the caseload counters. Flat tiles divided by
+   hairlines, the same construction as the briefing metric strip.
+================================================================= */
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;
+  background: var(--colors-hairline);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  overflow: hidden;
+}
+.stat-tile { background: var(--colors-canvas); padding: var(--spacing-md); }
+.stat-tile__label {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--colors-muted);
+}
+.stat-tile__value {
+  margin-top: var(--spacing-xxs);
+  font-size: var(--typography-title-lg-size);
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--colors-ink);
+  font-variant-numeric: tabular-nums;
+}
+.stat-tile__desc { margin-top: 2px; font-size: 12px; color: var(--colors-muted); }
+
+/* =================================================================
+   Meter — the emotion trend bar. Replaces the CDN progress element
+   so every fill resolves through the documented palette.
+================================================================= */
+
+.meter {
+  height: 8px;
+  border-radius: var(--rounded-pill);
+  background: var(--colors-surface-soft);
+  border: 1px solid var(--colors-hairline);
+  overflow: hidden;
+}
+.meter__fill { height: 100%; background: var(--colors-primary); }
+.meter__fill--joy { background: var(--colors-signature-forest); }
+.meter__fill--sadness { background: var(--colors-info); }
+.meter__fill--anger { background: var(--colors-signature-coral); }
+.meter__fill--fear { background: var(--colors-signature-mustard); }
+.meter__fill--neutral { background: var(--colors-border-strong); }
+
+/* =================================================================
+   Chat log — the decrypted clinical history. Two bubble roles, no
+   CDN chat component.
+================================================================= */
+
+.chat-line { display: flex; flex-direction: column; margin-bottom: 10px; }
+.chat-line--out { align-items: flex-end; }
+.chat-bubble {
+  max-width: 82%;
+  padding: var(--spacing-xs) 10px;
+  border-radius: var(--rounded-md);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  color: var(--colors-body);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.chat-line--out .chat-bubble {
+  background: var(--colors-primary);
+  border-color: var(--colors-primary);
+  color: var(--colors-on-primary);
+}
+
+/* =================================================================
+   Data table — the operational surface (job queues, comparison
+   rows). Hairline dividers only, per the elevation policy.
+================================================================= */
+
+.data-table-wrap {
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  overflow-x: auto;
+}
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--typography-body-md-size); }
+.data-table th {
+  text-align: left;
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--colors-muted);
+  border-bottom: 1px solid var(--colors-hairline);
+  background: var(--colors-surface-soft);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--colors-hairline);
+  color: var(--colors-body);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table__mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--colors-muted);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-table__actions { display: flex; gap: var(--spacing-sm); }
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--typography-body-md-size);
+  font-weight: 500;
+  color: var(--colors-link);
+  text-decoration: none;
+}
+.link-button--danger { color: var(--colors-danger); }
+.link-button--ok { color: var(--colors-success); }
+
+/* =================================================================
+   Notification center — the topbar bell and its panel.
+================================================================= */
+
+.notif { position: relative; }
+.notif__bell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--rounded-full);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  color: var(--colors-ink);
+  cursor: pointer;
+}
+.notif__bell--on { background: var(--colors-surface-soft); border-color: var(--colors-primary); }
+.notif__count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: var(--rounded-pill);
+  background: var(--colors-danger);
+  color: var(--colors-on-primary);
+  font-size: 10px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--colors-canvas);
+  font-variant-numeric: tabular-nums;
+}
+.notif__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--spacing-xs));
+  z-index: 60;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+  animation: menu-in 0.15s ease;
+}
+.notif__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-xs);
+  padding: 10px var(--spacing-md);
+  border-bottom: 1px solid var(--colors-hairline);
+  background: var(--colors-surface-soft);
+}
+.notif__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px var(--spacing-md);
+  border-bottom: 1px solid var(--colors-hairline);
+}
+.notif__item--unread { background: var(--colors-surface-soft); }
+.notif__item:last-child { border-bottom: none; }
+.notif__msg { font-size: 13px; line-height: 1.45; color: var(--colors-body); }
+.notif__time { font-size: 11px; color: var(--colors-muted); margin-top: 2px; }
+.notif__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-top: 1px solid var(--colors-hairline);
+  background: var(--colors-surface-soft);
+  font-size: 12px;
+  color: var(--colors-muted);
+}
+.notif__icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: none;
+  border-radius: var(--rounded-sm);
+  color: var(--colors-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* =================================================================
+   Landing bands — the editorial rhythm.
+
+   `white canvas → signature card → white → cream → dark → light
+   gray CTA → footer`. `.band` is the 96px vertical rhythm constant;
+   the surface modifier decides which documented surface the band
+   sits on. Two consecutive bands never share a surface.
+================================================================= */
+
+.band { padding: var(--spacing-section) 0; background: var(--colors-canvas); }
+.band--soft { background: var(--colors-surface-soft); }
+.band--tight { padding: var(--spacing-xxl) 0; }
+.band__head { max-width: 60ch; margin-bottom: var(--spacing-xl); }
+.band__title {
+  font-size: var(--typography-display-md-size);
+  font-weight: var(--typography-display-md-weight);
+  line-height: var(--typography-display-md-leading);
+  color: var(--colors-ink);
+}
+.band__lede {
+  margin-top: var(--spacing-sm);
+  font-size: var(--typography-title-sm-size);
+  font-weight: 400;
+  line-height: 1.65;
+  color: var(--colors-body);
+}
+
+.signature-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--spacing-lg);
+  align-items: stretch;
+}
+.signature-title {
+  font-size: var(--typography-display-md-size);
+  font-weight: var(--typography-display-md-weight);
+  line-height: var(--typography-display-md-leading);
+  color: var(--colors-on-dark);
+  max-width: 18ch;
+}
+/* The supporting copy on a signature card is `--colors-on-primary`,
+   not the muted on-dark tone: `--colors-on-dark-soft` (#9297a0) only
+   clears contrast against the near-black surface, and drops to about
+   2.5:1 on coral. Title and body separate by size, which is the
+   system's rule anyway — bigger type before bolder type. */
+.signature-coral-card p,
+.signature-forest-card p,
+.hero-card-dark p {
+  margin-top: var(--spacing-md);
+  font-size: var(--typography-body-md-size);
+  line-height: 1.7;
+  color: var(--colors-on-primary);
+  max-width: 44ch;
+}
+.signature-actions {
+  margin-top: var(--spacing-lg);
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--spacing-lg);
+  align-items: start;
+}
+.demo-grid-card__title {
+  font-size: var(--typography-label-md-size);
+  font-weight: var(--typography-label-md-weight);
+  color: var(--colors-ink);
+  margin-bottom: var(--spacing-xxs);
+}
+.demo-grid-card__text {
+  font-size: var(--typography-body-md-size);
+  line-height: 1.6;
+  color: var(--colors-body);
+}
+
+.cta-band-light__title {
+  font-size: var(--typography-display-md-size);
+  font-weight: var(--typography-display-md-weight);
+  line-height: var(--typography-display-md-leading);
+  color: var(--colors-ink);
+  max-width: 22ch;
+}
+.cta-band-light__text {
+  margin-top: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+  font-size: var(--typography-body-md-size);
+  line-height: 1.65;
+  color: var(--colors-body);
+  max-width: 52ch;
+}
+
+.footer-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--spacing-lg);
+  padding-bottom: var(--spacing-xl);
+}
+.footer-cols h4 {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--colors-muted);
+  margin-bottom: var(--spacing-sm);
+}
+.footer-cols li { list-style: none; margin-bottom: 6px; }
+.footer-cols a,
+.footer-cols span {
+  font-size: var(--typography-body-md-size);
+  color: var(--colors-body);
+  text-decoration: none;
+}
+.footer-legal {
+  border-top: 1px solid var(--colors-hairline);
+  padding-top: var(--spacing-lg);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+  font-size: var(--typography-body-md-size);
+  color: var(--colors-muted);
+}
+
+@media (max-width: 767px) {
+  .band { padding: var(--spacing-xxl) 0; }
+  .signature-coral-card,
+  .signature-forest-card,
+  .hero-card-dark,
+  .cta-band-light { padding: var(--spacing-lg); }
+}
+
+/* =================================================================
+   Icons — the inline SVG set drawn by `AletheaWeb.Icons`.
+
+   Size is a class, not a prop, so the call sites read the same as
+   the utility-class API they replaced (`size-4`, `size-5`). An
+   inline `style` on the element still wins over these.
+================================================================= */
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -0.15em;
+}
+.size-3 { width: 12px; height: 12px; }
+.size-4 { width: 16px; height: 16px; }
+.size-5 { width: 20px; height: 20px; }
+.size-6 { width: 24px; height: 24px; }
+
+/* =================================================================
+   Form actions + description list — the two remaining core
+   components that had no editorial counterpart.
+================================================================= */
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-lg);
+  flex-wrap: wrap;
+}
+
+.detail-list__row {
+  display: flex;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--colors-hairline);
+  font-size: var(--typography-body-md-size);
+}
+.detail-list__row:last-child { border-bottom: none; }
+.detail-list__row dt {
+  width: 140px;
+  flex-shrink: 0;
+  color: var(--colors-muted);
+  font-weight: 500;
+}
+.detail-list__row dd { color: var(--colors-body); min-width: 0; word-break: break-word; }
+
+/* =================================================================
+   Error pages — the 404 / 500 surface. A hero band with nothing in
+   it but type and the button pair, per the whitespace-as-atmosphere
+   rule.
+================================================================= */
+
+.error-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-top: var(--spacing-section);
+  padding-bottom: var(--spacing-section);
+}
+.error-page .ptla-title { margin-top: var(--spacing-sm); }
+
+/* =================================================================
+   Emotion chart — the 7-day breakdown.
+
+   The SVG scales with its container, and at full content width a
+   560×200 viewBox grows past 500px tall for a chart whose tallest
+   bar is 160px. The cap keeps the plot at its designed density; the
+   card around it still spans the column.
+================================================================= */
+
+.emotion-chart { max-width: 720px; }
+
+/* =================================================================
+   Telegram invite panel — an inline disclosure, not a modal.
+
+   The professional reads the six-digit code off the screen while
+   talking to the patient, so the invite must not trap focus or hide
+   the column it belongs to. It speaks with the info role over the
+   soft surface and takes the ink rail the briefing uses to mark a
+   reading region.
+================================================================= */
+
+.invite-panel {
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-left: 3px solid var(--colors-info);
+  border-radius: var(--rounded-md);
+  background: var(--colors-surface-soft);
+}
+.invite-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+.invite-panel__title {
+  font-size: var(--typography-body-md-size);
+  font-weight: 500;
+  color: var(--colors-ink);
+  margin-bottom: 2px;
+}
+.invite-panel__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}

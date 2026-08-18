@@ -9,13 +9,22 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
   @bar_w 10
   @bar_gap 2
 
+  # The bar palette is the signature-card set, in the same pairing the
+  # `.meter__fill--*` rules use, so a trend reads the same color in the
+  # bar chart and in the emotion meters above it. SVG presentation
+  # attributes cannot resolve a CSS custom property, so the token
+  # values appear as literals here and only here.
   @emotions [
-    {:joy, "Alegría", "#22c55e"},
-    {:sadness, "Tristeza", "#3b82f6"},
-    {:anger, "Ira", "#ef4444"},
-    {:fear, "Miedo", "#f59e0b"},
-    {:neutral, "Neutro", "#94a3b8"}
+    {:joy, "Alegría", "#0a2e0e"},
+    {:sadness, "Tristeza", "#254fad"},
+    {:anger, "Ira", "#aa2d00"},
+    {:fear, "Miedo", "#d9a441"},
+    {:neutral, "Neutro", "#9297a0"}
   ]
+
+  # `--colors-hairline` and `--colors-muted`, same rationale.
+  @grid_color "#dddddd"
+  @axis_color "#41454d"
 
   # daily_data: list of %{date: Date.t(), joy: float, sadness: float, anger: float, fear: float, neutral: float}
   attr :daily_data, :list, default: []
@@ -65,9 +74,11 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
       |> assign(:bars, bars)
       |> assign(:day_labels, day_labels)
       |> assign(:emotions, @emotions)
+      |> assign(:grid_color, @grid_color)
+      |> assign(:axis_color, @axis_color)
 
     ~H"""
-    <div>
+    <div class="emotion-chart">
       <svg
         viewBox="0 0 560 200"
         xmlns="http://www.w3.org/2000/svg"
@@ -75,22 +86,22 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
         aria-label="Gráfico de emociones últimos 7 días"
       >
         <%!-- horizontal grid lines --%>
-        <line x1="40" y1="10" x2="552" y2="10" stroke="#e2e8f0" stroke-width="1" />
+        <line x1="40" y1="10" x2="552" y2="10" stroke={@grid_color} stroke-width="1" />
         <line
           x1="40"
           y1="90"
           x2="552"
           y2="90"
-          stroke="#e2e8f0"
+          stroke={@grid_color}
           stroke-width="1"
           stroke-dasharray="3,3"
         />
-        <line x1="40" y1="170" x2="552" y2="170" stroke="#e2e8f0" stroke-width="1" />
+        <line x1="40" y1="170" x2="552" y2="170" stroke={@grid_color} stroke-width="1" />
 
         <%!-- y-axis labels --%>
-        <text x="34" y="13" text-anchor="end" font-size="9" fill="#94a3b8">100%</text>
-        <text x="34" y="93" text-anchor="end" font-size="9" fill="#94a3b8">50%</text>
-        <text x="34" y="173" text-anchor="end" font-size="9" fill="#94a3b8">0%</text>
+        <text x="34" y="13" text-anchor="end" font-size="9" fill={@axis_color}>100%</text>
+        <text x="34" y="93" text-anchor="end" font-size="9" fill={@axis_color}>50%</text>
+        <text x="34" y="173" text-anchor="end" font-size="9" fill={@axis_color}>0%</text>
 
         <%!-- bars --%>
         <%= for bar <- @bars do %>
@@ -101,13 +112,13 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
             height={bar.h}
             fill={bar.fill}
             rx="2"
-            opacity="0.85"
+            opacity="0.9"
           />
         <% end %>
 
         <%!-- x-axis day labels --%>
         <%= for lbl <- @day_labels do %>
-          <text x={lbl.x} y={lbl.y} text-anchor="middle" font-size="9" fill="#94a3b8">
+          <text x={lbl.x} y={lbl.y} text-anchor="middle" font-size="9" fill={@axis_color}>
             {lbl.label}
           </text>
         <% end %>
@@ -119,7 +130,7 @@ defmodule AletheaWeb.DashboardLive.Components.EmotionChart do
           <div style="display:flex; align-items:center; gap:4px;">
             <span style={"width:10px; height:10px; border-radius:2px; background:#{color}; flex-shrink:0; display:inline-block;"}>
             </span>
-            <span style="font-size:10px; color:#64748b;">{label}</span>
+            <span class="pta-hint">{label}</span>
           </div>
         <% end %>
       </div>

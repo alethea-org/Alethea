@@ -1,4 +1,12 @@
 defmodule AletheaWeb.PatientLive.Index do
+  @moduledoc """
+  The caseload management page.
+
+  Same editorial vocabulary as the dashboard: an editorial page head,
+  a hairline stat strip, and the caseload as a card grid. Registering
+  a patient opens an inline card above the grid instead of a second
+  column, so the page keeps one reading order at every width.
+  """
   use AletheaWeb, :live_view
 
   alias Alethea.Accounts
@@ -106,236 +114,157 @@ defmodule AletheaWeb.PatientLive.Index do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(assigns, :urgent_count, Enum.count(assigns.patients, & &1.urgent_intervention))
+
     ~H"""
-    <%!-- ── Header + stats ── --%>
-    <div style="margin-bottom:24px;">
-      <div style="margin-bottom:12px;">
-        <p style="font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.1em; color:#94a3b8;">
-          Alethea · Gestión de Pacientes
-        </p>
-        <h1 style="font-size:22px; font-weight:800; color:#1e293b; letter-spacing:-0.02em; margin-top:2px;">
-          {@current_professional.full_name || "Profesional Clínico"}
-        </h1>
-      </div>
+    <div class="pt ptd-wrap">
+      <%!-- ── Header ── --%>
+      <div class="ptd-head">
+        <div>
+          <p class="pt-eyebrow">Gestión de pacientes</p>
 
-      <%!-- Stats --%>
-      <div
-        class="stats"
-        style="border:1px solid #e2e8f0; border-radius:16px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.04); display:inline-flex;"
-      >
-        <div class="stat" style="padding:16px 24px;">
-          <div class="stat-figure" style="color:#6366f1;">
-            <.icon name="hero-users" style="width:28px; height:28px;" />
-          </div>
-          <div
-            class="stat-title"
-            style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;"
-          >
-            Pacientes
-          </div>
-          <div class="stat-value" style="font-size:22px; font-weight:800;">{length(@patients)}</div>
-          <div class="stat-desc" style="font-size:11px; color:#94a3b8;">En seguimiento</div>
+          <h1 class="pt-h1">{@current_professional.full_name || "Profesional Clínico"}</h1>
         </div>
-        <div class="stat" style="padding:16px 24px;">
-          <div class="stat-figure" style="color:#6366f1;">
-            <.icon name="hero-lock-closed" style="width:28px; height:28px;" />
-          </div>
-          <div
-            class="stat-title"
-            style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;"
-          >
-            Bóvedas
-          </div>
-          <div class="stat-value" style="font-size:22px; font-weight:800;">{length(@patients)}</div>
-          <div class="stat-desc" style="font-size:11px; color:#94a3b8;">Cifradas E2E</div>
+
+        <div :if={@live_action != :new} class="page-head__actions">
+          <.link patch={~p"/patients/new"} class="button-primary button-primary--sm">
+            <.icon name="hero-plus" class="size-4" style="margin-right:6px;" /> Registrar paciente
+          </.link>
         </div>
       </div>
-    </div>
+      <%!-- ── Caseload counters ── --%>
+      <div class="stat-strip" style="margin-bottom:24px;">
+        <div class="stat-tile">
+          <div class="stat-tile__label">Pacientes</div>
 
-    <%!-- Two-column layout --%>
-    <div style="display:grid; grid-template-columns:320px 1fr; gap:20px; min-height:400px;">
-      <%!-- ──── LEFT: Patient list ──── --%>
-      <div style="border-radius:16px; overflow:hidden; border:1px solid #e2e8f0; background:#fff; align-self:start;">
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #f1f5f9; background:#fafbfc;">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <.icon name="hero-users" style="width:14px; height:14px; color:#94a3b8;" />
-            <span style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#64748b;">
-              Pacientes
+          <div class="stat-tile__value">{length(@patients)}</div>
+
+          <div class="stat-tile__desc">En seguimiento</div>
+        </div>
+
+        <div class="stat-tile">
+          <div class="stat-tile__label">Bóvedas</div>
+
+          <div class="stat-tile__value">{length(@patients)}</div>
+
+          <div class="stat-tile__desc">Una clave por paciente</div>
+        </div>
+
+        <div class="stat-tile">
+          <div class="stat-tile__label">Atención</div>
+
+          <div class="stat-tile__value">{@urgent_count}</div>
+
+          <div class="stat-tile__desc">Intervención urgente</div>
+        </div>
+      </div>
+      <%!-- ── New patient form (inline, above the grid) ── --%>
+      <div :if={@live_action == :new} class="pt-card" style="margin-bottom:24px;">
+        <div class="pt-card__head">
+          <span class="pt-h2">Registrar nuevo paciente</span>
+          <.link patch={~p"/patients"} class="link-button">Cancelar</.link>
+        </div>
+
+        <div class="pt-card__body">
+          <div class="notice notice--success">
+            <.icon name="hero-shield-check" class="notice__icon" />
+            <span>Los datos clínicos se cifran con una DEK única por paciente y nunca
+              son visibles en texto plano.</span>
+          </div>
+
+          <.form for={@form} id="patient-form" phx-change="validate" phx-submit="save">
+            <div class="field">
+              <label for="patient-alias" class="field__label">Alias del paciente</label>
+              <input
+                type="text"
+                id="patient-alias"
+                name="patient[alias]"
+                value={@form[:alias].value || ""}
+                placeholder="Ej. Juan P."
+                autocomplete="off"
+                class={[
+                  "text-input",
+                  @form[:alias].errors != [] && "text-input--error"
+                ]}
+              />
+              <%!-- The changeset carries `{message, opts}` tuples, so the
+                   message has to be translated before it can be printed. --%>
+              <p :for={error <- @form[:alias].errors} class="field__error">
+                <.icon name="hero-exclamation-circle" class="size-3" />{translate_error(error)}
+              </p>
+
+              <p :if={@form[:alias].errors == []} class="field__hint">
+                El alias es lo único que Alethea muestra en claro. No uses el
+                nombre legal del paciente.
+              </p>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="button-primary button-primary--sm">
+                <.icon name="hero-lock-closed" class="size-4" style="margin-right:6px;" />
+                Registrar paciente
+              </button>
+              <.link patch={~p"/patients"} class="button-secondary button-secondary--sm">
+                Cancelar
+              </.link>
+            </div>
+          </.form>
+        </div>
+      </div>
+      <%!-- ── Caseload grid ── --%>
+      <div :if={@patients == []} class="empty-state">
+        <.icon name="hero-user-plus" class="empty-state__icon" />
+        <p class="empty-state__title">Todavía no hay pacientes</p>
+
+        <p class="empty-state__text">Registrá al primero para generar su bóveda cifrada y su enlace de
+          Telegram.</p>
+
+        <.link patch={~p"/patients/new"} class="button-primary button-primary--sm">
+          Registrar paciente
+        </.link>
+      </div>
+
+      <nav :if={@patients != []} id="patients-list" phx-update="stream" class="patient-grid">
+        <.link
+          :for={{dom_id, patient} <- @streams.patients}
+          id={dom_id}
+          navigate={~p"/dashboard?patient_id=#{patient.id}"}
+          class={["patient-card", patient.urgent_intervention && "patient-card--risk"]}
+        >
+          <div class="patient-card__head">
+            <span class={[
+              "pt-avatar patient-card__avatar",
+              patient.urgent_intervention && "pt-avatar--risk"
+            ]}>
+              {initials(patient.alias)}
+            </span>
+            <div style="min-width:0;">
+              <div class="patient-card__name">{patient.alias}</div>
+
+              <div class="patient-card__meta">{schedule_label(patient)}</div>
+            </div>
+          </div>
+
+          <div class="patient-card__foot">
+            <span style="display:flex; align-items:center; gap:6px; font-size:12px;">
+              <span class={[
+                "status-dot",
+                if(patient.urgent_intervention, do: "status-dot--risk", else: "status-dot--ok")
+              ]}>
+              </span> {if patient.urgent_intervention,
+                do: "Intervención urgente",
+                else: "En seguimiento"}
             </span>
           </div>
-          <.button
-            phx-click={JS.patch(~p"/patients/new")}
-            class="btn btn-primary btn-sm"
-            style="height:28px; font-size:11px;"
-          >
-            <.icon name="hero-plus" class="mr-1" style="width:12px; height:12px;" /> Nuevo
-          </.button>
-        </div>
-
-        <nav id="patients-list">
-          <%= if @patients == [] do %>
-            <div style="padding:40px 16px; text-align:center;">
-              <.icon
-                name="hero-user-plus"
-                style="width:28px; height:28px; color:#cbd5e1; margin:0 auto 8px; display:block;"
-              />
-              <p style="font-size:12px; color:#94a3b8; margin-bottom:12px;">No hay pacientes aún</p>
-              <.button phx-click={JS.patch(~p"/patients/new")} class="btn btn-primary btn-sm">
-                Registrar paciente
-              </.button>
-            </div>
-          <% end %>
-
-          <%= for {_id, patient} <- @streams.patients do %>
-            <.link
-              navigate={~p"/dashboard?patient_id=#{patient.id}"}
-              style={
-                "display:flex; align-items:center; gap:10px; padding:10px 14px; text-decoration:none; transition:background .15s; border-bottom:1px solid #f8fafc;" <>
-                if(@selected_patient && @selected_patient.id == patient.id,
-                  do: "background:#eef2ff; border-left:3px solid #6366f1;",
-                  else: "border-left:3px solid transparent;")
-              }
-            >
-              <%!-- Avatar --%>
-              <div style={
-                "width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;" <>
-                if(@selected_patient && @selected_patient.id == patient.id,
-                  do: "background:rgba(99,102,241,.12);",
-                  else: "background:#f1f5f9;")
-              }>
-                <span style={
-                  "font-size:11px; font-weight:700;" <>
-                  if(@selected_patient && @selected_patient.id == patient.id,
-                    do: "color:#6366f1;",
-                    else: "color:#64748b;")
-                }>
-                  {initials(patient.alias)}
-                </span>
-              </div>
-
-              <div style="min-width:0; flex:1;">
-                <div style="font-size:13px; font-weight:600; color:#1e293b;" class="truncate">
-                  {patient.alias}
-                </div>
-                <div style="font-size:10px; color:#94a3b8;">
-                  {format_session_day(patient.session_day_of_week)} · {format_session_time(
-                    patient.session_time
-                  )}
-                </div>
-              </div>
-
-              <%= if patient.urgent_intervention do %>
-                <span
-                  style="width:8px; height:8px; border-radius:50%; background:#ef4444; flex-shrink:0;"
-                  class="animate-pulse"
-                >
-                </span>
-              <% end %>
-            </.link>
-          <% end %>
-        </nav>
-      </div>
-
-      <%!-- ──── RIGHT: Content ──── --%>
-      <div>
-        <%= if @live_action == :new do %>
-          <%!-- New patient form --%>
-          <div style="border:1px solid #e2e8f0; border-radius:16px; background:#fff; overflow:hidden;">
-            <div style="background:rgba(99,102,241,.06); border-bottom:1px solid rgba(99,102,241,.12); padding:14px 20px;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <.icon name="hero-user-plus" style="width:16px; height:16px; color:#6366f1;" />
-                <span style="font-size:12px; font-weight:700; color:#6366f1; text-transform:uppercase; letter-spacing:0.04em;">
-                  Registrar Nuevo Paciente
-                </span>
-              </div>
-            </div>
-
-            <div style="padding:20px;">
-              <.simple_form
-                for={@form}
-                id="patient-form"
-                phx-change="validate"
-                phx-submit="save"
-              >
-                <div style="border:1px solid rgba(34,197,94,.2); border-radius:12px; background:rgba(34,197,94,.04); padding:12px 14px; margin-bottom:20px; display:flex; align-items:start; gap:10px;">
-                  <.icon
-                    name="hero-shield-check"
-                    style="width:18px; height:18px; color:#22c55e; flex-shrink:0; margin-top:2px;"
-                  />
-                  <div>
-                    <p style="font-size:12px; font-weight:700; color:#166534; margin-bottom:2px;">
-                      Privacidad de grado clínico
-                    </p>
-                    <p style="font-size:11px; color:#15803d;">
-                      Los datos clínicos se cifran con una DEK única por paciente y nunca son visibles en texto plano.
-                    </p>
-                  </div>
-                </div>
-
-                <div style="margin-bottom:16px;">
-                  <label style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:0.04em; display:block; margin-bottom:6px;">
-                    Alias del Paciente
-                  </label>
-                  <input
-                    type="text"
-                    name="patient[alias]"
-                    value={@form[:alias].value || ""}
-                    placeholder="Ej. Juan P."
-                    style="width:100%; padding:10px 14px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px; background:#fff; color:#334155;"
-                  />
-                  <%= for error <- Keyword.get_values(@form[:alias].errors, :message) do %>
-                    <p style="font-size:11px; color:#ef4444; margin-top:4px;">{error}</p>
-                  <% end %>
-                </div>
-
-                <div style="display:flex; gap:10px;">
-                  <button
-                    type="submit"
-                    class="btn btn-primary"
-                    style="flex:1; height:44px; border-radius:10px; font-weight:600;"
-                  >
-                    <.icon name="hero-lock-closed" class="mr-2" style="width:14px; height:14px;" />
-                    Registrar Paciente
-                  </button>
-                  <.button
-                    type="button"
-                    phx-click={JS.patch(~p"/patients")}
-                    class="btn btn-ghost"
-                    style="height:44px; border-radius:10px;"
-                  >
-                    Cancelar
-                  </.button>
-                </div>
-              </.simple_form>
-            </div>
-          </div>
-        <% else %>
-          <%!-- Empty state --%>
-          <div style="border:2px dashed #e2e8f0; border-radius:16px; background:#fff; min-height:320px; display:flex; align-items:center; justify-content:center;">
-            <div style="text-align:center; padding:40px;">
-              <div style="width:56px; height:56px; border-radius:16px; background:#eef2ff; display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
-                <.icon name="hero-user-circle" style="width:28px; height:28px; color:#818cf8;" />
-              </div>
-              <h2 style="font-size:15px; font-weight:700; color:#64748b; margin-bottom:4px;">
-                Gestión de Pacientes
-              </h2>
-              <p style="font-size:13px; color:#94a3b8; margin-bottom:16px;">
-                Seleccioná un paciente para ver su detalle en el dashboard.
-              </p>
-              <.button phx-click={JS.patch(~p"/patients/new")} class="btn btn-primary">
-                <.icon name="hero-plus" class="mr-2" style="width:14px; height:14px;" />
-                Registrar Paciente
-              </.button>
-            </div>
-          </div>
-        <% end %>
-      </div>
+        </.link>
+      </nav>
     </div>
     """
   end
 
-  defp initials(alias) when is_binary(alias) do
-    alias
+  defp initials(patient_alias) when is_binary(patient_alias) do
+    patient_alias
     |> String.split()
     |> Enum.map(&String.first/1)
     |> Enum.take(2)
@@ -343,14 +272,23 @@ defmodule AletheaWeb.PatientLive.Index do
     |> String.upcase()
   end
 
-  defp format_session_day(nil), do: "Sin horario"
+  defp initials(_), do: "?"
+
+  # One line, not two halves: without a scheduled day there is no time
+  # to print either, so the card says "Sin horario" instead of
+  # "Sin horario · sin hora".
+  defp schedule_label(%{session_day_of_week: day, session_time: time}) when not is_nil(day) do
+    "#{format_session_day(day)} · #{format_session_time(time)}"
+  end
+
+  defp schedule_label(_), do: "Sin horario"
 
   defp format_session_day(day) do
     days = ["", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
     Enum.at(days, day, "Sin día")
   end
 
-  defp format_session_time(nil), do: ""
+  defp format_session_time(nil), do: "sin hora"
 
   defp format_session_time(time) do
     Calendar.strftime(time, "%H:%M")

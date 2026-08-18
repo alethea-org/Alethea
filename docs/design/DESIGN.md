@@ -147,6 +147,14 @@ Haas Grotesk, with a fallback to `-apple-system, BlinkMacSystemFont,
 "Segoe UI", Roboto, ...`. The pricing surface runs a separate
 **Inter Display** stack at mid-weights (475 / 575).
 
+Alethea does not license Haas, so the app ships the spec's documented
+substitute: **Inter** as a variable font (`wght@100..900`) from Google
+Fonts, loaded by every layout. Being variable is the requirement, not
+a nicety — the pricing dialect's 475 / 575 mid-weights round to 500 on
+a static face. `body` sets the stack once in `app.css`; no component
+re-declares a family except `.pricing-surface`, which opts its subtree
+into the pricing dialect.
+
 ### Hierarchy
 
 Every row below is four tokens, not one:
@@ -290,6 +298,14 @@ Background `--colors-link`, text `--colors-on-primary`,
 `--colors-canvas` background, hairline border, and `--colors-ink`
 icon.
 
+**Size and width modifiers** — `--sm` tightens padding to
+`--spacing-xs` × `--spacing-sm` and drops the radius to
+`--rounded-md`, for toolbars and card footers; `--block` makes the
+button fill its column, for the auth forms. Both keep the role's
+colors and type step: the box changes, the voice does not. A disabled
+button drops to 50% opacity and, on the secondary, to a
+`--colors-border-strong` outline.
+
 ### Cards & Containers
 
 **`.hero-band`** — Full-page-width white-canvas hero. No surface
@@ -400,13 +416,16 @@ type on canvas, no rule above it.
 
 ### App Shell
 
-The authenticated shell predates this system. `app.css` still holds
-its geometry; the editorial block at the end of `editorial.css`
-re-skins its color, and because `editorial.css` loads after `app.css`
-at equal specificity, the editorial rules win.
+`app.css` positions the shell — sidebar, topbar, content column, auth
+grid — and reads every color, radius and spacing value straight from
+the tokens. It no longer carries a palette of its own, so the earlier
+re-skin block at the end of `editorial.css` is gone: there is nothing
+left to override. What remains in `editorial.css` is the chrome that
+is a component rather than a layout (the user menu) plus the shell's
+pointer feedback.
 
 **`.app-sidebar__logo`** — The brand mark: a `--colors-primary`
-square. `logo.svg` paints with `fill="currentColor"`, but the shell
+square. `logo.svg` paints with `stroke="currentColor"`, but the shell
 loads it through `<img src>` — an isolated document that does **not**
 inherit the surrounding `color`. The glyph is forced white with a
 filter; removing that filter makes it fall back to black and vanish
@@ -416,6 +435,101 @@ into the ink.
 `__name`, `__email`, `__item`, `__item--danger`, `__foot`) — The
 topbar dropdown. `--shadow-overlay` for the lift, hairline dividers,
 `--colors-danger` for the sign-out row.
+
+### Icons
+
+`AletheaWeb.Icons` draws the whole set inline as 24×24 stroked SVG at
+stroke-width 1.5, round caps and joins. The call site keeps the
+project convention (`<.icon name="hero-users" />`); only the
+implementation changed.
+
+This is a correctness fix as much as a style one. The old `icon/1`
+emitted `<span class="hero-users">` and depended on a Tailwind plugin
+to paint a mask into it. The app ships no Tailwind build, so every
+glyph outside the handful the fallback sheet happened to include
+rendered as an empty span — the sidebar, the search field, the
+notification bell and the form icons were all invisible.
+
+Color comes from `currentColor`; size from a class — `.icon` is the
+16px default, with `.size-3` / `-4` / `-5` / `-6` for the other steps.
+An inline `style` still wins over both.
+
+### Application Surfaces
+
+These components have no counterpart in the marketing spec: they are
+the product's own surfaces, built from the documented roles rather
+than from new ones.
+
+**`.auth-panel` / `.auth-form-side`** — The login and register split.
+An ink `--colors-surface-dark` signature panel on the left and the
+white form canvas on the right, with nothing between them. Below
+1024px the grid collapses to one column and the panel keeps only its
+brand line and headline. This replaces a centered card that stacked
+three shadows on a radial-gradient backdrop — both forbidden by the
+elevation and hero-atmosphere rules.
+
+**`.field` / `.field__label` / `.field__hint` / `.field__error`** —
+The form stack around `.text-input`. One label treatment (uppercase
+caption in `--colors-muted`), one hint treatment, one error treatment
+in `--colors-danger`. `.text-input--error` recolors the control's
+border; nothing else changes, so an invalid field never becomes a
+different component.
+
+**`.cmdbar`** — One horizontal control row: search, result count,
+filter popover, sort. It is the answer to a real defect in the
+dashboard's first version, where the picker stacked five rows of
+chrome above a caseload that was often a single patient. The filter
+chips live behind `.filter-menu`, whose trigger carries a
+`.filter-badge` with the active count, so an untouched filter set
+costs one control instead of a row.
+
+**`.patient-grid` / `.patient-card`** — The caseload as demo-grid
+cards: avatar, alias, schedule line, then a hairline foot with a
+`.status-dot` and its label. `--on` marks the patient currently in
+the briefing; `--risk` swaps the surface to `--colors-danger-soft`.
+`.patient-card--new` is the dashed create affordance and always sits
+last. Both the dashboard picker and the patients page render the same
+component, so the caseload reads identically in both places.
+
+**`.stat-strip` / `.stat-tile`** — Flat counters divided by hairlines,
+the same construction as the briefing metric strip. No icon, no
+accent, no shadow.
+
+**`.meter`** — The emotion trend bar. Replaces the CDN progress
+element; the fill modifiers (`--joy`, `--sadness`, `--anger`,
+`--fear`, `--neutral`) map onto the signature palette in the same
+pairing the 7-day chart uses, so a trend reads the same color in both
+places.
+
+**`.chat-line` / `.chat-bubble`** — The decrypted clinical history.
+Inbound is a hairline bubble on canvas, outbound is ink. Two roles,
+no third.
+
+**`.data-table`** — The operational surface (the job queue). Hairline
+dividers, a `--colors-surface-soft` header row, and `.data-table__mono`
+for argument payloads. `.link-button` is the in-row action: link-blue
+by default, `--danger` and `--ok` for the destructive and recovery
+actions.
+
+**`.notif`** — The notification bell and its panel. Severity is a
+`.status-dot` role (`--risk` / `--warn` / `--info`), never a bespoke
+hex, so a new alert level is a role decision.
+
+**`.flash` / `.flash-stack` / `.notice`** — Toast and inline notice.
+Both are the card's shape with a semantic border; the system
+documents no toast component, so neither invents an accent.
+
+**`.empty-state`** — A hairline frame with an icon, a title and one
+sentence. It replaces the dashed novelty boxes the app used to draw
+around empty regions.
+
+**`.band` / `.signature-split` / `.demo-grid` / `.footer-cols`** — The
+landing's rhythm helpers. `.band` is the 96px vertical constant; the
+surface modifier decides which documented surface a band sits on.
+
+**`.error-page`** — The 404 / 500 surface. A hero band holding
+nothing but type and the button pair. The templates are complete HTML
+documents because error rendering is configured with `layout: false`.
 
 ### Dashboard
 
@@ -498,10 +612,13 @@ which the editorial chrome rules out.
   keyframes live in `app.css`.
 - **`--colors-pricing-ink`** is referenced by the upstream spec
   without a defined value. It is an alias of `--colors-ink` here.
-- **FlyonUI overlap.** The app also loads FlyonUI from a CDN, and
-  parts of the UI still use its component classes (`btn`, `badge`,
-  `progress-*`, `chat-bubble-*`). Those carry FlyonUI's palette, not
-  these tokens. Reconciling the two is out of scope for this system.
+- **No CSS framework.** The FlyonUI CDN and the generated
+  `default.css` (daisyUI's fallback sheet) are gone, along with every
+  `btn`, `badge`, `progress-*`, `stat-*` and `chat-bubble-*` class
+  that read from their palettes. `app.css` and `editorial.css` are the
+  only stylesheets the app loads, so a class that is not in one of
+  them paints nothing — which makes an unstyled element a visible bug
+  instead of a silent one.
 - **The CSS variable `--theme_button-background-primary:
   #1b61c9`** exists at `:root` upstream of Airtable's design
   library but is not used as the primary CTA color anywhere. It
