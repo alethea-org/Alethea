@@ -638,33 +638,19 @@ defmodule AletheaWeb.DashboardLive do
             if(patient.urgent_intervention,
               do: "Intervención prioritaria",
               else: "Riesgo: Ira alta"
-            ),
-          dot_class: "background:#ef4444;",
-          badge_class: "badge-error"
+            )
         }
 
       predominant in ["sadness", "fear"] ->
-        %{
-          label: "Atención: #{format_emotion_label(predominant)}",
-          dot_class: "background:#f59e0b;",
-          badge_class: "badge-warning"
-        }
+        %{label: "Atención: #{format_emotion_label(predominant)}"}
 
       true ->
-        %{
-          label: "Estable",
-          dot_class: "background:#22c55e;",
-          badge_class: "badge-success"
-        }
+        %{label: "Estable"}
     end
   end
 
   defp default_mood_signal do
-    %{
-      label: "Sin datos",
-      dot_class: "background:#cbd5e1;",
-      badge_class: "badge-ghost"
-    }
+    %{label: "Sin datos"}
   end
 
   defp format_session_time(%Time{} = time) do
@@ -728,13 +714,10 @@ defmodule AletheaWeb.DashboardLive do
 
   defp metric_tile(assigns) do
     ~H"""
-    <div id={@id} style="text-align:center;">
-      <div style="font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#94a3b8; margin-bottom:2px;">
-        {@label}
-      </div>
-      <div style="font-size:20px; font-weight:700; color:#1e293b; font-variant-numeric:tabular-nums; line-height:1.2;">
-        {@value}
-      </div>
+    <div id={@id} class="pta-metric">
+      <div class="pta-metric__label">{@label}</div>
+
+      <div class="pta-metric__value">{@value}</div>
     </div>
     """
   end
