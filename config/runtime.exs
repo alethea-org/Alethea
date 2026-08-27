@@ -42,6 +42,17 @@ if config_env() in [:dev, :prod] do
     max_text_bytes: String.to_integer(System.get_env("EMOTION_SIDECAR_MAX_TEXT_BYTES", "4096"))
 end
 
+# Issue #198 — the emotion analyzer is a development-only capability.
+# The :emotion_analyzer discovery slot is intentionally NOT wired in
+# :prod; `Alethea.AI.emotion_analyzer/0` raises in that environment to
+# make the development-only contract loud rather than silent. The
+# dev-sidecar HTTP defaults above remain in place for the local :dev
+# workflow that still uses the real adapter.
+#
+# In :prod deployments that need to wire a non-dev analyzer, set the
+# :emotion_analyzer key explicitly via a release-time config injector.
+# That decision is out of scope for issue #198.
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

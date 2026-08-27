@@ -8,13 +8,11 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
   use Oban.Worker, queue: :ai_analysis, max_attempts: 1
 
   alias Alethea.Repo
+  alias Alethea.AI
   alias Alethea.Clinical
   alias Alethea.Clinical.{Message, EmotionAnalysis}
 
   require Logger
-
-  defp emotion_analyzer,
-    do: Application.get_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"message_id" => message_id}}) do
@@ -31,7 +29,7 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
   defp process_message(%Message{} = message) do
     with {:ok, dek} <- get_dek_for_message(message),
          {:ok, decrypted_content} <- decrypt_message(message, dek),
-         {:ok, emotion_scores} <- emotion_analyzer().analyze_batch([decrypted_content]),
+         {:ok, emotion_scores} <- AI.emotion_analyzer().analyze_batch([decrypted_content]),
          emotion_data when is_map(emotion_data) <- emotion_data(emotion_scores) do
       save_analysis(message, emotion_data)
     else
@@ -76,7 +74,6 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
   defp save_analysis(%Message{} = message, emotion_data) do
     analysis = %EmotionAnalysis{
       message_id: message.id,
-      model_version: "emotion-analyzer-v1",
       processed_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 

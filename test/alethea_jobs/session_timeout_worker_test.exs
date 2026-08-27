@@ -14,9 +14,14 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   setup :set_mox_from_context
   setup :verify_on_exit!
 
+  # Issue #198 — the :emotion_analyzer slot is wired to
+  # Alethea.AI.EmotionAnalyzer.Fake in config/test.exs by default.
+  # The Fake returns a fixed canonical vector (joy=0.8 dominant) — the
+  # happy-path tests below rely on that shape. The failure-shape tests
+  # swap in the EmotionAnalyzerBehaviourMock so the failure branches
+  # are exercised with deliberate, deterministic inputs.
   setup do
     previous_analyzer = Application.get_env(:alethea, :emotion_analyzer)
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerMock)
 
     on_exit(fn ->
       if previous_analyzer do
@@ -25,6 +30,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
         Application.delete_env(:alethea, :emotion_analyzer)
       end
     end)
+
+    :ok
   end
 
   setup do
@@ -73,16 +80,9 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   # backstop), so no TelegramOutboundWorker goodbye is enqueued.
   test "closes and summarizes a legacy WhatsApp (phone-args) session, skipping the retired goodbye",
        %{patient: patient, session: session, phone: phone} do
-    emotion_scores = [
-      %{label: "joy", score: 0.80},
-      %{label: "sadness", score: 0.05},
-      %{label: "anger", score: 0.05},
-      %{label: "fear", score: 0.05},
-      %{label: "neutral", score: 0.05}
-    ]
-
-    Alethea.AI.EmotionAnalyzerMock
-    |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
+    # Issue #198 — the :emotion_analyzer slot is wired to
+    # Alethea.AI.EmotionAnalyzer.Fake in config/test.exs (deterministic
+    # joy=0.8 dominant). No explicit mock expectation needed.
 
     Alethea.AI.SessionSummaryChainMock
     |> expect(:run, fn _texts, _scores ->
@@ -140,16 +140,9 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
          %{session: session, patient: patient, telegram_args: targs} do
       targs = %{targs | session_id: session.id, patient_id: patient.id}
 
-      emotion_scores = [
-        %{label: "joy", score: 0.80},
-        %{label: "sadness", score: 0.05},
-        %{label: "anger", score: 0.05},
-        %{label: "fear", score: 0.05},
-        %{label: "neutral", score: 0.05}
-      ]
-
-      Alethea.AI.EmotionAnalyzerMock
-      |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
+      # Issue #198 — the :emotion_analyzer slot is wired to
+      # Alethea.AI.EmotionAnalyzer.Fake (deterministic joy=0.8 dominant).
+      # No explicit mock expectation needed.
 
       Alethea.AI.SessionSummaryChainMock
       |> expect(:run, fn _texts, _scores ->
@@ -188,13 +181,11 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
 
       targs = %{targs | session_id: session.id, patient_id: patient.id}
 
-      # Neither adapter should be invoked — any unexpected call
-      # indicates the close-skip guard failed.
-      Alethea.AI.EmotionAnalyzerMock
-      |> expect(:analyze_batch, 0, fn _ ->
-        flunk("Emotion analysis must not run on closed session")
-      end)
-
+      # Issue #198 — the :emotion_analyzer slot is wired to
+      # Alethea.AI.EmotionAnalyzer.Fake (deterministic). The Fake would
+      # return its fixed vector if invoked, but the close-skip guard
+      # must short-circuit BEFORE the analyzer runs — we assert that
+      # indirectly by checking NO trends or summary are persisted.
       Alethea.AI.SessionSummaryChainMock
       |> expect(:run, 0, fn _, _ ->
         flunk("SessionSummaryChain must not run on closed session")
@@ -203,6 +194,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       assert :ok = perform_job(SessionTimeoutWorker, targs)
 
       refute_enqueued(worker: TelegramOutboundWorker)
+      assert Repo.aggregate(Trend, :count) == 0
+      assert Repo.aggregate(Summary, :count) == 0
     end
   end
 
@@ -211,7 +204,9 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     session: session,
     phone: phone
   } do
-    Alethea.AI.EmotionAnalyzerMock
+    # Issue #198 — swap to the inline Mox mock to drive the failure shape.
+    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+    Alethea.AI.EmotionAnalyzerBehaviourMock
     |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
 
     capture_log(fn ->
@@ -232,7 +227,8 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     session: session,
     phone: phone
   } do
-    Alethea.AI.EmotionAnalyzerMock
+    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+    Alethea.AI.EmotionAnalyzerBehaviourMock
     |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
 
     capture_log(fn ->
@@ -278,16 +274,10 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
            patient: patient,
            session: session
          } do
-      emotion_scores = [
-        %{label: "joy", score: 0.80},
-        %{label: "sadness", score: 0.05},
-        %{label: "anger", score: 0.05},
-        %{label: "fear", score: 0.05},
-        %{label: "neutral", score: 0.05}
-      ]
-
-      Alethea.AI.EmotionAnalyzerMock
-      |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
+      # Issue #198 — the :emotion_analyzer slot is wired to
+      # Alethea.AI.EmotionAnalyzer.Fake (deterministic joy=0.8 dominant).
+      # No explicit mock expectation needed; the Fake provides the
+      # score vector that feeds the SessionSummaryChain.
 
       # Force `Clinical.save_summary/1` to fail by piping a Changeset
       # with a violation through the chain. The chain itself returns
@@ -362,16 +352,10 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
            patient: patient,
            session: session
          } do
-      emotion_scores = [
-        %{label: "joy", score: 0.80},
-        %{label: "sadness", score: 0.05},
-        %{label: "anger", score: 0.05},
-        %{label: "fear", score: 0.05},
-        %{label: "neutral", score: 0.05}
-      ]
-
-      Alethea.AI.EmotionAnalyzerMock
-      |> expect(:analyze_batch, fn _texts -> {:ok, emotion_scores} end)
+      # Issue #198 — the :emotion_analyzer slot is wired to
+      # Alethea.AI.EmotionAnalyzer.Fake (deterministic joy=0.8 dominant).
+      # No explicit mock expectation needed; the Fake provides the
+      # score vector that feeds the SessionSummaryChain.
 
       # Force save_summary failure on a DIFFERENT field (`:type`) so
       # the failed-validation key is `[:type]`. The `summary_text` is

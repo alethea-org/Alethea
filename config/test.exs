@@ -23,18 +23,15 @@ config :alethea, AletheaWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
-config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerMock
+config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Fake
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
 config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
 
-config :alethea, Alethea.AI.EmotionAnalyzer,
-  base_url: "http://emotion-sidecar.test",
-  connect_timeout: 100,
-  receive_timeout: 100,
-  max_batch_size: 32,
-  max_text_bytes: 4096,
-  req_options: [plug: {Req.Test, Alethea.AI.EmotionAnalyzer}]
+# The real Alethea.AI.EmotionAnalyzer config (HTTP sidecar) is loaded from
+# config/config.exs (defaults) and config/runtime.exs (env-overrides) for
+# :dev and :prod. In :test, the slot is wired to the deterministic Fake
+# above — no network calls.
 
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   api_key: "test_key",

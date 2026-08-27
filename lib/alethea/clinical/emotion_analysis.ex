@@ -13,8 +13,6 @@ defmodule Alethea.Clinical.EmotionAnalysis do
   @score_fields [:joy_score, :sadness_score, :anger_score, :fear_score, :neutral_score]
 
   schema "emotion_analyses" do
-    field(:model_version, :string, default: "robertuito-emotion-analysis")
-
     field(:joy_score, :float)
     field(:sadness_score, :float)
     field(:anger_score, :float)
@@ -38,7 +36,6 @@ defmodule Alethea.Clinical.EmotionAnalysis do
     emotion_analysis
     |> cast(attrs, [
       :message_id,
-      :model_version,
       :joy_score,
       :sadness_score,
       :anger_score,

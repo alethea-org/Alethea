@@ -14,7 +14,10 @@ defmodule Mix.Tasks.Alethea.Demo.ProcessTest do
   setup do
     previous_analyzer = Application.get_env(:alethea, :emotion_analyzer)
     previous_chain = Application.get_env(:alethea, :weekly_summary_chain)
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerMock)
+    # Issue #198 — the inline Mox mock replaces the legacy
+    # Alethea.AI.EmotionAnalyzerMock (now removed). It is the failure-
+    # shape stub; the happy-path adapter is the Fake in config/test.exs.
+    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
     Application.put_env(:alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock)
 
     on_exit(fn ->
@@ -49,7 +52,7 @@ defmodule Mix.Tasks.Alethea.Demo.ProcessTest do
     message = inbound_message_fixture(patient, "Selected journal content")
     other_message = inbound_message_fixture(other_patient, "Other journal content")
 
-    expect(Alethea.AI.EmotionAnalyzerMock, :analyze_batch, fn [_content] ->
+    expect(Alethea.AI.EmotionAnalyzerBehaviourMock, :analyze_batch, fn [_content] ->
       {:ok, emotion_scores()}
     end)
 

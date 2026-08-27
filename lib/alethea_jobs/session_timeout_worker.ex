@@ -111,14 +111,12 @@ defmodule AletheaJobs.SessionTimeoutWorker do
     # session's lifetime — see @moduledoc "Uniqueness policy".
     unique: [fields: [:args], period: :infinity]
 
-  alias Alethea.{Accounts, Clinical, AI.Sanitizer}
+  alias Alethea.{Accounts, AI, Clinical}
+  alias Alethea.AI.Sanitizer
   alias Alethea.Clinical.{EmotionAnalysis, Session, SessionManager}
   alias AletheaJobs.SafeReason
 
   require Logger
-
-  defp emotion_analyzer,
-    do: Application.get_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer)
 
   defp session_summary_chain,
     do:
@@ -196,7 +194,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
          messages <- Clinical.list_session_messages(closed_session.id),
          {:ok, texts} <- decrypt_messages(patient, messages),
          sanitized_texts = Enum.map(texts, &Sanitizer.sanitize/1),
-         {:ok, emotion_scores} <- emotion_analyzer().analyze_batch(sanitized_texts),
+         {:ok, emotion_scores} <- AI.emotion_analyzer().analyze_batch(sanitized_texts),
          {:ok, _emotion_data} <- EmotionAnalysis.canonical_scores(emotion_scores),
          :ok <- Clinical.save_trends(patient, emotion_scores, closed_session),
          {:ok, summary_text} <- session_summary_chain().run(sanitized_texts, emotion_scores),
