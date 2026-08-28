@@ -51,3 +51,4 @@ defmodule Alethea.AI.EmotionAnalyzer.Fake do
     ]
   end
 end
+
