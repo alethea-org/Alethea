@@ -84,7 +84,13 @@ config :alethea, Oban,
     # queue's `10`) as a soft pre-Oban-Pro approximation of the
     # spec's "dedicated priority lane" — the real isolation comes
     # from job-level priority (0 vs 9), not queue-level limits.
-    telegram_outbound_crisis: 5
+    telegram_outbound_crisis: 5,
+    # `clinical_record_outbox` (sdd/clinical-record-foundation, GitHub #194,
+    # PR1). Consumed by `AletheaJobs.ClinicalRecordOutboxWorker`, a no-op
+    # until #196 lands its own projection consumer. Enqueued inside the
+    # same `Ecto.Multi`/transaction as the clinical row + audit entry
+    # (see `Alethea.ClinicalRecord`), so job args are identifiers only.
+    clinical_record_outbox: 5
   ],
   repo: Alethea.Repo,
   plugins: [
