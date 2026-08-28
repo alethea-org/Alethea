@@ -25,6 +25,7 @@ defmodule Mix.Tasks.Alethea.Demo.Reset do
   @lock_tables ~w(
     ai_diagnoses
     audit_logs
+    clinical_notes
     clinical_sessions
     clinical_summaries
     clinical_trends
@@ -39,13 +40,23 @@ defmodule Mix.Tasks.Alethea.Demo.Reset do
     oban_jobs
     patients
     professionals
+    target_behaviors
   )
 
+  # `target_behaviors`/`clinical_notes` (sdd/clinical-record-foundation, #194)
+  # are deleted in the `clinical` group — same as every other table with an
+  # FK to `patients`/`professionals` — so this reset never depends on the
+  # `on_delete: :delete_all`/`:restrict` DB cascade to avoid a FK violation
+  # against the raw `DELETE FROM professionals` in `legacy_accounts` below.
+  # Explicit-delete-then-lock keeps counts accurate and locking symmetric
+  # with the rest of this task, matching the existing convention (e.g.
+  # `messages` is also deleted explicitly here rather than relying on its
+  # own `patients` cascade).
   @delete_groups [
     jobs: ~w(oban_jobs),
     delivery: ~w(foundation_outbound_dead_letters foundation_patient_auth_codes),
     clinical:
-      ~w(ai_diagnoses emotion_analyses messages clinical_summaries clinical_trends clinical_sessions),
+      ~w(ai_diagnoses emotion_analyses messages clinical_summaries clinical_trends clinical_sessions target_behaviors clinical_notes),
     foundation_accounts: ~w(foundation_patients foundation_professionals foundation_admins),
     legacy_accounts: ~w(audit_logs patients encryption_keys professionals)
   ]
