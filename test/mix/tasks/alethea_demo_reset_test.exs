@@ -11,6 +11,7 @@ defmodule Mix.Tasks.Alethea.Demo.ResetTest do
   @target_tables ~w(
     ai_diagnoses
     audit_logs
+    clinical_notes
     clinical_sessions
     clinical_summaries
     clinical_trends
@@ -25,6 +26,7 @@ defmodule Mix.Tasks.Alethea.Demo.ResetTest do
     oban_jobs
     patients
     professionals
+    target_behaviors
   )
 
   test "fails closed outside development" do
@@ -151,6 +153,23 @@ defmodule Mix.Tasks.Alethea.Demo.ResetTest do
       professional_id: professional.id,
       action: "synthetic",
       resource_type: "Patient"
+    })
+
+    # sdd/clinical-record-foundation (#194, PR1): these two tables carry a
+    # `professional_id` FK with `on_delete: :restrict`, so this reset must
+    # delete them explicitly rather than rely on any cascade — this seed
+    # proves the fix in `Mix.Tasks.Alethea.Demo.Reset` (@delete_groups
+    # `clinical` group + @lock_tables) covers both new tables.
+    Repo.insert!(%Alethea.ClinicalRecord.TargetBehavior{
+      patient_id: patient.id,
+      professional_id: professional.id,
+      encrypted_description: <<1, 2, 3>>
+    })
+
+    Repo.insert!(%Alethea.ClinicalRecord.ClinicalNote{
+      patient_id: patient.id,
+      professional_id: professional.id,
+      encrypted_body: <<1, 2, 3>>
     })
 
     {:ok, foundation_professional} =
