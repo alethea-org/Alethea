@@ -206,6 +206,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   } do
     # Issue #198 — swap to the inline Mox mock to drive the failure shape.
     Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
     Alethea.AI.EmotionAnalyzerBehaviourMock
     |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
 
@@ -228,6 +229,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     phone: phone
   } do
     Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
     Alethea.AI.EmotionAnalyzerBehaviourMock
     |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
 
