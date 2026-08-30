@@ -2,6 +2,14 @@ defmodule Alethea.Clinical do
   @moduledoc """
   Contexto clínico para guardar mensajes, leer el historial reciente y persistir resultados de IA.
   Gestiona también el ciclo de vida de sesiones y tendencias emocionales.
+
+  **Boundary note**: journaling del paciente (mensajes, resúmenes,
+  tendencias) vive acá — es distinto de `Alethea.ClinicalRecord`, que
+  guarda las conductas objetivo y notas clínicas que autora el
+  profesional. Son tablas separadas, sin writer compartido, sin path
+  de escritura de IA hacia `target_behaviors` o `clinical_notes`.
+  Cualquier archivo que importe ambos DEBE aliasear uno explícitamente,
+  ej. `alias Alethea.Clinical, as: Journaling`, para evitar colisión visual.
   """
 
   import Ecto.Query, warn: false
