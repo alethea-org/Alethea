@@ -14,4 +14,3 @@ defmodule Alethea.Repo.Migrations.RemoveModelVersionFromEmotionAnalyses do
     end
   end
 end
-
