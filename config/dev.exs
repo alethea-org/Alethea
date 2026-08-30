@@ -101,3 +101,8 @@ config :phoenix_live_view,
 # NEVER use this value in production.
 config :alethea, Alethea.Encryption.Vault,
   aes_key: System.get_env("CLOAK_AES_KEY", "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc=")
+
+# Emotion analyzer — development-only deterministic Fake (issue #198).
+# The HTTP sidecar (Alethea.AI.EmotionAnalyzer) is not wired in :dev; the
+# Fake returns a fixed canonical score vector with no network calls.
+config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Fake

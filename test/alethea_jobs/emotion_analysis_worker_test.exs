@@ -9,21 +9,14 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
   alias AletheaJobs.EmotionAnalysisWorker
   alias Alethea.Clinical.{EmotionAnalysis, Trend}
 
+  # Issue #198 — the :emotion_analyzer slot is wired to
+  # Alethea.AI.EmotionAnalyzer.Fake in config/test.exs by default.
+  # The Fake returns a fixed canonical vector (joy=0.8 dominant) — the
+  # happy-path tests below rely on that shape. The
+  # "unavailable / malformed" branch swaps in the inline Mox mock
+  # because those failure shapes must NOT depend on the Fake's vector.
   setup :set_mox_from_context
   setup :verify_on_exit!
-
-  setup do
-    previous_analyzer = Application.get_env(:alethea, :emotion_analyzer)
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerMock)
-
-    on_exit(fn ->
-      if previous_analyzer do
-        Application.put_env(:alethea, :emotion_analyzer, previous_analyzer)
-      else
-        Application.delete_env(:alethea, :emotion_analyzer)
-      end
-    end)
-  end
 
   describe "EmotionAnalysis schema" do
     test "computes dominant label correctly" do
@@ -138,22 +131,17 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
     end
 
     test "canonical success inserts analysis and derived trends", %{message: message} do
-      expect(Alethea.AI.EmotionAnalyzerMock, :analyze_batch, fn _texts ->
-        {:ok,
-         [
-           %{label: "joy", score: 0.8},
-           %{label: "sadness", score: 0.05},
-           %{label: "anger", score: 0.05},
-           %{label: "fear", score: 0.05},
-           %{label: "neutral", score: 0.05}
-         ]}
-      end)
-
       assert {:ok, analysis} =
                EmotionAnalysisWorker.perform(%Oban.Job{args: %{"message_id" => message.id}})
 
+      # Alethea.AI.EmotionAnalyzer.Fake returns a fixed canonical vector
+      # with joy=0.8 dominant. Assert the worker honors it.
       assert analysis.dominant_label == "joy"
       assert analysis.joy_score == 0.8
+      assert analysis.sadness_score == 0.05
+      assert analysis.anger_score == 0.05
+      assert analysis.fear_score == 0.05
+      assert analysis.neutral_score == 0.05
       assert Repo.aggregate(Trend, :count) > 0
       assert analysis.message_id in Repo.all(from a in EmotionAnalysis, select: a.message_id)
     end
@@ -165,17 +153,6 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
     } do
       Phoenix.PubSub.subscribe(Alethea.PubSub, "patients:#{professional.id}")
 
-      expect(Alethea.AI.EmotionAnalyzerMock, :analyze_batch, fn _texts ->
-        {:ok,
-         [
-           %{label: "joy", score: 0.8},
-           %{label: "sadness", score: 0.05},
-           %{label: "anger", score: 0.05},
-           %{label: "fear", score: 0.05},
-           %{label: "neutral", score: 0.05}
-         ]}
-      end)
-
       assert {:ok, _analysis} =
                EmotionAnalysisWorker.perform(%Oban.Job{args: %{"message_id" => message.id}})
 
@@ -186,6 +163,22 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
     test "unavailable or malformed analysis inserts neither analysis nor trends", %{
       message: message
     } do
+      # The Fake always returns the canonical vector — to exercise the
+      # error path we swap in an inline Mox mock that returns each
+      # failure shape and restore the Fake on exit. This mirrors the
+      # issue #198 acceptance criterion: replacement consumer behavior
+      # and failure handling are exercised deterministically.
+      original = Application.get_env(:alethea, :emotion_analyzer)
+      Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:alethea, :emotion_analyzer, original)
+        else
+          Application.delete_env(:alethea, :emotion_analyzer)
+        end
+      end)
+
       for result <- [
             {:error, :unavailable},
             {:ok, [%{label: "joy", score: 0.8}]},
@@ -198,7 +191,7 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
                %{label: "neutral", score: 0.0}
              ]}
           ] do
-        expect(Alethea.AI.EmotionAnalyzerMock, :analyze_batch, fn _texts -> result end)
+        expect(Alethea.AI.EmotionAnalyzerBehaviourMock, :analyze_batch, fn _texts -> result end)
 
         capture_log(fn ->
           assert {:error, _} =
