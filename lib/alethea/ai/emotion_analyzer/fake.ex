@@ -38,6 +38,7 @@ defmodule Alethea.AI.EmotionAnalyzer.Fake do
   def analyze_batch(texts) when is_list(texts) do
     {:ok, fixed_scores()}
   end
+
   def analyze_batch(_texts), do: {:error, :unavailable}
 
   defp fixed_scores do
