@@ -14,13 +14,11 @@ defmodule Alethea.ClinicalRecord.Outbox do
     FunctionalAnalysisDraft,
     TargetBehavior
   }
-
   alias AletheaJobs.ClinicalRecordOutboxWorker
 
   @allowed_args ~w(event resource_type resource_id patient_id professional_id)
 
   @doc """
-  Builds the outbox job insert changeset for `event_type` from a
   persisted `TargetBehavior`, `ClinicalNote`, `ConsultationEvidence`,
   `ClinicianObservation`, `AIProposal`, or `FunctionalAnalysisDraft`.
   `args` is restricted to identifier fields only — see `@allowed_args`.
