@@ -83,6 +83,68 @@ defmodule Alethea.ClinicalRecord.AuditTest do
     end
   end
 
+  describe "changeset/1 — PR1b vocabulary (sdd/alethea/issue-195-clinical-review-workbench, task 2.7)" do
+    test "accepts clinician_observation_created/clinician_observation", %{
+      professional: professional
+    } do
+      changeset =
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "clinician_observation_created",
+          resource_type: "clinician_observation",
+          resource_id: Ecto.UUID.generate(),
+          outcome: "success"
+        })
+
+      assert changeset.valid?
+    end
+
+    test "accepts clinician_observation_updated", %{professional: professional} do
+      changeset =
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "clinician_observation_updated",
+          resource_type: "clinician_observation",
+          resource_id: Ecto.UUID.generate(),
+          outcome: "success"
+        })
+
+      assert changeset.valid?
+    end
+
+    test "accepts ai_proposals_requested/ai_proposal_accepted/ai_proposal_edited/ai_proposal_discarded",
+         %{professional: professional} do
+      for action <- ~w(ai_proposals_requested ai_proposal_accepted ai_proposal_edited
+                       ai_proposal_discarded) do
+        changeset =
+          Audit.changeset(%Audit{
+            professional_id: professional.id,
+            action: action,
+            resource_type: "ai_proposal",
+            resource_id: Ecto.UUID.generate(),
+            outcome: "success"
+          })
+
+        assert changeset.valid?, "expected #{action} to be a valid action"
+      end
+    end
+
+    test "accepts functional_analysis_draft_saved/functional_analysis_draft", %{
+      professional: professional
+    } do
+      changeset =
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "functional_analysis_draft_saved",
+          resource_type: "functional_analysis_draft",
+          resource_id: Ecto.UUID.generate(),
+          outcome: "success"
+        })
+
+      assert changeset.valid?
+    end
+  end
+
   describe "changeset/1 — closed vocabulary" do
     test "rejects an action outside the fixed action list", %{professional: professional} do
       changeset =

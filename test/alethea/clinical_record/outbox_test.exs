@@ -7,7 +7,15 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
   """
   use ExUnit.Case, async: true
 
-  alias Alethea.ClinicalRecord.{ClinicalNote, ConsultationEvidence, Outbox, TargetBehavior}
+  alias Alethea.ClinicalRecord.{
+    AIProposal,
+    ClinicalNote,
+    ClinicianObservation,
+    ConsultationEvidence,
+    FunctionalAnalysisDraft,
+    Outbox,
+    TargetBehavior
+  }
 
   describe "event/2 — target_behavior_created" do
     test "builds a job changeset with identifiers-only args" do
@@ -82,6 +90,79 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
       assert args["resource_id"] == id
       refute Map.has_key?(args, "encrypted_excerpt")
       refute Map.has_key?(args, "source_id")
+    end
+  end
+
+  describe "event/2 — clinician_observation_created (sdd/alethea/issue-195-clinical-review-workbench, PR1b task 2.7)" do
+    test "builds a job changeset with a clinician_observation resource_type and no body" do
+      id = Ecto.UUID.generate()
+      patient_id = Ecto.UUID.generate()
+      professional_id = Ecto.UUID.generate()
+
+      record = %ClinicianObservation{
+        id: id,
+        patient_id: patient_id,
+        professional_id: professional_id,
+        encrypted_body: <<4, 4, 4>>
+      }
+
+      changeset = Outbox.event("clinician_observation_created", record)
+      args = get_change(changeset, :args)
+
+      assert changeset.valid?
+      assert args["resource_type"] == "clinician_observation"
+      assert args["resource_id"] == id
+      refute Map.has_key?(args, "encrypted_body")
+    end
+  end
+
+  describe "event/2 — ai_proposals_requested (PR1b task 2.7)" do
+    test "builds a job changeset with an ai_proposal resource_type and no text" do
+      id = Ecto.UUID.generate()
+      patient_id = Ecto.UUID.generate()
+      professional_id = Ecto.UUID.generate()
+
+      record = %AIProposal{
+        id: id,
+        patient_id: patient_id,
+        professional_id: professional_id,
+        encrypted_original_text: <<5, 5, 5>>,
+        encrypted_text: <<5, 5, 5>>,
+        status: "pending"
+      }
+
+      changeset = Outbox.event("ai_proposals_requested", record)
+      args = get_change(changeset, :args)
+
+      assert changeset.valid?
+      assert args["resource_type"] == "ai_proposal"
+      assert args["resource_id"] == id
+      refute Map.has_key?(args, "encrypted_original_text")
+      refute Map.has_key?(args, "encrypted_text")
+      refute Map.has_key?(args, "status")
+    end
+  end
+
+  describe "event/2 — functional_analysis_draft_saved (PR1b task 2.7)" do
+    test "builds a job changeset with a functional_analysis_draft resource_type and no body" do
+      id = Ecto.UUID.generate()
+      patient_id = Ecto.UUID.generate()
+      professional_id = Ecto.UUID.generate()
+
+      record = %FunctionalAnalysisDraft{
+        id: id,
+        patient_id: patient_id,
+        professional_id: professional_id,
+        encrypted_body: <<6, 6, 6>>
+      }
+
+      changeset = Outbox.event("functional_analysis_draft_saved", record)
+      args = get_change(changeset, :args)
+
+      assert changeset.valid?
+      assert args["resource_type"] == "functional_analysis_draft"
+      assert args["resource_id"] == id
+      refute Map.has_key?(args, "encrypted_body")
     end
   end
 
