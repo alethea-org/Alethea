@@ -95,6 +95,9 @@ Trigger activo cuya condición es "falta 1 hora para la sesión". La acción es 
 
 ## Datos clínicos del paciente
 
+### Conducta objetivo (target behavior)
+Meta de tratamiento que el profesional registra para su paciente — texto libre, autorado únicamente por el psicólogo responsable, distinto de una nota clínica. Vive en `Alethea.ClinicalRecord`, separado de `Alethea.Clinical` (journaling): tabla propia, sin path de escritura de IA ni del pipeline de journaling. En el MVP (#194) solo se crea; lectura, listado, edición y cierre manual quedan para #195.
+
 ### Notas clínicas
 Texto libre que carga el profesional. Es la **forma canónica de cargar datos clínicos en el sistema**, incluyendo diagnósticos. Las notas pueden tener adjuntos (PDFs, imágenes) que son descargables pero **no se ingieren al RAG** — solo el texto libre entra al RAG.
 
