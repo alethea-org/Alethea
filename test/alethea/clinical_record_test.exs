@@ -1151,7 +1151,6 @@ defmodule Alethea.ClinicalRecordTest do
     })
     |> Repo.insert!()
   end
-
   defp create_target_behavior!(professional, patient) do
     {:ok, target_behavior} =
       ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta objetivo")
