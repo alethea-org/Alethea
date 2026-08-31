@@ -446,6 +446,38 @@ defmodule Alethea.ClinicalRecord do
   end
 
   @doc """
+  Read-only lookup of the single functional-analysis draft for a target
+  behavior (design A7/D4 — at most one row per `target_behavior_id`).
+  Returns `{:ok, nil}` when no draft has been saved yet. No audit row is
+  written (mirrors `review_timeline/3` — read access to the workbench is
+  not logged). Added for PR3's `TargetBehaviorLive.Review`: the draft
+  form needs its current content to remain editable in place, and no
+  getter existed in design's context API table (PR2a only shipped the
+  upsert) — a minimal, symmetrical read addition rather than reaching
+  into `Repo`/`PatientVault` from the web layer.
+  """
+  @spec get_functional_analysis_draft(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, FunctionalAnalysisDraft.t() | nil} | {:error, :unauthorized | term()}
+  def get_functional_analysis_draft(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id
+      ) do
+    with_patient(professional, patient_id, fn patient, dek ->
+      case Repo.get_by(FunctionalAnalysisDraft,
+             target_behavior_id: target_behavior_id,
+             patient_id: patient.id
+           ) do
+        nil ->
+          {:ok, nil}
+
+        draft ->
+          {:ok, %{draft | body: decrypt_or_placeholder(draft.encrypted_body, dek)}}
+      end
+    end)
+  end
+
+  @doc """
   Read-only chronological merge of a target behavior's review timeline:
   cited consultation evidence, clinician observations, and AI proposals
   (design A5). No audit row is written — read access to the timeline is not
