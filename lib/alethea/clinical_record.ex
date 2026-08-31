@@ -33,8 +33,11 @@ defmodule Alethea.ClinicalRecord do
     TargetBehavior
   }
 
+  alias Alethea.ClinicalRecord.SourceRef
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
+
+  import Ecto.Query
 
   @doc """
   Authorizes via `Accounts.get_patient_for_professional/2`, encrypts
@@ -440,6 +443,104 @@ defmodule Alethea.ClinicalRecord do
         |> finalize_record_multi()
       end
     end)
+  end
+
+  @doc """
+  Read-only chronological merge of a target behavior's review timeline:
+  cited consultation evidence, clinician observations, and AI proposals
+  (design A5). No audit row is written — read access to the timeline is not
+  logged (design's context API table lists no audit action for this
+  function).
+
+  The three tables are queried separately, decrypted per row under the
+  patient's DEK, and merged in Elixir by `{occurred_at, kind_rank, id}` —
+  a SQL `UNION` is not possible because each kind encrypts under a
+  differently-named column (design A5). `kind_rank` (evidence 0,
+  observation 1, proposal 2) is a deterministic tiebreak for items sharing
+  the same `occurred_at`.
+
+  Discarded AI proposals are **not** filtered out here (design D5 stays
+  observable) — the caller decides presentation. Each evidence item's
+  `source` field is resolved via `SourceRef.resolve_many/1` and is
+  `:unavailable` when the cited source row has since been deleted or
+  cryptographically erased; the item still renders from its own stored,
+  encrypted excerpt (design A3).
+  """
+  @spec review_timeline(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, [map()]} | {:error, :unauthorized | term()}
+  def review_timeline(%Professional{} = professional, patient_id, target_behavior_id) do
+    with_patient(professional, patient_id, fn _patient, dek ->
+      evidence =
+        ConsultationEvidence
+        |> where([e], e.target_behavior_id == ^target_behavior_id)
+        |> order_by([e], asc: e.occurred_at)
+        |> Repo.all()
+
+      observations =
+        ClinicianObservation
+        |> where([o], o.target_behavior_id == ^target_behavior_id)
+        |> order_by([o], asc: o.occurred_at)
+        |> Repo.all()
+
+      proposals =
+        AIProposal
+        |> where([p], p.target_behavior_id == ^target_behavior_id)
+        |> order_by([p], asc: p.occurred_at)
+        |> Repo.all()
+
+      source_refs =
+        evidence
+        |> Enum.map(&{&1.source_kind, &1.source_id})
+        |> SourceRef.resolve_many()
+
+      timeline =
+        (Enum.map(evidence, &evidence_item(&1, dek, source_refs)) ++
+           Enum.map(observations, &observation_item(&1, dek)) ++
+           Enum.map(proposals, &proposal_item(&1, dek)))
+        |> Enum.sort_by(&{&1.occurred_at, kind_rank(&1.kind), &1.id})
+
+      {:ok, timeline}
+    end)
+  end
+
+  defp evidence_item(%ConsultationEvidence{} = evidence, dek, source_refs) do
+    %{
+      id: evidence.id,
+      kind: :consultation_evidence,
+      occurred_at: evidence.occurred_at,
+      text: decrypt_or_placeholder(evidence.encrypted_excerpt, dek),
+      source: Map.get(source_refs, {evidence.source_kind, evidence.source_id}, :unavailable)
+    }
+  end
+
+  defp observation_item(%ClinicianObservation{} = observation, dek) do
+    %{
+      id: observation.id,
+      kind: :clinician_observation,
+      occurred_at: observation.occurred_at,
+      text: decrypt_or_placeholder(observation.encrypted_body, dek)
+    }
+  end
+
+  defp proposal_item(%AIProposal{} = proposal, dek) do
+    %{
+      id: proposal.id,
+      kind: :ai_proposal,
+      occurred_at: proposal.occurred_at,
+      text: decrypt_or_placeholder(proposal.encrypted_text, dek),
+      status: proposal.status
+    }
+  end
+
+  defp kind_rank(:consultation_evidence), do: 0
+  defp kind_rank(:clinician_observation), do: 1
+  defp kind_rank(:ai_proposal), do: 2
+
+  defp decrypt_or_placeholder(ciphertext, dek) do
+    case PatientVault.decrypt(ciphertext, dek) do
+      {:ok, plaintext} -> plaintext
+      {:error, _reason} -> "[Error al descifrar]"
+    end
   end
 
   defp update_ai_proposal_status(professional, patient, proposal_id, attrs, action) do
