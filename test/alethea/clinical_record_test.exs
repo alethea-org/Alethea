@@ -1042,6 +1042,61 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "get_functional_analysis_draft/3" do
+    test "authorized: returns nil when no draft exists yet", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+
+    test "authorized: returns the decrypted draft body when one exists", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "Borrador de analisis funcional"
+               )
+
+      assert {:ok, %FunctionalAnalysisDraft{} = draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert draft.body == "Borrador de analisis funcional"
+    end
+
+    test "unauthorized: denies a professional not responsible for the patient", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 other_professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+  end
+
   defp insert_evidence!(
          professional,
          patient,
