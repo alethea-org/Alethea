@@ -7,7 +7,7 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
   """
   use ExUnit.Case, async: true
 
-  alias Alethea.ClinicalRecord.{ClinicalNote, Outbox, TargetBehavior}
+  alias Alethea.ClinicalRecord.{ClinicalNote, ConsultationEvidence, Outbox, TargetBehavior}
 
   describe "event/2 — target_behavior_created" do
     test "builds a job changeset with identifiers-only args" do
@@ -56,6 +56,32 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
       assert args["resource_id"] == id
       refute Map.has_key?(args, "encrypted_body")
       refute Map.has_key?(args, "encrypted_description")
+    end
+  end
+
+  describe "event/2 — consultation_evidence_created (sdd/alethea/issue-195-clinical-review-workbench, PR1a task 1.5)" do
+    test "builds a job changeset with a consultation_evidence resource_type and no source data" do
+      id = Ecto.UUID.generate()
+      patient_id = Ecto.UUID.generate()
+      professional_id = Ecto.UUID.generate()
+
+      record = %ConsultationEvidence{
+        id: id,
+        patient_id: patient_id,
+        professional_id: professional_id,
+        source_kind: "clinical_note",
+        source_id: Ecto.UUID.generate(),
+        encrypted_excerpt: <<7, 7, 7>>
+      }
+
+      changeset = Outbox.event("consultation_evidence_created", record)
+      args = get_change(changeset, :args)
+
+      assert changeset.valid?
+      assert args["resource_type"] == "consultation_evidence"
+      assert args["resource_id"] == id
+      refute Map.has_key?(args, "encrypted_excerpt")
+      refute Map.has_key?(args, "source_id")
     end
   end
 
