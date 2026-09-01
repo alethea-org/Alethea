@@ -124,6 +124,8 @@ defmodule AletheaWeb.Router do
         :show
       )
 
+      live("/prototype/clinical-review", ClinicalReviewPrototypeLive, :index)
+      live("/prototype/eorc-shape", EorcShapeComparisonPrototypeLive, :index)
       live("/admin/oban-dashboard", ObanDashboardLive, :index)
     end
   end
