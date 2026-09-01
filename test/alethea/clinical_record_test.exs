@@ -887,6 +887,270 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "review_timeline/3" do
+    test "authorized: merges evidence/observation/proposal chronologically with decrypted text",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+
+      t1 = ~U[2026-01-01 10:00:00.000000Z]
+      t2 = ~U[2026-01-01 11:00:00.000000Z]
+      t3 = ~U[2026-01-01 12:00:00.000000Z]
+
+      proposal =
+        insert_proposal!(professional, patient, target_behavior, dek, t1, "Patron sugerido")
+
+      evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          t2,
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Cita textual del profesional"
+        )
+
+      observation =
+        insert_observation!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          t3,
+          "Observacion directa"
+        )
+
+      assert {:ok, timeline} =
+               ClinicalRecord.review_timeline(professional, patient.id, target_behavior.id)
+
+      assert [proposal_item, evidence_item, observation_item] = timeline
+
+      assert proposal_item.id == proposal.id
+      assert proposal_item.kind == :ai_proposal
+      assert proposal_item.occurred_at == t1
+      assert proposal_item.text == "Patron sugerido"
+      assert proposal_item.status == "pending"
+
+      assert evidence_item.id == evidence.id
+      assert evidence_item.kind == :consultation_evidence
+      assert evidence_item.occurred_at == t2
+      assert evidence_item.text == "Cita textual del profesional"
+
+      assert observation_item.id == observation.id
+      assert observation_item.kind == :clinician_observation
+      assert observation_item.occurred_at == t3
+      assert observation_item.text == "Observacion directa"
+    end
+
+    test "equal occurred_at ties break deterministically by kind_rank (evidence, observation, proposal)",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+
+      tied_at = ~U[2026-02-01 09:00:00.000000Z]
+
+      observation =
+        insert_observation!(professional, patient, target_behavior, dek, tied_at, "Obs empatada")
+
+      proposal =
+        insert_proposal!(professional, patient, target_behavior, dek, tied_at, "IA empatada")
+
+      evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          tied_at,
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Evidencia empatada"
+        )
+
+      assert {:ok, timeline} =
+               ClinicalRecord.review_timeline(professional, patient.id, target_behavior.id)
+
+      assert [item_1, item_2, item_3] = timeline
+      assert {item_1.kind, item_1.id} == {:consultation_evidence, evidence.id}
+      assert {item_2.kind, item_2.id} == {:clinician_observation, observation.id}
+      assert {item_3.kind, item_3.id} == {:ai_proposal, proposal.id}
+    end
+
+    test "unauthorized: denies a professional not responsible for the patient", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.review_timeline(other_professional, patient.id, target_behavior.id)
+    end
+
+    test "discarded proposals are still returned (design D5: observable, not filtered)", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      assert {:ok, %AIProposal{status: "discarded"}} =
+               ClinicalRecord.discard_ai_proposal(professional, patient.id, proposal.id)
+
+      assert {:ok, timeline} =
+               ClinicalRecord.review_timeline(professional, patient.id, target_behavior.id)
+
+      assert [%{kind: :ai_proposal, id: proposal_id, status: "discarded"}] = timeline
+      assert proposal_id == proposal.id
+    end
+
+    test "a cited source deleted after citation still renders from the stored excerpt, source: :unavailable",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+
+      {:ok, message} =
+        Journaling.save_message(patient, "Mensaje que sera borrado", dek, "inbound", "elicited")
+
+      evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          ~U[2026-03-01 08:00:00.000000Z],
+          "message",
+          message.id,
+          "Excerpt copiado al citar"
+        )
+
+      Repo.delete!(message)
+
+      assert {:ok, timeline} =
+               ClinicalRecord.review_timeline(professional, patient.id, target_behavior.id)
+
+      assert [item] = timeline
+      assert item.id == evidence.id
+      assert item.kind == :consultation_evidence
+      assert item.text == "Excerpt copiado al citar"
+      assert item.source == :unavailable
+    end
+  end
+
+  describe "get_functional_analysis_draft/3" do
+    test "authorized: returns nil when no draft exists yet", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+
+    test "authorized: returns the decrypted draft body when one exists", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "Borrador de analisis funcional"
+               )
+
+      assert {:ok, %FunctionalAnalysisDraft{} = draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert draft.body == "Borrador de analisis funcional"
+    end
+
+    test "unauthorized: denies a professional not responsible for the patient", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 other_professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+  end
+
+  defp insert_evidence!(
+         professional,
+         patient,
+         target_behavior,
+         dek,
+         occurred_at,
+         source_kind,
+         source_id,
+         excerpt
+       ) do
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(excerpt, dek)
+
+    %ConsultationEvidence{}
+    |> ConsultationEvidence.changeset(%{
+      source_kind: source_kind,
+      source_id: source_id,
+      encrypted_excerpt: ciphertext,
+      occurred_at: occurred_at,
+      patient_id: patient.id,
+      professional_id: professional.id,
+      target_behavior_id: target_behavior.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_observation!(professional, patient, target_behavior, dek, occurred_at, body) do
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(body, dek)
+
+    %ClinicianObservation{}
+    |> ClinicianObservation.changeset(%{
+      encrypted_body: ciphertext,
+      occurred_at: occurred_at,
+      patient_id: patient.id,
+      professional_id: professional.id,
+      target_behavior_id: target_behavior.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_proposal!(professional, patient, target_behavior, dek, occurred_at, text) do
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(text, dek)
+
+    %AIProposal{}
+    |> AIProposal.changeset(%{
+      encrypted_original_text: ciphertext,
+      encrypted_text: ciphertext,
+      model_version: "phi4-mini-test",
+      occurred_at: occurred_at,
+      patient_id: patient.id,
+      professional_id: professional.id,
+      target_behavior_id: target_behavior.id
+    })
+    |> Repo.insert!()
+  end
   defp create_target_behavior!(professional, patient) do
     {:ok, target_behavior} =
       ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta objetivo")

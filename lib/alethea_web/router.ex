@@ -117,6 +117,13 @@ defmodule AletheaWeb.Router do
       live("/dashboard/patients/:id", DashboardLive, :show)
       live("/patients", PatientLive.Index, :index)
       live("/patients/new", PatientLive.Index, :new)
+
+      live(
+        "/patients/:patient_id/target_behaviors/:id/review",
+        TargetBehaviorLive.Review,
+        :show
+      )
+
       live("/admin/oban-dashboard", ObanDashboardLive, :index)
     end
   end
