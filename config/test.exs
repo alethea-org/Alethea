@@ -27,6 +27,7 @@ config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Fake
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
 config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
+config :alethea, :pattern_proposal_chain, Alethea.AI.PatternProposalChainMock
 
 # The real Alethea.AI.EmotionAnalyzer config (HTTP sidecar) is loaded from
 # config/config.exs (defaults) and config/runtime.exs (env-overrides) for

@@ -23,7 +23,12 @@ defmodule Alethea.AI.LLMConfig do
   alias LangChain.ChatModels.ChatOpenAI
 
   @type provider :: :local | :cloud
-  @type chain_name :: :guided_conversation | :session_summary | :weekly_summary | :weekly_report
+  @type chain_name ::
+          :guided_conversation
+          | :session_summary
+          | :weekly_summary
+          | :weekly_report
+          | :pattern_proposal
 
   @type config :: %__MODULE__.Config{
           provider: provider(),
@@ -228,6 +233,7 @@ defmodule Alethea.AI.LLMConfig do
   defp chain_module(:session_summary), do: Alethea.AI.Chains.SessionSummaryChain
   defp chain_module(:weekly_summary), do: Alethea.AI.Chains.WeeklySummaryChain
   defp chain_module(:weekly_report), do: Alethea.AI.Chains.WeeklyReportChain
+  defp chain_module(:pattern_proposal), do: Alethea.AI.Chains.PatternProposalChain
 
   defp build_retry_config(global, chain, overrides) do
     retry_enabled =
