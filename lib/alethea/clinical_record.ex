@@ -574,6 +574,7 @@ defmodule Alethea.ClinicalRecord do
       {:error, _reason} -> "[Error al descifrar]"
     end
   end
+
   defp update_ai_proposal_status(professional, patient, proposal_id, attrs, action) do
     case Repo.get_by(AIProposal, id: proposal_id, patient_id: patient.id) do
       nil ->
