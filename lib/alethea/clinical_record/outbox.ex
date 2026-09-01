@@ -14,7 +14,6 @@ defmodule Alethea.ClinicalRecord.Outbox do
     FunctionalAnalysisDraft,
     TargetBehavior
   }
-
   alias AletheaJobs.ClinicalRecordOutboxWorker
 
   @allowed_args ~w(event resource_type resource_id patient_id professional_id)
