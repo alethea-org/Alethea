@@ -19,8 +19,11 @@ defmodule Alethea.ClinicalRecord.Audit do
   alias Alethea.Repo
 
   @actions ~w(target_behavior_created clinical_note_created clinical_record_access_denied
-              consultation_evidence_created)
-  @resource_types ~w(target_behavior clinical_note patient consultation_evidence)
+              consultation_evidence_created clinician_observation_created
+              clinician_observation_updated ai_proposals_requested ai_proposal_accepted
+              ai_proposal_edited ai_proposal_discarded functional_analysis_draft_saved)
+  @resource_types ~w(target_behavior clinical_note patient consultation_evidence
+                     clinician_observation ai_proposal functional_analysis_draft)
   @outcomes ~w(success denied)
 
   @primary_key {:id, :binary_id, autogenerate: true}
