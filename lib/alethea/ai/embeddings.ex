@@ -5,12 +5,12 @@ defmodule Alethea.AI.Embeddings do
 
   ## Why this behaviour exists (ADR-002)
 
-  Per `openspec/adr/002-embeddings-hf-multilingue.md`, Alethea uses a
-  multilingüe embeddings model (HF Inference API: `intfloat/multilingual-e5-large`
-  or `BAAI/bge-m3`) to vectorize patient journaling, transcripciones,
-  notas clínicas, etc. The choice between e5 and bge is deferred to
-  the concrete adapter change; the behaviour here is the stable
-  provider-agnostic interface.
+  Per `openspec/adr/002-embeddings-hf-multilingue.md`, Alethea uses
+  `BAAI/bge-m3` (multilingual) served locally via Ollama — no external
+  embeddings API call — to vectorize patient journaling, transcripciones,
+  notas clínicas, etc. Embeddings are derived from clinical PII, so no
+  raw text is sent to a third-party API to generate them. The behaviour
+  here is the stable provider-agnostic interface over that local runtime.
 
   ## Shape
 
@@ -37,7 +37,7 @@ defmodule Alethea.AI.Embeddings do
 
   ## What concrete implementations are out of scope here
 
-  - `Alethea.AI.Embeddings.HF` → `ai-embeddings-hf-foundation`
+  - `Alethea.AI.Embeddings.Ollama` → `ai-embeddings-hf-foundation`
   """
 
   @typedoc "Single-text returns a flat list of floats; batch returns a list of vectors in the same order as the inputs."

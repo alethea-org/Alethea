@@ -144,7 +144,7 @@ Para cada paciente activo con session_day_of_week mañana:
 | **Phi-4-mini** | Respuestas conversacionales, resúmenes, psicometría batch | Groq (API) | Free tier en dev, bajo en prod |
 | **RoBERTa-emotion** (local) | Clasificación de emociones por mensaje | Nx/Bumblebee en CPU | Costo marginal de cómputo |
 | **Whisper** | Transcripción de sesiones | Groq (API) | Bajo |
-| **Embeddings** (multilingüe) | RAG del paciente | Hugging Face Inference API | Free tier en dev, bajo en prod |
+| **Embeddings** (multilingüe, BGE-M3 local) | RAG del paciente | Ollama (self-hosted) | Sin costo por token; sin exposición externa de PII |
 
 ### Canales
 
