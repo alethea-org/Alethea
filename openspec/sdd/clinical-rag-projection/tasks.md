@@ -99,7 +99,7 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 - [x] 7.1 [RED] `test/alethea_web/live/patient_live/clinical_search_test.exs`: `badge badge--non-authoritative` on every result (non-dismissible); citation resolves to source row; unauthorized professional blocked; `:never_indexed` vs `:no_match` empty states; results re-`stream/3` with `reset: true` per query
 - [x] 7.2 [GREEN] `lib/alethea_web/live/patient_live/clinical_search.ex` + `router.ex` route `/patients/:patient_id/clinical-search` inside `live_session :require_authenticated_professional`
 
-## Phase 8: Docs / Verification
+## Phase 8: Docs / Verification ✅ (WU5, apply batch 5)
 
-- [ ] 8.1 `docs/main-demo-operator-guide.md`: document `mix alethea.rag.reindex` usage
-- [ ] 8.2 `mix precommit` — full compile/format/test pass
+- [x] 8.1 `docs/main-demo-operator-guide.md`: document `mix alethea.rag.reindex` usage
+- [x] 8.2 `mix precommit` — full compile/format/test pass
