@@ -89,10 +89,10 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 - [x] 5.7 [RED] authz test: non-treating professional denied
 - [x] 5.8 [GREEN] authz via `get_patient_for_professional/2`
 
-## Phase 6: Rebuild Entry Point
+## Phase 6: Rebuild Entry Point ✅ (WU5, apply batch 5)
 
-- [ ] 6.1 [RED] integration test: `mix alethea.rag.reindex` re-enqueues outbox jobs for all eligible resources of a patient; result converges idempotently (no duplicate chunks)
-- [ ] 6.2 [GREEN] `lib/mix/tasks/alethea.rag.reindex.ex`: `--patient-id <uuid> [--confirm]`, re-enqueues (does not embed inline)
+- [x] 6.1 [RED] integration test: `mix alethea.rag.reindex` re-enqueues outbox jobs for all eligible resources of a patient; result converges idempotently (no duplicate chunks)
+- [x] 6.2 [GREEN] `lib/mix/tasks/alethea.rag.reindex.ex`: `--patient-id <uuid> [--confirm]`, re-enqueues (does not embed inline)
 
 ## Phase 7: LiveView + Router
 
