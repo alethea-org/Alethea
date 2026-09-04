@@ -73,10 +73,10 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 - [x] 3.9 [RED] integration test: `index_event/1` end-to-end per eligible event type → retrievable chunk (Ecto sandbox + Oban `testing: :manual`)
 - [x] 3.10 [GREEN] wire `index_event/1` composing 3.2/3.4/3.6/3.8
 
-## Phase 4: Worker Rework
+## Phase 4: Worker Rework ✅ (WU3, apply batch 3)
 
-- [ ] 4.1 [RED] **REWRITE** `test/alethea_jobs/clinical_record_outbox_worker_test.exs` (do not extend — it locks 3 contracts this change breaks): `max_attempts == 5`; `perform/1` dispatches to `Indexer`; malformed args → `{:cancel, _}` (not `FunctionClauseError`); transient failure → `{:error, _}`; ignore/unknown → `:ok`
-- [ ] 4.2 [GREEN] `lib/alethea_jobs/clinical_record_outbox_worker.ex`: `max_attempts` 1→5, `perform/1` clauses + classification per design
+- [x] 4.1 [RED] **REWROTE** `test/alethea_jobs/clinical_record_outbox_worker_test.exs` (did not extend — old file locked 3 contracts this change breaks): `max_attempts == 5`; `perform/1` dispatches to `Indexer`; malformed args → `{:cancel, _}` (not `FunctionClauseError`); transient failure → `{:error, _}`; ignore/unknown → `:ok`; also added a `{:cancel, :not_found}` case for a missing source row (design section 4)
+- [x] 4.2 [GREEN] `lib/alethea_jobs/clinical_record_outbox_worker.ex`: `max_attempts` 1→5, `perform/1` clauses + classification per design (dispatches to `Alethea.ClinicalRecord.Rag.Indexer.index_event/1`)
 
 ## Phase 5: Retrieval
 
