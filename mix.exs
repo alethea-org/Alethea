@@ -41,7 +41,7 @@ defmodule Alethea.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.8.5"},
-      {:tidewave, "~> 0.5", only: :dev},
+      {:tidewave, "~> 0.9", only: :dev},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
