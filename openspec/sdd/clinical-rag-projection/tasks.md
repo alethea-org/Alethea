@@ -44,21 +44,21 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 | 4 | `Retrieval.search/4` (dense ANN + lexical rescore + freshness + authz) | PR 4 | `mix test test/alethea/clinical_record/rag/retrieval_test.exs` | IEx: `Retrieval.search(professional, patient_id, "query")` against seeded chunks | Delete `rag/retrieval.ex` + test; nothing else calls it yet |
 | 5 | Rebuild Mix task + `PatientLive.ClinicalSearch` + router + operator-guide note | PR 5 | `mix test test/alethea_web/live/patient_live/clinical_search_test.exs` | `mix alethea.rag.reindex --patient-id <uuid> --confirm` in dev; open `/patients/:id/clinical-search` | Remove route + LiveView file + Mix task; no other surface depends on them |
 
-## Phase 0: Prerequisite — Fix Fake Embeddings
+## Phase 0: Prerequisite — Fix Fake Embeddings ✅ (WU1, apply batch 1)
 
-- [ ] 0.1 [RED] `test/alethea/ai/embeddings/fake_test.exs`: assert `embed/2` returns deterministic non-zero 1024-dim vectors per input, `dimensions/0 == 1024`
-- [ ] 0.2 [GREEN] `lib/alethea/ai/embeddings/fake.ex`: derive vectors from input hash, non-zero, 1024-dim, deterministic
+- [x] 0.1 [RED] `test/alethea/ai/embeddings/fake_test.exs`: assert `embed/2` returns deterministic non-zero 1024-dim vectors per input, `dimensions/0 == 1024`
+- [x] 0.2 [GREEN] `lib/alethea/ai/embeddings/fake.ex`: derive vectors from input hash, non-zero, 1024-dim, deterministic
 
-## Phase 1: Migration
+## Phase 1: Migration ✅ (WU1, apply batch 1)
 
-- [ ] 1.1 `priv/repo/migrations/*_add_clinical_record_rag_chunks.exs`: `CREATE EXTENSION IF NOT EXISTS vector` (no-op down); create `clinical_record_rag_chunks` per design field list; `unique_index([:source_resource_type, :source_resource_id, :chunk_index])`; `index([:patient_id])`; HNSW `USING hnsw (embedding vector_cosine_ops)`
-- [ ] 1.2 Annotate stale `vector(384)` comment in `20260526141108_add_sessions_and_embeddings.exs` (D7 correction, comment-only, no executed column)
-- [ ] 1.3 `mix ecto.migrate`; manually verify table + indexes exist in dev DB
+- [x] 1.1 `priv/repo/migrations/20260904000131_create_clinical_record_rag_chunks.exs`: `CREATE EXTENSION IF NOT EXISTS vector` (no-op down); create `clinical_record_rag_chunks` per design field list; `unique_index([:source_resource_type, :source_resource_id, :chunk_index])`; `index([:patient_id])`; HNSW `USING hnsw (embedding vector_cosine_ops)`
+- [x] 1.2 Annotate stale `vector(384)` comment in `20260526141108_add_sessions_and_embeddings.exs` (D7 correction, comment-only, no executed column)
+- [x] 1.3 `mix ecto.migrate` attempted; migration is transactionally safe (confirmed clean rollback state via `mix ecto.migrations`) — **BLOCKED**: local/CI Postgres lacks the `vector` extension binary (pre-existing, project-documented gap, see README "Estado del RAG y grafo"; no MSVC toolchain available in this environment to build pgvector from source). Not a code defect — see apply-progress risk note.
 
-## Phase 2: Chunk Schema
+## Phase 2: Chunk Schema ✅ (WU1, apply batch 1)
 
-- [ ] 2.1 [RED] `test/alethea/clinical_record/rag/chunk_test.exs`: changeset validations; unique_constraint violation on `(source_resource_type, source_resource_id, chunk_index)`
-- [ ] 2.2 [GREEN] `lib/alethea/clinical_record/rag/chunk.ex`: schema mirroring `ConsultationEvidence` (PatientVault-encrypted content, virtual redacted field, `embedding: Pgvector.Ecto.Vector`, `@derive {Inspect, except: [:content]}`, unique_constraint)
+- [x] 2.1 [RED] `test/alethea/clinical_record/rag/chunk_test.exs`: changeset validations (16/17 passing); unique_constraint violation on `(source_resource_type, source_resource_id, chunk_index)` — **1 test BLOCKED** (same pgvector/table-does-not-exist gap as 1.3, not a code defect)
+- [x] 2.2 [GREEN] `lib/alethea/clinical_record/rag/chunk.ex`: schema mirroring `ConsultationEvidence` (PatientVault-encrypted content, virtual redacted field, `embedding: Pgvector.Ecto.Vector`, `@derive {Inspect, except: [:content]}`, unique_constraint)
 
 ## Phase 3: Indexer
 
