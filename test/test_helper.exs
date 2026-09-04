@@ -11,3 +11,10 @@ Mox.defmock(Alethea.AI.SessionSummaryChainMock, for: Alethea.AI.Chains.ChainBeha
 Mox.defmock(Alethea.AI.WeeklySummaryChainMock, for: Alethea.AI.Chains.ChainBehaviour)
 Mox.defmock(Alethea.AI.PatternProposalChainMock, for: Alethea.AI.Chains.ChainBehaviour)
 Mox.defmock(Alethea.AI.PhiWorkerMock, for: Alethea.AI.PhiWorkerBehaviour)
+
+# sdd/clinical-rag-projection (GitHub #196, WU2): the Indexer's embed
+# step needs to inject `{:error, _}`/dimension-mismatch shapes that the
+# deterministic `Alethea.AI.Embeddings.Fake` cannot express (spec
+# scenario: "tested only against the behaviour" — no test exercises
+# the real Ollama adapter).
+Mox.defmock(Alethea.AI.EmbeddingsMock, for: Alethea.AI.Embeddings)

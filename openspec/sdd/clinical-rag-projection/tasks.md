@@ -60,18 +60,18 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 - [x] 2.1 [RED] `test/alethea/clinical_record/rag/chunk_test.exs`: changeset validations (16/17 passing); unique_constraint violation on `(source_resource_type, source_resource_id, chunk_index)` — **1 test BLOCKED** (same pgvector/table-does-not-exist gap as 1.3, not a code defect)
 - [x] 2.2 [GREEN] `lib/alethea/clinical_record/rag/chunk.ex`: schema mirroring `ConsultationEvidence` (PatientVault-encrypted content, virtual redacted field, `embedding: Pgvector.Ecto.Vector`, `@derive {Inspect, except: [:content]}`, unique_constraint)
 
-## Phase 3: Indexer
+## Phase 3: Indexer ✅ (WU2, apply batch 2)
 
-- [ ] 3.1 [RED] `eligibility/1` tests — one case per spec table row (6 index/ignore events + unknown catch-all → `{:unknown, event}`, no crash)
-- [ ] 3.2 [GREEN] `eligibility/1` implementation with tombstone-seam catch-all
-- [ ] 3.3 [RED] `chunk/1` tests — short event → single chunk (`chunk_index: 0`, `full_event: true`); long event (>500 tokens) → sub-split on paragraph/sentence boundary with ~15% overlap
-- [ ] 3.4 [GREEN] `chunk/1` implementation (word-count heuristic, `~r/\n{2,}/` paragraphs, `~r/(?<=[.!?…])\s+/u` sentences, greedy pack + overlap)
-- [ ] 3.5 [RED] embed-dimension-mismatch test (Mox-injected `Embeddings` mock) → `{:cancel, {:embedding_dimension_mismatch, got, expected}}`
-- [ ] 3.6 [GREEN] batch `AI.embeddings().embed/2` call + mismatch guard
-- [ ] 3.7 [RED] `replace_chunks/2` DB tests: idempotent retry converges to one chunk set; concurrent double-run hits unique index → `{:error, _}`
-- [ ] 3.8 [GREEN] `replace_chunks/2`: one `Repo.transaction` (delete-by-resource then `insert_all`)
-- [ ] 3.9 [RED] integration test: `index_event/1` end-to-end per eligible event type → retrievable chunk (Ecto sandbox + Oban `testing: :manual`)
-- [ ] 3.10 [GREEN] wire `index_event/1` composing 3.2/3.4/3.6/3.8
+- [x] 3.1 [RED] `eligibility/1` tests — one case per spec table row (6 index/ignore events + unknown catch-all → `{:unknown, event}`, no crash)
+- [x] 3.2 [GREEN] `eligibility/1` implementation with tombstone-seam catch-all
+- [x] 3.3 [RED] `chunk/1` tests — short event → single chunk (`chunk_index: 0`, `full_event: true`); long event (>500 tokens) → sub-split on paragraph/sentence boundary with ~15% overlap
+- [x] 3.4 [GREEN] `chunk/1` implementation (word-count heuristic, `~r/\n{2,}/` paragraphs, `~r/(?<=[.!?…])\s+/u` sentences, greedy pack + overlap)
+- [x] 3.5 [RED] embed-dimension-mismatch test (Mox-injected `Embeddings` mock) → `{:cancel, {:embedding_dimension_mismatch, got, expected}}`
+- [x] 3.6 [GREEN] batch `AI.embeddings().embed/2` call + mismatch guard
+- [x] 3.7 [RED] `replace_chunks/2` DB tests: idempotent retry converges to one chunk set; re-save with a different chunk count replaces the old set entirely
+- [x] 3.8 [GREEN] `replace_chunks/2`: one `Repo.transaction` (delete-by-resource then `insert_all`)
+- [x] 3.9 [RED] integration test: `index_event/1` end-to-end per eligible event type → retrievable chunk (Ecto sandbox + Oban `testing: :manual`)
+- [x] 3.10 [GREEN] wire `index_event/1` composing 3.2/3.4/3.6/3.8
 
 ## Phase 4: Worker Rework
 
