@@ -53,11 +53,11 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 
 - [x] 1.1 `priv/repo/migrations/20260904000131_create_clinical_record_rag_chunks.exs`: `CREATE EXTENSION IF NOT EXISTS vector` (no-op down); create `clinical_record_rag_chunks` per design field list; `unique_index([:source_resource_type, :source_resource_id, :chunk_index])`; `index([:patient_id])`; HNSW `USING hnsw (embedding vector_cosine_ops)`
 - [x] 1.2 Annotate stale `vector(384)` comment in `20260526141108_add_sessions_and_embeddings.exs` (D7 correction, comment-only, no executed column)
-- [x] 1.3 `mix ecto.migrate` attempted; migration is transactionally safe (confirmed clean rollback state via `mix ecto.migrations`) — **BLOCKED**: local/CI Postgres lacks the `vector` extension binary (pre-existing, project-documented gap, see README "Estado del RAG y grafo"; no MSVC toolchain available in this environment to build pgvector from source). Not a code defect — see apply-progress risk note.
+- [x] 1.3 `mix ecto.migrate` runs clean end-to-end against a real Postgres with pgvector (Docker `db` swapped to `pgvector/pgvector:pg16`, exposed on host port 5432 — resolved during WU1 apply; see apply-progress).
 
 ## Phase 2: Chunk Schema ✅ (WU1, apply batch 1)
 
-- [x] 2.1 [RED] `test/alethea/clinical_record/rag/chunk_test.exs`: changeset validations (16/17 passing); unique_constraint violation on `(source_resource_type, source_resource_id, chunk_index)` — **1 test BLOCKED** (same pgvector/table-does-not-exist gap as 1.3, not a code defect)
+- [x] 2.1 [RED] `test/alethea/clinical_record/rag/chunk_test.exs`: changeset validations (17/17 passing, including the unique_constraint violation on `(source_resource_type, source_resource_id, chunk_index)` — passes cleanly now that pgvector is resolved, see 1.3)
 - [x] 2.2 [GREEN] `lib/alethea/clinical_record/rag/chunk.ex`: schema mirroring `ConsultationEvidence` (PatientVault-encrypted content, virtual redacted field, `embedding: Pgvector.Ecto.Vector`, `@derive {Inspect, except: [:content]}`, unique_constraint)
 
 ## Phase 3: Indexer ✅ (WU2, apply batch 2)
