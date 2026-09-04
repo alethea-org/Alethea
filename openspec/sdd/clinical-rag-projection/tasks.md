@@ -78,16 +78,16 @@ Confirming and refining the design's PR1(ingest)/PR2(retrieval) split: neither h
 - [x] 4.1 [RED] **REWROTE** `test/alethea_jobs/clinical_record_outbox_worker_test.exs` (did not extend — old file locked 3 contracts this change breaks): `max_attempts == 5`; `perform/1` dispatches to `Indexer`; malformed args → `{:cancel, _}` (not `FunctionClauseError`); transient failure → `{:error, _}`; ignore/unknown → `:ok`; also added a `{:cancel, :not_found}` case for a missing source row (design section 4)
 - [x] 4.2 [GREEN] `lib/alethea_jobs/clinical_record_outbox_worker.ex`: `max_attempts` 1→5, `perform/1` clauses + classification per design (dispatches to `Alethea.ClinicalRecord.Rag.Indexer.index_event/1`)
 
-## Phase 5: Retrieval
+## Phase 5: Retrieval ✅ (WU4, apply batch 4)
 
-- [ ] 5.1 [RED] unit tests: lexical normalization (NFD, accent-fold, Spanish stopwords), `score = 0.7*(1-dense) + 0.3*lexical` merge
-- [ ] 5.2 [GREEN] normalization + merge functions
-- [ ] 5.3 [RED] integration tests: cross-patient isolation (adversarial query), ranking order, `candidate_limit: 50` bound, decrypt strictly after LIMIT
-- [ ] 5.4 [GREEN] `lib/alethea/clinical_record/rag/retrieval.ex`: `search(%Professional{}, patient_id, query, opts)`
-- [ ] 5.5 [RED] freshness test: pending/in-flight `oban_jobs` for patient → `%{stale?: true, pending: n}`
-- [ ] 5.6 [GREEN] freshness query in search result envelope
-- [ ] 5.7 [RED] authz test: non-treating professional denied
-- [ ] 5.8 [GREEN] authz via `get_patient_for_professional/2`
+- [x] 5.1 [RED] unit tests: lexical normalization (NFD, accent-fold, Spanish stopwords), `score = 0.7*(1-dense) + 0.3*lexical` merge
+- [x] 5.2 [GREEN] normalization + merge functions (`normalize/1`, `lexical_score/2`, `merge_score/3`)
+- [x] 5.3 [RED] integration tests: cross-patient isolation (adversarial query), ranking order, `candidate_limit: 50` bound, decrypt strictly after LIMIT
+- [x] 5.4 [GREEN] `lib/alethea/clinical_record/rag/retrieval.ex`: `search(%Professional{}, patient_id, query, opts)`
+- [x] 5.5 [RED] freshness test: pending/in-flight `oban_jobs` for patient → `%{stale?: true, pending: n}`
+- [x] 5.6 [GREEN] freshness query in search result envelope (`freshness/1`)
+- [x] 5.7 [RED] authz test: non-treating professional denied
+- [x] 5.8 [GREEN] authz via `get_patient_for_professional/2`
 
 ## Phase 6: Rebuild Entry Point
 
