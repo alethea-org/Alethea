@@ -53,6 +53,18 @@ El RAG ingesta **eventos con contenido semanticable**, no solo mensajes. Un even
 - El RAG no es un simple "índice de mensajes" — el equipo tiene que entender el modelo de eventos antes de tocarlo.
 - Los adjuntos (PDFs, imágenes) NO se ingieren al RAG automáticamente. Solo el texto libre de la nota clínica. Si se necesita OCR, es scope aparte.
 
-### Decisiones que NO se toman acá
-- Tamaño de chunk, overlap, ventana de contexto → se decide en el slice de implementación.
-- Política de retención y purge → se discute cuando se defina lifecycle del paciente.
+### Estrategia de chunking (decidida 2026-09-02, en el slice de #196)
+
+**La unidad de chunk es el evento semanticable completo** (una nota clínica, una evidencia citada, una observación, un resumen) — no una ventana de tokens fija. BGE-M3 soporta contexto largo (hasta 8192 tokens), así que no hay límite técnico que fuerce a trocear; la razón es preservar la cita exacta que exige #196 (`labels each result by source with exact citations`). Trocear por conteo de tokens ciego puede partir una oración a la mitad o mezclar contenido de dos eventos en el mismo chunk.
+
+**Excepción:** si el texto libre de un evento supera ~500 tokens (típicamente el cuerpo de una `ClinicalNote` extensa), se sub-trocea por límites de oración/párrafo — nunca por conteo de caracteres crudo — con ~15% de overlap entre sub-chunks para no perder contexto en el borde.
+
+Metadata persistida por chunk: `source_event_id`, tamaño en tokens, si es evento completo o sub-chunk (y su índice de orden dentro del evento), y el modelo de embedding usado — necesario para reindexar sin perder trazabilidad (criterio de #193: *"persists source, model, and chunking metadata for reindexing"*).
+
+### Rebuild y purga del índice (decidido 2026-09-02, en el slice de #196)
+
+**Rebuild completo: on-demand, nunca programado.** El camino normal de actualización es el incremental vía outbox (evento por evento). El rebuild completo (re-embeber todo el historial desde cero) es una herramienta de recuperación disparada manualmente (comando ops), reservada para corrupción de índice, cambio de modelo de embeddings, o sospecha de desincronización — no corre en cron. Razón: el incremental transaccional ya es confiable; un rebuild periódico automático re-embebería el historial clínico completo de todos los pacientes de forma recurrente sin evidencia de que haga falta.
+
+**Purga: un solo mecanismo, borrado inmediato.** Tanto el borrado legal (obligatoriamente inmediato, per #193) como el tombstoning ordinario (evidencia descartada, draft superado, nota reemplazada) disparan el mismo camino: borrado inmediato de la fila indexada vía outbox, sin distinción de velocidad. No hay soft-delete ni job de barrido periódico — nadie pidió la capacidad de "deshacer" un tombstoning, y mantener dos mecanismos de purga solo agrega superficie de bug.
+
+Política de retención (por cuánto tiempo vive el contenido antes de ser elegible para purge) sigue ligada al lifecycle del ClinicalRecord, implementado en #197 — este ADR solo fija el mecanismo, no la ventana de tiempo.
