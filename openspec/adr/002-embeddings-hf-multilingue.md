@@ -1,8 +1,8 @@
-# ADR-002: Embeddings del RAG en modelo multilingüe vía Hugging Face Inference
+# ADR-002: Embeddings del RAG en modelo multilingüe local (BGE-M3)
 
-**Status:** Aceptado
-**Fecha:** 2026-06-11
-**Contexto:** Decisión de Fase 0 / Módulo 4 del grill-me
+**Status:** Aceptado (revisado)
+**Fecha:** 2026-06-11 — revisado 2026-09-02
+**Contexto:** Decisión de Fase 0 / Módulo 4 del grill-me — revisada en #191 (Grilling: Reconcile RAG implementation strategy with #165) y ratificada como canon en #193
 
 ## Contexto y problema
 
@@ -15,23 +15,26 @@ Opciones evaluadas:
 - Voyage AI (especializado en retrieval)
 - Cohere (multilingüe fuerte)
 - Hugging Face Inference API con modelo multilingüe (`intfloat/multilingual-e5-large` o `BAAI/bge-m3`)
+- **BGE-M3 self-hosted (Ollama), sin llamada a API externa**
+
+La decisión original (2026-06-11) optó por Hugging Face Inference API. Esa decisión quedó **revertida** en #191/#193: los embeddings son una representación numérica derivable del contenido clínico y caen bajo el mandato de seguridad del proyecto — *"pgvector embeddings are PII: Never send raw embeddings to external APIs"* (`CLAUDE.md`). Enviar texto clínico a una API externa para generarlos, aunque el proveedor no entrene con los requests, es una superficie de exposición que el proyecto decidió no aceptar.
 
 ## Decisión
 
-**Usar Hugging Face Inference API con un modelo multilingüe open source** (e5-large o bge-m3), vía `Alethea.AI.Embeddings` adapter.
+**Usar BGE-M3 (`BAAI/bge-m3`) local, servido vía Ollama**, sin llamada a ninguna API de embeddings externa, vía `Alethea.AI.Embeddings` adapter. Es parte del stack RAG inicial fijado en #193: PostgreSQL + pgvector, BGE-M3 local, generación local vía Ollama, retrieval híbrido (denso + full-text de PostgreSQL).
 
 ## Consecuencias
 
 ### Positivas
-- Los modelos multilingües rinden mejor en retrieval sobre texto en español que embeddings genéricos entrenados con predominio de inglés. Empíricamente, en benchmarks multilingües (MTEB), e5-large y bge-m3 están en el top para español.
-- Open source: si un cliente grande pide que los datos no salgan a una API, se puede mover el mismo modelo a self-hosted sin cambiar el adapter.
-- Privacidad razonable: HF Inference no entrena con requests.
-- Costo bajo: free tier en desarrollo, costo por token bajo en producción.
+- BGE-M3 rinde bien en benchmarks multilingües (MTEB) para español, igual que en la decisión original.
+- **Cero exposición externa**: el texto clínico nunca sale del perímetro de la aplicación para generar el embedding, cumpliendo el mandato de seguridad del proyecto sin depender de garantías contractuales de un tercero.
+- Sin costo por token ni dependencia de disponibilidad de una API externa.
+- Open source: mismo modelo, sin cambio de adapter si más adelante se re-evalúa el runtime (Ollama vs otro server local).
 
 ### Negativas
-- DX ligeramente peor que OpenAI (menos documentación, menos ejemplos en Elixir).
-- Hay que elegir entre e5-large y bge-m3 — ambos sirven, benchmarks cambian por trimestre. Decisión se confirma en `sdd-new` del slice de embeddings.
+- Requiere infraestructura de inferencia local (Ollama) corriendo junto a la aplicación — operacionalmente más pesado que llamar a una API.
+- Sin fallback gestionado por un proveedor externo si el servicio local cae; la disponibilidad del RAG depende de la disponibilidad de ese runtime.
 
 ### Mitigación
-- Adapter `Alethea.AI.Embeddings` con interfaz `embed(text) :: {:ok, [float]}`. Cambiar de proveedor o modelo es cambiar el adapter.
-- Decisión final del modelo (e5 vs bge) se toma en la fase de implementación, no acá.
+- Adapter `Alethea.AI.Embeddings` con interfaz `embed(text) :: {:ok, [float]}` ya existe (`lib/alethea/ai/embeddings.ex`); implementar el adapter real contra Ollama sin cambiar el contrato.
+- El RAG es una proyección no autoritativa (#196): si el runtime de embeddings falla, el ClinicalRecord (fuente de verdad) sigue disponible; solo se degrada la indexación/retrieval.

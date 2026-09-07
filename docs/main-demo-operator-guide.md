@@ -178,6 +178,48 @@ Expected outcomes:
 - The processing task prints `ALETHEA_DEMO_PROCESSING_COMPLETE` with an emotion count and `weekly_report=generated`.
 - No command prints journal text, reply text, tokens, passwords, invite URLs, or personal identifiers.
 
+## Rebuild the Clinical RAG Projection (On-Demand Only)
+
+`mix alethea.rag.reindex` (sdd/clinical-rag-projection, GitHub #196) is an
+operator-triggered recovery tool for the non-authoritative semantic
+projection over one patient's clinical record. It re-enqueues one outbox
+job per currently index-eligible resource (`ClinicalNote`,
+`ConsultationEvidence`, `ClinicianObservation`, an accepted `AIProposal`,
+`FunctionalAnalysisDraft`) through the same outbox → worker → indexer
+path incremental ingest already uses — it never embeds inline, and it
+never runs on a schedule. There is no cron/periodic trigger anywhere in
+the codebase for this task; only an operator running the command
+enqueues a rebuild.
+
+Run a dry run first (writes nothing, only reports counts):
+
+```bash
+mix alethea.rag.reindex --patient-id "$ALETHEA_DEMO_PATIENT_ID"
+```
+
+Expected output: `ALETHEA_RAG_REINDEX_DRY_RUN patient_id=<uuid> clinical_note=<n> consultation_evidence=<n> clinician_observation=<n> ai_proposal=<n> functional_analysis_draft=<n> total=<n>`.
+
+Then re-run with `--confirm` to actually enqueue the jobs:
+
+```bash
+mix alethea.rag.reindex --patient-id "$ALETHEA_DEMO_PATIENT_ID" --confirm
+```
+
+Expected output: `ALETHEA_RAG_REINDEX_COMPLETE patient_id=<uuid> ... enqueued=<n>`.
+
+Re-running the task (or Oban retrying/duplicating a job) is safe: the
+indexer replaces a resource's chunk set by `(source_resource_type,
+source_resource_id)` in one transaction, so repeated enqueues always
+converge to the same chunk set — no duplicate chunks are ever produced.
+Non-eligible resources (`TargetBehavior`, and any `AIProposal` that is
+not yet `accepted`) are never re-enqueued.
+
+Query the resulting projection at
+`/patients/<patient-id>/clinical-search` once logged in. Every result
+carries a persistent, non-dismissible `badge--non-authoritative` label
+and a citation — this view supplements, and never replaces, the
+authoritative `ClinicalRecord` review timeline.
+
 ## Recovery
 
 | Symptom | Safe recovery |
@@ -206,3 +248,5 @@ Stop the ngrok terminal manually when the public endpoint is no longer required.
 - `lib/mix/tasks/alethea.demo.process.ex`
 - `lib/mix/tasks/alethea.demo.reset.ex`
 - `lib/mix/tasks/alethea.telegram.bootstrap.ex`
+- `lib/mix/tasks/alethea.rag.reindex.ex`
+- `lib/alethea_web/live/patient_live/clinical_search.ex`

@@ -48,9 +48,17 @@ defmodule Alethea.AI.EmbeddingsTest do
   describe "Alethea.AI.Embeddings.Fake adapter" do
     alias Alethea.AI.Embeddings.Fake
 
-    test "embed/2 with a single string returns a single vector" do
-      assert {:ok, [vector]} = Fake.embed("hola", [])
-      assert is_float(vector)
+    # Fake-specific vector-shape/determinism assertions moved to the
+    # dedicated `test/alethea/ai/embeddings/fake_test.exs`
+    # (sdd/clinical-rag-projection, WU1) since the Fake's contract
+    # changed from a 1-dim all-zero stub to a 1024-dim non-zero,
+    # input-derived vector (ADR-002 revision, design point 4). This
+    # describe block keeps only the metadata-shape assertions that are
+    # independent of the vector's dimensionality/content.
+
+    test "embed/2 with a single string returns a single vector (shape only)" do
+      assert {:ok, [_ | _] = vector} = Fake.embed("hola", [])
+      assert Enum.all?(vector, &is_float/1)
     end
 
     test "embed/2 with a list of strings returns a list of vectors in order" do
@@ -59,17 +67,6 @@ defmodule Alethea.AI.EmbeddingsTest do
       assert length(vectors) == 2
       # Each element is itself a list of floats (one vector per input).
       assert Enum.all?(vectors, fn v -> is_list(v) and Enum.all?(v, &is_float/1) end)
-    end
-
-    test "embed/2 single-text result is a list of one element" do
-      # Triangulation: confirm the type contract is {:ok, [float()]} for
-      # single input, not {:ok, [[float()]]}.
-      assert {:ok, [+0.0]} = Fake.embed("cualquier cosa", [])
-    end
-
-    test "embed/2 batch result wraps each input in its own vector" do
-      # Triangulation: distinct batch shape, not flattened into a single vector.
-      assert {:ok, [[+0.0], [+0.0]]} = Fake.embed(["a", "b"], [])
     end
 
     test "model/0 returns a string identifying the fake model" do
