@@ -165,6 +165,20 @@ defmodule AletheaJobs.ClinicalRecordOutboxWorkerTest do
 
       assert {:cancel, :not_found} = perform_job(ClinicalRecordOutboxWorker, args)
     end
+
+    test "an indexable event for a missing patient cancels instead of raising or retrying", %{
+      professional: professional
+    } do
+      args = %{
+        "event" => "clinical_note_created",
+        "resource_type" => "clinical_note",
+        "resource_id" => Ecto.UUID.generate(),
+        "patient_id" => Ecto.UUID.generate(),
+        "professional_id" => professional.id
+      }
+
+      assert {:cancel, :not_found} = perform_job(ClinicalRecordOutboxWorker, args)
+    end
   end
 
   describe "perform/1 — transient failures surface as {:error, _} for Oban to retry" do
@@ -172,11 +186,12 @@ defmodule AletheaJobs.ClinicalRecordOutboxWorkerTest do
       professional = create_professional!()
       patient = create_patient!(professional)
 
-      original = Application.get_env(:alethea, :ai_embeddings)
       Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
 
       on_exit(fn ->
-        Application.put_env(:alethea, :ai_embeddings, original, persistent: true)
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
       end)
 
       %{professional: professional, patient: patient}

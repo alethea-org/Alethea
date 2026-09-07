@@ -12,11 +12,11 @@ defmodule AletheaWeb.PatientLive.ClinicalSearch do
 
   ## Access control (spec's "Access Control" requirement)
 
-  `mount/3` calls `Retrieval.search/4` once (with an empty query) both
+   `mount/3` calls `Retrieval.metadata/2` once both
   to authorize `current_professional` against `patient_id` and to load
   the initial `chunk_count`/`freshness` — the same accessor every other
   patient-scoped surface uses, per design section 7 ("Patient-scope
-  authz falls out of `Retrieval.search/4`"). A non-treating
+   authz falls out of `Retrieval.metadata/2`"). A non-treating
   professional is redirected before any patient data reaches the
   socket.
 
@@ -72,7 +72,14 @@ defmodule AletheaWeb.PatientLive.ClinicalSearch do
   def mount(%{"patient_id" => patient_id}, _session, socket) do
     professional = socket.assigns.current_professional
 
-    case Retrieval.search(professional, patient_id, "") do
+    # The LiveView mount path is the only legitimate place to call
+    # `stream_configure/3` — `unavailable/3` and `handle_event/3` only
+    # reset/init the stream. Configuring here once guarantees the
+    # stream is ready for any branch (success, unavailable, redirect).
+    socket =
+      stream_configure(socket, :results, dom_id: &"clinical-search-result-#{&1.chunk_id}")
+
+    case Retrieval.metadata(professional, patient_id) do
       {:ok, %{chunk_count: chunk_count, freshness: freshness}} ->
         socket =
           socket
@@ -83,13 +90,15 @@ defmodule AletheaWeb.PatientLive.ClinicalSearch do
           |> assign(:searched?, false)
           |> assign(:empty_state, if(chunk_count == 0, do: :never_indexed, else: nil))
           |> assign(:query_form, to_form(%{"query" => ""}, as: "search"))
-          |> stream_configure(:results, dom_id: &"clinical-search-result-#{&1.chunk_id}")
           |> stream(:results, [])
 
         {:ok, socket}
 
       {:error, :unauthorized} ->
         {:ok, deny_access(socket)}
+
+      {:error, _reason} ->
+        {:ok, unavailable(socket, patient_id)}
     end
   end
 
@@ -122,6 +131,9 @@ defmodule AletheaWeb.PatientLive.ClinicalSearch do
 
       {:error, :unauthorized} ->
         {:noreply, deny_access(socket)}
+
+      {:error, _reason} ->
+        {:noreply, unavailable(socket, patient_id, query)}
     end
   end
 
@@ -132,6 +144,22 @@ defmodule AletheaWeb.PatientLive.ClinicalSearch do
       "No estás autorizado para buscar en el historial clínico de este paciente."
     )
     |> push_navigate(to: ~p"/patients")
+  end
+
+  defp unavailable(socket, patient_id, query \\ "") do
+    socket
+    |> assign(:page_title, "Búsqueda clínica (no autoritativa)")
+    |> assign(:patient_id, patient_id)
+    |> assign(:chunk_count, 0)
+    |> assign(:freshness, %{stale?: false, pending: 0})
+    |> assign(:searched?, false)
+    |> assign(:empty_state, :unavailable)
+    |> assign(:query_form, to_form(%{"query" => query}, as: "search"))
+    |> stream(:results, [], reset: true)
+    |> put_flash(
+      :error,
+      "La búsqueda clínica no está disponible en este momento. Intentá nuevamente."
+    )
   end
 
   defp relevant?(%{score: score}), do: score >= @relevance_threshold
@@ -190,6 +218,11 @@ defmodule AletheaWeb.PatientLive.ClinicalSearch do
       <div :if={@empty_state == :no_match} id="clinical-search-no-match" class="empty-state">
         <.icon name="hero-magnifying-glass" class="empty-state__icon" />
         <p class="empty-state__title">No hay coincidencias para esta búsqueda</p>
+      </div>
+
+      <div :if={@empty_state == :unavailable} id="clinical-search-unavailable" class="empty-state">
+        <.icon name="hero-exclamation-triangle" class="empty-state__icon" />
+        <p class="empty-state__title">La búsqueda clínica no está disponible en este momento</p>
       </div>
 
       <p :if={@empty_state == nil and not @searched?} class="pt-muted">

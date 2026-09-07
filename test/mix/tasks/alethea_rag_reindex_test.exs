@@ -95,6 +95,34 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     refute Enum.any?(enqueued, &(&1.args["professional_id"] not in [professional.id]))
   end
 
+  test "--confirm reports enqueue failures and never emits COMPLETE for a partial run" do
+    %{patient: patient} = seed_eligible_and_ineligible_resources!()
+    drain_outbox!()
+
+    original = Application.get_env(:alethea, :rag_reindex_enqueue)
+
+    Application.put_env(:alethea, :rag_reindex_enqueue, fn _changeset ->
+      {:error, :unavailable}
+    end)
+
+    on_exit(fn ->
+      Application.put_env(:alethea, :rag_reindex_enqueue, original)
+    end)
+
+    output =
+      capture_io(fn ->
+        assert_raise Mix.Error,
+                     "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=0 failed=5",
+                     fn ->
+                       run_task(["--patient-id", patient.id, "--confirm"])
+                     end
+      end)
+
+    assert output =~ "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=0 failed=5"
+    refute output =~ "ALETHEA_RAG_REINDEX_COMPLETE"
+    refute_enqueued(worker: @worker, args: %{"patient_id" => patient.id})
+  end
+
   test "converges to one chunk per resource across two --confirm runs (idempotent, no duplicates)" do
     %{patient: patient} = seed_eligible_and_ineligible_resources!()
     drain_outbox!()

@@ -131,11 +131,12 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
 
   describe "embed_chunks/1 — batch embed + dimension guard" do
     setup do
-      original = Application.get_env(:alethea, :ai_embeddings)
       Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
 
       on_exit(fn ->
-        Application.put_env(:alethea, :ai_embeddings, original, persistent: true)
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
       end)
 
       :ok
@@ -163,6 +164,16 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       |> expect(:dimensions, fn -> 1024 end)
 
       assert {:cancel, {:embedding_dimension_mismatch, 384, 1024}} =
+               Indexer.embed_chunks(texts)
+    end
+
+    test "cancels before pairing when the adapter returns fewer vectors than chunk texts" do
+      texts = ["primero", "segundo"]
+
+      Alethea.AI.EmbeddingsMock
+      |> expect(:embed, fn ^texts, [] -> {:ok, [List.duplicate(0.1, 1024)]} end)
+
+      assert {:cancel, {:embedding_batch_size_mismatch, 1, 2}} =
                Indexer.embed_chunks(texts)
     end
   end
@@ -264,6 +275,43 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       }
 
       assert :ok = Indexer.index_event(args)
+      assert Alethea.Repo.aggregate(Chunk, :count) == 0
+    end
+
+    test "a mismatched embedding batch persists no partial chunk set", %{
+      professional: professional,
+      patient: patient
+    } do
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      body =
+        for n <- 1..90, into: "" do
+          "Este es el enunciado clínico número #{n} sobre la evolución del paciente. "
+        end
+
+      note = insert_clinical_note!(professional, patient, body)
+
+      Alethea.AI.EmbeddingsMock
+      |> expect(:embed, fn texts, [] ->
+        assert length(texts) > 1
+        {:ok, [List.duplicate(0.1, 1024)]}
+      end)
+
+      args = %{
+        "event" => "clinical_note_created",
+        "resource_type" => "clinical_note",
+        "resource_id" => note.id,
+        "patient_id" => patient.id,
+        "professional_id" => professional.id
+      }
+
+      assert {:cancel, {:embedding_batch_size_mismatch, 1, _expected}} = Indexer.index_event(args)
       assert Alethea.Repo.aggregate(Chunk, :count) == 0
     end
 

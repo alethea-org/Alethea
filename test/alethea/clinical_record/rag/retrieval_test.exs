@@ -305,17 +305,34 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
     end
   end
 
+  describe "metadata/2 — authorization and page metadata without content access" do
+    test "returns chunk count and freshness without embedding or decrypting chunks" do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+
+      assert {:ok, %{chunk_count: 0, freshness: %{stale?: false, pending: 0}}} =
+               Retrieval.metadata(professional, patient.id)
+    end
+
+    test "denies a non-treating professional" do
+      treating = create_professional!()
+      patient = create_patient!(treating)
+      stranger = create_professional!()
+
+      assert {:error, :unauthorized} = Retrieval.metadata(stranger, patient.id)
+    end
+  end
+
   # --- fixtures -----------------------------------------------------------
 
   defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
   defp far_vector, do: [0.0, 1.0 | List.duplicate(0.0, 1022)]
 
   defp stub_query_embedding(vector) do
-    original = Application.get_env(:alethea, :ai_embeddings)
     Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
 
     on_exit(fn ->
-      Application.put_env(:alethea, :ai_embeddings, original, persistent: true)
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake, persistent: true)
     end)
 
     Alethea.AI.EmbeddingsMock

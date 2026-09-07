@@ -116,6 +116,11 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
           freshness: %{stale?: boolean(), pending: non_neg_integer()}
         }
 
+  @type metadata :: %{
+          chunk_count: non_neg_integer(),
+          freshness: %{stale?: boolean(), pending: non_neg_integer()}
+        }
+
   # --- 5.7/5.8 authz + top-level search/4 -------------------------------
 
   @doc """
@@ -147,6 +152,26 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
              {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
           do_search(patient, dek, query, opts)
         end
+    end
+  end
+
+  @doc """
+  Authorizes access to `patient_id` and returns the inexpensive metadata
+  required to render the search page before a query is submitted. Unlike
+  `search/4`, this function never embeds or decrypts content.
+  """
+  @spec metadata(Professional.t(), Ecto.UUID.t()) :: {:ok, metadata()} | {:error, term()}
+  def metadata(%Professional{} = professional, patient_id) when is_binary(patient_id) do
+    try do
+      case Accounts.get_patient_for_professional(professional.id, patient_id) do
+        nil ->
+          {:error, :unauthorized}
+
+        patient ->
+          {:ok, %{chunk_count: count_chunks(patient.id), freshness: freshness(patient.id)}}
+      end
+    rescue
+      _error -> {:error, :unavailable}
     end
   end
 
@@ -191,8 +216,11 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   defp fetch_candidates(patient_id, query_vector, candidate_limit) do
     Chunk
     |> where([c], c.patient_id == ^patient_id)
-    |> select([c], %{chunk: c, dense_distance: cosine_distance(c.embedding, ^query_vector)})
-    |> order_by([c], cosine_distance(c.embedding, ^query_vector))
+    |> select([c], %{
+      chunk: c,
+      dense_distance: selected_as(cosine_distance(c.embedding, ^query_vector), :dense_distance)
+    })
+    |> order_by([c], selected_as(:dense_distance))
     |> limit(^candidate_limit)
     |> Repo.all()
   end

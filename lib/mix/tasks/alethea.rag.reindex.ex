@@ -93,12 +93,21 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
         counts = count_by_resource_type(entries)
 
         if confirm? do
-          enqueued = Enum.count(entries, &enqueue!/1)
+          case enqueue_entries(entries) do
+            {:ok, enqueued} ->
+              Mix.shell().info(
+                "ALETHEA_RAG_REINDEX_COMPLETE patient_id=#{patient.id} " <>
+                  format_counts(counts) <> " enqueued=#{enqueued}"
+              )
 
-          Mix.shell().info(
-            "ALETHEA_RAG_REINDEX_COMPLETE patient_id=#{patient.id} " <>
-              format_counts(counts) <> " enqueued=#{enqueued}"
-          )
+            {:error, enqueued, failed} ->
+              message = failure_message({:enqueue_failed, enqueued, failed})
+              # Failure summary goes to stdout so `capture_io/1` and
+              # CI log scrapers pick it up; `Mix.raise/1` still emits
+              # the diagnostic on stderr before raising.
+              Mix.shell().info(message)
+              Mix.raise(message)
+          end
         else
           Mix.shell().info(
             "ALETHEA_RAG_REINDEX_DRY_RUN patient_id=#{patient.id} " <>
@@ -178,11 +187,31 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     |> Enum.join(" ")
   end
 
-  defp enqueue!({event, _resource_type, record}) do
-    case event |> Outbox.event(record) |> Oban.insert() do
-      {:ok, _job} -> true
-      {:error, _reason} -> false
-    end
+  defp enqueue_entries(entries) do
+    {enqueued, failed} =
+      Enum.reduce(entries, {0, 0}, fn entry, {enqueued, failed} ->
+        case enqueue(entry) do
+          {:ok, _job} -> {enqueued + 1, failed}
+          {:error, _reason} -> {enqueued, failed + 1}
+        end
+      end)
+
+    if failed == 0, do: {:ok, enqueued}, else: {:error, enqueued, failed}
+  end
+
+  defp enqueue({event, _resource_type, record}) do
+    event
+    |> Outbox.event(record)
+    |> enqueue_job()
+  end
+
+  defp enqueue_job(changeset) do
+    # Treat `nil` the same as missing — a test on_exit that restores
+    # the original `nil` value via `Application.put_env/3` would
+    # otherwise leave us with no function to call. The third arg to
+    # `Application.get_env/3` only fires when the key is unset, not
+    # when it is explicitly `nil`.
+    (Application.get_env(:alethea, :rag_reindex_enqueue) || (&Oban.insert/1)).(changeset)
   end
 
   defp failure_message(:invalid_arguments),
@@ -190,4 +219,7 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
 
   defp failure_message(:patient_not_found),
     do: "ALETHEA_RAG_REINDEX_FAILED reason=patient_not_found"
+
+  defp failure_message({:enqueue_failed, enqueued, failed}),
+    do: "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=#{enqueued} failed=#{failed}"
 end

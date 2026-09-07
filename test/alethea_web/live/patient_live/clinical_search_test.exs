@@ -46,6 +46,27 @@ defmodule AletheaWeb.PatientLive.ClinicalSearchTest do
       assert {:error, {:live_redirect, %{to: "/patients"}}} =
                live(stranger_conn, ~p"/patients/#{patient.id}/clinical-search")
     end
+
+    test "does not embed or decrypt chunks before a search is submitted", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      insert_corrupt_chunk!(professional, patient)
+
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> expect(:embed, 0, fn _query, [] -> {:ok, near_vector()} end)
+
+      assert {:ok, _view, _html} = live(conn, ~p"/patients/#{patient.id}/clinical-search")
+    end
   end
 
   describe "empty states" do
@@ -79,6 +100,33 @@ defmodule AletheaWeb.PatientLive.ClinicalSearchTest do
       assert html =~ "clinical-search-no-match"
       refute html =~ "clinical-search-never-indexed"
       refute html =~ "badge--non-authoritative"
+    end
+  end
+
+  describe "retrieval failures" do
+    test "a non-authorization retrieval error renders an unavailable state instead of crashing",
+         %{
+           conn: conn,
+           patient: patient
+         } do
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> expect(:embed, fn _query, [] -> {:error, :timeout} end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/clinical-search")
+
+      view
+      |> form("#clinical-search-form", search: %{query: "consulta"})
+      |> render_submit()
+
+      assert has_element?(view, "#clinical-search-unavailable")
     end
   end
 
@@ -209,6 +257,28 @@ defmodule AletheaWeb.PatientLive.ClinicalSearchTest do
 
     {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
     resource_id
+  end
+
+  defp insert_corrupt_chunk!(professional, patient) do
+    resource_id = Ecto.UUID.generate()
+
+    attrs = [
+      %{
+        source_resource_type: "clinical_note",
+        source_resource_id: resource_id,
+        chunk_index: 0,
+        encrypted_content: <<1, 2, 3>>,
+        embedding: near_vector(),
+        embedding_model: "fake-embeddings-bge-m3",
+        token_count: 10,
+        full_event: true,
+        source_occurred_at: DateTime.utc_now(),
+        patient_id: patient.id,
+        professional_id: professional.id
+      }
+    ]
+
+    assert {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
   end
 
   defp create_target_behavior!(professional, patient) do

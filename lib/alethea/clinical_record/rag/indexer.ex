@@ -25,6 +25,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   """
 
   alias Alethea.Accounts
+  alias Alethea.Accounts.{Patient, Professional}
   alias Alethea.AI
 
   alias Alethea.ClinicalRecord.{
@@ -199,18 +200,21 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   Batch-embeds `texts` in one call to the configured
   `Alethea.AI.Embeddings` adapter. Returns `{:cancel,
   {:embedding_dimension_mismatch, got, expected}}` when a returned
-  vector's length disagrees with `dimensions/0` — a retry cannot fix a
-  config mismatch, so the caller should `{:cancel, _}` the job rather
-  than burn backoff attempts (design section 3).
+   vector's length disagrees with `dimensions/0`, or `{:cancel,
+   {:embedding_batch_size_mismatch, got, expected}}` when the adapter
+   returns a different number of vectors than inputs. Neither adapter
+   contract violation can be repaired by retrying the job.
   """
   @spec embed_chunks([String.t()]) ::
           {:ok, [[float()]]}
+          | {:cancel, {:embedding_batch_size_mismatch, non_neg_integer(), non_neg_integer()}}
           | {:cancel, {:embedding_dimension_mismatch, non_neg_integer(), pos_integer()}}
           | {:error, term()}
   def embed_chunks(texts) when is_list(texts) do
     adapter = AI.embeddings()
 
-    with {:ok, vectors} <- adapter.embed(texts, []) do
+    with {:ok, vectors} <- adapter.embed(texts, []),
+         :ok <- validate_batch_size(vectors, texts) do
       expected = adapter.dimensions()
 
       case Enum.find(vectors, fn vector -> length(vector) != expected end) do
@@ -218,6 +222,12 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
         mismatched -> {:cancel, {:embedding_dimension_mismatch, length(mismatched), expected}}
       end
     end
+  end
+
+  defp validate_batch_size(vectors, texts) when length(vectors) == length(texts), do: :ok
+
+  defp validate_batch_size(vectors, texts) do
+    {:cancel, {:embedding_batch_size_mismatch, length(vectors), length(texts)}}
   end
 
   # --- 3.7/3.8 replace_chunks/2 --------------------------------------------
@@ -287,29 +297,32 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   end
 
   defp index_resource(resource_kind, resource_type, resource_id, patient_id, professional_id) do
-    professional = Accounts.get_professional!(professional_id)
-    patient = Accounts.get_patient!(patient_id)
+    case {Repo.get(Professional, professional_id), Repo.get(Patient, patient_id)} do
+      {%Professional{} = professional, %Patient{} = patient} ->
+        with {:ok, kek} <- Accounts.load_professional_kek(professional),
+             {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
+             {:ok, plaintext, occurred_at, target_behavior_id} <-
+               fetch_and_decrypt(resource_kind, resource_id, dek),
+             pieces <- chunk(plaintext),
+             {:ok, vectors} <- embed_chunks(Enum.map(pieces, & &1.text)),
+             {:ok, chunk_attrs} <-
+               encrypt_chunk_attrs(
+                 pieces,
+                 vectors,
+                 dek,
+                 resource_type,
+                 resource_id,
+                 patient_id,
+                 professional_id,
+                 occurred_at,
+                 target_behavior_id
+               ),
+             {:ok, _rows} <- replace_chunks({resource_type, resource_id}, chunk_attrs) do
+          :ok
+        end
 
-    with {:ok, kek} <- Accounts.load_professional_kek(professional),
-         {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
-         {:ok, plaintext, occurred_at, target_behavior_id} <-
-           fetch_and_decrypt(resource_kind, resource_id, dek),
-         pieces <- chunk(plaintext),
-         {:ok, vectors} <- embed_chunks(Enum.map(pieces, & &1.text)),
-         {:ok, chunk_attrs} <-
-           encrypt_chunk_attrs(
-             pieces,
-             vectors,
-             dek,
-             resource_type,
-             resource_id,
-             patient_id,
-             professional_id,
-             occurred_at,
-             target_behavior_id
-           ),
-         {:ok, _rows} <- replace_chunks({resource_type, resource_id}, chunk_attrs) do
-      :ok
+      _ ->
+        {:cancel, :not_found}
     end
   end
 
