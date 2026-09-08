@@ -39,15 +39,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
     case ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id) do
       {:ok, items} ->
-        draft_body =
+        {draft_body, draft_tombstoned_at} =
           case ClinicalRecord.get_functional_analysis_draft(
                  professional,
                  patient_id,
                  target_behavior_id
                ) do
-            {:ok, nil} -> ""
-            {:ok, draft} -> draft.body
-            {:error, _reason} -> ""
+            {:ok, nil} -> {"", nil}
+            {:ok, {:legally_deleted, deleted_at}} -> {"", deleted_at}
+            {:ok, draft} -> {draft.body, nil}
+            {:error, _reason} -> {"", nil}
           end
 
         if connected?(socket) do
@@ -65,6 +66,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
           |> assign(:note_form, to_form(%{"body" => ""}, as: "note"))
           |> assign(:draft_form, to_form(%{"body" => draft_body}, as: "draft"))
+          |> assign(:draft_tombstoned_at, draft_tombstoned_at)
           |> stream(:timeline, items)
 
         {:ok, socket}
@@ -323,10 +325,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   defp review_item_class(:consultation_evidence), do: "review-item--evidence"
   defp review_item_class(:clinician_observation), do: "review-item--observation"
   defp review_item_class(:ai_proposal), do: "review-item--proposal"
+  defp review_item_class(:legally_deleted), do: "review-item--tombstone"
 
   defp kind_label(:consultation_evidence), do: "Evidencia citada"
   defp kind_label(:clinician_observation), do: "Observación del clínico"
   defp kind_label(:ai_proposal), do: "Propuesta de IA"
+  defp kind_label(:legally_deleted), do: "Registro eliminado legalmente"
 
   defp status_label("pending"), do: "pendiente"
   defp status_label("edited"), do: "editada"
@@ -395,7 +399,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </span>
           </div>
 
-          <p class="review-item__text">{item.text}</p>
+          <p :if={item.kind != :legally_deleted} class="review-item__text">{item.text}</p>
+
+          <p
+            :if={item.kind == :legally_deleted}
+            class="review-item__text review-item__text--tombstone"
+          >
+            <.icon name="hero-lock-closed" class="size-3" />
+            Eliminado legalmente el {format_datetime(item.occurred_at)}
+          </p>
 
           <div :if={item.kind == :consultation_evidence} class="review-item__source">
             <.icon name="hero-magnifying-glass" class="size-3" /> {source_label(item.source)}
@@ -475,7 +487,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
       <div class="review-draft">
         <h2 class="pt-h2">Borrador de análisis funcional</h2>
-        <.form for={@draft_form} id="draft-form" phx-submit="save_draft">
+        <div :if={@draft_tombstoned_at} id="draft-tombstone" class="tombstone-note">
+          <.icon name="hero-lock-closed" class="size-3" />
+          Eliminado legalmente el {format_datetime(@draft_tombstoned_at)}
+        </div>
+        <.form :if={!@draft_tombstoned_at} for={@draft_form} id="draft-form" phx-submit="save_draft">
           <.input field={@draft_form[:body]} type="textarea" label="Análisis funcional (editable)" />
           <div class="form-actions">
             <button type="submit" class="button-primary button-primary--sm">Guardar borrador</button>

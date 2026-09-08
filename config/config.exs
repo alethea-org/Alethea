@@ -90,13 +90,26 @@ config :alethea, Oban,
     # until #196 lands its own projection consumer. Enqueued inside the
     # same `Ecto.Multi`/transaction as the clinical row + audit entry
     # (see `Alethea.ClinicalRecord`), so job args are identifiers only.
-    clinical_record_outbox: 5
+    clinical_record_outbox: 5,
+    # `clinical_record_retention` (sdd/clinical-record-retention, GitHub
+    # #197, Phase 3/Slice C). Consumed by
+    # `AletheaJobs.RetentionSweepWorker`, cron-triggered. Concurrency is
+    # deliberately **1** — it serializes every destructive deletion this
+    # queue ever runs, which is what makes
+    # `Alethea.ClinicalRecord.Retention`'s terminal zero-remaining
+    # crypto-erasure check race-safe (design AD4).
+    clinical_record_retention: 1
   ],
   repo: Alethea.Repo,
   plugins: [
     {Oban.Plugins.Cron,
      crontab: [
-       {"0 0 * * *", AletheaJobs.DailySchedulerWorker}
+       {"0 0 * * *", AletheaJobs.DailySchedulerWorker},
+       # sdd/clinical-record-retention, GitHub #197. Ships inert — see
+       # `AletheaJobs.RetentionSweepWorker`'s moduledoc and the
+       # `:retention_sweep_enabled` flag below (both must hold for any
+       # deletion to actually occur).
+       {"30 3 * * *", AletheaJobs.RetentionSweepWorker}
      ]}
   ]
 
@@ -118,6 +131,18 @@ config :alethea, :telegram_client, Alethea.Telegram.Client.Req
 # --- AI & Clinical Configuration ---
 
 config :alethea, Alethea.Clinical, recent_message_limit: 10
+
+# --- Clinical Record Retention (sdd/clinical-record-retention, GitHub #197) ---
+
+# `false` by default — `AletheaJobs.RetentionSweepWorker` is a no-op
+# until this is explicitly flipped (one of its two independent inert
+# guards, design's rollback plan).
+config :alethea, :retention_sweep_enabled, false
+
+# Global retention baseline, in days (~10 years). Per-patient stricter
+# minimums (`Alethea.ClinicalRecord.Lifecycle.set_retention_minimum/3`)
+# can only lengthen this (AD3: `GREATEST`), never shorten it.
+config :alethea, :retention_baseline_days, 3650
 
 # Global configuration for LangChain chains
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,

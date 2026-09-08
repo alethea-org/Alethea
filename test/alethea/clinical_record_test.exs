@@ -26,7 +26,8 @@ defmodule Alethea.ClinicalRecordTest do
     ClinicianObservation,
     ConsultationEvidence,
     FunctionalAnalysisDraft,
-    TargetBehavior
+    TargetBehavior,
+    Tombstone
   }
 
   alias AletheaJobs.ClinicalRecordOutboxWorker
@@ -1095,6 +1096,192 @@ defmodule Alethea.ClinicalRecordTest do
                  target_behavior.id
                )
     end
+  end
+
+  describe "D4 — write to a legally deleted resource (sdd/clinical-record-retention, GitHub #197, task 1.9)" do
+    test "update_clinician_observation on a tombstoned resource is denied as :legally_deleted, audited content-free, sibling unaffected",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      {:ok, deleted_observation} =
+        ClinicalRecord.add_clinician_observation(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Cuerpo a borrar"
+        )
+
+      {:ok, sibling_observation} =
+        ClinicalRecord.add_clinician_observation(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Cuerpo hermano"
+        )
+
+      # Simulates a legal deletion directly — Retention.legally_delete_record/2
+      # (Slice C) is the real primitive that will perform this hard-delete +
+      # tombstone insert atomically; here we only need its end state to
+      # exercise the D4 gate.
+      Repo.delete!(deleted_observation)
+      insert_tombstone!(professional, patient, "clinician_observation", deleted_observation.id)
+
+      before_count =
+        AuditLog
+        |> where(
+          [a],
+          a.professional_id == ^professional.id and a.action == "clinical_record_access_denied"
+        )
+        |> Repo.aggregate(:count)
+
+      assert {:error, :legally_deleted} =
+               ClinicalRecord.update_clinician_observation(
+                 professional,
+                 patient.id,
+                 deleted_observation.id,
+                 "Nunca deberia escribirse"
+               )
+
+      rows =
+        AuditLog
+        |> where(
+          [a],
+          a.professional_id == ^professional.id and a.action == "clinical_record_access_denied"
+        )
+        |> order_by([a], asc: a.inserted_at)
+        |> Repo.all()
+
+      assert length(rows) == before_count + 1
+      new_row = List.last(rows)
+      assert new_row.resource_id == deleted_observation.id
+      assert new_row.resource_type == "clinician_observation"
+
+      haystack = "#{inspect(new_row.details)} #{new_row.action} #{new_row.resource_type}"
+      refute haystack =~ "Nunca deberia escribirse"
+
+      # Sibling remains fully readable/writable, unaffected by the deletion.
+      assert {:ok, updated_sibling} =
+               ClinicalRecord.update_clinician_observation(
+                 professional,
+                 patient.id,
+                 sibling_observation.id,
+                 "Cuerpo hermano editado"
+               )
+
+      assert updated_sibling.id == sibling_observation.id
+      refute updated_sibling.encrypted_body == sibling_observation.encrypted_body
+    end
+
+    test "a never-existed observation id still returns :not_found, distinct from :legally_deleted",
+         %{professional: professional, patient: patient} do
+      assert {:error, :not_found} =
+               ClinicalRecord.update_clinician_observation(
+                 professional,
+                 patient.id,
+                 Ecto.UUID.generate(),
+                 "irrelevante"
+               )
+    end
+
+    test "edit_ai_proposal on a tombstoned proposal is denied as :legally_deleted (triangulation: 2nd gate site)",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      Repo.delete!(proposal)
+      insert_tombstone!(professional, patient, "ai_proposal", proposal.id)
+
+      assert {:error, :legally_deleted} =
+               ClinicalRecord.edit_ai_proposal(
+                 professional,
+                 patient.id,
+                 proposal.id,
+                 "No deberia escribirse"
+               )
+    end
+
+    test "accept_ai_proposal on a tombstoned proposal is denied as :legally_deleted (triangulation: 3rd gate site)",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      Repo.delete!(proposal)
+      insert_tombstone!(professional, patient, "ai_proposal", proposal.id)
+
+      assert {:error, :legally_deleted} =
+               ClinicalRecord.accept_ai_proposal(professional, patient.id, proposal.id)
+    end
+  end
+
+  describe "review_timeline/3 — dual-read by encryption_version (D1/AD1, sdd/clinical-record-retention #197)" do
+    test "a v1-encrypted fixture row and a v2-encrypted fixture row on the same patient both decrypt in one review_timeline/3 call",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      t1 = ~U[2026-04-01 09:00:00.000000Z]
+      t2 = ~U[2026-04-01 10:00:00.000000Z]
+
+      {:ok, v1_ciphertext} =
+        Alethea.Encryption.PatientVault.encrypt(
+          "Observacion cifrada con la DEK compartida",
+          patient_dek
+        )
+
+      v1_observation =
+        %ClinicianObservation{}
+        |> ClinicianObservation.changeset(%{
+          encrypted_body: v1_ciphertext,
+          encryption_version: 1,
+          occurred_at: t1,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior.id
+        })
+        |> Repo.insert!()
+
+      {:ok, v2_ciphertext} =
+        Alethea.Encryption.PatientVault.encrypt(
+          "Observacion cifrada con la DEK de ClinicalRecord",
+          clinical_record_dek
+        )
+
+      v2_observation =
+        %ClinicianObservation{}
+        |> ClinicianObservation.changeset(%{
+          encrypted_body: v2_ciphertext,
+          encryption_version: 2,
+          occurred_at: t2,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior.id
+        })
+        |> Repo.insert!()
+
+      assert {:ok, timeline} =
+               ClinicalRecord.review_timeline(professional, patient.id, target_behavior.id)
+
+      assert [item_v1, item_v2] = timeline
+      assert item_v1.id == v1_observation.id
+      assert item_v1.text == "Observacion cifrada con la DEK compartida"
+      assert item_v2.id == v2_observation.id
+      assert item_v2.text == "Observacion cifrada con la DEK de ClinicalRecord"
+    end
+  end
+
+  defp insert_tombstone!(professional, patient, resource_type, resource_id) do
+    %Tombstone{}
+    |> Tombstone.changeset(%{
+      resource_type: resource_type,
+      resource_id: resource_id,
+      patient_id: patient.id,
+      deleted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      deleted_by_id: professional.id,
+      trigger: "manual"
+    })
+    |> Repo.insert!()
   end
 
   defp insert_evidence!(

@@ -42,6 +42,9 @@ defmodule Alethea.ClinicalRecord.AIProposal do
   schema "ai_proposals" do
     field :encrypted_original_text, :binary
     field :encrypted_text, :binary
+    # 1 = shared patient DEK, 2 = "patient_clinical_record" CR-scoped DEK
+    # (D1/AD1, sdd/clinical-record-retention, GitHub #197 — dual-read seam)
+    field :encryption_version, :integer, default: 1
     field :status, :string
     field :model_version, :string
     field :occurred_at, :utc_datetime_usec
@@ -67,6 +70,7 @@ defmodule Alethea.ClinicalRecord.AIProposal do
     |> cast(attrs, [
       :encrypted_original_text,
       :encrypted_text,
+      :encryption_version,
       :model_version,
       :occurred_at,
       :patient_id,
@@ -94,7 +98,7 @@ defmodule Alethea.ClinicalRecord.AIProposal do
   """
   def update_changeset(ai_proposal, attrs) do
     ai_proposal
-    |> cast(attrs, [:encrypted_text, :status])
+    |> cast(attrs, [:encrypted_text, :encryption_version, :status])
     |> validate_inclusion(:status, @statuses)
   end
 end
