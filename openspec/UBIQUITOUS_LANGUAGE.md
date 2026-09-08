@@ -47,6 +47,9 @@ Documento generado **antes de cada sesión** con todo lo registrado por el pacie
 ### RAG
 Índice vectorial del paciente, consultable en lenguaje natural. **Es la historia clínica navegable del paciente.** Contiene: journaling interactivo, etiquetas de análisis emocional, transcripciones, métricas inferidas, resúmenes de brecha, eventos de crisis, notas clínicas, configuración de triggers, medicación, diagnósticos (vía notas), datos futuros de wearables. Ver `adr/003-rag-historia-clinica-navegable.md`.
 
+### Chat de consulta clínica fundamentada
+Interfaz conversacional para que un **psicólogo autorizado** consulte la historia clínica navegable de **uno de sus pacientes**. Cada respuesta se fundamenta en evidencia recuperada del historial indexado de ese paciente y muestra sus fuentes; las hipótesis, cuando corresponden a una consulta interpretativa, son revisables por el profesional y no constituyen diagnóstico ni recomendación terapéutica. No es journaling interactivo: no es un intercambio entre paciente y Alethea ni sustituye la sesión clínica. Su incorporación se documenta como decisión de producto y dominio; la implementación se define por separado.
+
 ### Psicometría inferida
 Métricas que el sistema calcula sobre los datos del paciente. **No son diagnoses** — son agregaciones e inferencias que el profesional usa como insumo. Ejemplos: "esta semana el paciente se mostró más ansioso", "frecuencia de menciones del suegro en el último mes".
 
