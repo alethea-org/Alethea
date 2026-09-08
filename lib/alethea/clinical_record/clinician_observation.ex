@@ -26,6 +26,9 @@ defmodule Alethea.ClinicalRecord.ClinicianObservation do
   @derive {Inspect, except: [:body]}
   schema "clinician_observations" do
     field :encrypted_body, :binary
+    # 1 = shared patient DEK, 2 = "patient_clinical_record" CR-scoped DEK
+    # (D1/AD1, sdd/clinical-record-retention, GitHub #197 — dual-read seam)
+    field :encryption_version, :integer, default: 1
     field :occurred_at, :utc_datetime_usec
     field :body, :string, virtual: true, redact: true
 
@@ -41,6 +44,7 @@ defmodule Alethea.ClinicalRecord.ClinicianObservation do
     clinician_observation
     |> cast(attrs, [
       :encrypted_body,
+      :encryption_version,
       :occurred_at,
       :patient_id,
       :professional_id,
@@ -63,7 +67,7 @@ defmodule Alethea.ClinicalRecord.ClinicianObservation do
   """
   def update_changeset(clinician_observation, attrs) do
     clinician_observation
-    |> cast(attrs, [:encrypted_body])
+    |> cast(attrs, [:encrypted_body, :encryption_version])
     |> validate_required([:encrypted_body])
   end
 end

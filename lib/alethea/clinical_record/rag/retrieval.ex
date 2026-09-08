@@ -149,8 +149,19 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
 
       patient ->
         with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
-          do_search(patient, dek, query, opts)
+             {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek) do
+          # The CR-scoped key (D1, sdd/clinical-record-retention, GitHub
+          # #197) may not exist yet for a patient with no v2 chunks —
+          # permissive `nil` here, never a hard failure: a candidate set
+          # that turns out to be all-v1 must still search successfully.
+          clinical_record_dek =
+            case Accounts.load_clinical_record_dek(patient, kek) do
+              {:ok, dek} -> dek
+              {:error, _reason} -> nil
+            end
+
+          keyring = %{patient_dek: patient_dek, clinical_record_dek: clinical_record_dek}
+          do_search(patient, keyring, query, opts)
         end
     end
   end
@@ -175,7 +186,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     end
   end
 
-  defp do_search(patient, dek, query, opts) do
+  defp do_search(patient, keyring, query, opts) do
     candidate_limit = Keyword.get(opts, :candidate_limit, @candidate_limit)
     result_limit = Keyword.get(opts, :limit, @default_limit)
     dense_weight = Keyword.get(opts, :dense_weight, @dense_weight)
@@ -185,7 +196,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
       results =
         patient.id
         |> fetch_candidates(query_vector, candidate_limit)
-        |> Enum.map(&score_candidate(&1, query, dek, dense_weight, lexical_weight))
+        |> Enum.map(&score_candidate(&1, query, keyring, dense_weight, lexical_weight))
         |> Enum.sort_by(& &1.score, :desc)
         |> Enum.take(result_limit)
 
@@ -225,6 +236,14 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     |> Repo.all()
   end
 
+  # Picks the correct DEK out of `keyring` for a chunk per its OWN stored
+  # `encryption_version` (AD1, sdd/clinical-record-retention, GitHub #197)
+  # — mirrors `Alethea.ClinicalRecord`'s private `dek_for/2`. A chunk's
+  # version always matches whichever key encrypted its source resource at
+  # index time (see `Rag.Indexer`'s "v2 key selection").
+  defp dek_for(%{encryption_version: 1}, keyring), do: keyring.patient_dek
+  defp dek_for(%{encryption_version: 2}, keyring), do: keyring.clinical_record_dek
+
   defp count_chunks(patient_id) do
     Chunk
     |> where([c], c.patient_id == ^patient_id)
@@ -234,7 +253,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   defp score_candidate(
          %{chunk: chunk, dense_distance: dense_distance},
          query,
-         dek,
+         keyring,
          dense_weight,
          lexical_weight
        ) do
@@ -242,7 +261,10 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     # candidate-limited row is an integrity error, not a result to
     # silently drop (see moduledoc). `dense_distance` comes back from
     # Postgres as a plain float (pgvector `<=>` is `double precision`).
-    {:ok, content} = PatientVault.decrypt(chunk.encrypted_content, dek)
+    # `dek_for/2` picks the DEK by the CHUNK's OWN `encryption_version`
+    # (AD1, sdd/clinical-record-retention, GitHub #197) — set by the
+    # indexer to mirror whichever key encrypted its source resource.
+    {:ok, content} = PatientVault.decrypt(chunk.encrypted_content, dek_for(chunk, keyring))
 
     lexical = lexical_score(query, content)
 

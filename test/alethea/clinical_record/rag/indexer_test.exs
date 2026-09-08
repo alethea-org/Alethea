@@ -517,6 +517,131 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
     end
   end
 
+  describe "eligibility/1 — tombstone classification (sdd/clinical-record-retention #197, task 3.8)" do
+    test "clinical_record_legally_deleted classifies as a tombstone purge, not an index or ignore" do
+      assert Indexer.eligibility("clinical_record_legally_deleted") ==
+               {:tombstone, :legal_deletion}
+    end
+  end
+
+  describe "index_event/1 — tombstone purge branch (D5, sdd/clinical-record-retention #197, task 3.8)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "purges every existing chunk for the resource and never reaches the Professional/Patient/KEK/DEK lookup",
+         %{professional: professional, patient: patient} do
+      resource_id = Ecto.UUID.generate()
+      attrs = [chunk_attrs(patient, professional, resource_id, 0)]
+      assert {:ok, _} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
+      assert Alethea.Repo.aggregate(Chunk, :count) == 1
+
+      args = %{
+        "event" => "clinical_record_legally_deleted",
+        "resource_type" => "clinical_note",
+        "resource_id" => resource_id,
+        # A `patient_id`/`professional_id` that resolve to no row at
+        # all — if the purge branch ever reached `Repo.get(Professional,
+        # ...)` / `Repo.get(Patient, ...)` (the KEK/DEK ladder's entry
+        # point in `index_resource/5`), this would return `{:cancel,
+        # :not_found}` instead of `:ok`. Structural proof the purge
+        # branch short-circuits before any decrypt attempt.
+        "patient_id" => Ecto.UUID.generate(),
+        "professional_id" => Ecto.UUID.generate()
+      }
+
+      assert :ok = Indexer.index_event(args)
+      assert Alethea.Repo.aggregate(Chunk, :count) == 0
+    end
+
+    test "a tombstone event for a resource with no existing chunks is a no-op success" do
+      args = %{
+        "event" => "clinical_record_legally_deleted",
+        "resource_type" => "target_behavior",
+        "resource_id" => Ecto.UUID.generate(),
+        "patient_id" => Ecto.UUID.generate(),
+        "professional_id" => Ecto.UUID.generate()
+      }
+
+      assert :ok = Indexer.index_event(args)
+      assert Alethea.Repo.aggregate(Chunk, :count) == 0
+    end
+  end
+
+  describe "index_event/1 — dual-read by source encryption_version (D1/AD1, sdd/clinical-record-retention #197)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "a v1-encrypted (shared patient DEK) source row and a v2-encrypted (CR-scoped DEK) source row both index into decryptable chunks",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+
+      {:ok, v1_ciphertext} =
+        PatientVault.encrypt("Observacion legada cifrada con la DEK compartida", patient_dek)
+
+      v1_observation =
+        %Alethea.ClinicalRecord.ClinicianObservation{}
+        |> Alethea.ClinicalRecord.ClinicianObservation.changeset(%{
+          encrypted_body: v1_ciphertext,
+          encryption_version: 1,
+          occurred_at: DateTime.utc_now(),
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior.id
+        })
+        |> Alethea.Repo.insert!()
+
+      # `add_clinician_observation/4` now always stamps `encryption_version:
+      # 2` (task 2.8) — a genuinely new, CR-key-encrypted row.
+      {:ok, v2_observation} =
+        Alethea.ClinicalRecord.add_clinician_observation(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Observacion nueva cifrada con la DEK de ClinicalRecord"
+        )
+
+      assert v2_observation.encryption_version == 2
+
+      v1_args = %{
+        "event" => "clinician_observation_created",
+        "resource_type" => "clinician_observation",
+        "resource_id" => v1_observation.id,
+        "patient_id" => patient.id,
+        "professional_id" => professional.id
+      }
+
+      v2_args = %{v1_args | "resource_id" => v2_observation.id}
+
+      assert :ok = Indexer.index_event(v1_args)
+      assert :ok = Indexer.index_event(v2_args)
+
+      {:ok, clinical_record_dek} = Accounts.load_clinical_record_dek(patient, kek)
+
+      v1_chunk =
+        Chunk |> Alethea.Repo.all() |> Enum.find(&(&1.source_resource_id == v1_observation.id))
+
+      v2_chunk =
+        Chunk |> Alethea.Repo.all() |> Enum.find(&(&1.source_resource_id == v2_observation.id))
+
+      assert v1_chunk.encryption_version == 1
+      assert v2_chunk.encryption_version == 2
+
+      assert {:ok, "Observacion legada cifrada con la DEK compartida"} =
+               PatientVault.decrypt(v1_chunk.encrypted_content, patient_dek)
+
+      assert {:ok, "Observacion nueva cifrada con la DEK de ClinicalRecord"} =
+               PatientVault.decrypt(v2_chunk.encrypted_content, clinical_record_dek)
+    end
+  end
+
   defp chunk_attrs(patient, professional, resource_id, chunk_index) do
     %{
       source_resource_type: "clinical_note",

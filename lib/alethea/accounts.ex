@@ -213,6 +213,87 @@ defmodule Alethea.Accounts do
   end
 
   @doc """
+  Loads the `"patient_clinical_record"`-scoped DEK (D1,
+  sdd/clinical-record-retention, GitHub #197) — the `Alethea.ClinicalRecord`
+  equivalent of `load_patient_dek/2`, but a structurally distinct key row
+  and type literal. Never creates the row — see `ensure_clinical_record_dek/2`
+  for the lazy-create variant.
+  """
+  @spec load_clinical_record_dek(Patient.t(), binary()) ::
+          {:ok, binary()} | {:error, :not_found | term()}
+  def load_clinical_record_dek(patient, professional_kek) when is_binary(professional_kek) do
+    case Repo.get_by(EncryptionKey, patient_id: patient.id, type: "patient_clinical_record") do
+      nil ->
+        {:error, :not_found}
+
+      key_record ->
+        PatientVault.decrypt(key_record.encrypted_key, professional_kek)
+    end
+  end
+
+  @doc """
+  Lazily provisions the `"patient_clinical_record"`-scoped DEK on first
+  use — required by D1's "recreated lazily on the next clinical write"
+  (spec's Terminal Cryptographic Erasure requirement) and by AD1 (no
+  ciphertext backfill: the key only ever backs rows written after this
+  change ships).
+
+  Race-safe: two concurrent first-writes both attempt the insert, but only
+  one wins under `unique_index(:encryption_keys, [:patient_id, :type],
+  where: "patient_id IS NOT NULL")` (design section "Migrations (c)") via
+  `on_conflict: :nothing`; the loser's insert is silently dropped and both
+  callers re-read the row that actually persisted, so no ciphertext is ever
+  orphaned.
+  """
+  @spec ensure_clinical_record_dek(Patient.t(), binary()) :: {:ok, binary()} | {:error, term()}
+  def ensure_clinical_record_dek(patient, professional_kek) when is_binary(professional_kek) do
+    case load_clinical_record_dek(patient, professional_kek) do
+      {:ok, dek} ->
+        {:ok, dek}
+
+      {:error, :not_found} ->
+        dek_bytes = :crypto.strong_rand_bytes(32)
+        {:ok, wrapped_dek} = PatientVault.encrypt(dek_bytes, professional_kek)
+
+        %EncryptionKey{}
+        |> EncryptionKey.changeset(%{
+          "encrypted_key" => wrapped_dek,
+          "type" => "patient_clinical_record",
+          "patient_id" => patient.id
+        })
+        |> Repo.insert(
+          on_conflict: :nothing,
+          conflict_target: {:unsafe_fragment, "(patient_id, type) WHERE (patient_id IS NOT NULL)"}
+        )
+
+        load_clinical_record_dek(patient, professional_kek)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Terminal cryptographic erasure of the `"patient_clinical_record"`-scoped
+  key ONLY (D1/BR3, sdd/clinical-record-retention, GitHub #197). The
+  `type == "patient_clinical_record"` literal is the single enforcement
+  point proving the shared `"patient"` journaling key
+  (`load_patient_dek/2`, `Alethea.Clinical.patient_dek/1`) is structurally
+  unreachable from this delete — there is no code path here that can ever
+  target a `"patient"` row.
+  """
+  @spec destroy_clinical_record_dek(Ecto.UUID.t()) :: {:ok, :destroyed | :absent}
+  def destroy_clinical_record_dek(patient_id) do
+    EncryptionKey
+    |> where([k], k.patient_id == ^patient_id and k.type == "patient_clinical_record")
+    |> Repo.delete_all()
+    |> case do
+      {0, _} -> {:ok, :absent}
+      {_n, _} -> {:ok, :destroyed}
+    end
+  end
+
+  @doc """
   Crea un paciente con cifrado de extremo a extremo.
   Genera una DEK única y la envuelve con la KEK del profesional. La identidad
   del paciente es únicamente el `alias`; los campos obligatorios los valida

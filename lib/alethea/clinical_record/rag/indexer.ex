@@ -51,7 +51,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   @tokens_per_word 1.35
 
   @type eligibility_result ::
-          {:index, atom()} | {:ignore, atom()} | {:unknown, String.t()}
+          {:index, atom()} | {:tombstone, atom()} | {:ignore, atom()} | {:unknown, String.t()}
 
   @type chunk_piece :: %{
           chunk_index: non_neg_integer(),
@@ -69,6 +69,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   spec's "No deletion or tombstone handling" scenario).
   """
   @spec eligibility(String.t()) :: eligibility_result
+  def eligibility("clinical_record_legally_deleted"), do: {:tombstone, :legal_deletion}
   def eligibility("clinical_note_created"), do: {:index, :clinical_note}
   def eligibility("consultation_evidence_created"), do: {:index, :consultation_evidence}
   def eligibility("clinician_observation_created"), do: {:index, :clinician_observation}
@@ -285,6 +286,12 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
         "professional_id" => professional_id
       }) do
     case eligibility(event) do
+      {:tombstone, _reason} ->
+        case replace_chunks({resource_type, resource_id}, []) do
+          {:ok, _rows} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
       {:index, resource_kind} ->
         index_resource(resource_kind, resource_type, resource_id, patient_id, professional_id)
 
@@ -300,9 +307,9 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     case {Repo.get(Professional, professional_id), Repo.get(Patient, patient_id)} do
       {%Professional{} = professional, %Patient{} = patient} ->
         with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
-             {:ok, plaintext, occurred_at, target_behavior_id} <-
-               fetch_and_decrypt(resource_kind, resource_id, dek),
+             {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek),
+             {:ok, plaintext, occurred_at, target_behavior_id, encryption_version, dek} <-
+               fetch_and_decrypt(resource_kind, resource_id, patient, kek, patient_dek),
              pieces <- chunk(plaintext),
              {:ok, vectors} <- embed_chunks(Enum.map(pieces, & &1.text)),
              {:ok, chunk_attrs} <-
@@ -310,6 +317,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
                  pieces,
                  vectors,
                  dek,
+                 encryption_version,
                  resource_type,
                  resource_id,
                  patient_id,
@@ -326,10 +334,23 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     end
   end
 
+  # Resolves the DEK for a source row's OWN `encryption_version` (AD1/D1,
+  # sdd/clinical-record-retention, GitHub #197): `1` uses the already-loaded
+  # shared patient DEK with no extra query; `2` lazily loads (never
+  # creates — the CR key must already exist by the time a v2 row was
+  # written) the CR-scoped `"patient_clinical_record"` DEK. This keeps a
+  # v1-only patient's ingest from ever requiring a CR key that may not
+  # exist.
+  defp resolve_dek(1, _patient, _kek, patient_dek), do: {:ok, patient_dek}
+
+  defp resolve_dek(2, patient, kek, _patient_dek),
+    do: Accounts.load_clinical_record_dek(patient, kek)
+
   defp encrypt_chunk_attrs(
          pieces,
          vectors,
          dek,
+         encryption_version,
          resource_type,
          resource_id,
          patient_id,
@@ -349,6 +370,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
             source_resource_id: resource_id,
             chunk_index: piece.chunk_index,
             encrypted_content: ciphertext,
+            encryption_version: encryption_version,
             embedding: vector,
             embedding_model: embedding_model,
             token_count: piece.token_count,
@@ -381,68 +403,82 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   end
 
   # Loads the source resource by its polymorphic (resource_type,
-  # resource_id) pair and decrypts its free text under the patient's
-  # DEK. Returns `{:ok, plaintext, occurred_at, target_behavior_id}` —
-  # `occurred_at` and `target_behavior_id` vary by resource shape
-  # (some schemas have no independent historical timestamp or filter
-  # facet), so this is the single seam that normalizes them.
-  defp fetch_and_decrypt(:clinical_note, resource_id, dek) do
+  # resource_id) pair, resolves the DEK matching the resource's OWN
+  # `encryption_version` (AD1, sdd/clinical-record-retention, GitHub #197
+  # — `resolve_dek/4`), and decrypts its free text. Returns `{:ok,
+  # plaintext, occurred_at, target_behavior_id, encryption_version, dek}`
+  # — `occurred_at` and `target_behavior_id` vary by resource shape (some
+  # schemas have no independent historical timestamp or filter facet), and
+  # `encryption_version`/`dek` flow through so the resulting chunk is
+  # stamped and re-encrypted to match its source (design's "v2 key
+  # selection").
+  defp fetch_and_decrypt(:clinical_note, resource_id, patient, kek, patient_dek) do
     case Repo.get(ClinicalNote, resource_id) do
       nil ->
         {:error, :not_found}
 
       note ->
-        with {:ok, text} <- PatientVault.decrypt(note.encrypted_body, dek) do
-          {:ok, text, to_usec(DateTime.from_naive!(note.inserted_at, "Etc/UTC")), nil}
+        with {:ok, dek} <- resolve_dek(note.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(note.encrypted_body, dek) do
+          {:ok, text, to_usec(DateTime.from_naive!(note.inserted_at, "Etc/UTC")), nil,
+           note.encryption_version, dek}
         end
     end
   end
 
-  defp fetch_and_decrypt(:consultation_evidence, resource_id, dek) do
+  defp fetch_and_decrypt(:consultation_evidence, resource_id, patient, kek, patient_dek) do
     case Repo.get(ConsultationEvidence, resource_id) do
       nil ->
         {:error, :not_found}
 
       evidence ->
-        with {:ok, text} <- PatientVault.decrypt(evidence.encrypted_excerpt, dek) do
-          {:ok, text, evidence.occurred_at, evidence.target_behavior_id}
+        with {:ok, dek} <- resolve_dek(evidence.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(evidence.encrypted_excerpt, dek) do
+          {:ok, text, evidence.occurred_at, evidence.target_behavior_id,
+           evidence.encryption_version, dek}
         end
     end
   end
 
-  defp fetch_and_decrypt(:clinician_observation, resource_id, dek) do
+  defp fetch_and_decrypt(:clinician_observation, resource_id, patient, kek, patient_dek) do
     case Repo.get(ClinicianObservation, resource_id) do
       nil ->
         {:error, :not_found}
 
       observation ->
-        with {:ok, text} <- PatientVault.decrypt(observation.encrypted_body, dek) do
-          {:ok, text, observation.occurred_at, observation.target_behavior_id}
+        with {:ok, dek} <-
+               resolve_dek(observation.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(observation.encrypted_body, dek) do
+          {:ok, text, observation.occurred_at, observation.target_behavior_id,
+           observation.encryption_version, dek}
         end
     end
   end
 
-  defp fetch_and_decrypt(:ai_proposal, resource_id, dek) do
+  defp fetch_and_decrypt(:ai_proposal, resource_id, patient, kek, patient_dek) do
     case Repo.get(AIProposal, resource_id) do
       nil ->
         {:error, :not_found}
 
       proposal ->
-        with {:ok, text} <- PatientVault.decrypt(proposal.encrypted_text, dek) do
-          {:ok, text, proposal.occurred_at, proposal.target_behavior_id}
+        with {:ok, dek} <- resolve_dek(proposal.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(proposal.encrypted_text, dek) do
+          {:ok, text, proposal.occurred_at, proposal.target_behavior_id,
+           proposal.encryption_version, dek}
         end
     end
   end
 
-  defp fetch_and_decrypt(:functional_analysis_draft, resource_id, dek) do
+  defp fetch_and_decrypt(:functional_analysis_draft, resource_id, patient, kek, patient_dek) do
     case Repo.get(FunctionalAnalysisDraft, resource_id) do
       nil ->
         {:error, :not_found}
 
       draft ->
-        with {:ok, text} <- PatientVault.decrypt(draft.encrypted_body, dek) do
+        with {:ok, dek} <- resolve_dek(draft.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(draft.encrypted_body, dek) do
           {:ok, text, to_usec(DateTime.from_naive!(draft.updated_at, "Etc/UTC")),
-           draft.target_behavior_id}
+           draft.target_behavior_id, draft.encryption_version, dek}
         end
     end
   end

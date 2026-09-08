@@ -323,6 +323,49 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
     end
   end
 
+  describe "search/4 — dual-read by chunk encryption_version (D1/AD1, sdd/clinical-record-retention #197)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "a v1-encrypted chunk (shared patient DEK) and a v2-encrypted chunk (CR-scoped DEK) both decrypt in one search/4 call",
+         %{professional: professional, patient: patient} do
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      v1_id =
+        insert_versioned_chunk!(
+          professional,
+          patient,
+          "Nota antigua cifrada compartida",
+          near_vector(),
+          patient_dek,
+          1
+        )
+
+      v2_id =
+        insert_versioned_chunk!(
+          professional,
+          patient,
+          "Nota nueva cifrada ClinicalRecord",
+          near_vector(),
+          clinical_record_dek,
+          2
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} = Retrieval.search(professional, patient.id, "nota")
+
+      returned = Map.new(results, &{&1.source_resource_id, &1.content})
+      assert returned[v1_id] == "Nota antigua cifrada compartida"
+      assert returned[v2_id] == "Nota nueva cifrada ClinicalRecord"
+    end
+  end
+
   # --- fixtures -----------------------------------------------------------
 
   defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
@@ -353,6 +396,31 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
         source_resource_id: resource_id,
         chunk_index: 0,
         encrypted_content: ciphertext,
+        embedding: vector,
+        embedding_model: "fake-embeddings-bge-m3",
+        token_count: 10,
+        full_event: true,
+        source_occurred_at: DateTime.utc_now(),
+        patient_id: patient.id,
+        professional_id: professional.id
+      }
+    ]
+
+    {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
+    resource_id
+  end
+
+  defp insert_versioned_chunk!(professional, patient, text, vector, dek, encryption_version) do
+    resource_id = Ecto.UUID.generate()
+    {:ok, ciphertext} = PatientVault.encrypt(text, dek)
+
+    attrs = [
+      %{
+        source_resource_type: "clinical_note",
+        source_resource_id: resource_id,
+        chunk_index: 0,
+        encrypted_content: ciphertext,
+        encryption_version: encryption_version,
         embedding: vector,
         embedding_model: "fake-embeddings-bge-m3",
         token_count: 10,

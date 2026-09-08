@@ -34,10 +34,22 @@ defmodule Alethea.ClinicalRecord do
   }
 
   alias Alethea.ClinicalRecord.SourceRef
+  alias Alethea.ClinicalRecord.Tombstone
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
 
   import Ecto.Query
+
+  @typedoc """
+  Both DEKs a `with_patient/3`-routed function may need to encrypt/decrypt
+  a `ClinicalRecord` row, keyed by that row's own `encryption_version` (D1,
+  sdd/clinical-record-retention, GitHub #197): `1` decrypts under the
+  shared `Alethea.Clinical` patient DEK, `2` under the CR-scoped
+  `"patient_clinical_record"` DEK. `create_target_behavior/3` and
+  `create_clinical_note/3` bypass this seam entirely (see their own
+  moduledocs) and always stay on the shared patient DEK.
+  """
+  @type keyring :: %{patient_dek: binary(), clinical_record_dek: binary()}
 
   @doc """
   Authorizes via `Accounts.get_patient_for_professional/2`, encrypts
@@ -102,16 +114,20 @@ defmodule Alethea.ClinicalRecord do
   end
 
   # Authorizes via `Accounts.get_patient_for_professional/2`, then loads the
-  # professional's KEK and the patient's DEK, and invokes `fun.(patient, dek)`
-  # (sdd/alethea/issue-195-clinical-review-workbench, PR2a). Extracted because
-  # the auth→KEK→DEK ladder repeats across all the write functions below —
-  # see design's Technical Approach. `create_target_behavior/3` and
+  # professional's KEK and BOTH DEKs (the shared patient DEK and the
+  # CR-scoped "patient_clinical_record" DEK, lazily provisioned here — D1,
+  # sdd/clinical-record-retention, GitHub #197), and invokes
+  # `fun.(patient, keyring)` (was `fun.(patient, dek)` pre-#197 —
+  # sdd/alethea/issue-195-clinical-review-workbench, PR2a). Extracted
+  # because the auth→KEK→DEK ladder repeats across all the write functions
+  # below — see design's Technical Approach. `create_target_behavior/3` and
   # `create_clinical_note/3` above are intentionally left untouched (design:
-  # refactor only if the diff stays inside the slice budget).
+  # refactor only if the diff stays inside the slice budget) — they never
+  # call this seam and always stay on the shared patient DEK.
   #
   # On a missing/unauthorized patient, logs a denial audit row (no DEK/KEK
   # load happens) and returns `{:error, :unauthorized}` without calling `fun`.
-  @spec with_patient(Professional.t(), Ecto.UUID.t(), (Patient.t(), binary() -> result)) ::
+  @spec with_patient(Professional.t(), Ecto.UUID.t(), (Patient.t(), keyring() -> result)) ::
           result | {:error, :unauthorized}
         when result: {:ok, term()} | {:error, term()}
   defp with_patient(%Professional{} = professional, patient_id, fun) when is_function(fun, 2) do
@@ -121,11 +137,20 @@ defmodule Alethea.ClinicalRecord do
 
       patient ->
         with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
-          fun.(patient, dek)
+             {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek),
+             {:ok, clinical_record_dek} <- Accounts.ensure_clinical_record_dek(patient, kek) do
+          fun.(patient, %{patient_dek: patient_dek, clinical_record_dek: clinical_record_dek})
         end
     end
   end
+
+  # Picks the correct DEK out of `keyring` for a row per its OWN stored
+  # `encryption_version` (AD1, sdd/clinical-record-retention, GitHub #197)
+  # — never a caller-wide assumption. Pre-change rows stay `1` forever
+  # (no backfill); every new write through `with_patient/3` stamps `2`.
+  @spec dek_for(%{encryption_version: 1 | 2}, keyring()) :: binary()
+  defp dek_for(%{encryption_version: 1}, keyring), do: keyring.patient_dek
+  defp dek_for(%{encryption_version: 2}, keyring), do: keyring.clinical_record_dek
 
   @doc """
   Cites a source-derived fact (a `clinical_note` or a `message`) onto the
@@ -147,8 +172,8 @@ defmodule Alethea.ClinicalRecord do
         excerpt: excerpt,
         occurred_at: occurred_at
       }) do
-    with_patient(professional, patient_id, fn patient, dek ->
-      with {:ok, ciphertext} <- PatientVault.encrypt(excerpt, dek) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, ciphertext} <- PatientVault.encrypt(excerpt, keyring.clinical_record_dek) do
         Ecto.Multi.new()
         |> Ecto.Multi.insert(
           :record,
@@ -156,6 +181,7 @@ defmodule Alethea.ClinicalRecord do
             source_kind: source_kind,
             source_id: source_id,
             encrypted_excerpt: ciphertext,
+            encryption_version: 2,
             occurred_at: occurred_at,
             patient_id: patient.id,
             professional_id: professional.id,
@@ -197,13 +223,14 @@ defmodule Alethea.ClinicalRecord do
         target_behavior_id,
         body
       ) do
-    with_patient(professional, patient_id, fn patient, dek ->
-      with {:ok, ciphertext} <- PatientVault.encrypt(body, dek) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
         Ecto.Multi.new()
         |> Ecto.Multi.insert(
           :record,
           ClinicianObservation.changeset(%ClinicianObservation{}, %{
             encrypted_body: ciphertext,
+            encryption_version: 2,
             occurred_at: DateTime.utc_now(),
             patient_id: patient.id,
             professional_id: professional.id,
@@ -243,17 +270,20 @@ defmodule Alethea.ClinicalRecord do
         observation_id,
         body
       ) do
-    with_patient(professional, patient_id, fn patient, dek ->
+    with_patient(professional, patient_id, fn patient, keyring ->
       case Repo.get_by(ClinicianObservation, id: observation_id, patient_id: patient.id) do
         nil ->
-          {:error, :not_found}
+          tombstone_gate(professional.id, observation_id, "clinician_observation")
 
         observation ->
-          with {:ok, ciphertext} <- PatientVault.encrypt(body, dek) do
+          with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
             Ecto.Multi.new()
             |> Ecto.Multi.update(
               :record,
-              ClinicianObservation.update_changeset(observation, %{encrypted_body: ciphertext})
+              ClinicianObservation.update_changeset(observation, %{
+                encrypted_body: ciphertext,
+                encryption_version: 2
+              })
             )
             |> Ecto.Multi.insert(:audit, fn %{record: record} ->
               Audit.changeset(%Audit{
@@ -288,7 +318,7 @@ defmodule Alethea.ClinicalRecord do
   @spec request_ai_proposals(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
           {:ok, :requested} | {:error, :unauthorized | term()}
   def request_ai_proposals(%Professional{} = professional, patient_id, target_behavior_id) do
-    with_patient(professional, patient_id, fn patient, _dek ->
+    with_patient(professional, patient_id, fn patient, _keyring ->
       Ecto.Multi.new()
       |> Ecto.Multi.insert(
         :audit,
@@ -334,7 +364,7 @@ defmodule Alethea.ClinicalRecord do
           {:ok, AIProposal.t()}
           | {:error, :unauthorized | :not_found | Ecto.Changeset.t() | term()}
   def accept_ai_proposal(%Professional{} = professional, patient_id, proposal_id) do
-    with_patient(professional, patient_id, fn patient, _dek ->
+    with_patient(professional, patient_id, fn patient, _keyring ->
       update_ai_proposal_status(
         professional,
         patient,
@@ -354,17 +384,17 @@ defmodule Alethea.ClinicalRecord do
           {:ok, AIProposal.t()}
           | {:error, :unauthorized | :not_found | Ecto.Changeset.t() | term()}
   def edit_ai_proposal(%Professional{} = professional, patient_id, proposal_id, text) do
-    with_patient(professional, patient_id, fn patient, dek ->
+    with_patient(professional, patient_id, fn patient, keyring ->
       case Repo.get_by(AIProposal, id: proposal_id, patient_id: patient.id) do
         nil ->
-          {:error, :not_found}
+          tombstone_gate(professional.id, proposal_id, "ai_proposal")
 
         proposal ->
-          with {:ok, ciphertext} <- PatientVault.encrypt(text, dek) do
+          with {:ok, ciphertext} <- PatientVault.encrypt(text, keyring.clinical_record_dek) do
             commit_ai_proposal_update(
               professional,
               proposal,
-              %{encrypted_text: ciphertext, status: "edited"},
+              %{encrypted_text: ciphertext, encryption_version: 2, status: "edited"},
               "ai_proposal_edited"
             )
           end
@@ -380,7 +410,7 @@ defmodule Alethea.ClinicalRecord do
           {:ok, AIProposal.t()}
           | {:error, :unauthorized | :not_found | Ecto.Changeset.t() | term()}
   def discard_ai_proposal(%Professional{} = professional, patient_id, proposal_id) do
-    with_patient(professional, patient_id, fn patient, _dek ->
+    with_patient(professional, patient_id, fn patient, _keyring ->
       update_ai_proposal_status(
         professional,
         patient,
@@ -411,11 +441,12 @@ defmodule Alethea.ClinicalRecord do
         target_behavior_id,
         body
       ) do
-    with_patient(professional, patient_id, fn patient, dek ->
-      with {:ok, ciphertext} <- PatientVault.encrypt(body, dek) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
         changeset =
           FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
             encrypted_body: ciphertext,
+            encryption_version: 2,
             patient_id: patient.id,
             professional_id: professional.id,
             target_behavior_id: target_behavior_id
@@ -423,7 +454,8 @@ defmodule Alethea.ClinicalRecord do
 
         Ecto.Multi.new()
         |> Ecto.Multi.insert(:record, changeset,
-          on_conflict: {:replace, [:encrypted_body, :professional_id, :updated_at]},
+          on_conflict:
+            {:replace, [:encrypted_body, :encryption_version, :professional_id, :updated_at]},
           conflict_target: :target_behavior_id,
           returning: true
         )
@@ -455,24 +487,36 @@ defmodule Alethea.ClinicalRecord do
   getter existed in design's context API table (PR2a only shipped the
   upsert) — a minimal, symmetrical read addition rather than reaching
   into `Repo`/`PatientVault` from the web layer.
+
+  Returns `{:ok, {:legally_deleted, deleted_at}}` instead of `{:ok, nil}`
+  when the draft was legally deleted (BR10, sdd/clinical-record-retention,
+  GitHub #197) — an explicit content-free tombstone answer, distinct from
+  "no draft was ever saved", so the caller never silently renders an empty
+  form for a deleted draft as if nothing had happened.
   """
   @spec get_functional_analysis_draft(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
-          {:ok, FunctionalAnalysisDraft.t() | nil} | {:error, :unauthorized | term()}
+          {:ok, FunctionalAnalysisDraft.t() | nil}
+          | {:ok, {:legally_deleted, DateTime.t()}}
+          | {:error, :unauthorized | term()}
   def get_functional_analysis_draft(
         %Professional{} = professional,
         patient_id,
         target_behavior_id
       ) do
-    with_patient(professional, patient_id, fn patient, dek ->
+    with_patient(professional, patient_id, fn patient, keyring ->
       case Repo.get_by(FunctionalAnalysisDraft,
              target_behavior_id: target_behavior_id,
              patient_id: patient.id
            ) do
         nil ->
-          {:ok, nil}
+          case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
+            %Tombstone{deleted_at: deleted_at} -> {:ok, {:legally_deleted, deleted_at}}
+            nil -> {:ok, nil}
+          end
 
         draft ->
-          {:ok, %{draft | body: decrypt_or_placeholder(draft.encrypted_body, dek)}}
+          {:ok,
+           %{draft | body: decrypt_or_placeholder(draft.encrypted_body, dek_for(draft, keyring))}}
       end
     end)
   end
@@ -497,11 +541,20 @@ defmodule Alethea.ClinicalRecord do
   `:unavailable` when the cited source row has since been deleted or
   cryptographically erased; the item still renders from its own stored,
   encrypted excerpt (design A3).
+
+  Legally deleted evidence/observation/proposal rows (BR10,
+  sdd/clinical-record-retention, GitHub #197) are merged in from
+  `Alethea.ClinicalRecord.Tombstone` by `target_behavior_id`, as a
+  distinct `:legally_deleted` kind carrying only `occurred_at` (the
+  tombstone's `deleted_at`) and `resource_type` — never the erased
+  content. A legally deleted `functional_analysis_draft` tombstone is
+  intentionally excluded here: it is not a timeline item, it is surfaced
+  through `get_functional_analysis_draft/3` instead.
   """
   @spec review_timeline(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
           {:ok, [map()]} | {:error, :unauthorized | term()}
   def review_timeline(%Professional{} = professional, patient_id, target_behavior_id) do
-    with_patient(professional, patient_id, fn _patient, dek ->
+    with_patient(professional, patient_id, fn _patient, keyring ->
       evidence =
         ConsultationEvidence
         |> where([e], e.target_behavior_id == ^target_behavior_id)
@@ -520,53 +573,73 @@ defmodule Alethea.ClinicalRecord do
         |> order_by([p], asc: p.occurred_at)
         |> Repo.all()
 
+      tombstones =
+        Tombstone
+        |> where([t], t.target_behavior_id == ^target_behavior_id)
+        |> where(
+          [t],
+          t.resource_type in ~w(consultation_evidence clinician_observation ai_proposal)
+        )
+        |> Repo.all()
+
       source_refs =
         evidence
         |> Enum.map(&{&1.source_kind, &1.source_id})
         |> SourceRef.resolve_many()
 
       timeline =
-        (Enum.map(evidence, &evidence_item(&1, dek, source_refs)) ++
-           Enum.map(observations, &observation_item(&1, dek)) ++
-           Enum.map(proposals, &proposal_item(&1, dek)))
+        (Enum.map(evidence, &evidence_item(&1, keyring, source_refs)) ++
+           Enum.map(observations, &observation_item(&1, keyring)) ++
+           Enum.map(proposals, &proposal_item(&1, keyring)) ++
+           Enum.map(tombstones, &tombstone_item/1))
         |> Enum.sort_by(&{&1.occurred_at, kind_rank(&1.kind), &1.id})
 
       {:ok, timeline}
     end)
   end
 
-  defp evidence_item(%ConsultationEvidence{} = evidence, dek, source_refs) do
+  defp evidence_item(%ConsultationEvidence{} = evidence, keyring, source_refs) do
     %{
       id: evidence.id,
       kind: :consultation_evidence,
       occurred_at: evidence.occurred_at,
-      text: decrypt_or_placeholder(evidence.encrypted_excerpt, dek),
+      text: decrypt_or_placeholder(evidence.encrypted_excerpt, dek_for(evidence, keyring)),
       source: Map.get(source_refs, {evidence.source_kind, evidence.source_id}, :unavailable)
     }
   end
 
-  defp observation_item(%ClinicianObservation{} = observation, dek) do
+  defp observation_item(%ClinicianObservation{} = observation, keyring) do
     %{
       id: observation.id,
       kind: :clinician_observation,
       occurred_at: observation.occurred_at,
-      text: decrypt_or_placeholder(observation.encrypted_body, dek)
+      text: decrypt_or_placeholder(observation.encrypted_body, dek_for(observation, keyring))
     }
   end
 
-  defp proposal_item(%AIProposal{} = proposal, dek) do
+  defp proposal_item(%AIProposal{} = proposal, keyring) do
     %{
       id: proposal.id,
       kind: :ai_proposal,
       occurred_at: proposal.occurred_at,
-      text: decrypt_or_placeholder(proposal.encrypted_text, dek),
+      text: decrypt_or_placeholder(proposal.encrypted_text, dek_for(proposal, keyring)),
       status: proposal.status
+    }
+  end
+
+  defp tombstone_item(%Tombstone{} = tombstone) do
+    %{
+      id: tombstone.id,
+      kind: :legally_deleted,
+      occurred_at: tombstone.deleted_at,
+      resource_type: tombstone.resource_type
     }
   end
 
   defp kind_rank(:consultation_evidence), do: 0
   defp kind_rank(:clinician_observation), do: 1
   defp kind_rank(:ai_proposal), do: 2
+  defp kind_rank(:legally_deleted), do: 3
 
   defp decrypt_or_placeholder(ciphertext, dek) do
     case PatientVault.decrypt(ciphertext, dek) do
@@ -578,7 +651,7 @@ defmodule Alethea.ClinicalRecord do
   defp update_ai_proposal_status(professional, patient, proposal_id, attrs, action) do
     case Repo.get_by(AIProposal, id: proposal_id, patient_id: patient.id) do
       nil ->
-        {:error, :not_found}
+        tombstone_gate(professional.id, proposal_id, "ai_proposal")
 
       proposal ->
         commit_ai_proposal_update(professional, proposal, attrs, action)
@@ -614,15 +687,40 @@ defmodule Alethea.ClinicalRecord do
   end
 
   defp deny_access(professional_id, patient_id) do
-    case Audit.log_denied(professional_id, patient_id, "patient") do
+    log_denied_audit(professional_id, patient_id, "patient")
+    {:error, :unauthorized}
+  end
+
+  # D4 gate — every mutable write's `nil` branch (a `Repo.get_by/2` scoped
+  # by `patient_id` miss) reaches here. A miss now means one of two things:
+  # the id never existed (`:not_found`), or the resource was legally
+  # deleted (`:legally_deleted`) — an explicit policy answer, never an
+  # indistinguishable `:not_found` (D4's stated rationale).
+  @spec tombstone_gate(Ecto.UUID.t(), Ecto.UUID.t(), String.t()) ::
+          {:error, :legally_deleted | :not_found}
+  defp tombstone_gate(professional_id, resource_id, resource_type) do
+    case Tombstone.for_resource(resource_type, resource_id) do
+      %Tombstone{} ->
+        deny_access(professional_id, resource_id, resource_type)
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp deny_access(professional_id, resource_id, resource_type) do
+    log_denied_audit(professional_id, resource_id, resource_type)
+    {:error, :legally_deleted}
+  end
+
+  defp log_denied_audit(professional_id, resource_id, resource_type) do
+    case Audit.log_denied(professional_id, resource_id, resource_type) do
       {:ok, _audit} ->
         :ok
 
       {:error, reason} ->
         Logger.warning("clinical_record log_denied failed: #{inspect(reason)}")
     end
-
-    {:error, :unauthorized}
   end
 
   defp insert_target_behavior(professional, patient, ciphertext) do

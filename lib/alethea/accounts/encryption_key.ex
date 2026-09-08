@@ -6,7 +6,9 @@ defmodule Alethea.Accounts.EncryptionKey do
   @foreign_key_type :binary_id
   schema "encryption_keys" do
     field :encrypted_key, :binary
-    # 'patient', 'professional'
+    # 'patient', 'professional', 'patient_clinical_record' (D1,
+    # sdd/clinical-record-retention, GitHub #197 — the ClinicalRecord-scoped
+    # key, destroyed independently of the shared "patient" journaling key)
     field :type, :string
     field :version, :integer, default: 1
     field :patient_id, :binary_id
@@ -20,6 +22,6 @@ defmodule Alethea.Accounts.EncryptionKey do
     key
     |> cast(attrs, [:encrypted_key, :type, :version, :patient_id, :professional_id])
     |> validate_required([:encrypted_key, :type])
-    |> validate_inclusion(:type, ["patient", "professional"])
+    |> validate_inclusion(:type, ["patient", "professional", "patient_clinical_record"])
   end
 end

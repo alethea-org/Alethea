@@ -52,4 +52,27 @@ defmodule Alethea.ClinicalRecord.Outbox do
   defp resource_type(%ClinicianObservation{}), do: "clinician_observation"
   defp resource_type(%AIProposal{}), do: "ai_proposal"
   defp resource_type(%FunctionalAnalysisDraft{}), do: "functional_analysis_draft"
+
+  @doc """
+  Builds the outbox job insert changeset for a legal deletion
+  (sdd/clinical-record-retention, GitHub #197, Phase 3/Slice C). Unlike
+  `event/2`, there is no persisted struct to build `args` from — the row
+  is being hard-deleted in the same `Ecto.Multi` — so this takes the four
+  identifiers directly. Same `@allowed_args` allowlist, same
+  `ClinicalRecordOutboxWorker`, same queue.
+  """
+  @spec tombstone_event(String.t(), Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          Ecto.Changeset.t()
+  def tombstone_event(resource_type, resource_id, patient_id, professional_id)
+      when is_binary(resource_type) do
+    %{
+      "event" => "clinical_record_legally_deleted",
+      "resource_type" => resource_type,
+      "resource_id" => resource_id,
+      "patient_id" => patient_id,
+      "professional_id" => professional_id
+    }
+    |> Map.take(@allowed_args)
+    |> ClinicalRecordOutboxWorker.new()
+  end
 end

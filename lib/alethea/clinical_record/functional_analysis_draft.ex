@@ -31,6 +31,9 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisDraft do
   @derive {Inspect, except: [:body]}
   schema "functional_analysis_drafts" do
     field :encrypted_body, :binary
+    # 1 = shared patient DEK, 2 = "patient_clinical_record" CR-scoped DEK
+    # (D1/AD1, sdd/clinical-record-retention, GitHub #197 — dual-read seam)
+    field :encryption_version, :integer, default: 1
     field :body, :string, virtual: true, redact: true
 
     belongs_to :patient, Alethea.Accounts.Patient
@@ -45,7 +48,13 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisDraft do
   @doc "Create/upsert changeset. All fields required."
   def changeset(functional_analysis_draft, attrs) do
     functional_analysis_draft
-    |> cast(attrs, [:encrypted_body, :patient_id, :professional_id, :target_behavior_id])
+    |> cast(attrs, [
+      :encrypted_body,
+      :encryption_version,
+      :patient_id,
+      :professional_id,
+      :target_behavior_id
+    ])
     |> validate_required([:encrypted_body, :patient_id, :professional_id, :target_behavior_id])
     |> unique_constraint(:target_behavior_id)
   end

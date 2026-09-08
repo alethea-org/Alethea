@@ -21,7 +21,9 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     AIProposal,
     ClinicalNote,
     ClinicianObservation,
-    ConsultationEvidence
+    ConsultationEvidence,
+    Retention,
+    Tombstone
   }
 
   alias Alethea.Encryption.PatientVault
@@ -448,6 +450,139 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "post-deletion tombstone rendering (BR10, sdd/clinical-record-retention, GitHub #197)" do
+    test "a tombstoned entry renders content-free as legally deleted on {date}, ordered chronologically",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+      t1 = ~U[2026-01-01 10:00:00.000000Z]
+      t2 = ~U[2026-01-01 11:00:00Z]
+      t3 = ~U[2026-01-01 12:00:00.000000Z]
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        t1,
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia antes del borrado"
+      )
+
+      insert_tombstone!(patient, target_behavior, t2, "clinician_observation")
+
+      insert_proposal!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        t3,
+        "Propuesta despues del borrado"
+      )
+
+      {:ok, _view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert html =~ "Eliminado legalmente el"
+      assert html =~ "01/01/2026"
+
+      evidence_pos = :binary.match(html, "Evidencia antes del borrado") |> elem(0)
+      tombstone_pos = :binary.match(html, "Eliminado legalmente el") |> elem(0)
+      proposal_pos = :binary.match(html, "Propuesta despues del borrado") |> elem(0)
+
+      assert evidence_pos < tombstone_pos
+      assert tombstone_pos < proposal_pos
+    end
+
+    test "content that was legally deleted no longer renders; only the tombstone appears", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      observation =
+        insert_observation!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "Observacion a eliminar legalmente"
+        )
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"clinician_observation", observation.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      {:ok, _view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      refute html =~ "Observacion a eliminar legalmente"
+      assert html =~ "Eliminado legalmente el"
+    end
+  end
+
+  describe "functional-analysis draft distinguishes legally-deleted from never-created (BR10, GitHub #197)" do
+    test "a legally deleted draft is reported distinctly from an unset draft and renders content-free",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Borrador a eliminar legalmente"
+        )
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      assert {:ok, {:legally_deleted, deleted_at}} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert %DateTime{} = deleted_at
+
+      {:ok, view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      refute html =~ "Borrador a eliminar legalmente"
+      assert has_element?(view, "#draft-tombstone")
+    end
+
+    test "a target behavior with no draft ever saved still returns {:ok, nil}", %{
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+  end
+
   describe "web layer boundary — no Repo/PatientVault access in the LiveView" do
     test "the LiveView source never references Repo or PatientVault directly" do
       source =
@@ -527,6 +662,19 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       patient_id: patient.id,
       professional_id: professional.id,
       target_behavior_id: target_behavior.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_tombstone!(patient, target_behavior, deleted_at, resource_type) do
+    %Tombstone{}
+    |> Tombstone.changeset(%{
+      resource_type: resource_type,
+      resource_id: Ecto.UUID.generate(),
+      patient_id: patient.id,
+      target_behavior_id: target_behavior.id,
+      deleted_at: deleted_at,
+      trigger: "manual"
     })
     |> Repo.insert!()
   end
