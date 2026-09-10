@@ -132,6 +132,14 @@ config :alethea, :telegram_client, Alethea.Telegram.Client.Req
 
 config :alethea, Alethea.Clinical, recent_message_limit: 10
 
+# Grounded clinical consultation (sdd/grounded-clinical-chat-initial,
+# GitHub #223, #226a). `:consultation_evidence_threshold` is the
+# retrieval sufficiency floor owned by
+# `Alethea.ClinicalRecord.Rag.Consultation.evidence_threshold/0` — a
+# plain float, kept separate from the `:clinical_consultation` module
+# swap (AD10). Results all scoring below it yield `:no_evidence`.
+config :alethea, :consultation_evidence_threshold, 0.35
+
 # --- Clinical Record Retention (sdd/clinical-record-retention, GitHub #197) ---
 
 # `false` by default — `AletheaJobs.RetentionSweepWorker` is a no-op
