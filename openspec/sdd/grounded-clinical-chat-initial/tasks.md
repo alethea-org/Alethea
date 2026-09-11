@@ -102,15 +102,39 @@ and #234b must land last, after #232 proves retrieval; coordinated single merge 
 
 ## Phase 4: PR #232a — Consultation.Live core outcome mapping
 
-- [ ] 4.1 RED `test/alethea/clinical_record/rag/consultation/live_test.exs`: non-treating professional → `{:error, :unauthorized}`; `expect(ClinicalConsultationChainMock, :run, 0, fn _ -> :never end)` and assert `Rag.Retrieval.search/4` never runs. Scenario: Failed authorization never reaches retrieval.
-- [ ] 4.2 RED same file: insert pending `AletheaJobs.ClinicalRecordOutboxWorker` job (Oban `testing: :manual`) → `answer/4` returns `outcome: :stale`, `pending: N`, chain not called. Scenarios: Pending indexing blocks the answer, Stale outcome blocks and asks for retry.
-- [ ] 4.3 RED same file: two turns in one conversation → two `Rag.Retrieval.search/4` calls over full indexed history; second call not cached/narrowed. Scenario: Retrieval re-runs on every turn.
-- [ ] 4.4 RED same file: `resolve_query/2` pure table test — uses only `role: :professional` turns; follow-up "¿y sobre eso?" forms a standalone query, no `Source` derived from conversation text. Scenario: Conversation history is never evidence.
-- [ ] 4.5 RED same file: retrieval returns `[]` → `:no_evidence`; all results score `< 0.35` → `:no_evidence` (seeded chunks). Scenarios: Empty results yield no-evidence, All-below-threshold yields no-evidence.
-- [ ] 4.6 RED same file: at least one result `>= 0.35` and index fresh → chain `run/1` called once, `outcome: :synthesis` with non-empty synthesis + envelope-derived sources. Scenarios: At least one sufficient result proceeds to synthesis, Synthesis outcome carries answer and server-derived sources.
-- [ ] 4.7 RED same file: `ClinicalConsultationChainMock` returns synthesis naming a fabricated citation → `Answer.sources` equals exactly `Source.from_results/1` of the kept envelope results, nothing invented. Scenario: LLM cannot inject or fabricate a source. (Mox against `ChainBehaviour`.)
-- [ ] 4.8 RED same file: chain raises / returns `{:error, _}` / returns unparseable / returns empty synthesis → `outcome: :provider_failure`, `synthesis: nil`, `sources: []`. Scenario: Provider-failure outcome is a safe state (empty synthesis ⇒ provider_failure, never empty prose).
-- [ ] 4.9 GREEN create `lib/alethea/clinical_record/rag/consultation/live.ex`: implements `answer/4` + `open/2`. Ordered flow: (1) `Accounts.get_patient_for_professional/2` → nil ⇒ `{:error, :unauthorized}`; (2) `Rag.Retrieval.freshness/1` `stale?` ⇒ `%Answer{outcome: :stale, pending: n}`; (3) `Rag.Retrieval.search/4(prof, patient_id, resolve_query(query, history), opts)` → `{:error, :unauthorized}` passthrough, `{:error, _}` ⇒ `:provider_failure`; (4) `envelope.freshness.stale?` ⇒ `:stale` (race re-check, AD9); (5) filter `score >= Rag.Consultation.evidence_threshold()` → `[]` ⇒ `:no_evidence`; (6) `sources = Source.from_results(kept)`; `chain().run(%{question: query, excerpts: Enum.map(kept, &Alethea.AI.Sanitizer.sanitize(&1.content))})` → `{:ok, %{synthesis: s}}` ⇒ `:synthesis` (sources verbatim), `{:error, _}` ⇒ `:provider_failure`. `resolve_query/2` pure; `defp chain, do: Application.get_env(:alethea, :clinical_consultation_chain, Alethea.AI.Chains.ClinicalConsultationChain)`. Proportionate moduledoc.
+> **#232a delivered.** Focused suite `mix test
+> test/alethea/clinical_record/rag/consultation/live_test.exs` → 12 passed.
+> Combined domain regression `mix test
+> test/alethea/clinical_record/rag/consultation/ test/alethea/ai/chains/clinical_consultation_chain_test.exs
+> test/alethea_web/live/consultation_live_test.exs` → 54 passed. `mix compile
+> --warnings-as-errors --force` clean (147 files). `mix format --check-formatted`
+> clean. Full suite / `mix precommit` intentionally NOT run by the apply
+> sub-agent per this batch's orchestrator protocol (background-watchdog
+> stall risk) — left to the orchestrator's final verification pass.
+> **Deviation:** `resolve_query/2` is implemented as the identity function
+> (filters history to `role: :professional` turns internally but does not
+> yet rewrite the query) — follow-up phrasing resolution stays deferred
+> per AD6/AD11 from #227; this slice retrieves fresh on the raw query every
+> turn, exactly as the spec's "Fresh Full-History Retrieval Every Turn"
+> requirement describes for #232a. `open/2` delegates to
+> `Rag.Retrieval.metadata/2` (already authorizes + returns
+> `chunk_count`/`freshness` with no decrypt) rather than reimplementing
+> authorization — matches the design's "Learned" note. `config/dev.exs` /
+> `config/config.exs` needed NO new entry: `Rag.Consultation`'s `impl/0`
+> (from #226a) already defaults to `__MODULE__.Live` when no override is
+> configured, and no dev/prod override exists — only `config/test.exs`
+> pins `Fake`, and that pin is untouched (task 6.6's explicit `config/dev.exs`
+> entry is #234a's task, left alone).
+
+- [x] 4.1 RED `test/alethea/clinical_record/rag/consultation/live_test.exs`: non-treating professional → `{:error, :unauthorized}`; `expect(ClinicalConsultationChainMock, :run, 0, fn _ -> :never end)` and assert `Rag.Retrieval.search/4` never runs. Scenario: Failed authorization never reaches retrieval.
+- [x] 4.2 RED same file: insert pending `AletheaJobs.ClinicalRecordOutboxWorker` job (Oban `testing: :manual`) → `answer/4` returns `outcome: :stale`, `pending: N`, chain not called. Scenarios: Pending indexing blocks the answer, Stale outcome blocks and asks for retry.
+- [x] 4.3 RED same file: two turns in one conversation → two `Rag.Retrieval.search/4` calls over full indexed history; second call not cached/narrowed. Scenario: Retrieval re-runs on every turn.
+- [x] 4.4 RED same file: `resolve_query/2` pure table test — uses only `role: :professional` turns; follow-up "¿y sobre eso?" forms a standalone query, no `Source` derived from conversation text. Scenario: Conversation history is never evidence.
+- [x] 4.5 RED same file: retrieval returns `[]` → `:no_evidence`; all results score `< 0.35` → `:no_evidence` (seeded chunks). Scenarios: Empty results yield no-evidence, All-below-threshold yields no-evidence.
+- [x] 4.6 RED same file: at least one result `>= 0.35` and index fresh → chain `run/1` called once, `outcome: :synthesis` with non-empty synthesis + envelope-derived sources. Scenarios: At least one sufficient result proceeds to synthesis, Synthesis outcome carries answer and server-derived sources.
+- [x] 4.7 RED same file: `ClinicalConsultationChainMock` returns synthesis naming a fabricated citation → `Answer.sources` equals exactly `Source.from_results/1` of the kept envelope results, nothing invented. Scenario: LLM cannot inject or fabricate a source. (Mox against `ChainBehaviour`.)
+- [x] 4.8 RED same file: chain raises / returns `{:error, _}` / returns unparseable / returns empty synthesis → `outcome: :provider_failure`, `synthesis: nil`, `sources: []`. Scenario: Provider-failure outcome is a safe state (empty synthesis ⇒ provider_failure, never empty prose).
+- [x] 4.9 GREEN create `lib/alethea/clinical_record/rag/consultation/live.ex`: implements `answer/4` + `open/2`. Ordered flow: (1) `Accounts.get_patient_for_professional/2` → nil ⇒ `{:error, :unauthorized}`; (2) `Rag.Retrieval.freshness/1` `stale?` ⇒ `%Answer{outcome: :stale, pending: n}`; (3) `Rag.Retrieval.search/4(prof, patient_id, resolve_query(query, history), opts)` → `{:error, :unauthorized}` passthrough, `{:error, _}` ⇒ `:provider_failure`; (4) `envelope.freshness.stale?` ⇒ `:stale` (race re-check, AD9); (5) filter `score >= Rag.Consultation.evidence_threshold()` → `[]` ⇒ `:no_evidence`; (6) `sources = Source.from_results(kept)`; `chain().run(%{question: query, excerpts: Enum.map(kept, &Alethea.AI.Sanitizer.sanitize(&1.content))})` → `{:ok, %{synthesis: s}}` ⇒ `:synthesis` (sources verbatim), `{:error, _}` ⇒ `:provider_failure`. `resolve_query/2` pure; `defp chain, do: Application.get_env(:alethea, :clinical_consultation_chain, Alethea.AI.Chains.ClinicalConsultationChain)`. Proportionate moduledoc.
 
 ## Phase 5: PR #232b — Isolation / tombstone / read-only / race hardening
 
