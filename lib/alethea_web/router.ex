@@ -130,6 +130,8 @@ defmodule AletheaWeb.Router do
         :index
       )
 
+      live("/patients/:patient_id/consultation", ConsultationLive, :index)
+
       live("/prototype/clinical-review", ClinicalReviewPrototypeLive, :index)
       live("/prototype/eorc-shape", EorcShapeComparisonPrototypeLive, :index)
       live("/admin/oban-dashboard", ObanDashboardLive, :index)
