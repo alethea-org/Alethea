@@ -1,11 +1,16 @@
 defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
   @moduledoc """
-  Real `Rag.Consultation` implementation (#232a): authorize (before any
-  retrieval) → freshness pre-gate → fresh full-history retrieval every
-  turn → post-retrieval freshness re-check (AD9 race) → evidence
-  threshold filter → grounded synthesis. `resolve_query/2` only resolves
-  follow-up phrasing (AD6/AD11); history is NEVER sent to the chain as
-  evidence.
+  Real `Rag.Consultation` implementation (#232a/#232b): authorize
+  (before any retrieval) → freshness pre-gate → fresh full-history
+  retrieval every turn → post-retrieval freshness re-check (AD9 race) →
+  evidence threshold filter → tombstone cross-check (#232b, excludes
+  orphan chunks whose legal-deletion job reached a terminal
+  cancelled/discarded state) → grounded synthesis. `resolve_query/2`
+  only resolves follow-up phrasing (AD6/AD11); history is NEVER sent to
+  the chain as evidence. Cross-patient/cross-tenant isolation is
+  structural via `Retrieval.search/4`'s `patient_id`-scoped WHERE
+  clause; this module never widens that scope. Nothing here mutates
+  patient chunks, clinical records, or outbox jobs (read-only, #232b).
   """
 
   @behaviour Alethea.ClinicalRecord.Rag.Consultation
@@ -15,6 +20,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
   alias Alethea.AI.Sanitizer
   alias Alethea.ClinicalRecord.Rag.{Consultation, Retrieval}
   alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Source}
+  alias Alethea.ClinicalRecord.Tombstone
 
   @impl true
   def answer(%Professional{} = professional, patient_id, query, opts)
@@ -70,12 +76,28 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
   end
 
   defp handle_envelope(%{results: results}, query) do
-    kept = Enum.filter(results, &(&1.score >= Consultation.evidence_threshold()))
+    kept =
+      results
+      |> Enum.filter(&(&1.score >= Consultation.evidence_threshold()))
+      |> Enum.reject(&tombstoned?/1)
 
     case kept do
       [] -> {:ok, %Answer{outcome: :no_evidence}}
       _non_empty -> synthesize(kept, query)
     end
+  end
+
+  # A resource whose legal-deletion job reached a terminal state
+  # (`cancelled`/`discarded`, outside `Retrieval.freshness/1`'s
+  # `@pending_states`) before purging/reindexing its chunk leaves that
+  # chunk retrievable-but-orphaned. `Retrieval.search/4` never mutates
+  # or filters by tombstone (out of #232's scope for that module — see
+  # design's "no change to `search/4` ranking"), so this query-time
+  # cross-check is the read-side gate that keeps tombstoned/legally
+  # deleted material out of a consultation, even though the vector
+  # index itself was never cleaned up.
+  defp tombstoned?(%{source_resource_type: resource_type, source_resource_id: resource_id}) do
+    not is_nil(Tombstone.for_resource(resource_type, resource_id))
   end
 
   defp synthesize(kept, query) do

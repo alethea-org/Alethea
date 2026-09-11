@@ -138,12 +138,12 @@ and #234b must land last, after #232 proves retrieval; coordinated single merge 
 
 ## Phase 5: PR #232b — Isolation / tombstone / read-only / race hardening
 
-- [ ] 5.1 RED `live_test.exs`: two patients of the same professional; consult A → every returned `Source.reference.resource_id` resolves to patient A. Scenario: Cross-patient isolation.
-- [ ] 5.2 RED same file: patients belonging to different professionals; professional consults own patient → no other professional's chunk/excerpt retrievable end to end. Scenario: Cross-tenant isolation.
-- [ ] 5.3 RED same file: any turn (synthesis or any block) → patient chunks, clinical records, and Oban outbox jobs byte-identical before/after. Scenarios: Any turn leaves clinical state untouched, Clinical Sources Are Read-Only.
-- [ ] 5.4 RED same file: resource whose legal-deletion job is `cancelled`/`discarded` (outside `@pending_states`) leaves an orphan retrievable chunk → that content is not returned as a `Source`. Scenario: Orphan chunk from a non-pending deletion job is not cited.
-- [ ] 5.5 RED same file: freshness passes pre-gate but `envelope.freshness.stale? == true` post-retrieval → `outcome: :stale`, chain not called. Scenario: Freshness Is a Hard Gate (race re-check, AD9).
-- [ ] 5.6 GREEN `lib/alethea/clinical_record/rag/consultation/live.ex`: add the post-retrieval freshness re-check and, if needed for 5.4, a query-time `Alethea.ClinicalRecord.Tombstone.for_resource/2` cross-check on kept results before `Source.from_results/1`. No change to `Retrieval.search/4` ranking.
+- [x] 5.1 RED `live_test.exs`: two patients of the same professional; consult A → every returned `Source.reference.resource_id` resolves to patient A. Scenario: Cross-patient isolation. (Approval test — already held structurally via `Retrieval.search/4`'s `patient_id`-scoped WHERE; no production change needed.)
+- [x] 5.2 RED same file: patients belonging to different professionals; professional consults own patient → no other professional's chunk/excerpt retrievable end to end. Scenario: Cross-tenant isolation. (Approval test — same structural guarantee + authorize-before-retrieve.)
+- [x] 5.3 RED same file: any turn (synthesis or any block) → patient chunks, clinical records, and Oban outbox jobs byte-identical before/after. Scenarios: Any turn leaves clinical state untouched, Clinical Sources Are Read-Only. (Approval test — `answer/4` performs no writes; covers `:synthesis`/`:no_evidence`/`:stale`/`:provider_failure`.)
+- [x] 5.4 RED same file: resource whose legal-deletion job is `cancelled`/`discarded` (outside `@pending_states`) leaves an orphan retrievable chunk → that content is not returned as a `Source`. Scenario: Orphan chunk from a non-pending deletion job is not cited. (Genuine RED — failed pre-GREEN: orphan content reached the chain.)
+- [x] 5.5 RED same file: freshness passes pre-gate but `envelope.freshness.stale? == true` post-retrieval → `outcome: :stale`, chain not called. Scenario: Freshness Is a Hard Gate (race re-check, AD9). (Approval test — #232a already implemented `handle_envelope/2`'s stale-envelope branch; race simulated by enqueuing the pending job as a side effect of the embeddings stub, mid-`search/4`.)
+- [x] 5.6 GREEN `lib/alethea/clinical_record/rag/consultation/live.ex`: add the post-retrieval freshness re-check and, if needed for 5.4, a query-time `Alethea.ClinicalRecord.Tombstone.for_resource/2` cross-check on kept results before `Source.from_results/1`. No change to `Retrieval.search/4` ranking. (Freshness re-check was already present from #232a; only the `tombstoned?/1` cross-check + reject was new. `Retrieval.search/4` untouched.)
 
 ## Phase 6: PR #234a — Real wiring + Síntesis/Fuentes render + nav entry
 

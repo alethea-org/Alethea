@@ -14,8 +14,10 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
 
   alias Alethea.Accounts
   alias Alethea.AI.ClinicalConsultationChainMock
+  alias Alethea.ClinicalRecord.Rag.Chunk
   alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Live, Source}
   alias Alethea.ClinicalRecord.Rag.Indexer
+  alias Alethea.ClinicalRecord.Tombstone
   alias Alethea.Encryption.PatientVault
   alias AletheaJobs.ClinicalRecordOutboxWorker
 
@@ -251,6 +253,254 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
     end
   end
 
+  # --- 5.1 cross-patient isolation ----------------------------------------
+
+  describe "answer/4 — cross-patient isolation (#232b)" do
+    test "consulting patient A never surfaces patient B's chunks, even with identical vectors" do
+      professional = create_professional!()
+      patient_a = create_patient!(professional)
+      patient_b = create_patient!(professional)
+
+      insert_chunk!(
+        professional,
+        patient_a,
+        "Nota clínica exclusiva del paciente A",
+        near_vector()
+      )
+
+      patient_b_resource_id =
+        insert_chunk!(
+          professional,
+          patient_b,
+          "Nota clínica exclusiva del paciente B",
+          near_vector()
+        )
+
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn %{excerpts: excerpts} ->
+        {:ok, %{synthesis: "Síntesis con #{length(excerpts)} fragmento(s)."}}
+      end)
+
+      assert {:ok, %Answer{outcome: :synthesis, sources: sources}} =
+               Live.answer(professional, patient_a.id, "consulta", [])
+
+      refute Enum.any?(sources, &(&1.reference.resource_id == patient_b_resource_id))
+      refute Enum.any?(sources, &(&1.excerpt =~ "paciente B"))
+    end
+  end
+
+  # --- 5.2 cross-tenant isolation ------------------------------------------
+
+  describe "answer/4 — cross-tenant isolation (#232b)" do
+    test "a professional's consult never surfaces another professional's patient data" do
+      professional_a = create_professional!()
+      patient_a = create_patient!(professional_a)
+      professional_b = create_professional!()
+      patient_b = create_patient!(professional_b)
+
+      insert_chunk!(professional_a, patient_a, "Nota clínica del tenant A", near_vector())
+
+      tenant_b_resource_id =
+        insert_chunk!(professional_b, patient_b, "Nota clínica del tenant B", near_vector())
+
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn %{excerpts: excerpts} ->
+        {:ok, %{synthesis: "Síntesis con #{length(excerpts)} fragmento(s)."}}
+      end)
+
+      assert {:ok, %Answer{outcome: :synthesis, sources: sources}} =
+               Live.answer(professional_a, patient_a.id, "consulta", [])
+
+      refute Enum.any?(sources, &(&1.reference.resource_id == tenant_b_resource_id))
+      refute Enum.any?(sources, &(&1.excerpt =~ "tenant B"))
+
+      # And professional B cannot even reach patient A's id at all.
+      assert {:error, :unauthorized} = Live.answer(professional_b, patient_a.id, "consulta", [])
+    end
+  end
+
+  # --- 5.3 read-only / no-mutation ------------------------------------------
+
+  describe "answer/4 — read-only, no mutation of clinical state (#232b)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      insert_chunk!(professional, patient, "El paciente reporta mejoría del ánimo", near_vector())
+      %{professional: professional, patient: patient}
+    end
+
+    test "a :synthesis turn leaves chunks and outbox jobs byte-identical", %{
+      professional: professional,
+      patient: patient
+    } do
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: "Síntesis."}}
+      end)
+
+      chunks_before = snapshot(Chunk)
+      jobs_before = snapshot(Oban.Job)
+
+      assert {:ok, %Answer{outcome: :synthesis}} =
+               Live.answer(professional, patient.id, "consulta", [])
+
+      assert snapshot(Chunk) == chunks_before
+      assert snapshot(Oban.Job) == jobs_before
+    end
+
+    test "a :no_evidence turn leaves chunks and outbox jobs byte-identical", %{
+      professional: professional,
+      patient: patient
+    } do
+      stub_query_embedding(far_vector())
+
+      chunks_before = snapshot(Chunk)
+      jobs_before = snapshot(Oban.Job)
+
+      assert {:ok, %Answer{outcome: :no_evidence}} =
+               Live.answer(professional, patient.id, "zzzzz irrelevante", [])
+
+      assert snapshot(Chunk) == chunks_before
+      assert snapshot(Oban.Job) == jobs_before
+    end
+
+    test "a :stale turn (pending outbox job) leaves chunks and outbox jobs byte-identical", %{
+      professional: professional,
+      patient: patient
+    } do
+      insert_pending_job!(professional, patient)
+
+      chunks_before = snapshot(Chunk)
+      jobs_before = snapshot(Oban.Job)
+
+      assert {:ok, %Answer{outcome: :stale}} =
+               Live.answer(professional, patient.id, "consulta", [])
+
+      assert snapshot(Chunk) == chunks_before
+      assert snapshot(Oban.Job) == jobs_before
+    end
+
+    test "a :provider_failure turn leaves chunks and outbox jobs byte-identical", %{
+      professional: professional,
+      patient: patient
+    } do
+      stub_query_embedding(near_vector())
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params -> {:error, :unparseable} end)
+
+      chunks_before = snapshot(Chunk)
+      jobs_before = snapshot(Oban.Job)
+
+      assert {:ok, %Answer{outcome: :provider_failure}} =
+               Live.answer(professional, patient.id, "consulta", [])
+
+      assert snapshot(Chunk) == chunks_before
+      assert snapshot(Oban.Job) == jobs_before
+    end
+  end
+
+  # --- 5.4 orphan tombstoned chunk exclusion --------------------------------
+
+  describe "answer/4 — tombstoned/orphan chunks are never cited (#232b)" do
+    test "a chunk whose resource has a tombstone (legal-deletion job cancelled/discarded) is excluded" do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+
+      kept_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "El paciente reporta mejoría del ánimo",
+          near_vector()
+        )
+
+      orphan_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Contenido legalmente eliminado que no debe citarse",
+          near_vector()
+        )
+
+      insert_tombstone!(professional, patient, "clinical_note", orphan_id)
+      insert_discarded_job!(professional, patient, orphan_id)
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn %{excerpts: excerpts} ->
+        refute Enum.any?(excerpts, &(&1 =~ "legalmente eliminado"))
+        {:ok, %{synthesis: "Síntesis con #{length(excerpts)} fragmento(s)."}}
+      end)
+
+      assert {:ok, %Answer{outcome: :synthesis, sources: [%Source{} = source]}} =
+               Live.answer(professional, patient.id, "consulta", [])
+
+      assert source.reference.resource_id == kept_id
+      refute source.reference.resource_id == orphan_id
+      refute source.excerpt =~ "legalmente eliminado"
+    end
+
+    test "when every kept result is tombstoned, the outcome degrades to :no_evidence" do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+
+      orphan_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Contenido legalmente eliminado que no debe citarse",
+          near_vector()
+        )
+
+      insert_tombstone!(professional, patient, "clinical_note", orphan_id)
+      insert_discarded_job!(professional, patient, orphan_id)
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %Answer{outcome: :no_evidence, synthesis: nil, sources: []}} =
+               Live.answer(professional, patient.id, "consulta", [])
+    end
+  end
+
+  # --- 5.5 freshness is a hard gate with a race re-check (AD9) --------------
+
+  describe "answer/4 — post-retrieval freshness re-check (race, AD9) (#232b)" do
+    test "a job enqueued mid-retrieval, after the pre-gate passed, still blocks with :stale" do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      insert_chunk!(professional, patient, "El paciente reporta mejoría del ánimo", near_vector())
+
+      # The pre-gate `Retrieval.freshness/1` check runs first and passes
+      # (no pending job exists yet). The embeddings call happens INSIDE
+      # `Retrieval.search/4`, after the pre-gate but before it computes
+      # its own envelope freshness — inserting the pending job as a side
+      # effect of that call simulates a job enqueued mid-flight (the AD9
+      # race). `ClinicalConsultationChainMock` is deliberately NOT
+      # stubbed: an unexpected call would raise, proving the chain is
+      # never reached.
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> stub(:embed, fn _query, [] ->
+        insert_pending_job!(professional, patient)
+        {:ok, near_vector()}
+      end)
+      |> stub(:dimensions, fn -> 1024 end)
+      |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+
+      assert {:ok, %Answer{outcome: :stale, synthesis: nil, sources: [], pending: 1}} =
+               Live.answer(professional, patient.id, "consulta", [])
+    end
+  end
+
   # --- fixtures ------------------------------------------------------------
 
   defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
@@ -280,6 +530,51 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       }
       |> ClinicalRecordOutboxWorker.new()
       |> Oban.insert()
+  end
+
+  # Simulates a legal-deletion outbox job that reached a TERMINAL state
+  # outside `Retrieval.freshness/1`'s `@pending_states` (available,
+  # scheduled, executing, retryable) — the job that was supposed to
+  # purge/reindex `resource_id`'s chunk never completed, but it is no
+  # longer pending either, so `freshness/1` correctly reports "not
+  # stale" while the orphan chunk remains retrievable. Only the
+  # query-time `Tombstone.for_resource/2` cross-check (5.6) can still
+  # catch it.
+  defp insert_discarded_job!(professional, patient, resource_id) do
+    {:ok, job} =
+      %{
+        "event" => "clinical_note_deleted",
+        "resource_type" => "clinical_note",
+        "resource_id" => resource_id,
+        "patient_id" => patient.id,
+        "professional_id" => professional.id
+      }
+      |> ClinicalRecordOutboxWorker.new()
+      |> Oban.insert()
+
+    {:ok, _discarded} = job |> Ecto.Changeset.change(state: "discarded") |> Repo.update()
+  end
+
+  defp insert_tombstone!(professional, patient, resource_type, resource_id) do
+    {:ok, tombstone} =
+      %Tombstone{}
+      |> Tombstone.changeset(%{
+        resource_type: resource_type,
+        resource_id: resource_id,
+        patient_id: patient.id,
+        deleted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        deleted_by_id: professional.id,
+        trigger: "manual"
+      })
+      |> Repo.insert()
+
+    tombstone
+  end
+
+  defp snapshot(schema) do
+    schema
+    |> Repo.all()
+    |> Enum.sort_by(& &1.id)
   end
 
   defp insert_chunk!(professional, patient, text, vector) do
