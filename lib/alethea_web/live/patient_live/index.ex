@@ -226,13 +226,12 @@ defmodule AletheaWeb.PatientLive.Index do
       </div>
 
       <nav :if={@patients != []} id="patients-list" phx-update="stream" class="patient-grid">
-        <.link
+        <div
           :for={{dom_id, patient} <- @streams.patients}
           id={dom_id}
-          navigate={~p"/dashboard?patient_id=#{patient.id}"}
           class={["patient-card", patient.urgent_intervention && "patient-card--risk"]}
         >
-          <div class="patient-card__head">
+          <.link navigate={~p"/dashboard?patient_id=#{patient.id}"} class="patient-card__head">
             <span class={[
               "pt-avatar patient-card__avatar",
               patient.urgent_intervention && "pt-avatar--risk"
@@ -244,7 +243,15 @@ defmodule AletheaWeb.PatientLive.Index do
 
               <div class="patient-card__meta">{schedule_label(patient)}</div>
             </div>
-          </div>
+          </.link>
+
+          <.link
+            navigate={~p"/patients/#{patient.id}/consultation"}
+            class="patient-card__consultation-link"
+          >
+            <.icon name="hero-chat-bubble-left-right" class="size-4" style="margin-right:6px;" />
+            Consulta clínica
+          </.link>
 
           <div class="patient-card__foot">
             <span style="display:flex; align-items:center; gap:6px; font-size:12px;">
@@ -257,7 +264,7 @@ defmodule AletheaWeb.PatientLive.Index do
                 else: "En seguimiento"}
             </span>
           </div>
-        </.link>
+        </div>
       </nav>
     </div>
     """

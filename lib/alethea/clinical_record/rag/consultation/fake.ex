@@ -65,7 +65,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Fake do
         source_resource_type: "clinical_note",
         source_resource_id: "22222222-2222-2222-2222-222222222222",
         source_occurred_at: ~U[2026-01-15 10:00:00.000000Z],
-        target_behavior_id: nil,
+        target_behavior_id: "33333333-3333-3333-3333-333333333333",
         content: "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
       }
     ])

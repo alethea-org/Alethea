@@ -37,6 +37,34 @@ defmodule AletheaWeb.PatientLive.IndexTest do
     end
   end
 
+  describe "patient card navigation (grounded chat, #234a)" do
+    test "the patient card links to the consultation route and offers no clinical-search entry",
+         %{conn: conn, professional: professional} do
+      patient = create_patient!(professional)
+
+      {:ok, view, html} = live(conn, ~p"/patients")
+
+      assert html =~ patient.alias
+      assert has_element?(view, ~s(a[href="/patients/#{patient.id}/consultation"]))
+      refute has_element?(view, ~s(a[href="/patients/#{patient.id}/clinical-search"]))
+    end
+  end
+
+  defp create_patient!(professional) do
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+
+    {:ok, patient} =
+      Accounts.create_patient(
+        %{
+          "alias" => "Paciente #{System.unique_integer([:positive])}",
+          "professional_id" => professional.id
+        },
+        kek
+      )
+
+    patient
+  end
+
   defp register_and_log_in_professional(%{conn: conn}) do
     {:ok, professional} =
       Accounts.create_professional(%{

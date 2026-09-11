@@ -1,9 +1,11 @@
 defmodule AletheaWeb.ConsultationLiveTest do
   @moduledoc """
-  `Phoenix.LiveViewTest` specs for `AletheaWeb.ConsultationLive` (#227,
-  sdd/grounded-clinical-chat-initial). This slice is the authorized
-  LiveView SHELL consuming `Alethea.ClinicalRecord.Rag.Consultation.Fake`
-  only — no real retrieval, no LLM, no `Consultation.Live`.
+  `Phoenix.LiveViewTest` specs for `AletheaWeb.ConsultationLive`
+  (#227/#234a, sdd/grounded-clinical-chat-initial). Most scenarios drive
+  the shell over `Alethea.ClinicalRecord.Rag.Consultation.Fake`; the
+  "real pipeline" describe block flips the facade to `Consultation.Live`
+  to prove the #234a wiring, not to re-test `Live`'s own outcome mapping
+  (that lives in `consultation/live_test.exs`, #232a/#232b).
 
   Covers the spec's #227 scenarios:
   - Authorized per-patient surface: an unauthorized professional is
@@ -13,17 +15,27 @@ defmodule AletheaWeb.ConsultationLiveTest do
   - No persistence: conversation state lives only in socket assigns and
     does not survive a remount, navigation, or a new conversation, and no
     ETS / DB / audit row is written.
+
+  And #234a: synthesis/sources render as two distinct sections with
+  per-source kind label, date, and a link when a target behavior is
+  cited; provider-error renders safely through the real pipeline.
   """
   use AletheaWeb.ConnCase
   import Phoenix.LiveViewTest
+  import Mox
 
   alias Alethea.Accounts
+  alias Alethea.AI.ClinicalConsultationChainMock
   alias Alethea.ClinicalRecord.Rag.Chunk
+  alias Alethea.ClinicalRecord.Rag.Consultation
+  alias Alethea.ClinicalRecord.Rag.Indexer
   alias Alethea.Accounts.AuditLog
+  alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
 
   @password "supersecret12"
 
+  setup :verify_on_exit!
   setup [:register_and_log_in_professional]
 
   setup %{professional: professional} do
@@ -88,6 +100,30 @@ defmodule AletheaWeb.ConsultationLiveTest do
       assert html =~ "Síntesis basada en evidencia"
       assert html =~ "mejoría sostenida del ánimo"
       assert html =~ "El paciente reporta mejoría del ánimo esta semana"
+    end
+
+    test "synthesis and sources render as two structurally distinct sections; each source shows its kind, date, and a link when a target behavior is cited",
+         %{conn: conn, path: path, patient: patient} do
+      put_fake_outcome(:synthesis)
+      {:ok, view, _html} = live(conn, path)
+
+      view
+      |> form("#consultation-form", consultation: %{query: "¿cómo va el ánimo?"})
+      |> render_submit()
+
+      render_async(view)
+      html = render(view)
+
+      assert html =~ "Síntesis basada en evidencia"
+      assert html =~ "Fuentes"
+      assert has_element?(view, ".consultation__synthesis")
+      assert has_element?(view, ".consultation__sources-section")
+      assert html =~ "Nota clínica"
+
+      assert has_element?(
+               view,
+               ~s(a[href="/patients/#{patient.id}/target_behaviors/33333333-3333-3333-3333-333333333333/review"])
+             )
     end
 
     test "indexed-no-evidence renders a blocked state with no synthesized answer", %{
@@ -229,7 +265,79 @@ defmodule AletheaWeb.ConsultationLiveTest do
     end
   end
 
+  describe "the real pipeline (#234a wiring)" do
+    setup %{professional: professional, patient: patient} do
+      Application.put_env(:alethea, :clinical_consultation, Consultation.Live, persistent: true)
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :clinical_consultation, Consultation.Fake, persistent: true)
+
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      insert_chunk!(professional, patient, "El paciente mejora su ánimo", near_vector())
+      stub_query_embedding(near_vector())
+      :ok
+    end
+
+    test "a provider failure from the real pipeline renders the safe state, not a partial answer",
+         %{conn: conn, path: path} do
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params -> {:error, :unparseable} end)
+
+      {:ok, view, _html} = live(conn, path)
+
+      html =
+        view
+        |> form("#consultation-form", consultation: %{query: "¿cómo va el ánimo?"})
+        |> render_submit()
+
+      render_async(view)
+      html = render(view) <> html
+
+      assert has_element?(view, "[id^='consultation-provider-error']")
+      refute html =~ "Síntesis basada en evidencia"
+    end
+  end
+
   # --- helpers ----------------------------------------------------------
+
+  defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
+
+  defp stub_query_embedding(vector) do
+    Alethea.AI.EmbeddingsMock
+    |> stub(:embed, fn _query, [] -> {:ok, vector} end)
+    |> stub(:dimensions, fn -> 1024 end)
+    |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+  end
+
+  defp insert_chunk!(professional, patient, text, vector) do
+    resource_id = Ecto.UUID.generate()
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+    {:ok, ciphertext} = PatientVault.encrypt(text, dek)
+
+    attrs = [
+      %{
+        source_resource_type: "clinical_note",
+        source_resource_id: resource_id,
+        chunk_index: 0,
+        encrypted_content: ciphertext,
+        embedding: vector,
+        embedding_model: "fake-embeddings-bge-m3",
+        token_count: 10,
+        full_event: true,
+        source_occurred_at: DateTime.utc_now(),
+        patient_id: patient.id,
+        professional_id: professional.id
+      }
+    ]
+
+    {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
+    resource_id
+  end
 
   defp put_fake_outcome(outcome, opts \\ []) do
     Application.put_env(:alethea, :consultation_fake_outcome, outcome)

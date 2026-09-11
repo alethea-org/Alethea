@@ -147,13 +147,35 @@ and #234b must land last, after #232 proves retrieval; coordinated single merge 
 
 ## Phase 6: PR #234a — Real wiring + Síntesis/Fuentes render + nav entry
 
-- [ ] 6.1 RED `test/alethea_web/live/consultation_live_test.exs` (integration over `Consultation.Live` + `ClinicalConsultationChainMock` + seeded chunks): `:synthesis` renders `<section class="consultation__synthesis">` titled "Síntesis basada en evidencia" and `<ol class="consultation__sources">` titled "Fuentes" as visually distinct labeled sections. Scenario: Synthesis and sources are distinct sections.
-- [ ] 6.2 RED same file: each `<li>` renders exact excerpt, `source_kind_label/1`, formatted `occurred_at`, and a `.link` to `TargetBehaviorLive.Review` when `reference.target_behavior_id` present (text-only otherwise). Scenario: Each source renders excerpt, kind, date, reference.
-- [ ] 6.3 RED same file: `:provider_failure` from the real pipeline renders `#consultation-provider-error`, no partial synthesis, no sources. Scenario: Provider error renders a safe state.
-- [ ] 6.4 RED `test/alethea_web/live/patient_live/index_test.exs`: patient card renders a link to `~p"/patients/#{id}/consultation"` as the primary clinical-record entry; no "búsqueda clínica" entry present. Scenario: Navigation offers the chat as the primary surface.
-- [ ] 6.5 GREEN `lib/alethea_web/live/consultation_live.ex`: replace shell synthesis render with the two structurally distinct blocks; migrate `source_kind_label/1`, `source_link/2`, `format_datetime/1` from `clinical_search.ex`. No hypothesis block (D1).
-- [ ] 6.6 GREEN `config/dev.exs` (+ prod/runtime path): ensure `:clinical_consultation` resolves to `Rag.Consultation.Live` (facade default — remove any Fake pin outside test).
-- [ ] 6.7 GREEN `lib/alethea_web/live/patient_live/index.ex`: add "Consulta clínica" nav link to the consultation route on the patient card.
+- [x] 6.1 RED `test/alethea_web/live/consultation_live_test.exs` (integration over `Consultation.Live` + `ClinicalConsultationChainMock` + seeded chunks): `:synthesis` renders `<section class="consultation__synthesis">` titled "Síntesis basada en evidencia" and `<ol class="consultation__sources">` titled "Fuentes" as visually distinct labeled sections. Scenario: Synthesis and sources are distinct sections.
+- [x] 6.2 RED same file: each `<li>` renders exact excerpt, `source_kind_label/1`, formatted `occurred_at`, and a `.link` to `TargetBehaviorLive.Review` when `reference.target_behavior_id` present (text-only otherwise). Scenario: Each source renders excerpt, kind, date, reference.
+- [x] 6.3 RED same file: `:provider_failure` from the real pipeline renders `#consultation-provider-error`, no partial synthesis, no sources. Scenario: Provider error renders a safe state.
+- [x] 6.4 RED `test/alethea_web/live/patient_live/index_test.exs`: patient card renders a link to `~p"/patients/#{id}/consultation"` as the primary clinical-record entry; no "búsqueda clínica" entry present. Scenario: Navigation offers the chat as the primary surface.
+- [x] 6.5 GREEN `lib/alethea_web/live/consultation_live.ex`: replace shell synthesis render with the two structurally distinct blocks; migrate `source_kind_label/1`, `source_link/2`, `format_datetime/1` from `clinical_search.ex`. No hypothesis block (D1).
+- [x] 6.6 GREEN `config/dev.exs` (+ prod/runtime path): ensure `:clinical_consultation` resolves to `Rag.Consultation.Live` (facade default — remove any Fake pin outside test).
+- [x] 6.7 GREEN `lib/alethea_web/live/patient_live/index.ex`: add "Consulta clínica" nav link to the consultation route on the patient card.
+
+> **#234a delivered by the orchestrator directly** (two prior sub-agent
+> attempts stalled — one produced nothing, this batch's stall left #234a's
+> code fully intact on the branch but unverified/uncommitted; the
+> orchestrator finished 6.1-6.7 itself). Focused: `mix test
+> test/alethea_web/live/consultation_live_test.exs` → 14 passed (2 new:
+> distinct-sections+link, real-pipeline provider-error). `mix test
+> test/alethea_web/live/patient_live/index_test.exs` → 3 passed (1 new: nav
+> link present, no clinical-search link). `mix compile
+> --warnings-as-errors --force` and `mix format --check-formatted` clean.
+> **6.6 finding:** already satisfied — `Rag.Consultation.impl/0` (#226a)
+> defaults to `__MODULE__.Live` whenever `config :alethea,
+> :clinical_consultation` is unset; only `config/test.exs` pins `Fake`. No
+> `dev.exs`/`runtime.exs` change was needed or made.
+> **6.7 structural note:** the patient card was previously one big
+> `<.link navigate={dashboard}>` wrapping the whole card — nesting a second
+> `<a>` inside it for "Consulta clínica" would be invalid HTML and broken
+> click semantics. Restructured to an outer `<div id={dom_id}>` (keeps the
+> stream's `id`) with two sibling `<.link>`s: the head (avatar+name) to
+> `/dashboard?patient_id=`, and a new one to `/patients/:id/consultation`.
+> No existing test referenced the card's tag, so this was safe.
+> Full-suite verification and commit are the orchestrator's next step.
 
 ## Phase 7: PR #234b — ClinicalSearch hard retirement (D5, deletion only)
 

@@ -16,8 +16,9 @@ defmodule AletheaWeb.ConsultationLive do
   Conversation state (message stream + bounded follow-up `history`) lives
   ONLY in socket assigns. Nothing is persisted: no ETS, no DB row, no
   `Alethea.AI.ConversationMemory`, no audit/access record. It dies on
-  remount, navigation, and "nueva conversación" by construction. This
-  slice consumes `Consultation.Fake` only.
+  remount, navigation, and "nueva conversación" by construction. Since
+  #234a this consumes `Consultation`'s real `Live` implementation
+  (config-swappable; `config/test.exs` still pins `Fake`).
   """
   use AletheaWeb, :live_view
 
@@ -167,6 +168,21 @@ defmodule AletheaWeb.ConsultationLive do
 
   defp format_datetime(%DateTime{} = datetime), do: Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
 
+  # Migrated from PatientLive.ClinicalSearch (#234a) — same vocabulary,
+  # same reference shape. That surface is retired in #234b.
+  defp source_kind_label("clinical_note"), do: "Nota clínica"
+  defp source_kind_label("consultation_evidence"), do: "Evidencia citada"
+  defp source_kind_label("clinician_observation"), do: "Observación del clínico"
+  defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
+  defp source_kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
+  defp source_kind_label(other), do: other
+
+  defp source_link(%{reference: %{target_behavior_id: nil}}, _patient_id), do: nil
+
+  defp source_link(%{reference: %{target_behavior_id: target_behavior_id}}, patient_id) do
+    ~p"/patients/#{patient_id}/target_behaviors/#{target_behavior_id}/review"
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -211,14 +227,26 @@ defmodule AletheaWeb.ConsultationLive do
                   <h3 class="pt-h3">Síntesis basada en evidencia</h3>
                   <p>{message.synthesis}</p>
                 </section>
-                <ol class="consultation__sources">
-                  <li :for={source <- message.sources} class="consultation__source">
-                    <p class="consultation__source-excerpt">{source.excerpt}</p>
-                    <span class="consultation__source-meta">
-                      {source.kind} · {format_datetime(source.occurred_at)}
-                    </span>
-                  </li>
-                </ol>
+                <section class="consultation__sources-section">
+                  <h3 class="pt-h3">Fuentes</h3>
+                  <ol class="consultation__sources">
+                    <li :for={source <- message.sources} class="consultation__source">
+                      <p class="consultation__source-excerpt">{source.excerpt}</p>
+                      <%= if source_link(source, @patient_id) do %>
+                        <.link
+                          navigate={source_link(source, @patient_id)}
+                          class="consultation__source-meta"
+                        >
+                          {source_kind_label(source.kind)} · {format_datetime(source.occurred_at)}
+                        </.link>
+                      <% else %>
+                        <span class="consultation__source-meta">
+                          {source_kind_label(source.kind)} · {format_datetime(source.occurred_at)}
+                        </span>
+                      <% end %>
+                    </li>
+                  </ol>
+                </section>
               <% :no_evidence -> %>
                 <p>
                   El historial clínico indexado no respalda una respuesta a esta pregunta.
