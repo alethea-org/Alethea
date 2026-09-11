@@ -214,11 +214,11 @@ converge to the same chunk set — no duplicate chunks are ever produced.
 Non-eligible resources (`TargetBehavior`, and any `AIProposal` that is
 not yet `accepted`) are never re-enqueued.
 
-Query the resulting projection at
-`/patients/<patient-id>/clinical-search` once logged in. Every result
-carries a persistent, non-dismissible `badge--non-authoritative` label
-and a citation — this view supplements, and never replaces, the
-authoritative `ClinicalRecord` review timeline.
+Query the resulting projection through the grounded consultation chat at
+`/patients/<patient-id>/consultation` once logged in. Every synthesized
+answer is grounded in server-derived citations from this same index —
+this chat supplements, and never replaces, the authoritative
+`ClinicalRecord` review timeline.
 
 ## Recovery
 
@@ -249,4 +249,4 @@ Stop the ngrok terminal manually when the public endpoint is no longer required.
 - `lib/mix/tasks/alethea.demo.reset.ex`
 - `lib/mix/tasks/alethea.telegram.bootstrap.ex`
 - `lib/mix/tasks/alethea.rag.reindex.ex`
-- `lib/alethea_web/live/patient_live/clinical_search.ex`
+- `lib/alethea_web/live/consultation_live.ex`
