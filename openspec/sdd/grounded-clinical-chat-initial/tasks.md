@@ -70,14 +70,24 @@ and #234b must land last, after #232 proves retrieval; coordinated single merge 
 
 ## Phase 2: PR #226b — ClinicalConsultationChain (`:local` only)
 
-- [ ] 2.1 RED `test/alethea/ai/chains/clinical_consultation_chain_test.exs`: `build_prompt/1` output numbers excerpts and contains no `chunk_id` / `resource_id` / `target_behavior_id`; `parse/1` returns `{:error, :unparseable}` on malformed JSON AND on an empty/blank `synthesis` string (must NOT degrade to `""`). Scenario: AD8 / Provider-failure outcome is a safe state.
-- [ ] 2.2 RED same file: `supported_providers/0 == [:local]`; static source scan asserts no `:cloud` literal in `clinical_consultation_chain.ex` (mirror `AIProposalWorkerTest` scan). Scenarios: Local-Only Synthesis No External Leak, Cloud provider is rejected for this chain.
-- [ ] 2.3 RED same file (AI-pipeline behavior/grounding regression, repo CLAUDE.md): golden verbatim assertion on `suggested_system_prompt/0` (grounding + no-fallback Spanish text: "no diagnostiques, no recomiendes tratamiento, no completes con conocimiento general; si los fragmentos no alcanzan, dilo"); with a fixed excerpt set + fixed question, `build_prompt/1` embeds only excerpt text; via chain mock the synthesis contains no claim absent from the excerpts. Scenario: Server-Derived Source Provenance (grounding), design Testing row #226 Regression.
-- [ ] 2.4 GREEN create `lib/alethea/ai/chains/clinical_consultation_chain.ex`: `@behaviour Alethea.AI.Chains.ChainBehaviour`; `run(%{question: q, excerpts: xs})` → `LLMConfig.get_and_build(:clinical_consultation)` → `do_run/2` with `[:alethea, :ai, :chain, :start|:stop]` telemetry `chain: :clinical_consultation`; pure `build_prompt/1` (numbered, no ids), pure `parse/1` → `{:ok, %{synthesis: s}}` | `{:error, :unparseable}` (empty synthesis ⇒ error, NOT `""`); `suggested_max_tokens/0` `512`; `supported_providers/0 -> [:local]`. Returns `%{synthesis: binary}` ONLY — never a source list.
-- [ ] 2.5 GREEN `lib/alethea/ai/llm_config.ex`: add `:clinical_consultation` to `@type chain_name` (line ~31); add `defp chain_module(:clinical_consultation), do: Alethea.AI.Chains.ClinicalConsultationChain`.
-- [ ] 2.6 GREEN `config/config.exs`: pin `config :alethea, Alethea.AI.Chains.ClinicalConsultationChain, provider: :local` so `:cloud` is structurally impossible (AD5).
-- [ ] 2.7 GREEN `test/test_helper.exs`: `Mox.defmock(Alethea.AI.ClinicalConsultationChainMock, for: Alethea.AI.Chains.ChainBehaviour)`.
-- [ ] 2.8 GREEN `config/test.exs`: `config :alethea, :clinical_consultation_chain, Alethea.AI.ClinicalConsultationChainMock`.
+> **#226b delivered.** Full `mix test` → 1013 passed, 5 skipped (seed 0);
+> `mix precommit` → exit 0 (compile `--warnings-as-errors`, `deps.unlock --unused`,
+> `format`, `test` all clean). Focused suite
+> `mix test test/alethea/ai/chains/clinical_consultation_chain_test.exs` → 18 passed.
+> **Deviation:** the `LLMConfig` chain-name atom is `:consultation_synthesis`, not
+> `:clinical_consultation` — the latter already names the `Rag.Consultation` facade
+> module-swap key from #226a (`config :alethea, :clinical_consultation`), and
+> `LLMConfig.get/2` does `Keyword.merge(_, Application.get_env(:alethea, chain_name, []))`
+> which crashes on a module value. Telemetry label stays `chain: :clinical_consultation`.
+
+- [x] 2.1 RED `test/alethea/ai/chains/clinical_consultation_chain_test.exs`: `build_prompt/1` output numbers excerpts and contains no `chunk_id` / `resource_id` / `target_behavior_id`; `parse/1` returns `{:error, :unparseable}` on malformed JSON AND on an empty/blank `synthesis` string (must NOT degrade to `""`). Scenario: AD8 / Provider-failure outcome is a safe state.
+- [x] 2.2 RED same file: `supported_providers/0 == [:local]`; static source scan asserts no `:cloud` literal in `clinical_consultation_chain.ex` (mirror `AIProposalWorkerTest` scan). Scenarios: Local-Only Synthesis No External Leak, Cloud provider is rejected for this chain.
+- [x] 2.3 RED same file (AI-pipeline behavior/grounding regression, repo CLAUDE.md): golden verbatim assertion on `suggested_system_prompt/0` (grounding + no-fallback Spanish text: "no diagnostiques, no recomiendes tratamiento, no completes con conocimiento general; si los fragmentos no alcanzan, dilo"); with a fixed excerpt set + fixed question, `build_prompt/1` embeds only excerpt text; chain mock (Mox vs `ChainBehaviour`) returns synthesis derived only from the given excerpts. Scenario: Server-Derived Source Provenance (grounding), design Testing row #226 Regression.
+- [x] 2.4 GREEN create `lib/alethea/ai/chains/clinical_consultation_chain.ex`: `@behaviour Alethea.AI.Chains.ChainBehaviour`; `run(%{question: q, excerpts: xs})` → `LLMConfig.get_and_build(:consultation_synthesis)` → `do_run/2` with `[:alethea, :ai, :chain, :start|:stop]` telemetry `chain: :clinical_consultation`; pure `build_prompt/1` (numbered, no ids), pure `parse/1` → `{:ok, %{synthesis: s}}` | `{:error, :unparseable}` (empty synthesis ⇒ error, NOT `""`); `suggested_max_tokens/0` `512`; `supported_providers/0 -> [:local]`. Returns `%{synthesis: binary}` ONLY — never a source list.
+- [x] 2.5 GREEN `lib/alethea/ai/llm_config.ex`: add `:consultation_synthesis` to `@type chain_name`; add `defp chain_module(:consultation_synthesis), do: Alethea.AI.Chains.ClinicalConsultationChain`.
+- [x] 2.6 GREEN `config/config.exs`: pin `config :alethea, Alethea.AI.Chains.ClinicalConsultationChain, provider: :local` so `:cloud` is structurally impossible (AD5).
+- [x] 2.7 GREEN `test/test_helper.exs`: `Mox.defmock(Alethea.AI.ClinicalConsultationChainMock, for: Alethea.AI.Chains.ChainBehaviour)`.
+- [x] 2.8 GREEN `config/test.exs`: `config :alethea, :clinical_consultation_chain, Alethea.AI.ClinicalConsultationChainMock`.
 
 ## Phase 3: PR #227 — ConsultationLive shell (Fake only)
 

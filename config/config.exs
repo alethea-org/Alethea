@@ -170,6 +170,11 @@ config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   5. Si detectas riesgo inminente, el sistema perimetral ya actuó, tú continúa con el proceso reflexivo calmado.
   """
 
+# Grounded clinical consultation synthesis (#226b). Pinned to `:local`
+# so a `:cloud` provider is structurally impossible (D2 / AD5) —
+# decrypted clinical narrative must never leave the box.
+config :alethea, Alethea.AI.Chains.ClinicalConsultationChain, provider: :local
+
 config :alethea, Alethea.AI.EmotionAnalyzer,
   base_url: "http://127.0.0.1:8080",
   connect_timeout: 2_000,
