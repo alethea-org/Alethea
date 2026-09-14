@@ -122,6 +122,12 @@ defmodule AletheaWeb.GroundedChat.FollowupState do
   def reset, do: %__MODULE__{}
 
   @doc """
+  Backward-compatible variant to support pipelined callers.
+  """
+  @spec reset(any()) :: t()
+  def reset(_state), do: reset()
+
+  @doc """
   ¿Hay una conversación en curso?
 
   `false` ≡ slot recién reseteado o todavía no inicializado para el

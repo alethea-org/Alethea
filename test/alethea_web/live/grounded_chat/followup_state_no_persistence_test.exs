@@ -129,7 +129,7 @@ defmodule AletheaWeb.GroundedChat.FollowupStateNoPersistenceTest do
         @allowed_lib_paths
         |> Enum.group_by(& &1)
         |> Enum.filter(fn {_, list} -> length(list) > 1 end)
-        |> Map.keys()
+        |> Enum.map(fn {path, _list} -> path end)
 
       assert duplicates == [],
              "Duplicate entries in @allowed_lib_paths: #{inspect(duplicates)}"
