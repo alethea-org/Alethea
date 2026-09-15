@@ -15,6 +15,7 @@ defmodule AletheaWeb.CoreComponents do
 
   import AletheaWeb.Icons
 
+  alias Alethea.ClinicalRecord.Rag.Citation
   alias Phoenix.LiveView.JS
 
   @doc """
@@ -539,5 +540,72 @@ defmodule AletheaWeb.CoreComponents do
     js
     |> JS.hide(to: "##{id}")
     |> JS.dispatch("js:hide-modal", to: "##{id}")
+  end
+
+  @doc """
+  Renders a single grounded-chat citation (issue #230, ADR-010 §3).
+
+  Collapsed by default — the psychologist sees the source kind, the
+  date and the stable `source_ref` as the summary — and expands to
+  the verbatim, decrypted excerpt on click. The DOM id is derived
+  from the `source_ref` so two cites never collide and so the panel
+  can be opened / closed from the keyboard or an external script.
+
+  Reused by *Síntesis* (A4, issue #234) and *Hipótesis* (C3, issue
+  #231) without divergent rendering — a single component instance
+  per cite, same DOM shape regardless of source type.
+
+  ## Examples
+
+      <.citation citation={@c} />              <!-- collapsed -->
+      <.citation citation={@c} expanded />     <!-- open -->
+  """
+  attr :citation, :any, required: true, doc: "the %Citation{} to render"
+  attr :expanded, :boolean, default: false, doc: "open the details element"
+
+  def citation(%{citation: %Citation{}} = assigns) do
+    ~H"""
+    <details
+      id={"citation-#{@citation.source_ref}"}
+      class="citation"
+      aria-expanded={to_string(@expanded)}
+      aria-controls={"citation-#{@citation.source_ref}"}
+      open={@expanded}
+    >
+      <summary class="citation__summary">
+        <span class="citation__kind">{@citation.kind}</span>
+        <span class="citation__date">{format_date(@citation.occurred_at)}</span>
+        <span class="citation__ref">{@citation.source_ref}</span>
+      </summary>
+      <p :if={@expanded} class="citation__excerpt">{@citation.excerpt}</p>
+    </details>
+    """
+  end
+
+  @doc """
+  Renders a list of grounded-chat citations under a shared surface
+  (issue #230, ADR-010 §3). The list keeps the same visual language
+  whether it sits inside *Síntesis* or *Hipótesis*.
+
+  Renders an empty `<section class="citation-list">` (no decorative
+  chrome, no `<details>`) when given `[]` — defense in depth against
+  silent UI drift when the retrieve envelope comes back empty.
+
+  ## Examples
+
+      <.citation_list citations={@cites} />
+  """
+  attr :citations, :list, required: true, doc: "list of %Citation{} to render"
+
+  def citation_list(assigns) do
+    ~H"""
+    <section class="citation-list">
+      <.citation :for={cite <- @citations} citation={cite} />
+    </section>
+    """
+  end
+
+  defp format_date(%DateTime{} = dt) do
+    dt |> DateTime.to_date() |> Date.to_iso8601()
   end
 end
