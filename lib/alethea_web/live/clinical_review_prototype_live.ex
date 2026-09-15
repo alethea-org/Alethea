@@ -31,7 +31,10 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
 
   @impl true
   def handle_params(params, _url, socket) do
-    {:noreply, assign(socket, :variant, variant_from_params(params))}
+    {:noreply,
+     socket
+     |> assign(:variant, variant_from_params(params))
+     |> assign(:interpretive_query?, interpretive_query?(params))}
   end
 
   @impl true
@@ -56,6 +59,14 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
        do: variant
 
   defp variant_from_params(_), do: "review"
+
+  defp interpretive_query?(params) do
+    params
+    |> Map.get("interpretive", Map.get(params, "c1_authorized", "true"))
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "si"]))
+  end
 
   defp next_variant(current, "previous") do
     current
@@ -99,6 +110,23 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
       <blockquote>“{@quote}”</blockquote>
       <p><a href={"##{@source_id}"}>Nota clínica de origen {@source_label}</a> · {@origin}</p>
     </article>
+    """
+  end
+
+  defp hypothesis_claim(assigns) do
+    ~H"""
+    <li id={@id}>
+      <details class="crp-hypothesis-claim">
+        <summary>{@statement}</summary>
+        <.citation
+          id={@citation_id}
+          source_id={@source_id}
+          source_label={@source_label}
+          origin={@origin}
+          quote={@quote}
+        />
+      </details>
+    </li>
     """
   end
 
@@ -354,16 +382,51 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
       </aside>
       <main class="crp-draft-sheet">
         <p class="crp-kicker">Borrador provisional de análisis funcional</p>
-        <h2>Situación → respuesta → consecuencia</h2>
-        <ol class="crp-chain">
-          <li><strong>Situación</strong><span>Presentación pública anticipada</span></li>
-          <li>
-            <strong>Respuesta observada</strong><span>Evitación registrada en una fuente; participación en otra</span>
-          </li>
-          <li>
-            <strong>Posible consecuencia</strong><span>La reducción a corto plazo de la exposición sigue siendo una hipótesis, no una conclusión</span>
-          </li>
-        </ol>
+        <section id="hybrid-evidence-synthesis-panel" class="crp-summary">
+          <p class="crp-kicker">Respuesta factual del chat</p>
+          <h2>Síntesis basada en evidencia</h2>
+          <ol class="crp-chain">
+            <li><strong>Situación</strong><span>Presentación pública anticipada</span></li>
+            <li>
+              <strong>Respuesta observada</strong><span>Evitación registrada en una fuente; participación en otra</span>
+            </li>
+          </ol>
+        </section>
+        <section
+          :if={@interpretive_query?}
+          id="hybrid-hypothesis-panel"
+          class="crp-interpretation"
+          aria-labelledby="hybrid-hypothesis-title"
+        >
+          <p class="crp-kicker">C1 autorizado · lectura interpretativa</p>
+          <h2 id="hybrid-hypothesis-title">Hipótesis para revisar</h2>
+          <div id="hybrid-hypothesis-disclaimer" class="crp-warning">
+            <strong>Disclaimer clínico</strong>
+            <p>
+              Esta hipótesis es revisable por el profesional. No es un diagnóstico ni una recomendación terapéutica.
+            </p>
+          </div>
+          <ul class="crp-chain">
+            <.hypothesis_claim
+              id="hybrid-hypothesis-claim-1"
+              statement="La reducción a corto plazo de la exposición podría estar funcionando como escape."
+              citation_id="hybrid-hypothesis-excerpt-1"
+              source_id="hybrid-source-1"
+              source_label="12 jun"
+              origin="Informe escolar, párrafo 3"
+              quote="solicitó salir del aula antes de presentar"
+            />
+            <.hypothesis_claim
+              id="hybrid-hypothesis-claim-2"
+              statement="La participación pese a la aprensión podría indicar variabilidad dependiente del contexto."
+              citation_id="hybrid-hypothesis-excerpt-2"
+              source_id="hybrid-source-2"
+              source_label="19 jun"
+              origin="Observación de consulta, párrafo 2"
+              quote="permaneció en el grupo pese a la aprensión"
+            />
+          </ul>
+        </section>
         <div class="crp-warning">
           <strong>Contradicción identificada</strong>
           <p>Dos fuentes inmutables describen respuestas diferentes ante situaciones comparables.</p>

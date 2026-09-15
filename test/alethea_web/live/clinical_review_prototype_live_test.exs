@@ -40,4 +40,31 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLiveTest do
     view |> element("#toggle-contradiction-comparison") |> render_click()
     assert has_element?(view, "#hybrid-contradiction-comparison")
   end
+
+  test "hybrid variant renders separated synthesis + hypothesis panels with disclaimer and expandable citations",
+       %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/prototype/clinical-review?variant=hybrid")
+
+    assert has_element?(view, "#hybrid-evidence-synthesis-panel")
+    assert has_element?(view, "#hybrid-hypothesis-panel")
+    assert has_element?(view, "#hybrid-hypothesis-disclaimer")
+    assert has_element?(view, "#hybrid-hypothesis-claim-1 details summary")
+    assert has_element?(view, "#hybrid-hypothesis-claim-1 a[href='#hybrid-source-1']")
+
+    {evidence_pos, _} = :binary.match(html, "hybrid-evidence-synthesis-panel")
+    {hypothesis_pos, _} = :binary.match(html, "hybrid-hypothesis-panel")
+    {disclaimer_pos, _} = :binary.match(html, "hybrid-hypothesis-disclaimer")
+    {first_claim_pos, _} = :binary.match(html, "hybrid-hypothesis-claim-1")
+
+    assert evidence_pos < hypothesis_pos
+    assert disclaimer_pos < first_claim_pos
+  end
+
+  test "hybrid variant omits hypothesis panel when the query is not interpretive", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/prototype/clinical-review?variant=hybrid&interpretive=false")
+
+    assert has_element?(view, "#hybrid-evidence-synthesis-panel")
+    refute has_element?(view, "#hybrid-hypothesis-panel")
+    refute has_element?(view, "#hybrid-hypothesis-disclaimer")
+  end
 end
