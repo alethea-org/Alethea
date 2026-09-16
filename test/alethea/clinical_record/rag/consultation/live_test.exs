@@ -9,19 +9,21 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
   `ClinicalConsultationChainMock` standing in for the LLM (Mox against
   `ChainBehaviour`) — mirrors `retrieval_test.exs`'s fixture patterns.
   """
-  use Alethea.DataCase, async: true
+  # async: false — every test here swaps the global `:ai_embeddings` adapter
+  # slot through `Application.put_env/3`, so running concurrently with any
+  # other file that reads or writes that slot makes both flaky. Same reason
+  # `Alethea.AI.AdapterDiscoveryTest` and `Alethea.AITest` are sync.
+  use Alethea.DataCase, async: false
   use Oban.Testing, repo: Alethea.Repo
 
   import Mox
+  import Alethea.RagFixtures
 
-  alias Alethea.Accounts
   alias Alethea.AI.ClinicalConsultationChainMock
   alias Alethea.ClinicalRecord.Rag.Consultation
   alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Live, Source}
-  alias Alethea.ClinicalRecord.Rag.{Chunk, Indexer, Retrieval}
+  alias Alethea.ClinicalRecord.Rag.{Chunk, Retrieval}
   alias Alethea.ClinicalRecord.Tombstone
-  alias Alethea.Encryption.PatientVault
-  alias AletheaJobs.ClinicalRecordOutboxWorker
 
   setup :verify_on_exit!
 
@@ -439,31 +441,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
 
   # --- fixtures ----------------------------------------------------------------
 
-  defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
   defp far_vector, do: [0.0, 1.0 | List.duplicate(0.0, 1022)]
-
-  defp stub_query_embedding(vector) do
-    Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
-
-    on_exit(fn ->
-      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake, persistent: true)
-    end)
-
-    Alethea.AI.EmbeddingsMock
-    |> stub(:embed, fn _query, [] -> {:ok, vector} end)
-    |> stub(:dimensions, fn -> 1024 end)
-    |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
-  end
-
-  defp expect_embeddings_never_called do
-    Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
-
-    on_exit(fn ->
-      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake, persistent: true)
-    end)
-
-    expect(Alethea.AI.EmbeddingsMock, :embed, 0, fn _query, [] -> :never end)
-  end
 
   defp insert_tombstone!(patient, resource_type, resource_id) do
     {:ok, tombstone} =
@@ -489,70 +467,5 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       chunks: Repo.all(Chunk),
       oban_jobs: Repo.all(Oban.Job)
     }
-  end
-
-  defp insert_pending_job!(professional, patient) do
-    {:ok, _job} =
-      %{
-        "event" => "clinical_note_created",
-        "resource_type" => "clinical_note",
-        "resource_id" => Ecto.UUID.generate(),
-        "patient_id" => patient.id,
-        "professional_id" => professional.id
-      }
-      |> ClinicalRecordOutboxWorker.new()
-      |> Oban.insert()
-  end
-
-  defp insert_chunk!(professional, patient, text, vector) do
-    resource_id = Ecto.UUID.generate()
-    {:ok, kek} = Accounts.load_professional_kek(professional)
-    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
-    {:ok, ciphertext} = PatientVault.encrypt(text, dek)
-
-    attrs = [
-      %{
-        source_resource_type: "clinical_note",
-        source_resource_id: resource_id,
-        chunk_index: 0,
-        encrypted_content: ciphertext,
-        embedding: vector,
-        embedding_model: "fake-embeddings-bge-m3",
-        token_count: 10,
-        full_event: true,
-        source_occurred_at: DateTime.utc_now(),
-        patient_id: patient.id,
-        professional_id: professional.id
-      }
-    ]
-
-    {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
-    resource_id
-  end
-
-  defp create_professional! do
-    {:ok, professional} =
-      Accounts.create_professional(%{
-        email: "consultation-live-#{System.unique_integer([:positive])}@alethea.com",
-        password: "supersecret12",
-        full_name: "Dr. Consultation Live"
-      })
-
-    professional
-  end
-
-  defp create_patient!(professional) do
-    {:ok, kek} = Accounts.load_professional_kek(professional)
-
-    {:ok, patient} =
-      Accounts.create_patient(
-        %{
-          "alias" => "Paciente #{System.unique_integer([:positive])}",
-          "professional_id" => professional.id
-        },
-        kek
-      )
-
-    patient
   end
 end

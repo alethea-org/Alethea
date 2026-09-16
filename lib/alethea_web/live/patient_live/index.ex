@@ -123,56 +123,56 @@ defmodule AletheaWeb.PatientLive.Index do
       <div class="ptd-head">
         <div>
           <p class="pt-eyebrow">Gestión de pacientes</p>
-
+          
           <h1 class="pt-h1">{@current_professional.full_name || "Profesional Clínico"}</h1>
         </div>
-
+        
         <div :if={@live_action != :new} class="page-head__actions">
           <.link patch={~p"/patients/new"} class="button-primary button-primary--sm">
             <.icon name="hero-plus" class="size-4" style="margin-right:6px;" /> Registrar paciente
           </.link>
         </div>
       </div>
-      <%!-- ── Caseload counters ── --%>
+       <%!-- ── Caseload counters ── --%>
       <div class="stat-strip" style="margin-bottom:24px;">
         <div class="stat-tile">
           <div class="stat-tile__label">Pacientes</div>
-
+          
           <div class="stat-tile__value">{length(@patients)}</div>
-
+          
           <div class="stat-tile__desc">En seguimiento</div>
         </div>
-
+        
         <div class="stat-tile">
           <div class="stat-tile__label">Bóvedas</div>
-
+          
           <div class="stat-tile__value">{length(@patients)}</div>
-
+          
           <div class="stat-tile__desc">Una clave por paciente</div>
         </div>
-
+        
         <div class="stat-tile">
           <div class="stat-tile__label">Atención</div>
-
+          
           <div class="stat-tile__value">{@urgent_count}</div>
-
+          
           <div class="stat-tile__desc">Intervención urgente</div>
         </div>
       </div>
-      <%!-- ── New patient form (inline, above the grid) ── --%>
+       <%!-- ── New patient form (inline, above the grid) ── --%>
       <div :if={@live_action == :new} class="pt-card" style="margin-bottom:24px;">
         <div class="pt-card__head">
           <span class="pt-h2">Registrar nuevo paciente</span>
           <.link patch={~p"/patients"} class="link-button">Cancelar</.link>
         </div>
-
+        
         <div class="pt-card__body">
           <div class="notice notice--success">
             <.icon name="hero-shield-check" class="notice__icon" />
             <span>Los datos clínicos se cifran con una DEK única por paciente y nunca
               son visibles en texto plano.</span>
           </div>
-
+          
           <.form for={@form} id="patient-form" phx-change="validate" phx-submit="save">
             <div class="field">
               <label for="patient-alias" class="field__label">Alias del paciente</label>
@@ -193,13 +193,13 @@ defmodule AletheaWeb.PatientLive.Index do
               <p :for={error <- @form[:alias].errors} class="field__error">
                 <.icon name="hero-exclamation-circle" class="size-3" />{translate_error(error)}
               </p>
-
+              
               <p :if={@form[:alias].errors == []} class="field__hint">
                 El alias es lo único que Alethea muestra en claro. No uses el
                 nombre legal del paciente.
               </p>
             </div>
-
+            
             <div class="form-actions">
               <button type="submit" class="button-primary button-primary--sm">
                 <.icon name="hero-lock-closed" class="size-4" style="margin-right:6px;" />
@@ -212,24 +212,23 @@ defmodule AletheaWeb.PatientLive.Index do
           </.form>
         </div>
       </div>
-      <%!-- ── Caseload grid ── --%>
+       <%!-- ── Caseload grid ── --%>
       <div :if={@patients == []} class="empty-state">
         <.icon name="hero-user-plus" class="empty-state__icon" />
         <p class="empty-state__title">Todavía no hay pacientes</p>
-
+        
         <p class="empty-state__text">Registrá al primero para generar su bóveda cifrada y su enlace de
           Telegram.</p>
-
+        
         <.link patch={~p"/patients/new"} class="button-primary button-primary--sm">
           Registrar paciente
         </.link>
       </div>
-
+      
       <nav :if={@patients != []} id="patients-list" phx-update="stream" class="patient-grid">
-        <.link
+        <div
           :for={{dom_id, patient} <- @streams.patients}
           id={dom_id}
-          navigate={~p"/dashboard?patient_id=#{patient.id}"}
           class={["patient-card", patient.urgent_intervention && "patient-card--risk"]}
         >
           <div class="patient-card__head">
@@ -241,11 +240,11 @@ defmodule AletheaWeb.PatientLive.Index do
             </span>
             <div style="min-width:0;">
               <div class="patient-card__name">{patient.alias}</div>
-
+              
               <div class="patient-card__meta">{schedule_label(patient)}</div>
             </div>
           </div>
-
+          
           <div class="patient-card__foot">
             <span style="display:flex; align-items:center; gap:6px; font-size:12px;">
               <span class={[
@@ -257,7 +256,22 @@ defmodule AletheaWeb.PatientLive.Index do
                 else: "En seguimiento"}
             </span>
           </div>
-        </.link>
+          
+          <div class="patient-card__actions" style="display:flex; gap:8px; margin-top:12px;">
+            <.link
+              navigate={~p"/dashboard?patient_id=#{patient.id}"}
+              class="button-secondary button-secondary--sm"
+            >
+              Dashboard
+            </.link>
+            <.link
+              navigate={~p"/patients/#{patient.id}/consultation"}
+              class="button-primary button-primary--sm"
+            >
+              Consulta clínica
+            </.link>
+          </div>
+        </div>
       </nav>
     </div>
     """

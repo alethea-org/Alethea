@@ -7,13 +7,33 @@ defmodule AletheaWeb.ConsultationLiveTest do
   visible states driven entirely through the Fake (no real retrieval, no
   LLM), and the zero-persistence guarantee (no survival across remount,
   navigation, or "nueva conversación"; no DB/audit row is ever written).
+
+  #234a adds the integration pass over the real pipeline
+  (`Rag.Consultation.Live` + seeded chunks + `ClinicalConsultationChainMock`):
+  the grounded answer must render *Síntesis basada en evidencia* and
+  *Fuentes* as two visually distinct labeled sections.
   """
-  use AletheaWeb.ConnCase
+  # async: false — the #234a describe block swaps the global
+  # `:clinical_consultation` slot through `Application.put_env/3` and runs Mox
+  # in `:global` mode so the LiveView process sees the expectations. Both make
+  # this module unsafe to run concurrently with anything reading those slots.
+  use AletheaWeb.ConnCase, async: false
+
+  import Alethea.RagFixtures
+  import Mox
   import Phoenix.LiveViewTest
 
-  alias Alethea.Accounts
+  alias Alethea.AI.ClinicalConsultationChainMock
   alias Alethea.Clinical.Message
+  alias Alethea.ClinicalRecord.Rag.Consultation
   alias Alethea.Repo
+
+  @seeded_excerpt "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
+  @synthesis "Según los fragmentos citados, el paciente sostiene la mejoría del ánimo."
+  @linked_excerpt "Cumplió la caminata pactada el martes por la mañana."
+  @plain_excerpt "Durmió siete horas seguidas y se levantó sin alarma."
+  @linked_occurred_at ~U[2026-01-15 10:00:00.000000Z]
+  @plain_occurred_at ~U[2026-02-03 18:30:00.000000Z]
 
   setup [:register_and_log_in_professional]
 
@@ -109,6 +129,112 @@ defmodule AletheaWeb.ConsultationLiveTest do
     end
   end
 
+  describe "grounded answer over the real pipeline (#234a)" do
+    setup [:use_live_consultation, :set_mox_global, :verify_on_exit!]
+
+    test "synthesis and sources render as two distinct labeled sections", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn %{question: _question, excerpts: excerpts} ->
+        assert excerpts != []
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      html = render_async(view)
+
+      assert has_element?(view, "section.consultation__synthesis")
+      assert has_element?(view, "ol.consultation__sources")
+
+      synthesis_html = view |> element("section.consultation__synthesis") |> render()
+      sources_html = view |> element("ol.consultation__sources") |> render()
+
+      assert synthesis_html =~ @synthesis
+      refute synthesis_html =~ @seeded_excerpt
+
+      assert sources_html =~ @seeded_excerpt
+      refute sources_html =~ @synthesis
+
+      assert html =~ "Síntesis basada en evidencia"
+      assert html =~ "Fuentes"
+    end
+
+    test "each source renders its excerpt, kind, date and reference", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      clear_pending_outbox!(patient)
+
+      insert_chunk!(professional, patient, @linked_excerpt, near_vector(),
+        source_resource_type: "clinician_observation",
+        target_behavior_id: target_behavior.id,
+        occurred_at: @linked_occurred_at
+      )
+
+      insert_chunk!(professional, patient, @plain_excerpt, near_vector(),
+        source_resource_type: "clinical_note",
+        occurred_at: @plain_occurred_at
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿qué hizo el paciente esta semana?")
+      render_async(view)
+
+      linked_item = view |> element("ol.consultation__sources li", @linked_excerpt) |> render()
+
+      assert linked_item =~ @linked_excerpt
+      assert linked_item =~ "Observación del clínico"
+      assert linked_item =~ "15/01/2026 10:00"
+
+      assert linked_item =~
+               ~s(href="/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      plain_item = view |> element("ol.consultation__sources li", @plain_excerpt) |> render()
+
+      assert plain_item =~ @plain_excerpt
+      assert plain_item =~ "Nota clínica"
+      assert plain_item =~ "03/02/2026 18:30"
+      refute plain_item =~ "<a"
+    end
+
+    test "a provider failure renders the safe state with no synthesis and no sources", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params -> {:error, :timeout} end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      html = render_async(view)
+
+      assert html =~ "consultation-provider-error"
+      refute has_element?(view, "section.consultation__synthesis")
+      refute has_element?(view, "ol.consultation__sources")
+      refute html =~ @seeded_excerpt
+    end
+  end
+
   describe "zero persistence" do
     test "does not survive remount: a second mount starts empty", %{conn: conn, patient: patient} do
       set_fake_outcome(:synthesis)
@@ -174,30 +300,14 @@ defmodule AletheaWeb.ConsultationLiveTest do
     Application.delete_env(:alethea, :consultation_fake_pending)
   end
 
-  defp create_professional! do
-    {:ok, professional} =
-      Accounts.create_professional(%{
-        email: "consultation-live-#{System.unique_integer([:positive])}@alethea.com",
-        password: "supersecret12",
-        full_name: "Dr. Consultation"
-      })
+  defp use_live_consultation(_context) do
+    Application.put_env(:alethea, :clinical_consultation, Consultation.Live, persistent: true)
 
-    professional
-  end
+    on_exit(fn ->
+      Application.put_env(:alethea, :clinical_consultation, Consultation.Fake, persistent: true)
+    end)
 
-  defp create_patient!(professional) do
-    {:ok, kek} = Accounts.load_professional_kek(professional)
-
-    {:ok, patient} =
-      Accounts.create_patient(
-        %{
-          "alias" => "Paciente #{System.unique_integer([:positive])}",
-          "professional_id" => professional.id
-        },
-        kek
-      )
-
-    patient
+    :ok
   end
 
   defp register_and_log_in_professional(%{conn: conn}) do
