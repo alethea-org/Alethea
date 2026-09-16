@@ -14,7 +14,11 @@ defmodule AletheaJobs.ClinicalRecordOutboxWorkerTest do
   failure; any other `{:error, _}` is transient and retries under the
   new `max_attempts: 5`.
   """
-  use Alethea.DataCase, async: true
+  # async: false — every test here swaps the global `:ai_embeddings` adapter
+  # slot through `Application.put_env/3`, so running concurrently with any
+  # other file that reads or writes that slot makes both flaky. Same reason
+  # `Alethea.AI.AdapterDiscoveryTest` and `Alethea.AITest` are sync.
+  use Alethea.DataCase, async: false
   use Oban.Testing, repo: Alethea.Repo
 
   import Mox
