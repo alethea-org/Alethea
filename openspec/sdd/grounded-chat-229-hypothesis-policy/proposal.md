@@ -77,9 +77,14 @@ All units are new files plus two additive edits. Revert = delete the three new m
 - [ ] Every returned hypothesis carries the mandatory disclaimer, injected server-side, never LLM-authored.
 - [ ] `mix precommit` passes; `ClinicalConsultationChain` and its prompt regression test are byte-unchanged.
 
-## Proposal question round — OPEN, needs user decision
+## Locked decisions (D1-D4)
 
-Auto mode: these were not silently assumed. Each carries a recommendation.
+- **D1 — Intent classification: deterministic heuristic.** `interpretive_intent?/1` is a pure, testable Spanish-marker heuristic, never an LLM call. Accepted tradeoff: a false negative (missed interpretive request) just falls through to the normal evidence-based synthesis — never wrong, never harmful.
+- **D2 — Disclaimer: fixed verbatim text, structural field.** `"Hipótesis para revisar: no es un diagnóstico ni una recomendación terapéutica."` lives in `@enforce_keys [:disclaimer]` on `Hypothesis`, written by `HypothesisPolicy.evaluate/2` from a module constant — never LLM-authored, never concatenated into `statement`.
+- **D3 — Diagnostic/prescriptive rejection: fail-closed, whole-hypothesis reject.** Three layers (prompt + lexical forbidden-pattern scan on generated text + static source-scan test on the chain module). A match rejects the ENTIRE hypothesis — no partial redaction, no retry-with-stricter-prompt.
+- **D4 — Output type: `Consultation.Source` (#226a), not `Rag.Citation` (#230).** Contract-canonical, server-derived. Reconciling with `Citation`'s existing renderer is #235's job; #229 does not deepen the duplication and is not blocked waiting for that reconciliation.
+
+## Proposal question round — RESOLVED, see Locked decisions above
 
 ### Q1 — Intent classification: deterministic heuristic vs LLM classifier
 
