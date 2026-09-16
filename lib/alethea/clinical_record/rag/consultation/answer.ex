@@ -4,10 +4,12 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Answer do
   of the four values below. Blocking outcomes (`:no_evidence`, `:stale`,
   `:provider_failure`) carry `synthesis: nil` and `sources: []`;
   `pending` is only meaningful for `:stale` (the queued indexing-job
-  count).
+  count). `hypothesis` is additive (ADR-010 §2, #229): non-nil only
+  alongside `outcome: :synthesis`; no production code path populates it
+  until #235 wires `HypothesisPolicy.evaluate/2` into this flow.
   """
 
-  alias Alethea.ClinicalRecord.Rag.Consultation.Source
+  alias Alethea.ClinicalRecord.Rag.Consultation.{Hypothesis, Source}
 
   @type outcome :: :synthesis | :no_evidence | :stale | :provider_failure
 
@@ -15,9 +17,10 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Answer do
           outcome: outcome(),
           synthesis: String.t() | nil,
           sources: [Source.t()],
-          pending: non_neg_integer()
+          pending: non_neg_integer(),
+          hypothesis: Hypothesis.t() | nil
         }
 
   @enforce_keys [:outcome]
-  defstruct [:outcome, :synthesis, sources: [], pending: 0]
+  defstruct [:outcome, :synthesis, :hypothesis, sources: [], pending: 0]
 end
