@@ -134,8 +134,8 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
     end
 
     test "shares the same DOM shape for every kind (no divergent rendering per source type)" do
-      c_notes = citation(_, "clinical_notes")
-      c_sessions = citation(_, "session_transcripts")
+      c_notes = citation(%{}, "clinical_notes")
+      c_sessions = citation(%{}, "session_transcripts")
       html_notes = render_component(&CoreComponents.citation_list/1, citations: [c_notes])
       html_sessions = render_component(&CoreComponents.citation_list/1, citations: [c_sessions])
 
