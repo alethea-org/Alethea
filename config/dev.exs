@@ -106,3 +106,12 @@ config :alethea, Alethea.Encryption.Vault,
 # The HTTP sidecar (Alethea.AI.EmotionAnalyzer) is not wired in :dev; the
 # Fake returns a fixed canonical score vector with no network calls.
 config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Fake
+
+# Embeddings — Ollama-backed BGE-M3 local adapter (ADR-002, issue #254).
+# Requires `ollama pull bge-m3` and Ollama running on localhost:11434.
+config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Ollama
+
+config :alethea, Alethea.AI.Embeddings.Ollama,
+  model: "bge-m3",
+  endpoint_url: "http://localhost:11434",
+  receive_timeout: 120_000
