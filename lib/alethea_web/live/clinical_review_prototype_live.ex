@@ -92,7 +92,7 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
     """
   end
 
-  defp citation(assigns) do
+  defp crp_citation(assigns) do
     ~H"""
     <article class="crp-citation" id={@id}>
       <p class="crp-citation__label">Extracto citado · Inmutable y atribuible</p>
@@ -188,13 +188,13 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
           </p>
         </div>
         <div class="crp-citations">
-          <.citation
+          <.crp_citation
             id="excerpt-1"
             source_id="source-note-1"
             source_label="12 jun"
             origin="Informe escolar, párrafo 3"
             quote="solicitó salir del aula antes de presentar"
-          /><.citation
+          /><.crp_citation
             id="excerpt-2"
             source_id="source-note-2"
             source_label="19 jun"
@@ -228,7 +228,7 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
               date="Nota clínica inmutable"
               excerpt_id="timeline-excerpt-1"
               body="Informe escolar: evitación previa a la presentación."
-            /><.citation
+            /><.crp_citation
               id="timeline-excerpt-1"
               source_id="timeline-source-1"
               source_label="12 jun"
@@ -243,7 +243,7 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
               date="Nota clínica inmutable"
               excerpt_id="timeline-excerpt-2"
               body="Observación de consulta: participación pese a la aprensión."
-            /><.citation
+            /><.crp_citation
               id="timeline-excerpt-2"
               source_id="timeline-source-2"
               source_label="19 jun"
@@ -300,13 +300,13 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
         </div>
       </div>
       <div class="crp-matrix-excerpts">
-        <.citation
+        <.crp_citation
           id="matrix-excerpt-1"
           source_id="matrix-note-1"
           source_label="12 jun"
           origin="Informe escolar, párrafo 3"
           quote="solicitó salir del aula antes de presentar"
-        /><.citation
+        /><.crp_citation
           id="matrix-excerpt-2"
           source_id="matrix-note-2"
           source_label="19 jun"
@@ -400,14 +400,14 @@ defmodule AletheaWeb.ClinicalReviewPrototypeLive do
           </div>
         </section>
         <div class="crp-citations">
-          <.citation
+          <.crp_citation
             id="hybrid-excerpt-1"
             source_id="hybrid-source-1"
             source_label="12 jun"
             origin="Informe escolar, párrafo 3"
             quote="solicitó salir del aula antes de presentar"
           />
-          <.citation
+          <.crp_citation
             id="hybrid-excerpt-2"
             source_id="hybrid-source-2"
             source_label="19 jun"

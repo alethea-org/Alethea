@@ -61,6 +61,7 @@ defmodule Alethea.ClinicalRecord.Rag.Citation do
     score = fetch!(result, :score)
 
     _ = chunk_id
+    _ = source_resource_id
 
     if content == "" do
       raise ArgumentError,
