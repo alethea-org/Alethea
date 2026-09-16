@@ -48,7 +48,12 @@ defmodule AletheaWeb.PatientLive.IndexTest do
 
       {:ok, view, html} = live(conn, ~p"/patients")
 
-      assert has_element?(view, ~s(a[href="/patients/#{patient.id}/consultation"]), "Consulta clínica")
+      assert has_element?(
+               view,
+               ~s(a[href="/patients/#{patient.id}/consultation"]),
+               "Consulta clínica"
+             )
+
       refute has_element?(view, ~s(a[href="/patients/#{patient.id}/clinical-search"]))
       refute html =~ "Búsqueda clínica"
     end
