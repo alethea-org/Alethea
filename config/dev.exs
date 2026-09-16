@@ -102,10 +102,12 @@ config :phoenix_live_view,
 config :alethea, Alethea.Encryption.Vault,
   aes_key: System.get_env("CLOAK_AES_KEY", "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc=")
 
-# Emotion analyzer — development-only deterministic Fake (issue #198).
-# The HTTP sidecar (Alethea.AI.EmotionAnalyzer) is not wired in :dev; the
-# Fake returns a fixed canonical score vector with no network calls.
-config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Fake
+# Emotion analyzer — real Robertuito inference via local sidecar (issue #255).
+# Requires `docker compose up -d emotion-sidecar` (pysentimiento/robertuito).
+# The sidecar config (base_url, timeouts) is set in config/runtime.exs.
+# If the sidecar is not running, analyze_batch/1 returns {:error, :unavailable}
+# (fail-closed — no scores are persisted).
+config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
 # Embeddings — Ollama-backed BGE-M3 local adapter (ADR-002, issue #254).
 # Requires `ollama pull bge-m3` and Ollama running on localhost:11434.
