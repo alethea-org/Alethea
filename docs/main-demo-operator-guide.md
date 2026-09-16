@@ -215,10 +215,11 @@ Non-eligible resources (`TargetBehavior`, and any `AIProposal` that is
 not yet `accepted`) are never re-enqueued.
 
 Query the resulting projection at
-`/patients/<patient-id>/clinical-search` once logged in. Every result
-carries a persistent, non-dismissible `badge--non-authoritative` label
-and a citation — this view supplements, and never replaces, the
-authoritative `ClinicalRecord` review timeline.
+`/patients/<patient-id>/consultation` once logged in. The grounded
+consultation chat answers in two visibly separate sections — *Síntesis
+basada en evidencia* and *Fuentes* — and every cited source carries its
+exact excerpt, kind, date and a stable reference. This view supplements,
+and never replaces, the authoritative `ClinicalRecord` review timeline.
 
 ## Recovery
 
@@ -249,4 +250,4 @@ Stop the ngrok terminal manually when the public endpoint is no longer required.
 - `lib/mix/tasks/alethea.demo.reset.ex`
 - `lib/mix/tasks/alethea.telegram.bootstrap.ex`
 - `lib/mix/tasks/alethea.rag.reindex.ex`
-- `lib/alethea_web/live/patient_live/clinical_search.ex`
+- `lib/alethea_web/live/consultation_live.ex`
