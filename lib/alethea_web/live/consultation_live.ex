@@ -131,6 +131,27 @@ defmodule AletheaWeb.ConsultationLive do
     |> push_navigate(to: ~p"/patients")
   end
 
+  # Source presentation helpers, migrated from `PatientLive.ClinicalSearch`
+  # (retired in #234b): the consultation chat is now the only surface that
+  # renders server-derived sources.
+
+  defp source_kind_label("clinical_note"), do: "Nota clínica"
+  defp source_kind_label("consultation_evidence"), do: "Evidencia citada"
+  defp source_kind_label("clinician_observation"), do: "Observación del clínico"
+  defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
+  defp source_kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
+  defp source_kind_label(other), do: other
+
+  defp source_link(%{target_behavior_id: nil}, _patient_id), do: nil
+
+  defp source_link(%{target_behavior_id: target_behavior_id}, patient_id) do
+    ~p"/patients/#{patient_id}/target_behaviors/#{target_behavior_id}/review"
+  end
+
+  defp format_datetime(%DateTime{} = datetime) do
+    Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -162,14 +183,38 @@ defmodule AletheaWeb.ConsultationLive do
         <p>Buscando evidencia en el registro…</p>
       </div>
 
-      <div :if={@state == :synthesis} id="consultation-synthesis">
+      <section
+        :if={@state == :synthesis}
+        id="consultation-synthesis"
+        class="consultation__synthesis"
+      >
+        <h2 class="consultation__section-title">Síntesis basada en evidencia</h2>
         <p>{@last_answer.synthesis}</p>
-        <ol>
-          <li :for={source <- @last_answer.sources}>
-            {source.excerpt}
+      </section>
+
+      <section
+        :if={@state == :synthesis}
+        id="consultation-sources"
+        class="consultation__sources-panel"
+      >
+        <h2 class="consultation__section-title">Fuentes</h2>
+        <ol class="consultation__sources">
+          <li :for={source <- @last_answer.sources} class="consultation__source">
+            <p class="consultation__source-excerpt">{source.excerpt}</p>
+            <p class="consultation__source-meta">
+              <span class="consultation__source-kind">{source_kind_label(source.kind)}</span>
+              <span class="consultation__source-date">{format_datetime(source.occurred_at)}</span>
+              <.link
+                :if={source_link(source.reference, @patient_id)}
+                navigate={source_link(source.reference, @patient_id)}
+                class="consultation__source-link"
+              >
+                Ver conducta objetivo
+              </.link>
+            </p>
           </li>
         </ol>
-      </div>
+      </section>
 
       <div :if={@state == :no_evidence} id="consultation-no-evidence" class="empty-state">
         <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>

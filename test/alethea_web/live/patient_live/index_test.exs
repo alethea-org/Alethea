@@ -1,5 +1,7 @@
 defmodule AletheaWeb.PatientLive.IndexTest do
   use AletheaWeb.ConnCase
+
+  import Alethea.RagFixtures
   import Phoenix.LiveViewTest
 
   alias Alethea.Accounts
@@ -34,6 +36,21 @@ defmodule AletheaWeb.PatientLive.IndexTest do
 
       patients = Accounts.list_patients(professional.id)
       assert Enum.any?(patients, &(&1.alias == "Solo Alias"))
+    end
+  end
+
+  describe "patient card navigation (#234a)" do
+    test "the card offers the grounded consultation as the clinical-record entry", %{
+      conn: conn,
+      professional: professional
+    } do
+      patient = create_patient!(professional)
+
+      {:ok, view, html} = live(conn, ~p"/patients")
+
+      assert has_element?(view, ~s(a[href="/patients/#{patient.id}/consultation"]), "Consulta clínica")
+      refute has_element?(view, ~s(a[href="/patients/#{patient.id}/clinical-search"]))
+      refute html =~ "Búsqueda clínica"
     end
   end
 

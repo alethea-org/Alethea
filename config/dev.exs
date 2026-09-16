@@ -17,11 +17,6 @@ config :alethea, Alethea.Repo,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
-# Transitional pin (#227): `Rag.Consultation.Live` doesn't exist yet (#232
-# delivers it). Remove this line once #232 lands so dev falls back to the
-# facade's real default.
-config :alethea, :clinical_consultation, Alethea.ClinicalRecord.Rag.Consultation.Fake
-
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #
