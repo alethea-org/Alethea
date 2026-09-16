@@ -222,11 +222,11 @@ and #234b must land last, after #232 proves retrieval; coordinated single merge 
 
 ## Phase 7: PR #234b — ClinicalSearch hard retirement (D5, deletion only)
 
-- [ ] 7.1 RED `test/alethea_web/router_test.exs` (or new): `assert_raise Phoenix.Router.NoRouteError` for `/patients/#{id}/clinical-search`; `refute Code.ensure_loaded?(AletheaWeb.PatientLive.ClinicalSearch)`. Scenario: Retired route no longer resolves to the ranked list.
-- [ ] 7.2 GREEN `lib/alethea_web/router.ex`: remove the `live("/patients/:patient_id/clinical-search", PatientLive.ClinicalSearch, :index)` block (lines ~127-131).
-- [ ] 7.3 GREEN delete `lib/alethea_web/live/patient_live/clinical_search.ex` (removes the `@relevance_threshold 0.35` constant — threshold now solely owned by `Rag.Consultation.evidence_threshold/0`).
-- [ ] 7.4 GREEN delete `test/alethea_web/live/patient_live/clinical_search_test.exs`.
-- [ ] 7.5 GREEN `docs/main-demo-operator-guide.md` (~lines 218, 252): repoint the two references from `/clinical-search` to `/consultation`.
+- [x] 7.1 RED `test/alethea_web/router_test.exs` (or new): `assert_raise Phoenix.Router.NoRouteError` for `/patients/#{id}/clinical-search`; `refute Code.ensure_loaded?(AletheaWeb.PatientLive.ClinicalSearch)`. Scenario: Retired route no longer resolves to the ranked list.
+- [x] 7.2 GREEN `lib/alethea_web/router.ex`: remove the `live("/patients/:patient_id/clinical-search", PatientLive.ClinicalSearch, :index)` block (lines ~127-131).
+- [x] 7.3 GREEN delete `lib/alethea_web/live/patient_live/clinical_search.ex` (removes the `@relevance_threshold 0.35` constant — threshold now solely owned by `Rag.Consultation.evidence_threshold/0`).
+- [x] 7.4 GREEN delete `test/alethea_web/live/patient_live/clinical_search_test.exs`.
+- [x] 7.5 GREEN `docs/main-demo-operator-guide.md` (~lines 218, 252): repoint the two references from `/clinical-search` to `/consultation`.
 
 ## Phase 8: Verification (each PR + final)
 

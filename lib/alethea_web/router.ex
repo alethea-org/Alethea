@@ -124,12 +124,6 @@ defmodule AletheaWeb.Router do
         :show
       )
 
-      live(
-        "/patients/:patient_id/clinical-search",
-        PatientLive.ClinicalSearch,
-        :index
-      )
-
       live("/patients/:patient_id/consultation", ConsultationLive, :index)
 
       live("/prototype/clinical-review", ClinicalReviewPrototypeLive, :index)

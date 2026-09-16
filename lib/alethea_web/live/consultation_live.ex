@@ -3,8 +3,9 @@ defmodule AletheaWeb.ConsultationLive do
   Chat de consulta clínica fundamentada (#227, ADR-010) — carcasa fina
   sobre `Alethea.ClinicalRecord.Rag.Consultation`. Superficie primaria
   única (D1/#221): esta vista nunca implementa una ruta de búsqueda
-  paralela; hasta que `#232` entregue `Consultation.Live`, sólo consume
-  `Consultation.Fake`.
+  paralela, y desde #234b es la única: `PatientLive.ClinicalSearch` quedó
+  retirada. El contrato resuelve a `Consultation.Live` (#232) en dev y
+  prod, y a `Consultation.Fake` sólo en `:test`.
 
   Cero persistencia (ADR-010 §6): `history` y `followup_state` viven
   únicamente en `socket.assigns` y mueren con el proceso (remount,
