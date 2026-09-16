@@ -15,7 +15,11 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
   sentence (`(?<=[.!?…])\\s+`) boundaries, greedy packing, and ~15%
   trailing overlap between adjacent sub-chunks.
   """
-  use Alethea.DataCase, async: true
+  # async: false — every test here swaps the global `:ai_embeddings` adapter
+  # slot through `Application.put_env/3`, so running concurrently with any
+  # other file that reads or writes that slot makes both flaky. Same reason
+  # `Alethea.AI.AdapterDiscoveryTest` and `Alethea.AITest` are sync.
+  use Alethea.DataCase, async: false
 
   import Mox
 
