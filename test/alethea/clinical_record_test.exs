@@ -221,6 +221,71 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "list_clinical_notes/2" do
+    test "lists decrypted notes for an authorized patient in reverse chronological order with preloaded professional",
+         %{professional: professional, patient: patient} do
+      assert {:ok, []} = ClinicalRecord.list_clinical_notes(professional, patient.id)
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt("Primera nota", dek)
+
+      past_time =
+        DateTime.utc_now()
+        |> DateTime.add(-3600, :second)
+        |> DateTime.truncate(:second)
+
+      _note1 =
+        %ClinicalNote{inserted_at: past_time}
+        |> ClinicalNote.changeset(%{
+          patient_id: patient.id,
+          professional_id: professional.id,
+          encrypted_body: ciphertext
+        })
+        |> Repo.insert!()
+
+      assert {:ok, note2} =
+               ClinicalRecord.create_clinical_note(
+                 professional,
+                 patient.id,
+                 "Segunda nota más reciente"
+               )
+
+      assert {:ok, [latest, older]} =
+               ClinicalRecord.list_clinical_notes(professional, patient.id)
+
+      assert latest.id == note2.id
+      assert latest.body == "Segunda nota más reciente"
+      assert latest.professional.id == professional.id
+      assert latest.professional.full_name == professional.full_name
+
+      assert older.body == "Primera nota"
+      assert older.professional.id == professional.id
+    end
+
+    test "denies unauthorized professional and logs denial audit", %{
+      professional: professional,
+      patient: patient
+    } do
+      other_professional = create_professional!()
+
+      {:ok, _note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, "Nota confidencial")
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.list_clinical_notes(other_professional, patient.id)
+
+      audit_rows =
+        AuditLog
+        |> where([a], a.professional_id == ^other_professional.id)
+        |> Repo.all()
+
+      assert length(audit_rows) == 1
+      assert hd(audit_rows).action == "clinical_record_access_denied"
+      assert hd(audit_rows).details == %{"outcome" => "denied"}
+    end
+  end
+
   describe "create_clinical_note/3 — atomicity" do
     test "a failure past :record rolls back the whole Multi (no row, no audit, no job)", %{
       professional: professional,
