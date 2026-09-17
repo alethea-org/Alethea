@@ -90,7 +90,7 @@ defmodule Alethea.ClinicalRecord.Rag.CitationTest do
     test "rejects an empty excerpt — empty cite = decorative cite, not verifiable" do
       with_empty = Map.put(@valid_result, :content, "")
 
-      assert_raise ArgumentError, ~r/excerpt/, fn ->
+      assert_raise ArgumentError, ~r/content/, fn ->
         Citation.from_retrieval_result(with_empty)
       end
     end
@@ -137,7 +137,7 @@ defmodule Alethea.ClinicalRecord.Rag.CitationTest do
       stolen =
         @valid_result
         |> Map.put(:content, "Texto inventado por el LLM")
-        |> Map.put(:chunk_id, "deadbeef-0000-0000-0000-000000000000")
+        |> Map.put(:source_resource_id, "deadbeef-0000-0000-0000-000000000000")
 
       c2 = Citation.from_retrieval_result(stolen)
 
