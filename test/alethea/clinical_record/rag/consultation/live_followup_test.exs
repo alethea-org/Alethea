@@ -157,10 +157,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
                )
     end
 
-    test "second turn yields :provider_failure when the chain raises" do %{
-      professional: professional,
-      patient: patient
-    } do
+test "second turn yields :provider_failure when the chain raises", %{professional: professional, patient: patient} do
       insert_chunk!(professional, patient, "El paciente mejora su animo", near_vector())
       stub_query_embedding(near_vector())
       expect(ClinicalConsultationChainMock, :run, 1, fn _ -> raise "boom" end)
