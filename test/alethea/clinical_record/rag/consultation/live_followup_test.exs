@@ -74,6 +74,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
         "El paciente mejora su animo esta semana",
         near_vector()
       )
+
       stub_query_embedding(near_vector())
 
       expect(ClinicalConsultationChainMock, :run, 2, fn _params ->
@@ -113,6 +114,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
         "El paciente mejora su animo esta semana",
         near_vector()
       )
+
       stub_query_embedding(near_vector())
 
       expect(ClinicalConsultationChainMock, :run, 1, fn %{question: question, excerpts: _excerpts} ->
