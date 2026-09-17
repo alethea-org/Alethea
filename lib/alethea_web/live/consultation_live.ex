@@ -7,19 +7,19 @@ defmodule AletheaWeb.ConsultationLive do
   retirada. El contrato resuelve a `Consultation.Live` (#232) en dev y
   prod, y a `Consultation.Fake` sólo en `:test`.
 
-  Cero persistencia (ADR-010 §6): `history` y `followup_state` viven
-  únicamente en `socket.assigns` y mueren con el proceso (remount,
-  navegación, logout, "nueva conversación"). Ningún handler escribe en
-  `Repo`, ETS, ni audita el acceso. `current_professional` y
+  Cero persistencia (ADR-010 §6): `followup_state` y el contador de
+  turno viven únicamente en `socket.assigns` y mueren con el proceso
+  (remount, navegación, logout, "nueva conversación"). Ningún handler
+  escribe en `Repo`, ETS, ni audita el acceso. `current_professional` y
   `patient_id` siempre se leen de `socket.assigns`, nunca de params de
-  evento.
+  evento. A partir de #233 (B2) ya no se mantiene un historial textual:
+  la conversación previa se compone únicamente con `source_ref`s
+  server-derived (`followup_state`), nunca con prosa del asistente.
   """
   use AletheaWeb, :live_view
 
   alias Alethea.ClinicalRecord.Rag.Consultation
   alias AletheaWeb.GroundedChat.FollowupState
-
-  @history_limit 6
 
   @impl true
   def mount(%{"patient_id" => patient_id}, _session, socket) do
@@ -30,7 +30,6 @@ defmodule AletheaWeb.ConsultationLive do
         socket =
           socket
           |> assign(:patient_id, patient_id)
-          |> assign(:history, [])
           |> assign(:state, :idle)
           |> assign(:pending, 0)
           |> assign(:turn, 0)
@@ -52,14 +51,19 @@ defmodule AletheaWeb.ConsultationLive do
   def handle_event("ask", %{"consultation" => %{"query" => query}}, socket) do
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
-    history = socket.assigns.history
+    followup_state = socket.assigns.followup_state
+    next_turn = socket.assigns.turn
 
     socket =
       socket
       |> assign(:state, :retrieving)
       |> assign(:query_form, to_form(%{"query" => ""}, as: "consultation"))
       |> start_async(:answer, fn ->
-        {query, Consultation.answer(professional, patient_id, query, history: history)}
+        {query,
+         Consultation.answer(professional, patient_id, query,
+           followup_state: followup_state,
+           turn_index: next_turn
+         )}
       end)
 
     {:noreply, socket}
@@ -69,7 +73,6 @@ defmodule AletheaWeb.ConsultationLive do
   def handle_event("new_conversation", _params, socket) do
     socket =
       socket
-      |> assign(:history, [])
       |> assign(:state, :idle)
       |> assign(:pending, 0)
       |> assign(:turn, 0)
@@ -91,19 +94,20 @@ defmodule AletheaWeb.ConsultationLive do
 
   defp apply_answer(socket, query, {:ok, %Consultation.Answer{outcome: :synthesis} = answer}) do
     turn = socket.assigns.turn
+    refs = Enum.map(answer.sources, &source_ref/1)
 
-    history =
-      (socket.assigns.history ++
-         [
-           %{role: :professional, content: query},
-           %{role: :assistant, content: answer.synthesis}
-         ])
-      |> Enum.take(-@history_limit)
+    # B2 (#233): each successful synthesis turn records its server-derived
+    # refs in the B1 slot at the current turn index, then advances the
+    # counter. Blocked turns (`no_evidence`, `stale`, `provider_failure`,
+    # `unauthorized`) intentionally do NOT advance the counter and do
+    # NOT record: the user can retry against the same conversational
+    # step without polluting the B1 ring buffer with non-evidence turns.
+    next_state = FollowupState.record_turn(socket.assigns.followup_state, turn, query, refs)
 
     socket
     |> assign(:state, :synthesis)
-    |> assign(:history, history)
     |> assign(:turn, turn + 1)
+    |> assign(:followup_state, next_state)
     |> assign(:last_answer, answer)
     |> stream_insert(:messages, %{id: "turn-#{turn}", turn: turn, query: query, answer: answer})
   end
@@ -142,6 +146,14 @@ defmodule AletheaWeb.ConsultationLive do
   defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
   defp source_kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
   defp source_kind_label(other), do: other
+
+  # B2 (#233): server-derived `source_ref`. Stable across renders, unique
+  # per `(chunk_id, resource_type, resource_id)`. Used to populate the B1
+  # slot — never contains excerpts, only metadata that re-derives from
+  # the live retrieval on the next turn.
+  defp source_ref(%Consultation.Source{reference: ref}) do
+    "#{ref.chunk_id}:#{ref.resource_type}:#{ref.resource_id}"
+  end
 
   defp source_link(%{target_behavior_id: nil}, _patient_id), do: nil
 
