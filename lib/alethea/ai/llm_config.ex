@@ -29,6 +29,8 @@ defmodule Alethea.AI.LLMConfig do
           | :weekly_summary
           | :weekly_report
           | :pattern_proposal
+          | :consultation_synthesis
+          | :consultation_hypothesis
 
   @type config :: %__MODULE__.Config{
           provider: provider(),
@@ -234,6 +236,8 @@ defmodule Alethea.AI.LLMConfig do
   defp chain_module(:weekly_summary), do: Alethea.AI.Chains.WeeklySummaryChain
   defp chain_module(:weekly_report), do: Alethea.AI.Chains.WeeklyReportChain
   defp chain_module(:pattern_proposal), do: Alethea.AI.Chains.PatternProposalChain
+  defp chain_module(:consultation_synthesis), do: Alethea.AI.Chains.ClinicalConsultationChain
+  defp chain_module(:consultation_hypothesis), do: Alethea.AI.Chains.ClinicalHypothesisChain
 
   defp build_retry_config(global, chain, overrides) do
     retry_enabled =

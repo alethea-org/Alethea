@@ -33,7 +33,7 @@ defmodule AletheaWeb.GroundedChat.FollowupState do
 
   ## Hand-off
 
-    * A2 (issue #227) crea `AletheaWeb.GroundedChatLive` y la asigna
+    * A2 (issue #227) crea `AletheaWeb.ConsultationLive` y la asigna
       en su `mount/3`: `assign(socket, :followup_state, FollowupState.new(patient_id))`.
     * B2 (issue #233) recibe el `t()` y consume sólo `refs_for/2` y
       `last_index/1` para desambiguar; nunca su contenido como

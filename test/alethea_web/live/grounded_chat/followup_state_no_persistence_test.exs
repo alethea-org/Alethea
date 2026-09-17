@@ -22,7 +22,7 @@ defmodule AletheaWeb.GroundedChat.FollowupStateNoPersistenceTest do
       # A2 (issue #227) — la carcasa LiveView del chat; asigna
       # el estado en mount/3. Es exactamente el seam LiveView
       # previsto por ADR-010 §6.
-      "lib/alethea_web/live/grounded_chat_live.ex",
+      "lib/alethea_web/live/consultation_live.ex",
 
   Una referencia que **nunca** debe entrar en la allowlist:
 
@@ -41,6 +41,11 @@ defmodule AletheaWeb.GroundedChat.FollowupStateNoPersistenceTest do
   @allowed_lib_paths [
     # B1 (issue #228): el propio módulo define el seam.
     # Excluido por convención; ver `lib_root_basenames/0` abajo.
+
+    # A2 (issue #227) — la carcasa LiveView del chat; asigna el
+    # estado en mount/3 y lo resetea en "nueva conversación". Es
+    # exactamente el seam LiveView previsto por ADR-010 §6.
+    "lib/alethea_web/live/consultation_live.ex"
   ]
 
   # Tests pueden referenciar FollowupState libremente.
