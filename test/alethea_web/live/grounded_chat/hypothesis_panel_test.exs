@@ -2,198 +2,132 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
   @moduledoc """
   Cubre los criterios de aceptación de la issue #231 (ADR-010): el
   panel *Hipótesis para revisar* debe estar visiblemente separado,
-  llevar disclaimer clínico antes del contenido interpretativo, citar
-  cada afirmación con el renderer server-derived de #230 (sin markup
-  propio) y desaparecer por completo cuando la consulta no es
-  interpretativa.
+  llevar el disclaimer clínico server-owned antes de la afirmación,
+  citar la evidencia con el renderer server-derived de #230 (sin
+  markup propio) y desaparecer por completo cuando no hay hipótesis
+  para el turno.
+
+  Fixtures construidas vía `HypothesisPolicy.evaluate/2` (el único
+  constructor real de `Hypothesis.t()`, #229) — mismo patrón que usa
+  `hypothesis_policy_test.exs`, no structs armados a mano.
   """
   use ExUnit.Case, async: true
 
   import Phoenix.LiveViewTest
 
-  alias Alethea.ClinicalRecord.Rag.Citation
+  alias Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy
   alias AletheaWeb.GroundedChat.HypothesisPanel
-  alias AletheaWeb.GroundedChat.HypothesisPanel.Claim
 
-  @retrieval_result %{
+  @statement "La reducción a corto plazo de la exposición podría estar funcionando como escape."
+
+  @fixture_result_a %{
     chunk_id: "11111111-1111-1111-1111-111111111111",
     source_resource_type: "clinical_notes",
     source_resource_id: "22222222-2222-2222-2222-222222222222",
     source_occurred_at: ~U[2026-06-12 09:00:00Z],
     target_behavior_id: nil,
-    chunk_index: 0,
-    full_event: true,
-    content: "solicitó salir del aula antes de presentar",
-    dense_distance: 0.1,
-    lexical_score: 0.7,
-    score: 0.83
+    content: "solicitó salir del aula antes de presentar"
   }
 
-  @citation Citation.from_retrieval_result(@retrieval_result)
+  @fixture_result_b %{
+    chunk_id: "33333333-3333-3333-3333-333333333333",
+    source_resource_type: "clinical_notes",
+    source_resource_id: "44444444-4444-4444-4444-444444444444",
+    source_occurred_at: ~U[2026-06-19 09:00:00Z],
+    target_behavior_id: nil,
+    content: "permaneció en el grupo pese a la aprensión"
+  }
 
-  @claim Claim.build(
-           "hyp-claim-1",
-           "La reducción a corto plazo de la exposición podría estar funcionando como escape.",
-           [@citation]
-         )
+  @hypothesis (case HypothesisPolicy.evaluate(@statement, [@fixture_result_a]) do
+                 {:ok, hypothesis} -> hypothesis
+               end)
 
-  # Difiere en :chunk_index de @retrieval_result — Citation.ref/1 es
-  # determinístico, así que dos citas con el mismo id/chunk producirían
-  # el mismo `source_ref` y, por lo tanto, el mismo id de DOM (ver D4,
-  # design.md §5).
-  @retrieval_result_b Map.put(@retrieval_result, :chunk_index, 1)
-  @citation_b Citation.from_retrieval_result(@retrieval_result_b)
-
-  @claim_a Claim.build(
-             "hyp-claim-1",
-             "La reducción a corto plazo de la exposición podría estar funcionando como escape.",
-             [@citation]
-           )
-  @claim_b Claim.build(
-             "hyp-claim-2",
-             "El comportamiento evitativo se refuerza tras cada episodio de escape.",
-             [@citation_b]
-           )
-
-  describe "@moduledoc disclosures" do
-    test "declara Claim.t()/interpretive? como interfaz provisional pendiente de #229 (PD1) y el disclaimer como borrador pendiente de sign-off clínico/legal (PD4)" do
-      moduledoc = moduledoc_text(HypothesisPanel)
-
-      assert moduledoc =~ "provisional"
-      assert moduledoc =~ "#229"
-      assert moduledoc =~ "borrador"
-      assert moduledoc =~ "clínic"
-    end
-  end
-
-  describe "Claim.build/3" do
-    test "construye un %Claim{} válido" do
-      assert %Claim{id: "hyp-claim-x", statement: "afirmación válida", citations: [@citation]} =
-               Claim.build("hyp-claim-x", "afirmación válida", [@citation])
-    end
-
-    test "rechaza id no-binario" do
-      assert_raise ArgumentError, fn -> Claim.build(123, "afirmación", [@citation]) end
-    end
-
-    test "rechaza id vacío" do
-      assert_raise ArgumentError, fn -> Claim.build("", "afirmación", [@citation]) end
-    end
-
-    test "rechaza statement vacío" do
-      assert_raise ArgumentError, fn -> Claim.build("hyp-claim-x", "", [@citation]) end
-    end
-
-    test "rechaza citations con un elemento que no es %Citation{}" do
-      assert_raise ArgumentError, fn ->
-        Claim.build("hyp-claim-x", "afirmación", [@citation, %{not: "a citation"}])
-      end
-    end
-  end
+  @hypothesis_multi (case HypothesisPolicy.evaluate(@statement, [
+                             @fixture_result_a,
+                             @fixture_result_b
+                           ]) do
+                        {:ok, hypothesis} -> hypothesis
+                      end)
 
   describe "hypothesis_panel/1" do
-    test "no renderiza nada cuando la consulta no es interpretativa" do
+    test "no renderiza nada cuando no hay hipótesis para este turno" do
       html =
         render_component(&HypothesisPanel.hypothesis_panel/1,
           id: "chat-turn-1-hypothesis",
-          interpretive?: false,
-          claims: [@claim]
+          hypothesis: nil
         )
 
       assert String.trim(html) == ""
     end
 
-    test "renderiza el panel separado con el disclaimer antes de la primera afirmación" do
+    test "renderiza el panel con el disclaimer server-owned antes de la afirmación" do
       html =
         render_component(&HypothesisPanel.hypothesis_panel/1,
           id: "chat-turn-1-hypothesis",
-          interpretive?: true,
-          claims: [@claim]
+          hypothesis: @hypothesis
         )
 
       assert html =~ ~s(id="chat-turn-1-hypothesis")
       assert html =~ "Hipótesis para revisar"
       assert html =~ "Disclaimer clínico"
-      assert html =~ "No es un diagnóstico ni una recomendación terapéutica"
+      assert html =~ @hypothesis.disclaimer
 
       {disclaimer_pos, _} = :binary.match(html, "Disclaimer clínico")
-      {claim_pos, _} = :binary.match(html, @claim.statement)
+      {statement_pos, _} = :binary.match(html, @hypothesis.statement)
 
-      assert disclaimer_pos < claim_pos
+      assert disclaimer_pos < statement_pos
     end
 
-    test "cada afirmación se renderiza con el citation renderer real de #230, sin markup propio" do
+    test "la evidencia se renderiza con el citation renderer real de #230, sin markup propio" do
       html =
         render_component(&HypothesisPanel.hypothesis_panel/1,
           id: "chat-turn-1-hypothesis",
-          interpretive?: true,
-          claims: [@claim]
+          hypothesis: @hypothesis
         )
 
-      assert html =~ ~s(id="hyp-claim-1")
-      assert html =~ @claim.statement
-
-      # DOM exacto de AletheeWeb.CoreComponents.citation/1 — mismo shape que Síntesis.
+      # DOM exacto de AletheaWeb.CoreComponents.citation/1 — mismo shape que Síntesis.
       assert html =~ "<details"
-      assert html =~ ~s(id="citation-#{@citation.source_ref}")
       assert html =~ "citation__summary"
-      assert html =~ @citation.kind
+
+      [source] = @hypothesis.sources
+      short_chunk_id = source.reference.chunk_id |> String.slice(0, 8)
+      expected_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
+
+      assert html =~ ~s(id="citation-#{expected_ref}")
+      assert html =~ source.kind
     end
 
-    test "puede renderizar el panel sin afirmaciones todavía (C1 autorizó pero no hay claims)" do
+    test "con dos o más fuentes, cada una se cita de forma independiente" do
       html =
         render_component(&HypothesisPanel.hypothesis_panel/1,
           id: "chat-turn-1-hypothesis",
-          interpretive?: true,
-          claims: []
+          hypothesis: @hypothesis_multi
         )
 
-      assert html =~ "Hipótesis para revisar"
-      refute html =~ "<details"
-    end
+      [source_a, source_b] = @hypothesis_multi.sources
 
-    test "con dos o más afirmaciones, preserva el orden de la lista y no mezcla las citas entre afirmaciones" do
-      html =
-        render_component(&HypothesisPanel.hypothesis_panel/1,
-          id: "chat-turn-1-hypothesis",
-          interpretive?: true,
-          claims: [@claim_a, @claim_b]
-        )
+      ref_a = "#{source_a.reference.resource_type}/#{String.slice(source_a.reference.chunk_id, 0, 8)}"
+      ref_b = "#{source_b.reference.resource_type}/#{String.slice(source_b.reference.chunk_id, 0, 8)}"
 
-      {statement_a_pos, _} = :binary.match(html, @claim_a.statement)
-      {statement_b_pos, _} = :binary.match(html, @claim_b.statement)
-      {disclaimer_pos, _} = :binary.match(html, "Disclaimer clínico")
-
-      assert statement_a_pos < statement_b_pos
-      assert disclaimer_pos < statement_a_pos
-      assert disclaimer_pos < statement_b_pos
-
-      assert html =~ ~s(id="hyp-claim-1")
-      assert html =~ ~s(id="hyp-claim-2")
+      assert html =~ ~s(id="citation-#{ref_a}")
+      assert html =~ ~s(id="citation-#{ref_b}")
 
       lazy = LazyHTML.from_fragment(html)
-
-      claim_a_citation_ids =
-        lazy |> LazyHTML.query("li#hyp-claim-1 details") |> LazyHTML.attribute("id")
-
-      claim_b_citation_ids =
-        lazy |> LazyHTML.query("li#hyp-claim-2 details") |> LazyHTML.attribute("id")
-
-      assert claim_a_citation_ids == ["citation-#{@citation.source_ref}"]
-      assert claim_b_citation_ids == ["citation-#{@citation_b.source_ref}"]
-
       assert lazy |> LazyHTML.query("details") |> Enum.count() == 2
-      assert lazy |> LazyHTML.query("section.citation-list") |> Enum.count() == 2
     end
-  end
 
-  defp moduledoc_text(module) do
-    {:docs_v1, _annotation, _language, _format, module_doc, _metadata, _docs} =
-      Code.fetch_docs(module)
+    test "rechaza una fuente con excerpt vacío — HypothesisPolicy no lo garantiza por elemento" do
+      empty_excerpt_result = Map.put(@fixture_result_a, :content, "")
 
-    case module_doc do
-      %{} = docs -> docs |> Map.values() |> Enum.join("\n")
-      _ -> ""
+      {:ok, hypothesis_with_empty_source} =
+        HypothesisPolicy.evaluate(@statement, [empty_excerpt_result])
+
+      assert_raise ArgumentError, fn ->
+        render_component(&HypothesisPanel.hypothesis_panel/1,
+          id: "chat-turn-1-hypothesis",
+          hypothesis: hypothesis_with_empty_source
+        )
+      end
     end
   end
 end
