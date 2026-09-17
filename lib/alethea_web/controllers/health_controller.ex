@@ -19,11 +19,11 @@ defmodule AletheaWeb.HealthController do
   def readiness(conn, _params) do
     checks = %{
       database: check_database(),
-      redis: check_redis()
+      oban: check_oban()
     }
 
     status =
-      if checks.database == :ok && checks.redis == :ok do
+      if checks.database == :ok && checks.oban == :ok do
         200
       else
         503
@@ -46,7 +46,7 @@ defmodule AletheaWeb.HealthController do
     end
   end
 
-  defp check_redis do
+  defp check_oban do
     # Oban stores jobs in the database. For health check purposes, we verify
     # Oban is functional by checking if the oban_jobs table is accessible.
     case Repo.query("SELECT 1 FROM oban_jobs LIMIT 1") do

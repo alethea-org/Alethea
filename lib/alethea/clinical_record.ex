@@ -113,6 +113,39 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
+  @doc """
+  Lists all clinical notes for an authorized patient in reverse-chronological order,
+  decrypting each note's encrypted body under the patient's DEK. Preloads the professional
+  author.
+
+  Returns `{:ok, [ClinicalNote.t()]}` on success, or `{:error, :unauthorized}`
+  if the professional is not authorized for this patient.
+  """
+  @spec list_clinical_notes(Professional.t(), Ecto.UUID.t()) ::
+          {:ok, [ClinicalNote.t()]} | {:error, :unauthorized | term()}
+  def list_clinical_notes(%Professional{} = professional, patient_id) do
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        deny_access(professional.id, patient_id)
+
+      patient ->
+        with {:ok, kek} <- Accounts.load_professional_kek(professional),
+             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
+          notes =
+            ClinicalNote
+            |> where([n], n.patient_id == ^patient.id)
+            |> order_by([n], desc: n.inserted_at, desc: n.id)
+            |> preload([:professional])
+            |> Repo.all()
+            |> Enum.map(fn note ->
+              %{note | body: decrypt_or_placeholder(note.encrypted_body, dek)}
+            end)
+
+          {:ok, notes}
+        end
+    end
+  end
+
   # Authorizes via `Accounts.get_patient_for_professional/2`, then loads the
   # professional's KEK and BOTH DEKs (the shared patient DEK and the
   # CR-scoped "patient_clinical_record" DEK, lazily provisioned here — D1,

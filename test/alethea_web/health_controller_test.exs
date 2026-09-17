@@ -18,7 +18,7 @@ defmodule AletheaWeb.HealthControllerTest do
 
       assert response["status"] == "ok"
       assert response["checks"]["database"] == "ok"
-      assert response["checks"]["redis"] == "ok"
+      assert response["checks"]["oban"] == "ok"
     end
   end
 

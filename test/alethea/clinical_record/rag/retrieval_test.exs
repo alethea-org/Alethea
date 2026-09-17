@@ -18,7 +18,11 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
   - Authorization via the existing `get_patient_for_professional/2`
     accessor (non-treating professional denied).
   """
-  use Alethea.DataCase, async: true
+  # async: false — every test here swaps the global `:ai_embeddings` adapter
+  # slot through `Application.put_env/3`, so running concurrently with any
+  # other file that reads or writes that slot makes both flaky. Same reason
+  # `Alethea.AI.AdapterDiscoveryTest` and `Alethea.AITest` are sync.
+  use Alethea.DataCase, async: false
   use Oban.Testing, repo: Alethea.Repo
 
   import Mox

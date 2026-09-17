@@ -6,7 +6,6 @@ Diario interactivo y sensor de conducta verbal para la continuidad terapéutica.
 [![OTP](https://img.shields.io/badge/OTP-28-4b275f?logo=erlang&logoColor=white)](https://www.erlang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.8-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
 [![CI](https://github.com/alethea-org/Alethea/actions/workflows/elixir.yml/badge.svg)](https://github.com/alethea-org/Alethea/actions)
 
 ## 🚀 Onboarding
@@ -78,7 +77,6 @@ Las decisiones técnicas duras (LLM en Groq, embeddings HF, Telegram como único
 | Elixir | 1.19+ | Lenguaje y framework (versión validada por el CI) |
 | Erlang/OTP | 28 | Runtime de Elixir |
 | PostgreSQL | 15+ | Base de datos principal |
-| Redis | 7+ | Cola/infraestructura de soporte |
 | Docker | Cualquiera | Opcional: levanta las dependencias en un comando |
 | Node.js | 20 | Opcional: solo para regenerar los assets estáticos |
 
@@ -97,18 +95,18 @@ docker compose up
 - Health check: <http://localhost:4000/health>
 - Mailpit (email de desarrollo): <http://localhost:8025>
 
-El compose levanta la aplicación, PostgreSQL y Redis. En desarrollo Telegram se simula con `Alethea.Telegram.Client.Fake`, por lo que **no** se requiere bot real ni webhook público.
+El compose levanta la aplicación y PostgreSQL. En desarrollo Telegram se simula con `Alethea.Telegram.Client.Fake`, por lo que **no** se requiere bot real ni webhook público.
 
 ### Opción B: Instalación local
 
 1. Instalar **Elixir 1.19** y **Erlang/OTP 28** (asdf, apt, Homebrew o el manejador de tu preferencia).
-2. Tener PostgreSQL y Redis disponibles. La forma más rápida es solo levantar las dependencias:
+2. Tener PostgreSQL disponible. La forma más rápida es solo levantar la dependencia:
 
    ```bash
-   docker compose up -d db redis
+   docker compose up -d db
    ```
 
-   O instalarlos nativamente y asegurar que `postgres` con contraseña `postgres` sea accesible en `localhost:5432` y Redis en `localhost:6379`.
+   O instalarlo nativamente y asegurar que `postgres` con contraseña `postgres` sea accesible en `localhost:5432`.
 
 3. Obtener el código:
 
@@ -165,7 +163,6 @@ El job de CI corre exactamente estos comandos — puedes reproducirlos localment
 ```bash
 export MIX_ENV=test
 export PGHOST=localhost PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres PGDATABASE=alethea_test
-export REDIS_HOST=localhost REDIS_PORT=6379
 mix test
 ```
 
@@ -185,7 +182,7 @@ El flujo de CI está definido en `.github/workflows/elixir.yml` y se dispara con
 
 | Trabajo | Descripción |
 | --- | --- |
-| `test` | Levanta servicios PostgreSQL **15** y Redis **7**; instala Elixir **1.19** con OTP **28** (vía `erlef/setup-beam@v1`); ejecuta `mix deps.get` y `mix test`. |
+| `test` | Levanta servicio PostgreSQL **15**; instala Elixir **1.19** con OTP **28** (vía `erlef/setup-beam@v1`); ejecuta `mix deps.get` y `mix test`. |
 | `format` | Instala Elixir 1.19/OTP 28; ejecuta `mix deps.get` y `mix format --check-formatted`. |
 
 ---
