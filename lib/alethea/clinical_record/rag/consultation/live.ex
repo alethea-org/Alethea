@@ -45,24 +45,41 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
   @spec resolve_query(String.t(), [%{role: atom(), content: String.t()}]) :: String.t()
   def resolve_query(query, history) when is_binary(query) and is_list(history), do: query
 
-  defp answer_authorized(professional, patient_id, query, opts) do
-    case Retrieval.freshness(patient_id) do
-      %{stale?: true, pending: pending} ->
-        {:ok, %Answer{outcome: :stale, pending: pending}}
+  @spec resolve_query(String.t(), map() | nil, non_neg_integer()) :: String.t()
+  def resolve_query(query, _followup_state, turn_index)
+      when is_binary(query) and (is_integer(turn_index) and turn_index >= 0),
+      do: query
 
-      %{stale?: false} ->
-        retrieve_and_answer(professional, patient_id, query, opts)
+  defp answer_authorized(professional, patient_id, query, opts) do
+    with :ok <- authorize_followup_slot(patient_id, opts) do
+      case Retrieval.freshness(patient_id) do
+        %{stale?: true, pending: pending} ->
+          {:ok, %Answer{outcome: :stale, pending: pending}}
+
+        %{stale?: false} ->
+          retrieve_and_answer(professional, patient_id, query, opts)
+      end
     end
   end
 
   defp retrieve_and_answer(professional, patient_id, query, opts) do
-    history = Keyword.get(opts, :history, [])
-    resolved_query = resolve_query(query, history)
+    followup_state = Keyword.get(opts, :followup_state)
+    turn_index = Keyword.get(opts, :turn_index, 0)
+    resolved_query = resolve_query(query, followup_state, turn_index)
 
     case Retrieval.search(professional, patient_id, resolved_query, opts) do
       {:error, :unauthorized} -> {:error, :unauthorized}
       {:error, _reason} -> {:ok, %Answer{outcome: :provider_failure}}
       {:ok, envelope} -> handle_envelope(envelope, query)
+    end
+  end
+
+  defp authorize_followup_slot(patient_id, opts) when is_binary(patient_id) and is_list(opts) do
+    case Keyword.get(opts, :followup_state) do
+      nil -> :ok
+      %{patient_id: nil} -> :ok
+      %{patient_id: ^patient_id} -> :ok
+      _ -> {:error, :unauthorized}
     end
   end
 
