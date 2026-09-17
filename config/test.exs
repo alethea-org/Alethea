@@ -35,10 +35,6 @@ config :alethea, :clinical_consultation_chain, Alethea.AI.ClinicalConsultationCh
 # `Rag.Consultation.Live` implementation lands in #232.
 config :alethea, :clinical_consultation, Alethea.ClinicalRecord.Rag.Consultation.Fake
 
-# Grounded clinical consultation (#226a): the facade dispatches to the
-# deterministic Fake in :test — no real retrieval, no LLM. The real
-# `Rag.Consultation.Live` implementation lands in #232.
-config :alethea, :clinical_consultation, Alethea.ClinicalRecord.Rag.Consultation.Fake
 
 # The real Alethea.AI.EmotionAnalyzer config (HTTP sidecar) is loaded from
 # config/config.exs (defaults) and config/runtime.exs (env-overrides) for
