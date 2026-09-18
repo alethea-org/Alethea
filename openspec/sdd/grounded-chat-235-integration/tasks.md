@@ -1,0 +1,93 @@
+# Tasks — grounded-chat-235-integration
+
+**Change:** grounded-chat-235-integration (issue #235) | **Store:** hybrid
+**Mode:** Strict TDD — RED (failing test) → GREEN (minimum code) → REFACTOR, per task where applicable.
+**Branch:** `feat/grounded-chat-235-integration` (cut from `feat/grounded-clinical-chat-hypotheses`) → 4 chained child branches, each targeting the previous slice.
+**Inputs:** `proposal.md` (1fbcc84), `spec.md` (47e43d9, 12 requirements), `design.md` (398a845) — design is authoritative for code shape; tasks slice it, not re-derive it.
+
+## Review Workload Forecast
+
+| Field | Value |
+|---|---|
+| Estimated changed lines | ~940 total across 4 PRs (design's Slicing Plan, verbatim) |
+| 400-line budget risk | Low per slice (each under 400) |
+| Chained PRs recommended | Yes |
+| Suggested split | #235a0 → #235a → #235b → #235c |
+| Delivery strategy | ask-on-risk (session default; not overridden) |
+| Chain strategy | feature-branch-chain (pre-fixed by design's Slicing Plan) |
+
+Decision needed before apply: No
+Chained PRs recommended: Yes
+Chain strategy: feature-branch-chain
+400-line budget risk: Low
+
+**Arithmetic (design's Slicing Plan, unchanged):** #235a0 ≈187 (ast_scan.ex ~70, ast_scan_test.exs ~90, hypothesis_policy_test.exs +3/−24) · #235a ≈266 (live.ex +32, answer.ex +4, live_test.exs +160, hypothesis_wiring_gate_test.exs +70) · #235b ≈228 (consultation_live.ex +12, fake.ex +15/−6, rag_fixtures.ex +25, consultation_live_test.exs +170) · #235c ≈259 (core_components.ex +15/−3, consultation_live.ex +18/−26, source_citation.ex +32, hypothesis_panel.ex +4/−30, citation_test.exs +55, consultation_live_test.exs +35/−18, hypothesis_panel_test.exs +15/−8). No drift found while slicing into tasks — every file design named appears in a task below and nothing new was added.
+
+### Suggested Work Units
+
+| Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
+|---|---|---|---|---|---|
+| #235a0 | AST scanner extraction, gate migrated | PR 1 (base = tracker) | `mix test test/alethea/test_support/ast_scan_test.exs test/alethea/clinical_record/rag/consultation/hypothesis_policy_test.exs` | N/A — pure ExUnit, no process/runtime boundary (design's Threat Matrix: N/A) | Pure test-infra; revert restores `hg_walk/2` verbatim, zero production diff |
+| #235a | Domain wiring + gate | PR 2 (base = #235a0) | `mix test test/alethea/clinical_record/rag/consultation/live_test.exs test/alethea/clinical_record/rag/consultation/hypothesis_wiring_gate_test.exs` | N/A — `answer/4` unit harness, no LiveView mount | Revert restores `hypothesis: nil` in every `Answer` — today's production behavior exactly |
+| #235b | Panel mount + E2E | PR 3 (base = #235a) | `mix test test/alethea_web/live/consultation_live_test.exs test/alethea/clinical_record/rag/consultation/live_test.exs` | `Phoenix.LiveViewTest` render/mount (no external service) | Revert restores current render (Síntesis + Fuentes, no panel) |
+| #235c | Citation unification | PR 4 (base = #235b) | `mix test test/alethea_web/components/citation_test.exs test/alethea_web/live/grounded_chat/hypothesis_panel_test.exs test/alethea_web/live/consultation_live_test.exs` | `Phoenix.LiveViewTest` + `LazyHTML` DOM assertions | Revert restores hand-rolled source markup; no persisted state anywhere in this change |
+
+## Requirement Coverage (12 → slice, per design's Test Plan)
+
+R1,R2,R3,R6,R7,R9,R11 → **#235a** · R4,R5,R12 → **#235b** · R8 → **#235a + #235b** (domain + render halves; zero-evidence half covered by construction, no new test) · R10 → **#235c**
+
+## Phase 0 — Slice #235a0: AST scan extraction (pure refactor)
+
+- [x] 0.1 RED: `test/alethea/test_support/ast_scan_test.exs` — full positive/negative table from design AD5 (`HypothesisPolicy.evaluate(a,b)`, aliased call, `&.../2` capture, `apply/3`, `import`, moduledoc string, `alias`, pattern-match struct). Module doesn't exist yet — compile failure is the RED. Actual RED: 13/13 failures (`UndefinedFunctionError`).
+- [x] 0.2 GREEN: create `test/support/ast_scan.ex` (`AletheaTest.ASTScan`) — `lib_files/1`, `parse!/1`, `constructs_struct?/2` (moved verbatim from `hg_walk/2`, generalized to any `atom()` struct name), `calls?/3` (new).
+- [x] 0.3 Run 0.1 — green. Actual: 13/13 passing.
+- [x] 0.4 REFACTOR: migrate `hypothesis_policy_test.exs`'s Sole Constructor Gate to call `ASTScan.constructs_struct?/2`; delete `hg_walk/2`. Actual diff: +4/−34 (design estimated +3/−24).
+- [x] 0.5 Run `mix test test/alethea/clinical_record/rag/consultation/hypothesis_policy_test.exs` — still green, proves the extraction is behavior-preserving. Actual: 91/91 passing (same count as pre-migration).
+- [ ] 0.6 `mix precommit`; open PR #235a0 targeting `feat/grounded-chat-235-integration`.
+
+## Phase 1 — Slice #235a: Domain wiring + gate
+
+- [ ] 1.1 RED: `test/alethea/clinical_record/rag/consultation/hypothesis_wiring_gate_test.exs` (new file, `async: true`, no `DataCase`) — AST-scan assertion: zero `HypothesisPolicy.interpretive_intent?/1`/`evaluate/2` call sites under `lib/**` outside `consultation/live.ex`; negative control for a moduledoc mention (R9, R11).
+- [ ] 1.2 RED: `live_test.exs` — extend `answer/4 — synthesis on sufficient evidence`: interpretive query → `hypothesis: %Hypothesis{}` (R1); factual query → `hypothesis: nil` + `expect(ClinicalHypothesisChainMock, :run, 0, ...)` (R2).
+- [ ] 1.3 GREEN: `lib/alethea/clinical_record/rag/consultation/live.ex` — add `maybe_hypothesis/3` + `hypothesis_chain/0`, wire into `synthesize/2`'s success branch, per design AD1 code shape verbatim.
+- [ ] 1.4 GREEN: `lib/alethea/clinical_record/rag/consultation/answer.ex` — close the moduledoc's "#235 will wire this" note.
+- [ ] 1.5 **Apply-phase hazard sweep (mandatory, run immediately after 1.3 lands, before any further RED task):** run the full `mix test` suite. `synthesize/2` now calls `hypothesis_chain()` for every query `interpretive_intent?/1` classifies true — catalog every legacy `live_test.exs`/`consultation_live_test.exs` fixture query that newly hits `ClinicalHypothesisChainMock` with no Mox expectation and fails under strict mode (markers: `patron`, `por que`, `tendencia`, `relacion entre`, etc.). Fix each individually — reword the query or add an explicit `expect/3` — never a blanket `stub/3` (would silently void R2).
+- [ ] 1.6 RED: `live_test.exs` — new describe `answer/4 — the hypothesis path is additive and fail-silent (#235)`: raise / `{:error, _}` / `{:reject, _}` / blank prose → `outcome: :synthesis, hypothesis: nil` (R3); diagnostic/prescriptive marker prose → same (R8 domain half).
+- [ ] 1.7 RED: `live_test.exs` — extend `cross-patient isolation` and `cross-tenant isolation` describes with an interpretive-query variant: no hypothesis, no foreign evidence (R6).
+- [ ] 1.8 RED: `live_test.exs` — extend `clinical state is never mutated` describe with a hypothesis-turn case: byte-identical chunks, 0 new Oban jobs, no `Repo` write (R7).
+- [ ] 1.9 Run `mix test test/alethea/clinical_record/rag/consultation/live_test.exs test/alethea/clinical_record/rag/consultation/hypothesis_wiring_gate_test.exs` — all green (1.6–1.8 pass against the 1.3 implementation with no further code changes; confirms `maybe_hypothesis/3`'s own rescue boundary and empty-excerpt guard already satisfy them).
+- [ ] 1.10 `mix precommit`; open PR #235a targeting #235a0's branch.
+
+## Phase 2 — Slice #235b: Panel mount + E2E
+
+- [ ] 2.1 REFACTOR (prep, no behavior change): `lib/alethea/clinical_record/rag/consultation/fake.ex` — `canned_sources/0` → `Source.from_results(canned_results())`, so the fake's sources and the fixture's hypothesis cite the same fragment (design AD2).
+- [ ] 2.2 GREEN: `test/support/fixtures/rag_fixtures.ex` — add `canned_hypothesis!/0` (built through the real `HypothesisPolicy.evaluate/2`, never hand-rolled), `set_fake_hypothesis/1`, `reset_fake_hypothesis/0`; wire the reset into the existing `on_exit` alongside `reset_fake_outcome/0`.
+- [ ] 2.3 GREEN: `fake.ex` — add `selected_hypothesis/1` and thread it into the `:synthesis` branch's `hypothesis:` field, per design AD2 verbatim. Never call `HypothesisPolicy` from `fake.ex` — that would create a second AST-scan call site and break #235a's gate.
+- [ ] 2.4 RED: `consultation_live_test.exs` — new describe `hypothesis panel over the real pipeline (#235)`: interpretive turn HTML contains `<section class="review-hypothesis-panel">`; factual turn HTML contains that tag nowhere, not even hidden (R4).
+- [ ] 2.5 RED: same describe — E2E: disclaimer's byte offset precedes the statement's; each citation renders as a collapsed `<details>` that expands to the exact server-derived excerpt (R5).
+- [ ] 2.6 RED: same describe — diagnostic/prescriptive candidate prose via the real chain ⇒ `hypothesis: nil`, no panel in the DOM (R8 render half).
+- [ ] 2.7 RED: same describe — `#consultation-synthesis` and the hypothesis panel `<section>` exist as sibling elements under the same parent, neither nested inside the other (R12).
+- [ ] 2.8 GREEN: `lib/alethea_web/live/consultation_live.ex` — `import AletheaWeb.GroundedChat.HypothesisPanel, only: [hypothesis_panel: 1]`; mount `<.hypothesis_panel :if={@state == :synthesis} id={"consultation-hypothesis-turn-#{@turn}"} hypothesis={@last_answer.hypothesis} />` after `#consultation-sources`, per design AD3 verbatim.
+- [ ] 2.9 Run `mix test test/alethea_web/live/consultation_live_test.exs test/alethea/clinical_record/rag/consultation/live_test.exs` — all green.
+- [ ] 2.10 `mix precommit`; open PR #235b targeting #235a's branch.
+
+## Phase 3 — Slice #235c: Citation unification (Q2/b)
+
+- [ ] 3.1 **DECISION CHECKPOINT — `source_kind_label/1` humanization.** Confirm or reject design's Open Question recommendation: move `source_kind_label/1` into `core_components.ex` as `citation/1`'s private `kind_label/1`, making the single renderer also the single humanizer (touches #230's shipped DOM assertions, already accepted by Q2/b). Record the answer before 3.4.
+- [ ] 3.2 **DECISION CHECKPOINT — datetime precision.** Confirm: accept the day-level loss (drop `%H:%M`, `citation/1`'s existing ISO-date rendering wins), or add `attr :datetime, :boolean, default: false` to `citation/1` to preserve time-of-day. Record the answer before 3.9.
+- [ ] 3.3 RED: `citation_test.exs` — new describe `citation/1 — optional link slot`: `:link` slot content renders inside `<summary>` when the caller passes it; absent and no error when the caller passes nothing (R10).
+- [ ] 3.4 GREEN: `lib/alethea_web/components/core_components.ex` — add `slot :link` to `citation/1`, render `<span :if={@link != []}>` inside `<summary>` per design AD4 verbatim; apply 3.1's decision.
+- [ ] 3.5 GREEN: create `lib/alethea_web/live/grounded_chat/source_citation.ex` — promote `source_to_citation/1` to a public `AletheaWeb.GroundedChat.SourceCitation` adapter (`%Source{} → %Citation{}`, ~30 lines).
+- [ ] 3.6 REFACTOR: `lib/alethea_web/live/grounded_chat/hypothesis_panel.ex` — delegate to the promoted converter; close its moduledoc hand-off note.
+- [ ] 3.7 RED then GREEN: `hypothesis_panel_test.exs` — extend for converter delegation; confirm no behavior change (pure regression).
+- [ ] 3.8 RED: `consultation_live_test.exs` — extend `grounded answer over the real pipeline (#234a)`: migrated source list via `citation_list/1` still renders "Ver conducta objetivo" for a source with non-nil `target_behavior_id`; no dangling link and no error for `target_behavior_id: nil` (R10).
+- [ ] 3.9 GREEN: `consultation_live.ex` — replace hand-rolled source markup with `<.citation_list citations={@citations}>` + `<:link>` slot calling the existing `source_link/2` route helper, per design AD4 call-site verbatim; apply 3.2's decision.
+- [ ] 3.10 Run `mix test test/alethea_web/components/citation_test.exs test/alethea_web/live/grounded_chat/hypothesis_panel_test.exs test/alethea_web/live/consultation_live_test.exs` — all green, including the preserved "Ver conducta objetivo" assertions.
+- [ ] 3.11 `mix precommit`; open PR #235c targeting #235b's branch.
+
+## Out of scope (explicit, per spec/design)
+
+- Any change to C1's `HypothesisPolicy` markers, gate precedence, disclaimer text, forbidden-language regexes (#229 ships untouched).
+- Follow-up interpretive intent resolution (#233).
+- Hypothesis persistence, audit logging, accept/reject UI.
+- Zero-evidence E2E test for R8 — covered by construction (`kept` is never `[]` through `answer/4`), per spec's explicit correction.
