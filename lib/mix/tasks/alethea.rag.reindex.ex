@@ -4,6 +4,13 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
   import Ecto.Query
 
   alias Alethea.Accounts.Patient
+  alias Alethea.Clinical.Message
+  # `Alethea.Clinical` and `Alethea.ClinicalRecord` both export an
+  # `Outbox` module (per each context's own moduledoc: any file
+  # importing both MUST alias one explicitly to avoid visual
+  # collision) — `JournalingOutbox` is the "voz del paciente" producer,
+  # `Outbox` (below) stays the pre-existing ClinicalRecord one.
+  alias Alethea.Clinical.Outbox, as: JournalingOutbox
 
   alias Alethea.ClinicalRecord.{
     AIProposal,
@@ -93,7 +100,7 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
         counts = count_by_resource_type(entries)
 
         if confirm? do
-          case enqueue_entries(entries) do
+          case enqueue_entries(entries, patient) do
             {:ok, enqueued} ->
               Mix.shell().info(
                 "ALETHEA_RAG_REINDEX_COMPLETE patient_id=#{patient.id} " <>
@@ -124,14 +131,15 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     end
   end
 
-  @resource_kinds ~w(clinical_note consultation_evidence clinician_observation ai_proposal functional_analysis_draft)
+  @resource_kinds ~w(clinical_note consultation_evidence clinician_observation ai_proposal functional_analysis_draft patient_message)
 
   defp eligible_entries(patient_id) do
     clinical_notes(patient_id) ++
       consultation_evidences(patient_id) ++
       clinician_observations(patient_id) ++
       accepted_ai_proposals(patient_id) ++
-      functional_analysis_drafts(patient_id)
+      functional_analysis_drafts(patient_id) ++
+      patient_messages(patient_id)
   end
 
   defp clinical_notes(patient_id) do
@@ -172,6 +180,17 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     |> Enum.map(&{"functional_analysis_draft_saved", "functional_analysis_draft", &1})
   end
 
+  # Only inbound patient messages are INDEX-eligible (spec's ingest-
+  # eligibility table + the AI's outbound reply is never the patient's
+  # own voice) — outbound rows are excluded at the source query, not
+  # filtered after the fact.
+  defp patient_messages(patient_id) do
+    Message
+    |> where([m], m.patient_id == ^patient_id and m.direction == "inbound")
+    |> Repo.all()
+    |> Enum.map(&{"patient_message_received", "patient_message", &1})
+  end
+
   defp count_by_resource_type(entries) do
     grouped =
       entries
@@ -187,10 +206,10 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     |> Enum.join(" ")
   end
 
-  defp enqueue_entries(entries) do
+  defp enqueue_entries(entries, patient) do
     {enqueued, failed} =
       Enum.reduce(entries, {0, 0}, fn entry, {enqueued, failed} ->
-        case enqueue(entry) do
+        case enqueue(entry, patient) do
           {:ok, _job} -> {enqueued + 1, failed}
           {:error, _reason} -> {enqueued, failed + 1}
         end
@@ -199,7 +218,15 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     if failed == 0, do: {:ok, enqueued}, else: {:error, enqueued, failed}
   end
 
-  defp enqueue({event, _resource_type, record}) do
+  defp enqueue({event, "patient_message", record}, patient) do
+    # `Message` carries no `professional_id` of its own (AD1) — the
+    # already-loaded `%Patient{}` supplies it at zero extra query.
+    event
+    |> JournalingOutbox.event(record, patient.professional_id)
+    |> enqueue_job()
+  end
+
+  defp enqueue({event, _resource_type, record}, _patient) do
     event
     |> Outbox.event(record)
     |> enqueue_job()

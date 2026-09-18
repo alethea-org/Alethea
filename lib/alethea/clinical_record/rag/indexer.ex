@@ -27,6 +27,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   alias Alethea.Accounts
   alias Alethea.Accounts.{Patient, Professional}
   alias Alethea.AI
+  alias Alethea.Clinical.Message
 
   alias Alethea.ClinicalRecord.{
     AIProposal,
@@ -76,6 +77,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   def eligibility("clinician_observation_updated"), do: {:index, :clinician_observation}
   def eligibility("ai_proposal_accepted"), do: {:index, :ai_proposal}
   def eligibility("functional_analysis_draft_saved"), do: {:index, :functional_analysis_draft}
+  def eligibility("patient_message_received"), do: {:index, :patient_message}
   def eligibility("ai_proposal_edited"), do: {:ignore, :not_accepted}
   def eligibility("ai_proposal_discarded"), do: {:ignore, :not_accepted}
   def eligibility("target_behavior_created"), do: {:ignore, :structural_metadata}
@@ -479,6 +481,26 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
              {:ok, text} <- PatientVault.decrypt(draft.encrypted_body, dek) do
           {:ok, text, to_usec(DateTime.from_naive!(draft.updated_at, "Etc/UTC")),
            draft.target_behavior_id, draft.encryption_version, dek}
+        end
+    end
+  end
+
+  # `Alethea.Clinical.Message` is the "voz del paciente" source
+  # (sdd/telegram-rag-ingestion-262, GitHub #262, AD4). Unlike the
+  # `ClinicalRecord` resources above, `message.timestamp` is already a
+  # `DateTime` (`:utc_datetime`), NOT a `NaiveDateTime` — so it is
+  # widened directly via `to_usec/1` with no `DateTime.from_naive!`
+  # wrap. Patient messages carry no target-behavior facet, so
+  # `target_behavior_id` is always `nil`.
+  defp fetch_and_decrypt(:patient_message, resource_id, patient, kek, patient_dek) do
+    case Repo.get(Message, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        with {:ok, dek} <- resolve_dek(message.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(message.encrypted_content, dek) do
+          {:ok, text, to_usec(message.timestamp), nil, message.encryption_version, dek}
         end
     end
   end
