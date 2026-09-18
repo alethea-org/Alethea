@@ -40,7 +40,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
-  alias AletheaJobs.EmotionAnalysisWorker
+  alias AletheaJobs.{ClinicalRecordOutboxWorker, EmotionAnalysisWorker}
 
   import Alethea.FoundationTestHelper
   import Ecto.Query
@@ -418,6 +418,29 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # NO crisis-lane enqueue in PR #3a.
       safe_jobs = Repo.all(from j in Oban.Job, where: j.queue == "telegram_outbound_crisis")
       assert safe_jobs == []
+    end
+
+    test "neither outbound call site emits a patient-voice outbox event (Q1 boundary enforcement, sdd/telegram-rag-ingestion-262 Slice 2 task 5.1)",
+         ctx do
+      _ = ctx
+
+      args = build_args("hola, buen día", telegram_message_id: 305, telegram_update_id: 10)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+
+      # Exactly-one + identity-pinned is strictly stronger than a bare
+      # count delta (design.md "Q1 enforcement mechanism"): it fails
+      # both if an outbound call site emits AND if emission were
+      # mis-attributed to the wrong message. `persist_and_enqueue_outbound/7`'s
+      # outbound `Clinical.save_telegram_message/6` call (worker.ex,
+      # `persist_and_enqueue_outbound/7`) runs through `persist/3`'s
+      # non-inbound clause (AD2) — a bare `Repo.insert/1`, never the
+      # `Ecto.Multi` + `Outbox.event/3` inbound path.
+      jobs = all_enqueued(worker: ClinicalRecordOutboxWorker)
+      assert length(jobs) == 1
+      assert hd(jobs).args["resource_id"] == inbound.id
     end
   end
 
@@ -1113,6 +1136,26 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # Regression: the legacy patient's urgent_intervention flag
       # must NOT have been set on the safe path.
       assert Alethea.Accounts.get_patient!(ctx.legacy_patient.id).urgent_intervention == false
+    end
+
+    test "neither outbound call site emits a patient-voice outbox event (Q1 boundary enforcement, sdd/telegram-rag-ingestion-262 Slice 2 task 5.2, crisis branch)",
+         ctx do
+      _ = ctx
+
+      args =
+        build_args("me voy a suicidar", telegram_message_id: 709, telegram_update_id: 79)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+
+      # Mirrors the safe-path test above for `handle_crisis_path/9`
+      # (worker.ex, ~L684-707): its outbound `Clinical.save_telegram_message/6`
+      # call also runs through `persist/3`'s non-inbound clause (AD2),
+      # never the Multi + Outbox.event/3 path.
+      jobs = all_enqueued(worker: ClinicalRecordOutboxWorker)
+      assert length(jobs) == 1
+      assert hd(jobs).args["resource_id"] == inbound.id
     end
   end
 
