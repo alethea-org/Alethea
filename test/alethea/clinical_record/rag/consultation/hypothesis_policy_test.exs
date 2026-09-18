@@ -8,6 +8,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicyTest do
   use ExUnit.Case, async: true
 
   alias Alethea.ClinicalRecord.Rag.Consultation.{Hypothesis, HypothesisPolicy, Source}
+  alias AletheaTest.ASTScan
 
   describe "Hypothesis struct contract" do
     test "raises ArgumentError when required keys are missing" do
@@ -260,47 +261,16 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicyTest do
   describe "Sole Constructor Gate — static scan" do
     test "no lib file outside hypothesis.ex/hypothesis_policy.ex constructs %Hypothesis{" do
       violations =
-        "lib/**/*.ex"
-        |> Path.wildcard()
-        |> Enum.reject(&String.ends_with?(&1, ["hypothesis.ex", "hypothesis_policy.ex"]))
+        ASTScan.lib_files(exclude: ["hypothesis.ex", "hypothesis_policy.ex"])
         |> Enum.filter(fn path ->
           path
-          |> File.read!()
-          |> Code.string_to_quoted!()
-          |> constructs_hypothesis?()
+          |> ASTScan.parse!()
+          |> ASTScan.constructs_struct?(:Hypothesis)
         end)
 
       assert violations == []
     end
   end
-
-  # Walks a file's AST distinguishing pattern position (function heads,
-  # case/with/fn clauses, the left side of `=`/`<-`) from expression
-  # position. Reading/destructuring `%Hypothesis{}` is legitimate anywhere
-  # (e.g. HypothesisPanel pattern-matching on the value it was handed);
-  # only *building* a new one outside hypothesis_policy.ex is the violation.
-  defp constructs_hypothesis?(ast), do: hg_walk(ast, false)
-
-  defp hg_walk({:%, _, [{:__aliases__, _, [:Hypothesis]}, {:%{}, _, _} = map]}, pattern?) do
-    not pattern? or hg_walk(map, pattern?)
-  end
-
-  defp hg_walk({:def, _, [head, body]}, _pattern?),
-    do: hg_walk(head, true) or hg_walk(body, false)
-
-  defp hg_walk({:defp, _, [head, body]}, _pattern?),
-    do: hg_walk(head, true) or hg_walk(body, false)
-
-  defp hg_walk({:when, _, [head, guard]}, true), do: hg_walk(head, true) or hg_walk(guard, false)
-  defp hg_walk({:->, _, [args, body]}, _pattern?), do: hg_walk(args, true) or hg_walk(body, false)
-  defp hg_walk({:=, _, [lhs, rhs]}, _pattern?), do: hg_walk(lhs, true) or hg_walk(rhs, false)
-  defp hg_walk({:<-, _, [lhs, rhs]}, _pattern?), do: hg_walk(lhs, true) or hg_walk(rhs, false)
-
-  defp hg_walk({left, right}, pattern?), do: hg_walk(left, pattern?) or hg_walk(right, pattern?)
-  defp hg_walk({_, _, args}, pattern?) when is_list(args), do: hg_walk(args, pattern?)
-  defp hg_walk({_, _, _}, _pattern?), do: false
-  defp hg_walk(list, pattern?) when is_list(list), do: Enum.any?(list, &hg_walk(&1, pattern?))
-  defp hg_walk(_, _pattern?), do: false
 
   describe "HypothesisPolicy purity (static scan)" do
     test "hypothesis_policy.ex never touches Repo or clinical mutation functions" do
