@@ -141,6 +141,7 @@ defmodule AletheaWeb.ConsultationLive do
   defp source_kind_label("clinician_observation"), do: "Observación del clínico"
   defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
   defp source_kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
+  defp source_kind_label("patient_message"), do: "Mensaje del paciente"
   defp source_kind_label(other), do: other
 
   defp source_link(%{target_behavior_id: nil}, _patient_id), do: nil

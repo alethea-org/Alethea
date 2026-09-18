@@ -28,6 +28,7 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
   import ExUnit.CaptureIO
 
   alias Alethea.Accounts
+  alias Alethea.Clinical
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.AIProposal
   alias Alethea.ClinicalRecord.Rag.Chunk
@@ -137,6 +138,79 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     drain_outbox!()
 
     assert chunk_count(patient.id) == first_chunk_count
+  end
+
+  describe "patient_message inclusion (sdd/telegram-rag-ingestion-262 #262, Slice 1)" do
+    test "dry run counts only inbound messages, excluding outbound replies" do
+      %{patient: patient} = seed_inbound_and_outbound_messages!()
+      drain_outbox!()
+
+      output = capture_io(fn -> run_task(["--patient-id", patient.id]) end)
+
+      assert output =~ "ALETHEA_RAG_REINDEX_DRY_RUN"
+      assert output =~ "patient_message=2"
+
+      refute_enqueued(worker: @worker, args: %{"patient_id" => patient.id})
+    end
+
+    test "--confirm enqueues exactly one job per inbound message, routed through Clinical.Outbox" do
+      %{patient: patient, professional: professional} = seed_inbound_and_outbound_messages!()
+      drain_outbox!()
+
+      output = capture_io(fn -> run_task(["--patient-id", patient.id, "--confirm"]) end)
+
+      assert output =~ "ALETHEA_RAG_REINDEX_COMPLETE"
+      assert output =~ "patient_message=2"
+
+      enqueued =
+        all_enqueued(worker: ClinicalRecordOutboxWorker)
+        |> Enum.filter(&(&1.args["patient_id"] == patient.id))
+        |> Enum.filter(&(&1.args["event"] == "patient_message_received"))
+
+      assert length(enqueued) == 2
+      assert Enum.all?(enqueued, &(&1.args["resource_type"] == "patient_message"))
+      assert Enum.all?(enqueued, &(&1.args["professional_id"] == professional.id))
+    end
+
+    test "converges to one chunk per inbound message across two --confirm runs (idempotent, no duplicates)" do
+      %{patient: patient} = seed_inbound_and_outbound_messages!()
+      drain_outbox!()
+
+      capture_io(fn -> run_task(["--patient-id", patient.id, "--confirm"]) end)
+      drain_outbox!()
+
+      first_count = patient_message_chunk_count(patient.id)
+      assert first_count == 2
+
+      capture_io(fn -> run_task(["--patient-id", patient.id, "--confirm"]) end)
+      drain_outbox!()
+
+      assert patient_message_chunk_count(patient.id) == first_count
+    end
+  end
+
+  defp patient_message_chunk_count(patient_id) do
+    import Ecto.Query
+
+    Chunk
+    |> where([c], c.patient_id == ^patient_id and c.source_resource_type == "patient_message")
+    |> Repo.aggregate(:count)
+  end
+
+  defp seed_inbound_and_outbound_messages! do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+
+    {:ok, _inbound_1} =
+      Clinical.save_message(patient, "Me siento mejor hoy.", nil, "inbound", "spontaneous")
+
+    {:ok, _inbound_2} =
+      Clinical.save_message(patient, "Dormi bien anoche.", nil, "inbound", "spontaneous")
+
+    {:ok, _outbound} =
+      Clinical.save_message(patient, "Que bueno escuchar eso.", nil, "outbound", "elicited")
+
+    %{professional: professional, patient: patient}
   end
 
   defp run_task(args) do

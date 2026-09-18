@@ -213,6 +213,37 @@ defmodule AletheaWeb.ConsultationLiveTest do
       refute plain_item =~ "<a"
     end
 
+    test "a patient_message source renders the patient-voice label with its timestamp (sdd/telegram-rag-ingestion-262 #262, Slice 1)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      clear_pending_outbox!(patient)
+
+      insert_chunk!(professional, patient, @plain_excerpt, near_vector(),
+        source_resource_type: "patient_message",
+        occurred_at: @plain_occurred_at
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿qué reporto el paciente esta semana?")
+      render_async(view)
+
+      item = view |> element("ol.consultation__sources li", @plain_excerpt) |> render()
+
+      assert item =~ @plain_excerpt
+      assert item =~ "Mensaje del paciente"
+      assert item =~ "03/02/2026 18:30"
+    end
+
     test "a provider failure renders the safe state with no synthesis and no sources", %{
       conn: conn,
       professional: professional,
