@@ -72,11 +72,18 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
       assert html =~ "id=\"citation-#{c.source_ref}\""
     end
 
-    test "marks the summary as a button-equivalent control for ARIA" do
+    test "renders a plain <summary> with no stale ARIA state" do
       html = render_component(&CoreComponents.citation/1, citation: citation())
 
       assert html =~ "<summary"
-      assert html =~ "aria-controls=\"citation-#{citation().source_ref}\""
+
+      # #235c/Judgment Day: native <details>/<summary> already exposes
+      # open/closed to assistive tech; a server-rendered aria-expanded
+      # would go stale the moment a real click toggles it (unreachable
+      # before the excerpt-gating fix — see task 3.0 — and now a real
+      # regression to guard against).
+      refute html =~ "aria-expanded"
+      refute html =~ "aria-controls"
     end
   end
 
@@ -88,14 +95,6 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
       assert html =~ "<details"
       assert html =~ " open"
       assert html =~ "El paciente reportó insomnio recurrente"
-    end
-
-    test "aria-expanded reflects the open state" do
-      html = render_component(&CoreComponents.citation/1, citation: citation(), expanded: true)
-      assert html =~ "aria-expanded=\"true\""
-
-      html2 = render_component(&CoreComponents.citation/1, citation: citation())
-      assert html2 =~ "aria-expanded=\"false\""
     end
   end
 

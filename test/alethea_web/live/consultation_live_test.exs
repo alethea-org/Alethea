@@ -280,7 +280,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
       assert html =~ "consultation-provider-error"
       refute has_element?(view, "section.consultation__synthesis")
-      refute has_element?(view, "ol.consultation__sources")
+      refute has_element?(view, "section.consultation__sources-panel")
       refute html =~ @seeded_excerpt
     end
   end

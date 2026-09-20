@@ -561,6 +561,13 @@ defmodule AletheaWeb.CoreComponents do
   legitimately cite the same retrieved chunk), which collides. Pass
   `id` explicitly to disambiguate in that case.
 
+  No `aria-expanded`/`aria-controls`: native `<details>`/`<summary>`
+  already exposes open/closed state to assistive tech on its own.
+  Server-rendered `aria-expanded` would go stale the moment a user
+  toggles a real click (unreachable before the fix above, corroborated
+  by Judgment Day on #235c) — a redundant, stale ARIA attribute is
+  worse than none.
+
   Reused by *Síntesis* (A4, issue #234) and *Hipótesis* (C3, issue
   #231) without divergent rendering — a single component instance
   per cite, same DOM shape regardless of source type.
@@ -592,13 +599,7 @@ defmodule AletheaWeb.CoreComponents do
     assigns = assign(assigns, :dom_id, assigns.id || "citation-#{assigns.citation.source_ref}")
 
     ~H"""
-    <details
-      id={@dom_id}
-      class="citation"
-      aria-expanded={to_string(@expanded)}
-      aria-controls={@dom_id}
-      open={@expanded}
-    >
+    <details id={@dom_id} class="citation" open={@expanded}>
       <summary class="citation__summary">
         <span class="citation__kind">{kind_label(@citation.kind)}</span>
         <span class="citation__date">{format_date(@citation.occurred_at)}</span>
