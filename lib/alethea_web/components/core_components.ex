@@ -52,7 +52,7 @@ defmodule AletheaWeb.CoreComponents do
       />
       <div>
         <p :if={@title} class="flash__title">{@title}</p>
-
+        
         <p class="flash__msg">{msg}</p>
       </div>
     </div>
@@ -220,10 +220,10 @@ defmodule AletheaWeb.CoreComponents do
         {@rest}
       >
         <option :if={@prompt} value="">{@prompt}</option>
-        {Phoenix.HTML.Form.options_for_select(@options, @value)}
+         {Phoenix.HTML.Form.options_for_select(@options, @value)}
       </select>
       <p :if={@hint && @errors == []} class="field__hint">{@hint}</p>
-
+      
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -242,7 +242,7 @@ defmodule AletheaWeb.CoreComponents do
         {@rest}
       >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       <p :if={@hint && @errors == []} class="field__hint">{@hint}</p>
-
+      
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -262,7 +262,7 @@ defmodule AletheaWeb.CoreComponents do
         {@rest}
       />
       <p :if={@hint && @errors == []} class="field__hint">{@hint}</p>
-
+      
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
     """
@@ -298,12 +298,12 @@ defmodule AletheaWeb.CoreComponents do
     <header class={["page-head", @class]} {@rest}>
       <div>
         <p :if={@eyebrow != []} class="pt-eyebrow">{render_slot(@eyebrow)}</p>
-
+        
         <h1 class="pt-h1">{render_slot(@inner_block)}</h1>
-
+        
         <p :if={@subtitle != []} class="pt-muted">{render_slot(@subtitle)}</p>
       </div>
-
+      
       <div :if={@actions != []} class="page-head__actions">{render_slot(@actions)}</div>
     </header>
     """
@@ -346,17 +346,17 @@ defmodule AletheaWeb.CoreComponents do
         <thead>
           <tr>
             <th :for={col <- @col}>{col[:label]}</th>
-
+            
             <th :if={@action != []}><span class="sr-only">Acciones</span></th>
           </tr>
         </thead>
-
+        
         <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
           <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
             <td :for={col <- @col} phx-click={@row_click && @row_click.(row)}>
               {render_slot(col, @row_item.(row))}
             </td>
-
+            
             <td :if={@action != []}>
               <div class="data-table__actions">
                 <%= for action <- @action do %>
@@ -390,7 +390,7 @@ defmodule AletheaWeb.CoreComponents do
     <dl class="detail-list">
       <div :for={item <- @item} class="detail-list__row">
         <dt>{item.title}</dt>
-
+        
         <dd>{render_slot(item)}</dd>
       </div>
     </dl>
@@ -497,7 +497,7 @@ defmodule AletheaWeb.CoreComponents do
     >
       <div class="pta-modal__head">
         <h3 class="pta-modal__title">{@title}</h3>
-
+        
         <button
           type="button"
           class="pta-modal__close"
@@ -507,7 +507,7 @@ defmodule AletheaWeb.CoreComponents do
           <.icon name="hero-x-mark" class="size-4" />
         </button>
       </div>
-
+      
       <div class="pta-modal__body">{render_slot(@inner_block)}</div>
     </dialog>
     """
@@ -577,6 +577,7 @@ defmodule AletheaWeb.CoreComponents do
         <span class="citation__date">{format_date(@citation.occurred_at)}</span>
         <span class="citation__ref">{@citation.source_ref}</span>
       </summary>
+      
       <p :if={@expanded} class="citation__excerpt">{@citation.excerpt}</p>
     </details>
     """
@@ -599,9 +600,7 @@ defmodule AletheaWeb.CoreComponents do
 
   def citation_list(assigns) do
     ~H"""
-    <section class="citation-list">
-      <.citation :for={cite <- @citations} citation={cite} />
-    </section>
+    <section class="citation-list"><.citation :for={cite <- @citations} citation={cite} /></section>
     """
   end
 

@@ -28,27 +28,27 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
         <span class="auth-panel__brand">Alethea</span>
         <div>
           <h2 class="auth-panel__title">Una cuenta, todo el seguimiento.</h2>
-
+          
           <p class="auth-panel__lede">
             Invitás al paciente por Telegram, la conversación se cifra con su
             propia clave y vos leés el resumen semanal antes de la sesión.
           </p>
         </div>
-
+        
         <p class="auth-panel__proof">
           El borrado de datos es criptográfico: se destruye la clave del paciente
           en la bóveda, no se borran filas.
         </p>
       </section>
-
+      
       <section class="auth-form-side">
         <div id="register-page" class="auth-form">
           <p class="pt-eyebrow">Cuenta profesional</p>
-
+          
           <h1 class="auth-form__title">Registrar cuenta</h1>
-
+          
           <p class="auth-form__sub">Completá los datos para acceder a Alethea.</p>
-
+          
           <.form
             for={@changeset}
             phx-submit="save"
@@ -71,7 +71,7 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 {msg}
               </p>
             </div>
-
+            
             <div class="field">
               <label for="full_name" class="field__label">Nombre completo</label>
               <input
@@ -91,7 +91,7 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 {msg}
               </p>
             </div>
-
+            
             <div class="field">
               <label for="password" class="field__label">Contraseña</label>
               <input
@@ -104,7 +104,7 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 class="text-input"
               />
               <p class="field__hint">La contraseña debe tener al menos 12 caracteres.</p>
-
+              
               <p
                 :for={{msg, _} <- Keyword.get_values(@changeset.errors, :password)}
                 class="field__error"
@@ -112,11 +112,11 @@ defmodule AletheaWeb.ProfessionalRegistrationLive do
                 {msg}
               </p>
             </div>
-            <button type="submit" class="button-primary button-primary--block">Crear cuenta</button>
+             <button type="submit" class="button-primary button-primary--block">Crear cuenta</button>
           </.form>
-
+          
           <p class="auth-form__foot">¿Ya tenés cuenta? <a href="/login">Iniciá sesión</a></p>
-
+          
           <p class="auth-form__note">Cifrado a nivel de paciente</p>
         </div>
       </section>

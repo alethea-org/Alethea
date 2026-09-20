@@ -119,12 +119,12 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
             </button>
           </div>
         </div>
-
+        
         <div :if={@page_items == []} class="empty-state" style="border:none; padding:32px 16px;">
           <.icon name="hero-bell-slash" class="empty-state__icon" />
           <p class="empty-state__text" style="margin-bottom:0;">Sin notificaciones</p>
         </div>
-
+        
         <div :if={@page_items != []}>
           <div
             :for={notif <- @page_items}
@@ -138,10 +138,10 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
             </span>
             <div style="flex:1; min-width:0;">
               <p class="notif__msg">{notif.message}</p>
-
+              
               <p class="notif__time">{relative_time(notif.inserted_at)}</p>
             </div>
-
+            
             <button
               :if={!notif.read}
               type="button"
@@ -156,7 +156,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
             </button>
           </div>
         </div>
-
+        
         <div :if={@total_pages > 1} class="notif__foot">
           <button
             type="button"

@@ -102,18 +102,18 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             class="text-input"
           />
         </div>
-        <span class="cmdbar__count">{length(@filtered)} de {length(@patients)}</span>
+         <span class="cmdbar__count">{length(@filtered)} de {length(@patients)}</span>
         <div class="cmdbar__divider"></div>
-
+        
         <details class="filter-menu" id={"#{@id}-filters"}>
           <summary>
             Filtros
             <span :if={@active_filter_count > 0} class="filter-badge">{@active_filter_count}</span>
           </summary>
-
+          
           <div class="filter-menu__panel">
             <p class="filter-menu__title">Estado del paciente</p>
-
+            
             <div class="filter-menu__chips">
               <button
                 :for={{key, label} <- @filter_labels}
@@ -132,7 +132,7 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             </div>
           </div>
         </details>
-
+        
         <div class="cmdbar__sort">
           <label for={"#{@id}-sort"}>Ordenar</label>
           <select
@@ -148,16 +148,16 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
           </select>
         </div>
       </div>
-      <%!-- ── Caseload grid ── --%>
+       <%!-- ── Caseload grid ── --%>
       <div :if={@filtered == []} class="empty-state">
         <.icon name="hero-magnifying-glass" class="empty-state__icon" />
         <p class="empty-state__title">Sin resultados</p>
-
+        
         <p class="empty-state__text">
           Ningún paciente coincide con la búsqueda o los filtros activos.
         </p>
       </div>
-
+      
       <nav :if={@filtered != []} id={"#{@id}-results"} class="patient-grid">
         <.link
           :for={patient <- @filtered}
@@ -178,11 +178,11 @@ defmodule AletheaWeb.DashboardLive.Components.PatientSearch do
             </span>
             <div style="min-width:0;">
               <div class="patient-card__name">{patient.alias}</div>
-
+              
               <div class="patient-card__meta">{schedule_label(patient)}</div>
             </div>
           </div>
-
+          
           <div class="patient-card__foot">
             <span style="display:flex; align-items:center; gap:6px; font-size:12px;">
               <span class={"status-dot " <> status_dot(patient)}></span> {status_label(patient)}
