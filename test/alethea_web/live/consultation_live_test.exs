@@ -25,11 +25,9 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
   alias Alethea.AI.{ClinicalConsultationChainMock, ClinicalHypothesisChainMock}
   alias Alethea.Clinical.Message
-  alias Alethea.ClinicalRecord.Rag.Citation
   alias Alethea.ClinicalRecord.Rag.Consultation
   alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Hypothesis}
   alias Alethea.Repo
-  alias AletheaWeb.CoreComponents
 
   @seeded_excerpt "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
   @synthesis "Según los fragmentos citados, el paciente sostiene la mejoría del ánimo."
@@ -166,10 +164,10 @@ defmodule AletheaWeb.ConsultationLiveTest do
       html = render_async(view)
 
       assert has_element?(view, "section.consultation__synthesis")
-      assert has_element?(view, "ol.consultation__sources")
+      assert has_element?(view, "section.consultation__sources-panel")
 
       synthesis_html = view |> element("section.consultation__synthesis") |> render()
-      sources_html = view |> element("ol.consultation__sources") |> render()
+      sources_html = view |> element("section.consultation__sources-panel") |> render()
 
       assert synthesis_html =~ @synthesis
       refute synthesis_html =~ @seeded_excerpt
@@ -211,20 +209,57 @@ defmodule AletheaWeb.ConsultationLiveTest do
       submit_query(view, "¿qué hizo el paciente esta semana?")
       render_async(view)
 
-      linked_item = view |> element("ol.consultation__sources li", @linked_excerpt) |> render()
+      # Migrated (#235c/R10) to render through the unified
+      # `AletheaWeb.CoreComponents.citation/1` — a `<details>` per
+      # source, not the old hand-rolled `<ol><li>`. Date drops to
+      # day-level ISO (#235c task 3.2, decision accepted): citation/1
+      # never renders time-of-day.
+      linked_item = view |> element("#consultation-sources details", @linked_excerpt) |> render()
 
       assert linked_item =~ @linked_excerpt
       assert linked_item =~ "Observación del clínico"
-      assert linked_item =~ "15/01/2026 10:00"
+      assert linked_item =~ "2026-01-15"
 
       assert linked_item =~
                ~s(href="/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      plain_item = view |> element("ol.consultation__sources li", @plain_excerpt) |> render()
+      assert linked_item =~ "Ver conducta objetivo"
+
+      plain_item = view |> element("#consultation-sources details", @plain_excerpt) |> render()
 
       assert plain_item =~ @plain_excerpt
       assert plain_item =~ "Nota clínica"
-      assert plain_item =~ "03/02/2026 18:30"
+      assert plain_item =~ "2026-02-03"
+      refute plain_item =~ "<a"
+    end
+
+    test "a source without a target behavior renders no dangling link and no error (#235c, R10)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      insert_chunk!(professional, patient, @plain_excerpt, near_vector(),
+        source_resource_type: "clinical_note",
+        target_behavior_id: nil,
+        occurred_at: @plain_occurred_at
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿qué hizo el paciente esta semana?")
+      html = render_async(view)
+
+      assert html =~ @plain_excerpt
+      refute html =~ "Ver conducta objetivo"
+
+      plain_item = view |> element("#consultation-sources details", @plain_excerpt) |> render()
       refute plain_item =~ "<a"
     end
 
@@ -245,7 +280,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
       assert html =~ "consultation-provider-error"
       refute has_element?(view, "section.consultation__synthesis")
-      refute has_element?(view, "ol.consultation__sources")
+      refute has_element?(view, "section.consultation__sources-panel")
       refute html =~ @seeded_excerpt
     end
   end
@@ -317,36 +352,23 @@ defmodule AletheaWeb.ConsultationLiveTest do
       panel_html = view |> element("section.review-hypothesis-panel") |> render()
       assert panel_html =~ "<details"
       assert panel_html =~ "citation__summary"
-      refute panel_html =~ @seeded_excerpt
+      refute panel_html =~ " open"
 
-      # Ground truth: the same real pipeline, called directly (deterministic
-      # Mox stubs, same seeded chunk), to obtain the server-derived %Source{}
-      # the live panel's citation was built from — never hand-built, mirrors
-      # hypothesis_panel_test.exs's own real-constructor fixture pattern.
+      # #235c task 3.0: the excerpt is always in the DOM — native
+      # <details> hides it visually until opened, so a real click
+      # works with zero JS. Asserting presence here, directly on the
+      # panel's own render, is now the complete proof (no ground-truth
+      # workaround needed — that was only required while the excerpt
+      # was structurally absent from the collapsed render).
+      assert panel_html =~ @seeded_excerpt
+
       assert {:ok, %Answer{hypothesis: %Hypothesis{sources: [source]}}} =
                Consultation.answer(professional, patient.id, @interpretive_query, history: [])
-
-      assert source.excerpt == @seeded_excerpt
 
       short_chunk_id = source.reference.chunk_id |> to_string() |> String.slice(0, 8)
       source_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
 
       assert panel_html =~ ~s(id="citation-#{source_ref}")
-
-      expanded_html =
-        render_component(&CoreComponents.citation/1,
-          citation: %Citation{
-            source_ref: source_ref,
-            kind: source.kind,
-            occurred_at: source.occurred_at,
-            excerpt: source.excerpt,
-            score: nil,
-            chunk_index: nil
-          },
-          expanded: true
-        )
-
-      assert expanded_html =~ @seeded_excerpt
     end
 
     test "diagnostic candidate prose yields hypothesis: nil and no panel in the DOM (R8 render half)",
