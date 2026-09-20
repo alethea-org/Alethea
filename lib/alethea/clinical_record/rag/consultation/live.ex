@@ -66,14 +66,13 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
   # Cross-patient guard extracted from `answer_authorized/4`. The B1 slot
   # is patient-scoped; if the slot's `patient_id` does not match the one
   # we are about to retrieve, refuse the turn as `{:error, :unauthorized}`.
-defp authorize_followup_slot(nil, _patient_id), do: :ok
+  defp authorize_followup_slot(nil, _patient_id), do: :ok
 
-defp authorize_followup_slot(%{patient_id: patient_id}, patient_id), do: :ok
+  defp authorize_followup_slot(%{patient_id: patient_id}, patient_id), do: :ok
 
-defp authorize_followup_slot(%{patient_id: other}, _patient_id)
-     when is_binary(other) and other != "" do
-  {:error, :unauthorized}
-end
+  defp authorize_followup_slot(%{patient_id: other}, _patient_id)
+       when is_binary(other) and other != "" do
+    {:error, :unauthorized}
   end
 
   defp authorize_followup_slot(%{}, _patient_id), do: :ok

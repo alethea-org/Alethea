@@ -24,7 +24,12 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
   @seeded_excerpt_a "Paciente reporto mejora del sueno durante la semana."
   @seeded_excerpt_b "Paciente volvio a hacer su caminata diaria despues del alta."
 
-  setup [:register_and_log_in_professional, :use_live_consultation, :set_mox_from_context, :verify_on_exit!]
+  setup [
+    :register_and_log_in_professional,
+    :use_live_consultation,
+    :set_mox_from_context,
+    :verify_on_exit!
+  ]
 
   setup %{professional: professional} do
     patient = create_patient!(professional)
@@ -34,11 +39,12 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
     %{patient: patient}
   end
 
-  describe "follow-up cycle (#233)" do
-    test "two turns each render their own synthesis and sources without reusing citations", %{
-      conn: conn,
-      patient: patient
-    } do
+  describe "follow-up cycle (#233, #236)" do
+    test "two turns each render their own synthesis and sources in chained order without reusing citations",
+         %{
+           conn: conn,
+           patient: patient
+         } do
       stub_query_embedding_by_query(%{
         "turno uno" => near_vector(),
         "turno dos" => far_vector()
@@ -65,28 +71,98 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       html_one = render_async(view)
 
       assert has_element?(view, "#consultation-synthesis")
-      assert html_one =~ "Sintesis inicial sobre sueno."
-      assert html_one =~ @seeded_excerpt_a
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0 .consultation__turn-query-text", "turno uno")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis inicial sobre sueno.")
+      assert has_element?(view, "#turn-0-sources", @seeded_excerpt_a)
+      refute has_element?(view, "#turn-0-sources", @seeded_excerpt_b)
       refute html_one =~ @seeded_excerpt_b
 
       submit_query(view, "turno dos")
-      html_two = render_async(view)
+      _html_two = render_async(view)
 
       assert has_element?(view, "#consultation-synthesis")
-      assert html_two =~ "Sintesis de seguimiento sobre caminatas."
-      refute html_two =~ "Sintesis inicial sobre sueno."
 
-      # Server-derived sources per turn — the second turn re-derives from
-      # the fresh retrieval. The new chunk must appear; the previous chunk
-      # must not be reused as evidence for the follow-up.
-      assert html_two =~ @seeded_excerpt_b
-      refute html_two =~ @seeded_excerpt_a
+      # Both turn 0 and turn 1 are present in chained order
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0 .consultation__turn-query-text", "turno uno")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis inicial sobre sueno.")
+      assert has_element?(view, "#turn-0-sources", @seeded_excerpt_a)
+
+      assert has_element?(view, "#turn-1")
+      assert has_element?(view, "#turn-1 .consultation__turn-query-text", "turno dos")
+      assert has_element?(view, "#turn-1-synthesis", "Sintesis de seguimiento sobre caminatas.")
+      assert has_element?(view, "#turn-1-sources", @seeded_excerpt_b)
+
+      # In turn 1's sources element, refute @seeded_excerpt_a
+      turn_1_sources_html = render(element(view, "#turn-1-sources"))
+      refute turn_1_sources_html =~ @seeded_excerpt_a
+      assert turn_1_sources_html =~ @seeded_excerpt_b
     end
 
-    test "the consultation-new-conversation button clears follow-up context but preserves the patient", %{
+    test "chained turns (3 turns): N follow-ups can be chained sequentially", %{
       conn: conn,
+      professional: professional,
       patient: patient
     } do
+      seeded_excerpt_c = "Paciente refiere descanso reparador y regularidad."
+      insert_chunk!(professional, patient, seeded_excerpt_c, third_vector())
+
+      stub_query_embedding_by_query(%{
+        "pregunta 1" => near_vector(),
+        "pregunta 2" => far_vector(),
+        "pregunta 3" => third_vector()
+      })
+
+      expect(ClinicalConsultationChainMock, :run, 3, fn %{question: question, excerpts: excerpts} ->
+        cond do
+          question =~ "1" ->
+            assert excerpts == [@seeded_excerpt_a]
+            {:ok, %{synthesis: "Sintesis 1"}}
+
+          question =~ "2" ->
+            assert excerpts == [@seeded_excerpt_b]
+            {:ok, %{synthesis: "Sintesis 2"}}
+
+          question =~ "3" ->
+            assert excerpts == [seeded_excerpt_c]
+            {:ok, %{synthesis: "Sintesis 3"}}
+        end
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "pregunta 1")
+      render_async(view)
+
+      submit_query(view, "pregunta 2")
+      render_async(view)
+
+      submit_query(view, "pregunta 3")
+      render_async(view)
+
+      # All 3 turns exist in the stream in sequential order
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0 .consultation__turn-query-text", "pregunta 1")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis 1")
+      assert has_element?(view, "#turn-0-sources", @seeded_excerpt_a)
+
+      assert has_element?(view, "#turn-1")
+      assert has_element?(view, "#turn-1 .consultation__turn-query-text", "pregunta 2")
+      assert has_element?(view, "#turn-1-synthesis", "Sintesis 2")
+      assert has_element?(view, "#turn-1-sources", @seeded_excerpt_b)
+
+      assert has_element?(view, "#turn-2")
+      assert has_element?(view, "#turn-2 .consultation__turn-query-text", "pregunta 3")
+      assert has_element?(view, "#turn-2-synthesis", "Sintesis 3")
+      assert has_element?(view, "#turn-2-sources", seeded_excerpt_c)
+    end
+
+    test "nueva conversación reset: clears synthesis, idle is present, all turn elements are gone",
+         %{
+           conn: conn,
+           patient: patient
+         } do
       stub_query_embedding_by_query(%{
         "turno uno" => far_vector(),
         "post reset" => near_vector()
@@ -106,20 +182,187 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       render_async(view)
 
       assert has_element?(view, "#consultation-synthesis")
+      assert has_element?(view, "#turn-0")
 
-      html_after_reset =
-        view
-        |> element("#consultation-new-conversation")
-        |> render_click()
+      view
+      |> element("#consultation-new-conversation")
+      |> render_click()
 
-      assert html_after_reset =~ "consultation-idle"
+      assert has_element?(view, "#consultation-idle")
       refute has_element?(view, "#consultation-synthesis")
+      refute has_element?(view, "#turn-0")
+      refute has_element?(view, "#turn-1")
+      refute has_element?(view, "#turn-2")
 
       submit_query(view, "post reset")
       html_after_reset = render_async(view)
 
       assert html_after_reset =~ "Sintesis despues del reset."
       refute html_after_reset =~ "Sintesis inicial."
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis despues del reset.")
+    end
+
+    test "logout / remount zero-persistence", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      stub_query_embedding_by_query(%{
+        "turno uno" => near_vector()
+      })
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "Sintesis antes de logout."}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "turno uno")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0")
+
+      # Simulate logout and a new session mount for the same patient
+      new_conn = log_in_professional(build_conn(), professional)
+      {:ok, new_view, html} = live(new_conn, ~p"/patients/#{patient.id}/consultation")
+
+      assert has_element?(new_view, "#consultation-idle")
+      assert html =~ "consultation-idle"
+      refute has_element?(new_view, "#consultation-synthesis")
+      refute has_element?(new_view, "#turn-0")
+      refute has_element?(new_view, "#consultation-messages")
+      refute html =~ "Sintesis antes de logout."
+    end
+  end
+
+  describe "safe blocked states in follow-ups (#236)" do
+    test "turn 2 yielding :no_evidence displays empty state, keeps turn 1 in stream, and allows retry",
+         %{
+           conn: conn,
+           patient: patient
+         } do
+      stub_query_embedding_by_query(%{
+        "turno uno" => near_vector(),
+        "sin evidencia" => orthogonal_vector(),
+        "reintento" => far_vector()
+      })
+
+      expect(ClinicalConsultationChainMock, :run, 2, fn %{question: question} ->
+        cond do
+          question =~ "uno" ->
+            {:ok, %{synthesis: "Sintesis turno uno"}}
+
+          question =~ "reintento" ->
+            {:ok, %{synthesis: "Sintesis reintento"}}
+        end
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      # Turn 1 succeeds
+      submit_query(view, "turno uno")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
+
+      # Turn 2 yields no evidence (orthogonal vector has cosine similarity 0 < 0.35)
+      submit_query(view, "sin evidencia")
+      html_blocked = render_async(view)
+
+      assert has_element?(view, "#consultation-no-evidence")
+
+      assert html_blocked =~
+               "El registro no cuenta con evidencia suficiente para responder esta consulta."
+
+      # Turn 1 remains visible in the stream
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
+      refute has_element?(view, "#turn-1")
+
+      # Turn counter did not advance: retrying records at turn 1
+      submit_query(view, "reintento")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-1")
+      assert has_element?(view, "#turn-1-synthesis", "Sintesis reintento")
+      assert has_element?(view, "#turn-1-sources", @seeded_excerpt_b)
+      refute has_element?(view, "#consultation-no-evidence")
+    end
+
+    test "turn 2 yielding :stale displays notice with pending count and keeps turn 1 in stream",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      stub_query_embedding_by_query(%{
+        "turno uno" => near_vector(),
+        "turno pendiente" => far_vector()
+      })
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn %{question: question} ->
+        assert question =~ "uno"
+        {:ok, %{synthesis: "Sintesis turno uno"}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "turno uno")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0")
+
+      # Insert pending outbox job so next turn triggers :stale
+      insert_pending_job!(professional, patient)
+
+      submit_query(view, "turno pendiente")
+      html_stale = render_async(view)
+
+      assert has_element?(view, "#consultation-stale")
+      assert html_stale =~ "La indexación del paciente está pendiente (1 elementos)"
+      # Turn 1 remains visible in stream
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
+      refute has_element?(view, "#turn-1")
+    end
+
+    test "turn 2 yielding :provider_failure displays error and keeps turn 1 in stream", %{
+      conn: conn,
+      patient: patient
+    } do
+      stub_query_embedding_by_query(%{
+        "turno uno" => near_vector(),
+        "turno falla" => far_vector()
+      })
+
+      expect(ClinicalConsultationChainMock, :run, 2, fn %{question: question} ->
+        cond do
+          question =~ "uno" ->
+            {:ok, %{synthesis: "Sintesis turno uno"}}
+
+          question =~ "falla" ->
+            {:error, :timeout}
+        end
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "turno uno")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0")
+
+      submit_query(view, "turno falla")
+      html_failure = render_async(view)
+
+      assert has_element?(view, "#consultation-provider-error")
+      assert html_failure =~ "No se pudo generar una respuesta. Intentá nuevamente."
+      # Turn 1 remains visible in stream
+      assert has_element?(view, "#turn-0")
+      assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
+      refute has_element?(view, "#turn-1")
     end
   end
 
@@ -129,9 +372,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
     Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
 
     on_exit(fn ->
-      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
-        persistent: true
-      )
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake, persistent: true)
     end)
 
     Alethea.AI.EmbeddingsMock
@@ -141,6 +382,8 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
   end
 
   defp far_vector, do: [0.0, 1.0 | List.duplicate(0.0, 1022)]
+  defp third_vector, do: [0.0, 0.0, 1.0 | List.duplicate(0.0, 1021)]
+  defp orthogonal_vector, do: [0.0, 0.0, 0.0, 1.0 | List.duplicate(0.0, 1020)]
 
   defp submit_query(view, query) do
     view
@@ -152,9 +395,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
     Application.put_env(:alethea, :clinical_consultation, Consultation.Live, persistent: true)
 
     on_exit(fn ->
-      Application.put_env(:alethea, :clinical_consultation, Consultation.Fake,
-        persistent: true
-      )
+      Application.put_env(:alethea, :clinical_consultation, Consultation.Fake, persistent: true)
     end)
 
     :ok

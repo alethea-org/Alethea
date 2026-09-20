@@ -22,7 +22,6 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
   alias Alethea.AI.ClinicalConsultationChainMock
   alias AletheaWeb.GroundedChat.FollowupState
 
-  alias Alethea.ClinicalRecord.Rag.Consultation
   alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Live, Source}
 
   setup :verify_on_exit!
@@ -63,11 +62,18 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
   end
 
   describe "answer/4 — every follow-up turn triggers a fresh retrieval (#233)" do
-    test "two turns hit the chain twice, with followup refs carried as B1 metadata (no evidence)", %{
-      professional: professional,
-      patient: patient
-    } do
-      insert_chunk!(professional, patient, "El paciente mejora su animo esta semana", near_vector())
+    test "two turns hit the chain twice, with followup refs carried as B1 metadata (no evidence)",
+         %{
+           professional: professional,
+           patient: patient
+         } do
+      insert_chunk!(
+        professional,
+        patient,
+        "El paciente mejora su animo esta semana",
+        near_vector()
+      )
+
       stub_query_embedding(near_vector())
 
       expect(ClinicalConsultationChainMock, :run, 2, fn _params ->
@@ -77,7 +83,10 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
       base_state = FollowupState.new(patient.id)
 
       assert {:ok, %Answer{outcome: :synthesis} = a1} =
-               Live.answer(professional, patient.id, "animo", followup_state: base_state, turn_index: 0)
+               Live.answer(professional, patient.id, "animo",
+                 followup_state: base_state,
+                 turn_index: 0
+               )
 
       next_state = FollowupState.record_turn(base_state, 0, "animo", source_refs(a1.sources))
 
@@ -98,7 +107,13 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
            professional: professional,
            patient: patient
          } do
-      insert_chunk!(professional, patient, "El paciente mejora su animo esta semana", near_vector())
+      insert_chunk!(
+        professional,
+        patient,
+        "El paciente mejora su animo esta semana",
+        near_vector()
+      )
+
       stub_query_embedding(near_vector())
 
       expect(ClinicalConsultationChainMock, :run, 1, fn %{question: question, excerpts: _excerpts} ->
@@ -157,7 +172,10 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveFollowupTest do
                )
     end
 
-test "second turn yields :provider_failure when the chain raises", %{professional: professional, patient: patient} do
+    test "second turn yields :provider_failure when the chain raises", %{
+      professional: professional,
+      patient: patient
+    } do
       insert_chunk!(professional, patient, "El paciente mejora su animo", near_vector())
       stub_query_embedding(near_vector())
       expect(ClinicalConsultationChainMock, :run, 1, fn _ -> raise "boom" end)

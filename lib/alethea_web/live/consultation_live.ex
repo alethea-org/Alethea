@@ -35,6 +35,7 @@ defmodule AletheaWeb.ConsultationLive do
           |> assign(:turn, 0)
           |> assign(:followup_state, FollowupState.new(patient_id))
           |> assign(:query_form, to_form(%{"query" => ""}, as: "consultation"))
+          |> stream_configure(:messages, dom_id: & &1.id)
           |> stream(:messages, [])
 
         {:ok, socket}
@@ -188,7 +189,7 @@ defmodule AletheaWeb.ConsultationLive do
         Nueva conversación
       </button>
 
-      <div :if={@state == :idle} id="consultation-idle" class="empty-state">
+      <div :if={@state == :idle and @turn == 0} id="consultation-idle" class="empty-state">
         <p>Escribí una pregunta sobre la historia clínica del paciente.</p>
       </div>
 
@@ -196,38 +197,54 @@ defmodule AletheaWeb.ConsultationLive do
         <p>Buscando evidencia en el registro…</p>
       </div>
 
-      <section
-        :if={@state == :synthesis}
+      <div
+        :if={@turn > 0}
         id="consultation-synthesis"
-        class="consultation__synthesis"
+        class="consultation-synthesis consultation__thread"
       >
-        <h2 class="consultation__section-title">Síntesis basada en evidencia</h2>
-        <p>{@last_answer.synthesis}</p>
-      </section>
+        <div id="consultation-messages" phx-update="stream" class="consultation__messages">
+          <article
+            :for={{dom_id, message} <- @streams.messages}
+            id={dom_id}
+            class="consultation__turn"
+            data-turn={message.turn}
+          >
+            <div class="consultation__turn-query">
+              <p class="consultation__turn-query-text">{message.query}</p>
+            </div>
 
-      <section
-        :if={@state == :synthesis}
-        id="consultation-sources"
-        class="consultation__sources-panel"
-      >
-        <h2 class="consultation__section-title">Fuentes</h2>
-        <ol class="consultation__sources">
-          <li :for={source <- @last_answer.sources} class="consultation__source">
-            <p class="consultation__source-excerpt">{source.excerpt}</p>
-            <p class="consultation__source-meta">
-              <span class="consultation__source-kind">{source_kind_label(source.kind)}</span>
-              <span class="consultation__source-date">{format_datetime(source.occurred_at)}</span>
-              <.link
-                :if={source_link(source.reference, @patient_id)}
-                navigate={source_link(source.reference, @patient_id)}
-                class="consultation__source-link"
-              >
-                Ver conducta objetivo
-              </.link>
-            </p>
-          </li>
-        </ol>
-      </section>
+            <section
+              id={"#{dom_id}-synthesis"}
+              class="consultation-synthesis consultation__synthesis"
+            >
+              <h2 class="consultation__section-title">Síntesis basada en evidencia</h2>
+              <p>{message.answer.synthesis}</p>
+            </section>
+
+            <section id={"#{dom_id}-sources"} class="consultation__sources-panel">
+              <h2 class="consultation__section-title">Fuentes</h2>
+              <ol class="consultation__sources">
+                <li :for={source <- message.answer.sources} class="consultation__source">
+                  <p class="consultation__source-excerpt">{source.excerpt}</p>
+                  <p class="consultation__source-meta">
+                    <span class="consultation__source-kind">{source_kind_label(source.kind)}</span>
+                    <span class="consultation__source-date">
+                      {format_datetime(source.occurred_at)}
+                    </span>
+                    <.link
+                      :if={source_link(source.reference, @patient_id)}
+                      navigate={source_link(source.reference, @patient_id)}
+                      class="consultation__source-link"
+                    >
+                      Ver conducta objetivo
+                    </.link>
+                  </p>
+                </li>
+              </ol>
+            </section>
+          </article>
+        </div>
+      </div>
 
       <div :if={@state == :no_evidence} id="consultation-no-evidence" class="empty-state">
         <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>
