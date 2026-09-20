@@ -405,6 +405,22 @@ defmodule AletheaWeb.ConsultationLiveTest do
     end
   end
 
+  describe "hypothesis panel via Consultation.Fake (#235b)" do
+    test "renders when the Fake carries a hypothesis (Judgment Day W1: selected_hypothesis/1 pass-through was previously untested)",
+         %{conn: conn, patient: patient} do
+      set_fake_outcome(:synthesis)
+      set_fake_hypothesis(canned_hypothesis!())
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      html = render_async(view)
+
+      assert html =~ "consultation-synthesis"
+      assert has_element?(view, "section.review-hypothesis-panel")
+    end
+  end
+
   describe "zero persistence" do
     test "does not survive remount: a second mount starts empty", %{conn: conn, patient: patient} do
       set_fake_outcome(:synthesis)
