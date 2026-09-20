@@ -13,6 +13,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisWiringGateTest do
   """
   use ExUnit.Case, async: true
 
+  alias Alethea.ClinicalRecord.Rag.Consultation.Answer
   alias AletheaTest.ASTScan
 
   @allowed_call_site "consultation/live.ex"
@@ -60,4 +61,18 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisWiringGateTest do
              |> ASTScan.calls?(:HypothesisPolicy, [:interpretive_intent?, :evaluate])
     end
   end
+
+  describe "Answer.outcome/0 vocabulary is unchanged (#235, R11)" do
+    test "remains exactly :synthesis | :no_evidence | :stale | :provider_failure" do
+      {:ok, types} = Code.Typespec.fetch_types(Answer)
+
+      {:type, {:outcome, union, []}} =
+        Enum.find(types, fn {:type, {name, _, _}} -> name == :outcome end)
+
+      assert flatten_union(union) == [:synthesis, :no_evidence, :stale, :provider_failure]
+    end
+  end
+
+  defp flatten_union({:type, _, :union, members}), do: Enum.flat_map(members, &flatten_union/1)
+  defp flatten_union({:atom, _, value}), do: [value]
 end
