@@ -16,6 +16,8 @@ defmodule Alethea.RagFixtures do
 
   alias Alethea.Accounts
   alias Alethea.ClinicalRecord
+  alias Alethea.ClinicalRecord.Rag.Consultation.Fake
+  alias Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy
   alias Alethea.ClinicalRecord.Rag.Indexer
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
@@ -138,6 +140,31 @@ defmodule Alethea.RagFixtures do
       })
 
     professional
+  end
+
+  @doc """
+  A real `%Hypothesis{}`, built through `HypothesisPolicy.evaluate/2` —
+  the sole constructor, never hand-rolled — over `Fake.canned_results/0`
+  (#235b/AD2), so `Consultation.Fake`'s sources and this hypothesis cite
+  the exact same fragment. `test/**` sits outside the Hypothesis Wiring
+  Gate's `lib/**` scan glob, so this call site does not count toward it.
+  """
+  def canned_hypothesis! do
+    {:ok, hypothesis} =
+      HypothesisPolicy.evaluate(
+        "Podría existir una relación entre las caminatas pactadas y la mejoría del ánimo.",
+        Fake.canned_results()
+      )
+
+    hypothesis
+  end
+
+  def set_fake_hypothesis(hypothesis) do
+    Application.put_env(:alethea, :consultation_fake_hypothesis, hypothesis, persistent: true)
+  end
+
+  def reset_fake_hypothesis do
+    Application.delete_env(:alethea, :consultation_fake_hypothesis)
   end
 
   def create_patient!(professional) do
