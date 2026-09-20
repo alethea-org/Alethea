@@ -13,13 +13,13 @@
   </.link>
   <div>
     <h2 class="auth-panel__title">La semana del paciente, ya leída.</h2>
-
+    
     <p class="auth-panel__lede">
       El registro diario entre sesiones llega convertido en un resumen clínico
       con métricas, tendencias y anclas al mensaje que originó cada insight.
     </p>
   </div>
-
+  
   <p class="auth-panel__proof">
     Cada paciente tiene su propia clave de cifrado. Ni el equipo de Alethea ni
     terceros pueden leer el contenido clínico.
@@ -29,19 +29,19 @@
 <section class="auth-form-side">
   <div class="auth-form">
     <p class="pt-eyebrow">Centro de Control Clínico</p>
-
+    
     <h1 class="auth-form__title">Bienvenido de vuelta</h1>
-
+    
     <p class="auth-form__sub">Ingresá tus credenciales para continuar.</p>
-
+    
     <div :if={@flash["error"]} class="notice notice--error">
       <.icon name="hero-exclamation-circle" class="notice__icon" /> <span>{@flash["error"]}</span>
     </div>
-
+    
     <div :if={@flash["info"]} class="notice notice--success">
       <.icon name="hero-information-circle" class="notice__icon" /> <span>{@flash["info"]}</span>
     </div>
-
+    
     <form action={~p"/login"} method="post" id="login-form">
       <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
       <div class="field">
@@ -56,7 +56,7 @@
           class="text-input"
         />
       </div>
-
+      
       <div class="field">
         <label for="login-password" class="field__label">Contraseña</label>
         <input
@@ -69,7 +69,7 @@
           class="text-input"
         />
       </div>
-
+      
       <label for="login-remember-me" class="checkbox-row">
         <input
           type="checkbox"
@@ -82,11 +82,11 @@
         Iniciar sesión
       </button>
     </form>
-
+    
     <p class="auth-form__foot">
       ¿No tenés cuenta? <.link navigate={~p"/register"}>Registrate acá</.link>
     </p>
-
+    
     <p class="auth-form__note">
       <.icon name="hero-lock-closed" class="size-3" /> Cifrado a nivel de paciente
     </p>

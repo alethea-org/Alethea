@@ -158,7 +158,7 @@ defmodule AletheaWeb.ConsultationLive do
     ~H"""
     <div class="consultation">
       <.header>Consulta clínica</.header>
-
+      
       <.form for={@query_form} id="consultation-ask-form" phx-submit="ask">
         <.input field={@query_form[:query]} type="text" label="Preguntá sobre la historia clínica" />
         <div class="form-actions">
@@ -171,37 +171,39 @@ defmodule AletheaWeb.ConsultationLive do
           </button>
         </div>
       </.form>
-
+      
       <button id="consultation-new-conversation" type="button" phx-click="new_conversation">
         Nueva conversación
       </button>
-
       <div :if={@state == :idle} id="consultation-idle" class="empty-state">
         <p>Escribí una pregunta sobre la historia clínica del paciente.</p>
       </div>
-
+      
       <div :if={@state == :retrieving} id="consultation-retrieving" class="empty-state">
         <p>Buscando evidencia en el registro…</p>
       </div>
-
+      
       <section
         :if={@state == :synthesis}
         id="consultation-synthesis"
         class="consultation__synthesis"
       >
         <h2 class="consultation__section-title">Síntesis basada en evidencia</h2>
+        
         <p>{@last_answer.synthesis}</p>
       </section>
-
+      
       <section
         :if={@state == :synthesis}
         id="consultation-sources"
         class="consultation__sources-panel"
       >
         <h2 class="consultation__section-title">Fuentes</h2>
+        
         <ol class="consultation__sources">
           <li :for={source <- @last_answer.sources} class="consultation__source">
             <p class="consultation__source-excerpt">{source.excerpt}</p>
+            
             <p class="consultation__source-meta">
               <span class="consultation__source-kind">{source_kind_label(source.kind)}</span>
               <span class="consultation__source-date">{format_datetime(source.occurred_at)}</span>
@@ -216,17 +218,17 @@ defmodule AletheaWeb.ConsultationLive do
           </li>
         </ol>
       </section>
-
+      
       <div :if={@state == :no_evidence} id="consultation-no-evidence" class="empty-state">
         <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>
       </div>
-
+      
       <div :if={@state == :stale} id="consultation-stale" class="notice notice--warning">
         <p>
           La indexación del paciente está pendiente ({@pending} elementos). Reintentá cuando finalice.
         </p>
       </div>
-
+      
       <div :if={@state == :provider_failure} id="consultation-provider-error" class="empty-state">
         <p>No se pudo generar una respuesta. Intentá nuevamente.</p>
       </div>

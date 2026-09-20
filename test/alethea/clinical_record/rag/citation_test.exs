@@ -31,7 +31,9 @@ defmodule Alethea.ClinicalRecord.Rag.CitationTest do
     test "builds a citation from a server-side Retrieval.result map" do
       citation = Citation.from_retrieval_result(@valid_result)
 
-      assert citation.excerpt == "El paciente reportó insomnio recurrente durante la última semana."
+      assert citation.excerpt ==
+               "El paciente reportó insomnio recurrente durante la última semana."
+
       assert citation.kind == "clinical_notes"
       assert citation.occurred_at == ~U[2026-08-12 14:30:00Z]
       assert citation.chunk_index == 0
@@ -96,7 +98,8 @@ defmodule Alethea.ClinicalRecord.Rag.CitationTest do
     end
 
     test "accepts different source_resource_type values — any kind the indexer produces" do
-      for kind <- ~w(clinical_notes session_transcripts journal_entries target_behaviors summaries) do
+      for kind <-
+            ~w(clinical_notes session_transcripts journal_entries target_behaviors summaries) do
         result = Map.put(@valid_result, :source_resource_type, kind)
         citation = Citation.from_retrieval_result(result)
         assert citation.kind == kind

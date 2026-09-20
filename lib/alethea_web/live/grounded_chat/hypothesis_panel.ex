@@ -63,7 +63,8 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
 
   attr :hypothesis, :any,
     default: nil,
-    doc: "la %Hypothesis{} que produjo HypothesisPolicy.evaluate/2, o nil si no aplica a este turno"
+    doc:
+      "la %Hypothesis{} que produjo HypothesisPolicy.evaluate/2, o nil si no aplica a este turno"
 
   def hypothesis_panel(assigns) do
     assigns = assign(assigns, :citations, citations_for(assigns[:hypothesis]))
@@ -76,13 +77,16 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
       aria-labelledby={"#{@id}-title"}
     >
       <p class="pt-eyebrow">C1 autorizado · lectura interpretativa</p>
+      
       <h2 id={"#{@id}-title"}>Hipótesis para revisar</h2>
+      
       <div id={"#{@id}-disclaimer"} class="review-hypothesis-panel__disclaimer">
         <strong>Disclaimer clínico</strong>
         <p>{@hypothesis.disclaimer}</p>
       </div>
+      
       <p class="review-hypothesis-panel__statement">{@hypothesis.statement}</p>
-      <.citation_list citations={@citations} />
+       <.citation_list citations={@citations} />
     </section>
     """
   end

@@ -43,11 +43,11 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
                end)
 
   @hypothesis_multi (case HypothesisPolicy.evaluate(@statement, [
-                             @fixture_result_a,
-                             @fixture_result_b
-                           ]) do
-                        {:ok, hypothesis} -> hypothesis
-                      end)
+                            @fixture_result_a,
+                            @fixture_result_b
+                          ]) do
+                       {:ok, hypothesis} -> hypothesis
+                     end)
 
   describe "hypothesis_panel/1" do
     test "no renderiza nada cuando no hay hipótesis para este turno" do
@@ -106,8 +106,11 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
 
       [source_a, source_b] = @hypothesis_multi.sources
 
-      ref_a = "#{source_a.reference.resource_type}/#{String.slice(source_a.reference.chunk_id, 0, 8)}"
-      ref_b = "#{source_b.reference.resource_type}/#{String.slice(source_b.reference.chunk_id, 0, 8)}"
+      ref_a =
+        "#{source_a.reference.resource_type}/#{String.slice(source_a.reference.chunk_id, 0, 8)}"
+
+      ref_b =
+        "#{source_b.reference.resource_type}/#{String.slice(source_b.reference.chunk_id, 0, 8)}"
 
       assert html =~ ~s(id="citation-#{ref_a}")
       assert html =~ ~s(id="citation-#{ref_b}")
