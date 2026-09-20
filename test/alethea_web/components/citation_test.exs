@@ -45,7 +45,7 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
   end
 
   describe "<.citation> collapsed (default)" do
-    test "renders kind, ref and fecha as the summary — excerpt is hidden" do
+    test "renders kind, ref and fecha as the summary — excerpt is present but visually collapsed (native <details>, no `open` attribute)" do
       html = render_component(&CoreComponents.citation/1, citation: citation())
 
       assert html =~ "<details"
@@ -56,7 +56,12 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
 
       assert html =~ "2026-08-12"
 
-      refute html =~ "El paciente reportó insomnio"
+      # The excerpt is always in the DOM — native <details> hides it
+      # visually until opened, so a real click works with zero JS.
+      # Structurally omitting it here (the pre-fix behavior) made
+      # click-to-expand unreachable, since no production call site
+      # ever re-renders with `expanded: true` (#235c task 3.0).
+      assert html =~ "El paciente reportó insomnio"
     end
 
     test "uses a stable DOM id derived from the source_ref" do

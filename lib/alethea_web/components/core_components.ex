@@ -547,9 +547,17 @@ defmodule AletheaWeb.CoreComponents do
 
   Collapsed by default — the psychologist sees the source kind, the
   date and the stable `source_ref` as the summary — and expands to
-  the verbatim, decrypted excerpt on click. The DOM id is derived
-  from the `source_ref` so two cites never collide and so the panel
-  can be opened / closed from the keyboard or an external script.
+  the verbatim, decrypted excerpt on click. Expansion is native
+  `<details>`/`<summary>` disclosure: the excerpt is always present in
+  the DOM (the `expanded` attr only sets the initial `open` state), so
+  a real click works with zero JS and zero LiveView round-trip. An
+  earlier version gated the excerpt paragraph behind `:if={@expanded}`,
+  which made it structurally absent whenever `expanded: false` (the
+  only value any caller ever passed) — click-to-expand was silently
+  unreachable. Fixed alongside #235c; see that change's tasks.md task
+  3.0 for the investigation. The DOM id is derived from the
+  `source_ref` so two cites never collide and so the panel can be
+  opened / closed from the keyboard or an external script.
 
   Reused by *Síntesis* (A4, issue #234) and *Hipótesis* (C3, issue
   #231) without divergent rendering — a single component instance
@@ -577,8 +585,8 @@ defmodule AletheaWeb.CoreComponents do
         <span class="citation__date">{format_date(@citation.occurred_at)}</span>
         <span class="citation__ref">{@citation.source_ref}</span>
       </summary>
-      
-      <p :if={@expanded} class="citation__excerpt">{@citation.excerpt}</p>
+
+      <p class="citation__excerpt">{@citation.excerpt}</p>
     </details>
     """
   end

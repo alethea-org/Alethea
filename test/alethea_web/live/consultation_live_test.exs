@@ -25,11 +25,9 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
   alias Alethea.AI.{ClinicalConsultationChainMock, ClinicalHypothesisChainMock}
   alias Alethea.Clinical.Message
-  alias Alethea.ClinicalRecord.Rag.Citation
   alias Alethea.ClinicalRecord.Rag.Consultation
   alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Hypothesis}
   alias Alethea.Repo
-  alias AletheaWeb.CoreComponents
 
   @seeded_excerpt "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
   @synthesis "Según los fragmentos citados, el paciente sostiene la mejoría del ánimo."
@@ -317,36 +315,23 @@ defmodule AletheaWeb.ConsultationLiveTest do
       panel_html = view |> element("section.review-hypothesis-panel") |> render()
       assert panel_html =~ "<details"
       assert panel_html =~ "citation__summary"
-      refute panel_html =~ @seeded_excerpt
+      refute panel_html =~ " open"
 
-      # Ground truth: the same real pipeline, called directly (deterministic
-      # Mox stubs, same seeded chunk), to obtain the server-derived %Source{}
-      # the live panel's citation was built from — never hand-built, mirrors
-      # hypothesis_panel_test.exs's own real-constructor fixture pattern.
+      # #235c task 3.0: the excerpt is always in the DOM — native
+      # <details> hides it visually until opened, so a real click
+      # works with zero JS. Asserting presence here, directly on the
+      # panel's own render, is now the complete proof (no ground-truth
+      # workaround needed — that was only required while the excerpt
+      # was structurally absent from the collapsed render).
+      assert panel_html =~ @seeded_excerpt
+
       assert {:ok, %Answer{hypothesis: %Hypothesis{sources: [source]}}} =
                Consultation.answer(professional, patient.id, @interpretive_query, history: [])
-
-      assert source.excerpt == @seeded_excerpt
 
       short_chunk_id = source.reference.chunk_id |> to_string() |> String.slice(0, 8)
       source_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
 
       assert panel_html =~ ~s(id="citation-#{source_ref}")
-
-      expanded_html =
-        render_component(&CoreComponents.citation/1,
-          citation: %Citation{
-            source_ref: source_ref,
-            kind: source.kind,
-            occurred_at: source.occurred_at,
-            excerpt: source.excerpt,
-            score: nil,
-            chunk_index: nil
-          },
-          expanded: true
-        )
-
-      assert expanded_html =~ @seeded_excerpt
     end
 
     test "diagnostic candidate prose yields hypothesis: nil and no panel in the DOM (R8 render half)",
