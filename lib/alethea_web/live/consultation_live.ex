@@ -19,6 +19,8 @@ defmodule AletheaWeb.ConsultationLive do
   alias Alethea.ClinicalRecord.Rag.Consultation
   alias AletheaWeb.GroundedChat.FollowupState
 
+  import AletheaWeb.GroundedChat.HypothesisPanel, only: [hypothesis_panel: 1]
+
   @history_limit 6
 
   @impl true
@@ -218,7 +220,13 @@ defmodule AletheaWeb.ConsultationLive do
           </li>
         </ol>
       </section>
-      
+
+      <.hypothesis_panel
+        :if={@state == :synthesis}
+        id={"consultation-hypothesis-turn-#{@turn}"}
+        hypothesis={@last_answer.hypothesis}
+      />
+
       <div :if={@state == :no_evidence} id="consultation-no-evidence" class="empty-state">
         <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>
       </div>
