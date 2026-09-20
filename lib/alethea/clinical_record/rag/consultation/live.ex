@@ -15,7 +15,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
   alias Alethea.Accounts
   alias Alethea.AI.Sanitizer
   alias Alethea.ClinicalRecord.Rag.{Consultation, Retrieval}
-  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Source}
+  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, HypothesisPolicy, Source}
   alias Alethea.ClinicalRecord.Tombstone
 
   @impl true
@@ -105,8 +105,17 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
         # provider_failure, defensively, even if the configured chain
         # (a test mock, in particular) skips its own `parse/1` guard.
         case String.trim(synthesis) do
-          "" -> {:ok, %Answer{outcome: :provider_failure}}
-          trimmed -> {:ok, %Answer{outcome: :synthesis, synthesis: trimmed, sources: sources}}
+          "" ->
+            {:ok, %Answer{outcome: :provider_failure}}
+
+          trimmed ->
+            {:ok,
+             %Answer{
+               outcome: :synthesis,
+               synthesis: trimmed,
+               sources: sources,
+               hypothesis: maybe_hypothesis(query, excerpts, kept)
+             }}
         end
 
       _other ->
@@ -122,5 +131,37 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
         :alethea,
         :clinical_consultation_chain,
         Alethea.AI.Chains.ClinicalConsultationChain
+      )
+
+  # PD1/PD2/PD3/PD4 (#235): the sole domain call site for
+  # `HypothesisPolicy.interpretive_intent?/1` and `HypothesisPolicy.evaluate/2`
+  # (enforced by the Hypothesis Wiring Gate, R9/R11). Own function-level
+  # `rescue`, distinct from `synthesize/2`'s — an inner rescue always wins,
+  # so no hypothesis defect can ever downgrade a valid synthesis (PD2).
+  defp maybe_hypothesis(query, excerpts, kept) do
+    if HypothesisPolicy.interpretive_intent?(query) do
+      citable = Enum.filter(kept, &(String.trim(&1.content) != ""))
+
+      with false <- citable == [],
+           {:ok, %{hypothesis: prose}} <-
+             hypothesis_chain().run(%{question: query, excerpts: excerpts}),
+           {:ok, hypothesis} <- HypothesisPolicy.evaluate(prose, citable) do
+        hypothesis
+      else
+        _ -> nil
+      end
+    else
+      nil
+    end
+  rescue
+    _error -> nil
+  end
+
+  defp hypothesis_chain,
+    do:
+      Application.get_env(
+        :alethea,
+        :clinical_hypothesis_chain,
+        Alethea.AI.Chains.ClinicalHypothesisChain
       )
 end
