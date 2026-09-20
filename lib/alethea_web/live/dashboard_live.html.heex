@@ -120,7 +120,17 @@
   <div :if={@selected_patient}>
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
       <h2 class="pt-h2">Briefing · {@selected_patient.alias}</h2>
-      <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
+
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
+        <.link
+          id="patient-clinical-notes-link"
+          navigate={~p"/patients/#{@selected_patient.id}/clinical-notes"}
+          class="button-secondary button-secondary--sm"
+        >
+          Notas clínicas
+        </.link>
+      </div>
     </div>
     <%!-- Weekly pre-session report — the briefing's signature surface --%>
     <article
@@ -278,17 +288,27 @@
         <div>
           <h4 class="pta-field-title">Historial Clínico</h4>
 
-          <button
-            id="decrypt-chat-button"
-            type="button"
-            phx-click="decrypt_chat"
-            class={[
-              "button-secondary button-secondary--sm",
-              @chat_decrypted && "button-secondary--block"
-            ]}
-          >
-            {if @chat_decrypted, do: "Chat descifrado", else: "Descifrar chat"}
-          </button>
+          <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+            <.link
+              id="patient-clinical-notes-action"
+              navigate={~p"/patients/#{@selected_patient.id}/clinical-notes"}
+              class="button-secondary button-secondary--sm"
+            >
+              Notas clínicas
+            </.link>
+            <button
+              id="decrypt-chat-button"
+              type="button"
+              phx-click="decrypt_chat"
+              class={[
+                "button-secondary button-secondary--sm",
+                @chat_decrypted && "button-secondary--block"
+              ]}
+            >
+              {if @chat_decrypted, do: "Chat descifrado", else: "Descifrar chat"}
+            </button>
+          </div>
+
           <div
             :if={@chat_decrypted}
             id="chat-history-panel"
@@ -300,9 +320,7 @@
               id={id}
               class={["chat-line", msg.direction == "outbound" && "chat-line--out"]}
             >
-              <div class="pta-chatlog__time">
-                {Calendar.strftime(msg.timestamp, "%H:%M")}
-              </div>
+              <div class="pta-chatlog__time">{Calendar.strftime(msg.timestamp, "%H:%M")}</div>
 
               <div class="chat-bubble">{msg.encrypted_content}</div>
             </div>

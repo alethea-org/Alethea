@@ -22,6 +22,7 @@ defmodule Alethea.ClinicalRecord.ClinicalNote do
   schema "clinical_notes" do
     field :encrypted_body, :binary
     field :encryption_version, :integer, default: 1
+    field :body, :string, virtual: true
 
     belongs_to :patient, Alethea.Accounts.Patient
     belongs_to :professional, Alethea.Accounts.Professional

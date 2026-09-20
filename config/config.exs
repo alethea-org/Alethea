@@ -132,6 +132,14 @@ config :alethea, :telegram_client, Alethea.Telegram.Client.Req
 
 config :alethea, Alethea.Clinical, recent_message_limit: 10
 
+# Grounded clinical consultation (sdd/grounded-clinical-chat-initial,
+# GitHub #223, #226a). `:consultation_evidence_threshold` is the
+# retrieval sufficiency floor owned by
+# `Alethea.ClinicalRecord.Rag.Consultation.evidence_threshold/0` — a
+# plain float, kept separate from the `:clinical_consultation` module
+# swap (AD10). Results all scoring below it yield `:no_evidence`.
+config :alethea, :consultation_evidence_threshold, 0.35
+
 # --- Clinical Record Retention (sdd/clinical-record-retention, GitHub #197) ---
 
 # `false` by default — `AletheaJobs.RetentionSweepWorker` is a no-op
@@ -161,6 +169,11 @@ config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   4. Mantén un tono empático pero profesional y neutral.
   5. Si detectas riesgo inminente, el sistema perimetral ya actuó, tú continúa con el proceso reflexivo calmado.
   """
+
+# Grounded clinical consultation synthesis (#226b). Pinned to `:local`
+# so a `:cloud` provider is structurally impossible (D2 / AD5) —
+# decrypted clinical narrative must never leave the box.
+config :alethea, Alethea.AI.Chains.ClinicalConsultationChain, provider: :local
 
 config :alethea, Alethea.AI.EmotionAnalyzer,
   base_url: "http://127.0.0.1:8080",

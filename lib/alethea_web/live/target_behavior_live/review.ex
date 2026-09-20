@@ -64,7 +64,6 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:editing_proposal_id, nil)
           |> assign(:timeline_index, timeline_index(items))
           |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
-          |> assign(:note_form, to_form(%{"body" => ""}, as: "note"))
           |> assign(:draft_form, to_form(%{"body" => draft_body}, as: "draft"))
           |> assign(:draft_tombstoned_at, draft_tombstoned_at)
           |> stream(:timeline, items)
@@ -226,23 +225,6 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
-  def handle_event("create_note", %{"note" => %{"body" => body}}, socket) do
-    professional = socket.assigns.current_professional
-    patient_id = socket.assigns.patient_id
-
-    case ClinicalRecord.create_clinical_note(professional, patient_id, body) do
-      {:ok, _note} ->
-        {:noreply,
-         socket
-         |> assign(:note_form, to_form(%{"body" => ""}, as: "note"))
-         |> put_flash(:info, "Nota clínica creada.")}
-
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "No se pudo crear la nota clínica.")}
-    end
-  end
-
-  @impl true
   def handle_info({:ai_proposals_ready, target_behavior_id}, socket) do
     if target_behavior_id == socket.assigns.target_behavior_id do
       {:noreply,
@@ -363,6 +345,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         <:subtitle>
           Cronología de evidencia, observaciones y propuestas de IA para esta conducta objetivo.
         </:subtitle>
+
         <:actions>
           <button
             type="button"
@@ -371,8 +354,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             disabled={@generation_pending}
             class="button-secondary button-secondary--sm"
           >
-            <.icon name="hero-presentation-chart-line" class="size-4" style="margin-right:6px;" />
-            {if @generation_pending, do: "Generando patrones…", else: "Sugerir patrones (IA)"}
+            <.icon name="hero-presentation-chart-line" class="size-4" style="margin-right:6px;" /> {if @generation_pending,
+              do: "Generando patrones…",
+              else: "Sugerir patrones (IA)"}
           </button>
         </:actions>
       </.header>
@@ -386,11 +370,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           <div class="review-item__meta">
             <span class="review-item__kind">{kind_label(item.kind)}</span>
             <span class="review-item__time">{format_datetime(item.occurred_at)}</span>
-
             <span :if={item.kind == :clinician_observation} class="badge badge--uncited">
               Sin cita — agregado por el clínico
             </span>
-
             <span
               :if={item.kind == :ai_proposal}
               class={["badge", "badge--provisional", "badge--status-#{item.status}"]}
@@ -453,9 +435,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             <input type="hidden" name="proposal_id" value={item.id} />
             <.input type="textarea" name="proposal[text]" value={item.text} label="Editar propuesta" />
             <div class="form-actions">
-              <button type="submit" class="button-primary button-primary--sm">
-                Guardar edición
-              </button>
+              <button type="submit" class="button-primary button-primary--sm">Guardar edición</button>
               <button
                 type="button"
                 phx-click="cancel_edit_proposal"
@@ -475,6 +455,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
       <div class="review-observation">
         <h2 class="pt-h2">Agregar observación clínica</h2>
+
         <.form for={@observation_form} id="observation-form" phx-submit="add_observation">
           <.input field={@observation_form[:body]} type="textarea" label="Observación (sin cita)" />
           <div class="form-actions">
@@ -487,30 +468,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
       <div class="review-draft">
         <h2 class="pt-h2">Borrador de análisis funcional</h2>
+
         <div :if={@draft_tombstoned_at} id="draft-tombstone" class="tombstone-note">
           <.icon name="hero-lock-closed" class="size-3" />
           Eliminado legalmente el {format_datetime(@draft_tombstoned_at)}
         </div>
+
         <.form :if={!@draft_tombstoned_at} for={@draft_form} id="draft-form" phx-submit="save_draft">
           <.input field={@draft_form[:body]} type="textarea" label="Análisis funcional (editable)" />
           <div class="form-actions">
             <button type="submit" class="button-primary button-primary--sm">Guardar borrador</button>
-          </div>
-        </.form>
-      </div>
-
-      <div class="review-note">
-        <h2 class="pt-h2">Crear nota clínica</h2>
-        <p class="pt-muted">
-          Acción explícita y separada — no se crea automáticamente al aceptar una propuesta ni al
-          guardar el borrador.
-        </p>
-        <.form for={@note_form} id="note-form" phx-submit="create_note">
-          <.input field={@note_form[:body]} type="textarea" label="Contenido de la nota clínica" />
-          <div class="form-actions">
-            <button type="submit" class="button-primary button-primary--sm">
-              Crear nota clínica
-            </button>
           </div>
         </.form>
       </div>
