@@ -164,10 +164,10 @@ defmodule AletheaWeb.ConsultationLiveTest do
       html = render_async(view)
 
       assert has_element?(view, "section.consultation__synthesis")
-      assert has_element?(view, "ol.consultation__sources")
+      assert has_element?(view, "section.consultation__sources-panel")
 
       synthesis_html = view |> element("section.consultation__synthesis") |> render()
-      sources_html = view |> element("ol.consultation__sources") |> render()
+      sources_html = view |> element("section.consultation__sources-panel") |> render()
 
       assert synthesis_html =~ @synthesis
       refute synthesis_html =~ @seeded_excerpt
@@ -209,20 +209,57 @@ defmodule AletheaWeb.ConsultationLiveTest do
       submit_query(view, "¿qué hizo el paciente esta semana?")
       render_async(view)
 
-      linked_item = view |> element("ol.consultation__sources li", @linked_excerpt) |> render()
+      # Migrated (#235c/R10) to render through the unified
+      # `AletheaWeb.CoreComponents.citation/1` — a `<details>` per
+      # source, not the old hand-rolled `<ol><li>`. Date drops to
+      # day-level ISO (#235c task 3.2, decision accepted): citation/1
+      # never renders time-of-day.
+      linked_item = view |> element("#consultation-sources details", @linked_excerpt) |> render()
 
       assert linked_item =~ @linked_excerpt
       assert linked_item =~ "Observación del clínico"
-      assert linked_item =~ "15/01/2026 10:00"
+      assert linked_item =~ "2026-01-15"
 
       assert linked_item =~
                ~s(href="/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      plain_item = view |> element("ol.consultation__sources li", @plain_excerpt) |> render()
+      assert linked_item =~ "Ver conducta objetivo"
+
+      plain_item = view |> element("#consultation-sources details", @plain_excerpt) |> render()
 
       assert plain_item =~ @plain_excerpt
       assert plain_item =~ "Nota clínica"
-      assert plain_item =~ "03/02/2026 18:30"
+      assert plain_item =~ "2026-02-03"
+      refute plain_item =~ "<a"
+    end
+
+    test "a source without a target behavior renders no dangling link and no error (#235c, R10)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      insert_chunk!(professional, patient, @plain_excerpt, near_vector(),
+        source_resource_type: "clinical_note",
+        target_behavior_id: nil,
+        occurred_at: @plain_occurred_at
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿qué hizo el paciente esta semana?")
+      html = render_async(view)
+
+      assert html =~ @plain_excerpt
+      refute html =~ "Ver conducta objetivo"
+
+      plain_item = view |> element("#consultation-sources details", @plain_excerpt) |> render()
       refute plain_item =~ "<a"
     end
 

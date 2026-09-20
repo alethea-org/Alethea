@@ -39,9 +39,10 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
     * `Hypothesis.sources` trae `[Alethea.ClinicalRecord.Rag.
       Consultation.Source.t()]` (#226a), no `[Citation.t()]` (#230).
       `citation_list/1` exige `%Citation{}` exactamente (pattern
-      match de struct) y `Source.t()` no tiene `source_ref` —
-      `source_to_citation/1` abajo hace esa conversión, pura, sin
-      tocar `citation.ex` ni `core_components.ex` (de #230).
+      match de struct) y `Source.t()` no tiene `source_ref` — esa
+      conversión ahora vive en `AletheaWeb.GroundedChat.SourceCitation`
+      (promovida en #235c, ver "Hand-off" abajo — este panel solo
+      delega).
     * El disclaimer ya no es un borrador propio: es
       `Hypothesis.disclaimer/0`, texto server-owned y verbatim.
 
@@ -51,13 +52,17 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
       para este turno y construye `Hypothesis.t()` — este panel
       nunca lo hace.
     * #227 monta este componente dentro de `ConsultationLive`.
-    * #235 lo compone junto al panel *Síntesis*: prueba la
-      separación visible exigida por ADR-010.
+    * #235b lo compone junto al panel *Síntesis*: prueba la
+      separación visible exigida por ADR-010 (cerrado).
+    * #235c promueve `source_to_citation/1` (antes privada acá) a
+      `AletheaWeb.GroundedChat.SourceCitation`, pública, para que
+      *Síntesis* la reuse al unificar su propio listado de fuentes con
+      `citation_list/1` (cerrado — este panel ahora solo delega).
   """
   use AletheaWeb, :html
 
-  alias Alethea.ClinicalRecord.Rag.Citation
-  alias Alethea.ClinicalRecord.Rag.Consultation.{Hypothesis, Source}
+  alias Alethea.ClinicalRecord.Rag.Consultation.Hypothesis
+  alias AletheaWeb.GroundedChat.SourceCitation
 
   attr :id, :string, required: true, doc: "id único del panel (por turno de conversación)"
 
@@ -94,50 +99,6 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
   defp citations_for(nil), do: []
 
   defp citations_for(%Hypothesis{sources: sources}) do
-    Enum.map(sources, &source_to_citation/1)
-  end
-
-  # Adapta un Source.t() (#226a) a un Citation.t() (#230) para que
-  # citation_list/1 pueda renderizarlo — esa función exige %Citation{}
-  # exactamente (pattern match de struct en citation/1) y Source.t()
-  # no tiene source_ref.
-  #
-  # No usa Citation.from_retrieval_result/1 ("the only constructor" en
-  # citation.ex) porque ese constructor espera el mapa crudo del
-  # retrieval envelope, no un %Source{} ya construido; construye el
-  # struct directamente en su lugar. Única forma de adaptar sin tocar
-  # citation.ex.
-  #
-  # Rechaza excerpt vacío igual que from_retrieval_result/1: ni
-  # HypothesisPolicy.evaluate/2 ni Source.from_results/1 garantizan
-  # excerpt no vacío por elemento (evaluate/2 solo rechaza
-  # results == [], no valida cada resultado individual) — esta es la
-  # única garantía real de "no citar una fuente sin contenido
-  # verificable" en esta cadena.
-  #
-  # score y chunk_index quedan en nil — Source.t() no los tiene y
-  # citation/1 nunca los renderiza.
-  #
-  # Privado por ahora: si #235 termina necesitando la misma conversión
-  # al unificar con Síntesis, promoverlo a público ahí, no antes.
-  @spec source_to_citation(Source.t()) :: Citation.t()
-  defp source_to_citation(%Source{} = source) do
-    if source.excerpt == "" do
-      raise ArgumentError, "Source has empty excerpt — empty cite cannot be verified"
-    end
-
-    short_chunk_id =
-      source.reference.chunk_id
-      |> to_string()
-      |> String.slice(0, 8)
-
-    %Citation{
-      source_ref: "#{source.reference.resource_type}/#{short_chunk_id}",
-      kind: source.kind,
-      occurred_at: source.occurred_at,
-      excerpt: source.excerpt,
-      score: nil,
-      chunk_index: nil
-    }
+    Enum.map(sources, &SourceCitation.source_to_citation/1)
   end
 end

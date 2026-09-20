@@ -16,6 +16,7 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
 
   use ExUnit.Case, async: true
 
+  import Phoenix.Component
   import Phoenix.LiveViewTest
 
   alias Alethea.ClinicalRecord.Rag.Citation
@@ -118,6 +119,38 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
       assert html =~ "&amp;"
 
       assert html =~ "&#39;quoted&#39;"
+    end
+  end
+
+  describe "citation/1 — optional link slot" do
+    test "renders the :link slot's content inside <summary> when the caller passes it" do
+      assigns = %{citation: citation()}
+
+      html =
+        rendered_to_string(~H"""
+        <CoreComponents.citation citation={@citation}>
+          <:link>Ver conducta objetivo</:link>
+        </CoreComponents.citation>
+        """)
+
+      assert html =~ "Ver conducta objetivo"
+
+      summary_start = :binary.match(html, "<summary") |> elem(0)
+      summary_end = :binary.match(html, "</summary>") |> elem(0)
+      link_pos = :binary.match(html, "Ver conducta objetivo") |> elem(0)
+
+      assert summary_start < link_pos and link_pos < summary_end
+    end
+
+    test "no link and no error when the caller passes no :link slot" do
+      assigns = %{citation: citation()}
+
+      html =
+        rendered_to_string(~H"""
+        <CoreComponents.citation citation={@citation} />
+        """)
+
+      refute html =~ "citation__link"
     end
   end
 

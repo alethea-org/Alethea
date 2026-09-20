@@ -555,9 +555,11 @@ defmodule AletheaWeb.CoreComponents do
   which made it structurally absent whenever `expanded: false` (the
   only value any caller ever passed) — click-to-expand was silently
   unreachable. Fixed alongside #235c; see that change's tasks.md task
-  3.0 for the investigation. The DOM id is derived from the
-  `source_ref` so two cites never collide and so the panel can be
-  opened / closed from the keyboard or an external script.
+  3.0 for the investigation. The DOM id defaults to the `source_ref`,
+  unique per cite — except when the *same* source is cited by two
+  sections on the same page at once (#235c: Fuentes and Hipótesis can
+  legitimately cite the same retrieved chunk), which collides. Pass
+  `id` explicitly to disambiguate in that case.
 
   Reused by *Síntesis* (A4, issue #234) and *Hipótesis* (C3, issue
   #231) without divergent rendering — a single component instance
@@ -567,23 +569,41 @@ defmodule AletheaWeb.CoreComponents do
 
       <.citation citation={@c} />              <!-- collapsed -->
       <.citation citation={@c} expanded />     <!-- open -->
+
+      <.citation citation={@c}>
+        <:link><.link navigate={~p"/..."}>Ver conducta objetivo</.link></:link>
+      </.citation>
+
+      <%!-- disambiguate when the same source_ref may render twice on the page --%>
+      <.citation citation={@c} id={"citation-sources-\#{@c.source_ref}"} />
   """
   attr :citation, :any, required: true, doc: "the %Citation{} to render"
   attr :expanded, :boolean, default: false, doc: "open the details element"
 
+  attr :id, :string,
+    default: nil,
+    doc:
+      "override the DOM id, defaults to \"citation-\#{source_ref}\" (#235c — disambiguates when the same source is cited twice on one page)"
+
+  slot :link,
+    doc: "optional navigation affordance rendered in <summary>; the caller owns the route (#235c)"
+
   def citation(%{citation: %Citation{}} = assigns) do
+    assigns = assign(assigns, :dom_id, assigns.id || "citation-#{assigns.citation.source_ref}")
+
     ~H"""
     <details
-      id={"citation-#{@citation.source_ref}"}
+      id={@dom_id}
       class="citation"
       aria-expanded={to_string(@expanded)}
-      aria-controls={"citation-#{@citation.source_ref}"}
+      aria-controls={@dom_id}
       open={@expanded}
     >
       <summary class="citation__summary">
-        <span class="citation__kind">{@citation.kind}</span>
+        <span class="citation__kind">{kind_label(@citation.kind)}</span>
         <span class="citation__date">{format_date(@citation.occurred_at)}</span>
         <span class="citation__ref">{@citation.source_ref}</span>
+        <span :if={@link != []} class="citation__link">{render_slot(@link)}</span>
       </summary>
 
       <p class="citation__excerpt">{@citation.excerpt}</p>
@@ -615,4 +635,15 @@ defmodule AletheaWeb.CoreComponents do
   defp format_date(%DateTime{} = dt) do
     dt |> DateTime.to_date() |> Date.to_iso8601()
   end
+
+  # Humanized source-kind labels (#235c task 3.1 — moved verbatim from
+  # `AletheaWeb.ConsultationLive.source_kind_label/1`, the migration's
+  # single call site, so `citation/1` is now the single renderer AND the
+  # single humanizer; the Hipótesis panel's cites get the upgrade for free).
+  defp kind_label("clinical_note"), do: "Nota clínica"
+  defp kind_label("consultation_evidence"), do: "Evidencia citada"
+  defp kind_label("clinician_observation"), do: "Observación del clínico"
+  defp kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
+  defp kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
+  defp kind_label(other), do: other
 end
