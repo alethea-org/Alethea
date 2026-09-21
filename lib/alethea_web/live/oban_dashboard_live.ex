@@ -71,89 +71,89 @@ defmodule AletheaWeb.ObanDashboardLive do
       <div class="ptd-head">
         <div>
           <p class="pt-eyebrow">Operaciones</p>
-          
+
           <h1 class="pt-h1">Cola de trabajos</h1>
         </div>
-        
+
         <div class="page-head__actions">
           <button type="button" phx-click="refresh" class="button-secondary button-secondary--sm">
             <.icon name="hero-arrow-path" class="size-4" style="margin-right:6px;" /> Actualizar
           </button>
         </div>
       </div>
-       <%!-- ── Queue counters (available + scheduled + executing) ── --%>
+      <%!-- ── Queue counters (available + scheduled + executing) ── --%>
       <div class="stat-strip" style="margin-bottom:24px;">
         <div :for={queue <- @queues} class="stat-tile">
           <div class="stat-tile__label">{queue}</div>
-          
+
           <div class="stat-tile__value">{get_queue_count(@queue_stats, queue)}</div>
-          
+
           <div class="stat-tile__desc">Pendientes</div>
         </div>
       </div>
-       <%!-- ── Filters ── --%>
+      <%!-- ── Filters ── --%>
       <div class="cmdbar">
         <div class="cmdbar__sort">
           <label for="filter-queue">Cola</label>
           <select id="filter-queue" name="queue" phx-change="filter_queue" class="text-input">
             <option value="all" selected={@selected_queue == "all"}>Todas</option>
-            
+
             <option :for={queue <- @queues} value={queue} selected={@selected_queue == "#{queue}"}>
               {queue}
             </option>
           </select>
         </div>
-        
+
         <div class="cmdbar__divider"></div>
-        
+
         <div class="cmdbar__sort">
           <label for="filter-state">Estado</label>
           <select id="filter-state" name="state" phx-change="filter_state" class="text-input">
             <option value="all" selected={@selected_state == "all"}>Todos</option>
-            
+
             <option :for={state <- @states} value={state} selected={@selected_state == "#{state}"}>
               {state}
             </option>
           </select>
         </div>
       </div>
-       <%!-- ── Job list ── --%>
+      <%!-- ── Job list ── --%>
       <div class="data-table-wrap">
         <table class="data-table">
           <thead>
             <tr>
               <th>ID</th>
-              
+
               <th>Cola</th>
-              
+
               <th>Worker</th>
-              
+
               <th>Estado</th>
-              
+
               <th>Args</th>
-              
+
               <th>Intentos</th>
-              
+
               <th><span class="sr-only">Acciones</span></th>
             </tr>
           </thead>
-          
+
           <tbody id="jobs" phx-update="stream">
             <tr :for={{dom_id, job} <- @streams.jobs} id={dom_id}>
               <td style="font-variant-numeric:tabular-nums;">{job.id}</td>
-              
+
               <td>{job.queue}</td>
-              
+
               <td>{job.worker}</td>
-              
+
               <td><span class={"pt-pill " <> state_pill(job.state)}>{job.state}</span></td>
-              
+
               <td class="data-table__mono">{inspect(job.args)}</td>
-              
+
               <td style="font-variant-numeric:tabular-nums;">
                 {job.attempt}{if job.max_attempts, do: "/#{job.max_attempts}"}
               </td>
-              
+
               <td>
                 <div class="data-table__actions">
                   <button
@@ -188,11 +188,11 @@ defmodule AletheaWeb.ObanDashboardLive do
           </tbody>
         </table>
       </div>
-       <%!-- ── Job details ── --%>
+      <%!-- ── Job details ── --%>
       <dialog :if={@selected_job} id="job-details" open class="pta-modal">
         <div class="pta-modal__head">
           <h3 class="pta-modal__title">Trabajo #{@selected_job.id}</h3>
-          
+
           <button
             type="button"
             phx-click="close_job_details"
@@ -202,26 +202,26 @@ defmodule AletheaWeb.ObanDashboardLive do
             <.icon name="hero-x-mark" class="size-4" />
           </button>
         </div>
-        
+
         <div class="pta-modal__body">
           <.list>
             <:item title="Worker">{@selected_job.worker}</:item>
-            
+
             <:item title="Cola">{@selected_job.queue}</:item>
-            
+
             <:item title="Estado">{@selected_job.state}</:item>
-            
+
             <:item title="Intentos">{@selected_job.attempt}/{@selected_job.max_attempts}</:item>
-            
+
             <:item title="Args">{inspect(@selected_job.args, pretty: true)}</:item>
-            
+
             <:item title="Meta">{inspect(@selected_job.meta, pretty: true)}</:item>
           </.list>
-          
+
           <p :if={@selected_job.attempted_by} class="pta-hint" style="margin-top:12px;">
             Ejecutado por {@selected_job.attempted_by}
           </p>
-          
+
           <p :if={@selected_job.completed_at} class="pta-hint">
             Completado el {@selected_job.completed_at}
           </p>

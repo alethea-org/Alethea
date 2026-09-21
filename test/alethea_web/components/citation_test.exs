@@ -87,6 +87,24 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
     end
   end
 
+  describe "<.citation> kind label" do
+    test "humanizes patient_message as the patient's voice (#262 label carried into citation/1)" do
+      c = %Citation{
+        source_ref: "patient_message/abcd1234",
+        kind: "patient_message",
+        occurred_at: ~U[2026-02-03 18:30:00Z],
+        excerpt: "Me costó dormir esta semana.",
+        score: nil,
+        chunk_index: nil
+      }
+
+      html = render_component(&CoreComponents.citation/1, citation: c)
+
+      assert html =~ "Mensaje del paciente"
+      refute html =~ ">patient_message<"
+    end
+  end
+
   describe "<.citation> expanded" do
     test "expands by default when the `expanded` attribute is true" do
       c = citation()

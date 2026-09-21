@@ -214,7 +214,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
       # source, not the old hand-rolled `<ol><li>`. Date drops to
       # day-level ISO (#235c task 3.2, decision accepted): citation/1
       # never renders time-of-day.
-      linked_item = view |> element("#consultation-sources details", @linked_excerpt) |> render()
+      linked_item = view |> element("#turn-0-sources details", @linked_excerpt) |> render()
 
       assert linked_item =~ @linked_excerpt
       assert linked_item =~ "Observación del clínico"
@@ -225,7 +225,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
       assert linked_item =~ "Ver conducta objetivo"
 
-      plain_item = view |> element("#consultation-sources details", @plain_excerpt) |> render()
+      plain_item = view |> element("#turn-0-sources details", @plain_excerpt) |> render()
 
       assert plain_item =~ @plain_excerpt
       assert plain_item =~ "Nota clínica"
@@ -259,8 +259,40 @@ defmodule AletheaWeb.ConsultationLiveTest do
       assert html =~ @plain_excerpt
       refute html =~ "Ver conducta objetivo"
 
-      plain_item = view |> element("#consultation-sources details", @plain_excerpt) |> render()
+      plain_item = view |> element("#turn-0-sources details", @plain_excerpt) |> render()
       refute plain_item =~ "<a"
+    end
+
+    test "a patient_message source renders the patient-voice label with its date (sdd/telegram-rag-ingestion-262 #262, Slice 1)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      clear_pending_outbox!(patient)
+
+      insert_chunk!(professional, patient, @plain_excerpt, near_vector(),
+        source_resource_type: "patient_message",
+        occurred_at: @plain_occurred_at
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿qué reporto el paciente esta semana?")
+      render_async(view)
+
+      item = view |> element("#turn-0-sources details", @plain_excerpt) |> render()
+
+      assert item =~ @plain_excerpt
+      assert item =~ "Mensaje del paciente"
+      # #235c task 3.2: `citation/1` renders day-level ISO dates only.
+      assert item =~ "2026-02-03"
     end
 
     test "a provider failure renders the safe state with no synthesis and no sources", %{
@@ -282,6 +314,28 @@ defmodule AletheaWeb.ConsultationLiveTest do
       refute has_element?(view, "section.consultation__synthesis")
       refute has_element?(view, "section.consultation__sources-panel")
       refute html =~ @seeded_excerpt
+    end
+  end
+
+  describe "per-turn Fuentes (#235c on the B2 thread)" do
+    test "the same source cited on two turns never repeats a DOM id", %{
+      conn: conn,
+      patient: patient
+    } do
+      set_fake_outcome(:synthesis)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      render_async(view)
+      submit_query(view, "¿y durante esta semana?")
+      html = render_async(view)
+
+      assert has_element?(view, "#turn-0-sources details")
+      assert has_element?(view, "#turn-1-sources details")
+
+      ids = html |> LazyHTML.from_fragment() |> LazyHTML.query("[id]") |> LazyHTML.attribute("id")
+
+      assert ids == Enum.uniq(ids)
     end
   end
 
@@ -410,7 +464,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
       lazy = LazyHTML.from_fragment(html)
 
       assert lazy
-             |> LazyHTML.query("div.consultation > section#consultation-synthesis")
+             |> LazyHTML.query("div.consultation > div#consultation-synthesis")
              |> Enum.count() == 1
 
       assert lazy
@@ -418,11 +472,11 @@ defmodule AletheaWeb.ConsultationLiveTest do
              |> Enum.count() == 1
 
       assert lazy
-             |> LazyHTML.query("section#consultation-synthesis section.review-hypothesis-panel")
+             |> LazyHTML.query("div#consultation-synthesis section.review-hypothesis-panel")
              |> Enum.count() == 0
 
       assert lazy
-             |> LazyHTML.query("section.review-hypothesis-panel section#consultation-synthesis")
+             |> LazyHTML.query("section.review-hypothesis-panel div#consultation-synthesis")
              |> Enum.count() == 0
     end
   end

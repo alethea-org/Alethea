@@ -432,7 +432,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert Repo.aggregate(ClinicalNote, :count) == 0
     end
 
-    test "note creation is a distinct explicit action separate from accept/draft-save", %{
+    test "no longer offers duplicated clinical note form", %{
       conn: conn,
       patient: patient,
       target_behavior: target_behavior
@@ -440,13 +440,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      html =
-        view
-        |> form("#note-form", note: %{body: "Nota clinica final"})
-        |> render_submit()
-
-      assert html =~ "Nota clínica creada"
-      assert Repo.aggregate(ClinicalNote, :count) == 1
+      refute has_element?(view, "#note-form")
     end
   end
 

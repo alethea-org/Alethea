@@ -24,8 +24,11 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
   import Mox
 
   alias Alethea.Accounts
+  alias Alethea.Clinical
+  alias Alethea.Clinical.Message
   alias Alethea.ClinicalRecord.Rag.{Chunk, Indexer}
   alias Alethea.Encryption.PatientVault
+  alias Alethea.Repo
 
   setup :verify_on_exit!
 
@@ -56,6 +59,10 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
     test "functional_analysis_draft_saved indexes (replace prior chunks)" do
       assert Indexer.eligibility("functional_analysis_draft_saved") ==
                {:index, :functional_analysis_draft}
+    end
+
+    test "patient_message_received indexes (sdd/telegram-rag-ingestion-262 #262, Slice 1)" do
+      assert Indexer.eligibility("patient_message_received") == {:index, :patient_message}
     end
   end
 
@@ -521,6 +528,92 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
     end
   end
 
+  describe "index_event/1 — patient_message (sdd/telegram-rag-ingestion-262 #262, Slice 1)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "patient_message_received produces a chunk decrypted under the patient DEK, with no behavior link",
+         %{professional: professional, patient: patient} do
+      plaintext = "Me siento mejor esta semana, dormi bien."
+      {:ok, message} = Clinical.save_message(patient, plaintext, nil, "inbound", "spontaneous")
+
+      args = patient_message_args(message, patient, professional)
+
+      assert :ok = Indexer.index_event(args)
+
+      chunks = Chunk |> Repo.all() |> Enum.filter(&(&1.source_resource_id == message.id))
+      assert length(chunks) == 1
+      chunk = hd(chunks)
+
+      assert chunk.source_resource_type == "patient_message"
+      assert chunk.target_behavior_id == nil
+      assert chunk.source_occurred_at == to_usec(message.timestamp)
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      assert {:ok, ^plaintext} = PatientVault.decrypt(chunk.encrypted_content, patient_dek)
+    end
+
+    test "a resource_id that no longer resolves to a Message surfaces :not_found (worker remaps to :cancel, same as every other resource kind)",
+         %{
+           professional: professional,
+           patient: patient
+         } do
+      args = %{
+        "event" => "patient_message_received",
+        "resource_type" => "patient_message",
+        "resource_id" => Ecto.UUID.generate(),
+        "patient_id" => patient.id,
+        "professional_id" => professional.id
+      }
+
+      assert {:error, :not_found} = Indexer.index_event(args)
+      assert Repo.aggregate(Chunk, :count) == 0
+    end
+
+    test "chunk ciphertext is opaque: raw SELECT on clinical_record_rag_chunks returns binary, not plaintext (AC2)",
+         %{professional: professional, patient: patient} do
+      plaintext = "Contenido sensible del paciente que nunca debe verse en claro."
+      {:ok, message} = Clinical.save_message(patient, plaintext, nil, "inbound", "spontaneous")
+
+      args = patient_message_args(message, patient, professional)
+      assert :ok = Indexer.index_event(args)
+
+      %{rows: [[ciphertext]]} =
+        Repo.query!(
+          "SELECT encrypted_content FROM clinical_record_rag_chunks WHERE source_resource_id = $1::text::uuid",
+          [message.id]
+        )
+
+      assert is_binary(ciphertext)
+      refute ciphertext == plaintext
+      refute String.contains?(ciphertext, plaintext)
+    end
+
+    test "re-processing the same patient_message_received job (retry) converges to one chunk set",
+         %{professional: professional, patient: patient} do
+      {:ok, message} =
+        Clinical.save_message(
+          patient,
+          "Texto estable para reintento.",
+          nil,
+          "inbound",
+          "spontaneous"
+        )
+
+      args = patient_message_args(message, patient, professional)
+
+      assert :ok = Indexer.index_event(args)
+      assert :ok = Indexer.index_event(args)
+
+      chunks = Chunk |> Repo.all() |> Enum.filter(&(&1.source_resource_id == message.id))
+      assert length(chunks) == 1
+    end
+  end
+
   describe "eligibility/1 — tombstone classification (sdd/clinical-record-retention #197, task 3.8)" do
     test "clinical_record_legally_deleted classifies as a tombstone purge, not an index or ignore" do
       assert Indexer.eligibility("clinical_record_legally_deleted") ==
@@ -644,6 +737,23 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       assert {:ok, "Observacion nueva cifrada con la DEK de ClinicalRecord"} =
                PatientVault.decrypt(v2_chunk.encrypted_content, clinical_record_dek)
     end
+  end
+
+  defp patient_message_args(%Message{} = message, patient, professional) do
+    %{
+      "event" => "patient_message_received",
+      "resource_type" => "patient_message",
+      "resource_id" => message.id,
+      "patient_id" => patient.id,
+      "professional_id" => professional.id
+    }
+  end
+
+  # Mirrors `Indexer`'s private `to_usec/1` widening (AD4): the test
+  # asserts against the SAME transformation the production code applies,
+  # not a re-derivation, so this stays byte-for-byte identical.
+  defp to_usec(%DateTime{microsecond: {value, _precision}} = dt) do
+    %{dt | microsecond: {value, 6}}
   end
 
   defp chunk_attrs(patient, professional, resource_id, chunk_index) do

@@ -82,16 +82,16 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
       aria-labelledby={"#{@id}-title"}
     >
       <p class="pt-eyebrow">C1 autorizado · lectura interpretativa</p>
-      
+
       <h2 id={"#{@id}-title"}>Hipótesis para revisar</h2>
-      
+
       <div id={"#{@id}-disclaimer"} class="review-hypothesis-panel__disclaimer">
         <strong>Disclaimer clínico</strong>
         <p>{@hypothesis.disclaimer}</p>
       </div>
-      
+
       <p class="review-hypothesis-panel__statement">{@hypothesis.statement}</p>
-       <.citation_list citations={@citations} />
+      <.citation_list citations={@citations} />
     </section>
     """
   end

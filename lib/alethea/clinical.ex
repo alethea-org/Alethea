@@ -15,7 +15,7 @@ defmodule Alethea.Clinical do
   import Ecto.Query, warn: false
 
   alias Alethea.Repo
-  alias Alethea.Clinical.{Message, Summary, Trend}
+  alias Alethea.Clinical.{Message, Outbox, Summary, Trend}
   alias Alethea.AI.Diagnosis
   alias Alethea.Clinical.EmotionAnalysis
   alias Alethea.Accounts.EncryptionKey
@@ -59,26 +59,52 @@ defmodule Alethea.Clinical do
 
       %Message{}
       |> Message.changeset(attrs)
-      |> Repo.insert()
-      |> case do
-        {:ok, message} ->
-          {:ok, message}
-
-        {:error, changeset} ->
-          cond do
-            Keyword.has_key?(changeset.errors, :telegram_message_id) && telegram_message_id ->
-              # Telegram duplicates are surfaced as raw errors so the
-              # worker treats them as retry-eligible (REQ-C3). The
-              # Oban unique-period on `telegram_update_id` is the
-              # first line of defence; this DB-level constraint is
-              # the safety net for replays outside the Oban window.
-              {:error, changeset}
-
-            true ->
-              {:error, changeset}
-          end
-      end
+      |> persist(direction, patient)
     end
+  end
+
+  # Inbound messages are the "voz del paciente" producer
+  # (sdd/telegram-rag-ingestion-262, AD2): the Message row and the
+  # `Clinical.Outbox` job commit atomically via `Ecto.Multi` so the
+  # RAG indexer can never observe a persisted message with no
+  # corresponding outbox event (or vice versa).
+  #
+  # Gated to `direction == "inbound"` ONLY (AD2 — key discovery): both
+  # outbound call sites (`telegram_message_worker.ex`'s
+  # `persist_and_enqueue_outbound/7` and `handle_crisis_path/9`)
+  # already run INSIDE an enclosing `Repo.transaction`. Ecto nested
+  # transactions take no savepoint — a failing inner
+  # `Repo.transaction(multi)` would roll back the OUTER transaction,
+  # after which the callers' own `Repo.rollback(reason)` in their
+  # `else` branch could no longer run correctly. The outbound clause
+  # below stays a byte-for-byte bare `Repo.insert/1` to keep that
+  # path provably untouched.
+  defp persist(changeset, "inbound", patient) do
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:message, changeset)
+    |> Oban.insert(:outbox_event, fn %{message: message} ->
+      Outbox.event("patient_message_received", message, patient.professional_id)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{message: message}} ->
+        {:ok, message}
+
+      {:error, :message, changeset, _changes} ->
+        # AD3: remap onto the exact `{:error, %Ecto.Changeset{}}` shape
+        # the public contract (and the worker's telegram_message_id
+        # duplicate-detection branch, plus
+        # `AletheaJobs.SafeReason.for_log/1`'s changeset pattern match)
+        # already expects from the pre-Multi bare `Repo.insert/1` path.
+        {:error, changeset}
+
+      {:error, _step, reason, _changes} ->
+        {:error, reason}
+    end
+  end
+
+  defp persist(changeset, _direction, _patient) do
+    Repo.insert(changeset)
   end
 
   @doc """

@@ -45,17 +45,14 @@ defmodule AletheaWeb.GroundedChat.FollowupStateNoPersistenceTest do
     # A2 (issue #227) — la carcasa LiveView del chat; asigna el
     # estado en mount/3 y lo resetea en "nueva conversación". Es
     # exactamente el seam LiveView previsto por ADR-010 §6.
-    "lib/alethea_web/live/consultation_live.ex"
+    "lib/alethea_web/live/consultation_live.ex",
+
+    # Issue #233 (B2): consumes opts[:followup_state] in the consultation
+    # contract to resolve follow-ups with fresh retrieval and server-derived
+    # source deduplication without reusing prior citations as evidence.
+    "lib/alethea/clinical_record/rag/consultation/live.ex"
   ]
 
-  # Tests pueden referenciar FollowupState libremente.
-  @allowed_test_paths [
-    "test/alethea_web/live/grounded_chat/followup_state_test.exs",
-    "test/alethea_web/live/grounded_chat/followup_state_no_persistence_test.exs"
-  ]
-
-  @lib_root "lib/"
-  @test_root "test/"
   @module_basename "followup_state.ex"
 
   @doc """
