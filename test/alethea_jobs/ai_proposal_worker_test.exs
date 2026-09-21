@@ -132,6 +132,29 @@ defmodule AletheaJobs.AIProposalWorkerTest do
     end
   end
 
+  describe "perform/1 — cross-patient target behavior (GitHub #289)" do
+    test "denies a target behavior of another patient: no chain call, no rows, broadcasts failed",
+         %{professional: professional, patient: patient_a} do
+      patient_b = create_patient!(professional)
+
+      {:ok, target_b} =
+        ClinicalRecord.create_target_behavior(professional, patient_b.id, "Conducta de B")
+
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "target_behavior:#{target_b.id}")
+
+      # No `expect(:run, ...)` — Mox raises if the chain is reached.
+      assert {:error, :not_found} =
+               perform_job(AIProposalWorker, %{
+                 "professional_id" => professional.id,
+                 "patient_id" => patient_a.id,
+                 "target_behavior_id" => target_b.id
+               })
+
+      assert_receive {:ai_proposals_failed, :not_found}
+      assert Alethea.Repo.aggregate(AIProposal, :count) == 0
+    end
+  end
+
   describe "structural safety" do
     test "the worker module source never references a confirm/accept/note-write function" do
       source =

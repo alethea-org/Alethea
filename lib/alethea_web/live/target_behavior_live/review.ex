@@ -37,7 +37,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   def mount(%{"patient_id" => patient_id, "id" => target_behavior_id}, _session, socket) do
     professional = socket.assigns.current_professional
 
-    case ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id) do
+    case load_review(professional, patient_id, target_behavior_id) do
       {:ok, items} ->
         {draft_body, draft_tombstoned_at} =
           case ClinicalRecord.get_functional_analysis_draft(
@@ -74,6 +74,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         {:ok,
          socket
          |> put_flash(:error, "No estás autorizado para ver esta línea de tiempo clínica.")
+         |> push_navigate(to: ~p"/patients")}
+
+      {:error, :not_found} ->
+        {:ok,
+         socket
+         |> put_flash(:error, "La conducta objetivo no existe o no pertenece a este paciente.")
          |> push_navigate(to: ~p"/patients")}
     end
   end
@@ -247,6 +253,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  # Ownership gate for mount (GitHub #289): the target behavior must belong
+  # to the patient in the URL before any timeline data is read.
+  defp load_review(professional, patient_id, target_behavior_id) do
+    with {:ok, _target_behavior} <-
+           ClinicalRecord.get_target_behavior(professional, patient_id, target_behavior_id) do
+      ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id)
+    end
+  end
 
   defp load_timeline(socket) do
     professional = socket.assigns.current_professional
