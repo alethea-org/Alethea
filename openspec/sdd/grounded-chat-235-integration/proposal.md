@@ -132,15 +132,33 @@ Per slice, revert the commit. No migration, no schema, no config default change,
 
 ## Success criteria
 
-- [ ] An interpretive query on the real flow returns `%Answer{outcome: :synthesis, hypothesis: %Hypothesis{}}`.
-- [ ] A factual query returns `hypothesis: nil` and makes **no** hypothesis-chain call.
-- [ ] A raising/erroring/rejecting hypothesis path still returns `outcome: :synthesis` with the full synthesis and sources.
-- [ ] The rendered page contains `review-hypothesis-panel` for interpretive turns and **does not contain the tag at all** for factual turns.
-- [ ] Both panels exist as separate sibling elements; the disclaimer precedes the statement; citations render as collapsed-by-default `<details>` that expand to verbatim server-derived excerpts.
-- [ ] Adversarial cross-patient and cross-tenant queries produce no hypothesis and no foreign evidence.
-- [ ] A hypothesis turn leaves chunks byte-identical and enqueues zero Oban jobs; nothing is written to `Repo`.
-- [ ] No hypothesis is emitted without ≥1 server-derived source, and diagnostic/prescriptive prose is rejected end-to-end (not just in C1's unit tests).
+- [x] An interpretive query on the real flow returns `%Answer{outcome: :synthesis, hypothesis: %Hypothesis{}}`.
+- [x] A factual query returns `hypothesis: nil` and makes **no** hypothesis-chain call.
+- [x] A raising/erroring/rejecting hypothesis path still returns `outcome: :synthesis` with the full synthesis and sources.
+- [x] The rendered page contains `review-hypothesis-panel` for interpretive turns and **does not contain the tag at all** for factual turns.
+- [x] Both panels exist as separate sibling elements; the disclaimer precedes the statement; citations render as collapsed-by-default `<details>` that expand to verbatim server-derived excerpts.
+- [x] Adversarial cross-patient and cross-tenant queries produce no hypothesis and no foreign evidence.
+- [x] A hypothesis turn leaves chunks byte-identical and enqueues zero Oban jobs; nothing is written to `Repo`.
+- [x] No hypothesis is emitted without ≥1 server-derived source, and diagnostic/prescriptive prose is rejected end-to-end (not just in C1's unit tests).
 - [ ] `mix precommit` passes.
+
+  Not run literally on this Windows checkout: `core.autocrlf=true`
+  means git checks out these files as CRLF while the committed blobs
+  are LF, so `mix format`/`mix format --check-formatted` reports
+  spurious violations on files whose actual content is correctly
+  formatted (confirmed: a line-ending-insensitive re-check shows zero
+  real violations). This is a property of `git config core.autocrlf`
+  on this local clone, unrelated to the #235a0-#235c format-drift
+  content fix already merged (PR #275) and unrelated to the separate,
+  still-undecided citation/hypothesis-panel CSS styling gap. Verified
+  instead, per commit, throughout #235: `mix compile
+  --warnings-as-errors` clean, `mix test` full suite green (solo,
+  confirmed uncontaminated), and a line-ending-insensitive diff of
+  `mix format --stdin-filename` output against `HEAD` showing zero
+  newly introduced formatting violations. Re-run `mix precommit`
+  literally once this checkout's `core.autocrlf` setting (or a repo
+  `.gitattributes`) is fixed — not a permanent exception to the
+  process.
 
 ## Proposal question round
 

@@ -17,6 +17,7 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
 
   alias Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy
   alias AletheaWeb.GroundedChat.HypothesisPanel
+  alias AletheaWeb.GroundedChat.SourceCitation
 
   @statement "La reducción a corto plazo de la exposición podría estar funcionando como escape."
 
@@ -131,6 +132,20 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
           hypothesis: hypothesis_with_empty_source
         )
       end
+    end
+
+    test "delegates the Source → Citation conversion to the promoted AletheaWeb.GroundedChat.SourceCitation adapter (#235c)" do
+      html =
+        render_component(&HypothesisPanel.hypothesis_panel/1,
+          id: "chat-turn-1-hypothesis",
+          hypothesis: @hypothesis
+        )
+
+      [source] = @hypothesis.sources
+      expected = SourceCitation.source_to_citation(source)
+
+      assert html =~ ~s(id="citation-#{expected.source_ref}")
+      assert html =~ expected.excerpt
     end
   end
 end
