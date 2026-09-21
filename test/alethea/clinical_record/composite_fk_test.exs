@@ -58,12 +58,9 @@ defmodule Alethea.ClinicalRecord.CompositeFkTest do
   describe "a mismatched (patient_id, target_behavior_id) pair is rejected by the database" do
     for table <- @tables do
       test "#{table}", %{professional: professional, patient_a: patient_a, target_b: target_b} do
-        error =
-          assert_raise Ecto.ConstraintError, fn ->
-            insert_row!(unquote(table), professional, patient_a.id, target_b.id)
-          end
-
-        assert error.constraint == "#{unquote(table)}_target_behavior_patient_fkey"
+        assert_rejected_by_composite_fk(unquote(table), fn ->
+          insert_row!(unquote(table), professional, patient_a.id, target_b.id)
+        end)
       end
     end
   end
@@ -108,6 +105,27 @@ defmodule Alethea.ClinicalRecord.CompositeFkTest do
   end
 
   defp count(table), do: Repo.aggregate(table, :count)
+
+  # A table whose changeset declares the FK (`ai_proposals`, GitHub #289) turns
+  # the violation into an `Ecto.InvalidChangesetError`; the others raise the
+  # raw `Ecto.ConstraintError`. Either way it must be the composite FK.
+  defp assert_rejected_by_composite_fk(table, insert_fun) do
+    expected = "#{table}_target_behavior_patient_fkey"
+
+    try do
+      insert_fun.()
+      flunk("expected #{expected} to reject the mismatched pair, but the insert succeeded")
+    rescue
+      error in Ecto.ConstraintError ->
+        assert error.constraint == expected
+
+      error in Ecto.InvalidChangesetError ->
+        assert Enum.any?(error.changeset.errors, fn
+                 {:target_behavior_id, {_message, opts}} -> opts[:constraint_name] == expected
+                 _other -> false
+               end)
+    end
+  end
 
   defp insert_row!("consultation_evidences", professional, patient_id, target_behavior_id) do
     %ConsultationEvidence{}

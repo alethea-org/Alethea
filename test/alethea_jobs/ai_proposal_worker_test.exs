@@ -155,6 +155,63 @@ defmodule AletheaJobs.AIProposalWorkerTest do
     end
   end
 
+  describe "perform/1 — target behavior deleted during generation (GitHub #289)" do
+    test "returns a terminal error, broadcasts failed and persists nothing", %{
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "target_behavior:#{target_behavior.id}")
+
+      Alethea.AI.PatternProposalChainMock
+      |> expect(:run, fn _params ->
+        # Retention deletes the target behavior while the LLM call is in flight.
+        Alethea.Repo.delete!(target_behavior)
+
+        {:ok, %{proposals: ["Podria existir un patron A", "Podria existir un patron B"]}}
+      end)
+
+      assert {:error, :target_behavior_deleted} =
+               perform_job(AIProposalWorker, %{
+                 "professional_id" => professional.id,
+                 "patient_id" => patient.id,
+                 "target_behavior_id" => target_behavior.id
+               })
+
+      assert_receive {:ai_proposals_failed, :target_behavior_deleted}
+      assert Alethea.Repo.aggregate(AIProposal, :count) == 0
+    end
+  end
+
+  describe "perform/1 — proposals are inserted atomically (GitHub #289)" do
+    test "a failure on a later proposal rolls back the earlier ones", %{
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      # Fails only the long proposal: the ciphertext of the short one stays
+      # under the limit, so it is inserted first and must then be rolled back.
+      Alethea.Repo.query!(
+        "ALTER TABLE ai_proposals ADD CONSTRAINT ai_proposals_test_force_failure CHECK (octet_length(encrypted_text) < 100)"
+      )
+
+      Alethea.AI.PatternProposalChainMock
+      |> expect(:run, fn _params ->
+        {:ok, %{proposals: ["Patron corto", String.duplicate("x", 300)]}}
+      end)
+
+      assert_raise Ecto.ConstraintError, fn ->
+        perform_job(AIProposalWorker, %{
+          "professional_id" => professional.id,
+          "patient_id" => patient.id,
+          "target_behavior_id" => target_behavior.id
+        })
+      end
+
+      assert Alethea.Repo.aggregate(AIProposal, :count) == 0
+    end
+  end
+
   describe "structural safety" do
     test "the worker module source never references a confirm/accept/note-write function" do
       source =

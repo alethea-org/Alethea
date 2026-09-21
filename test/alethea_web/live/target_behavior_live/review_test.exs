@@ -133,6 +133,75 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "target behavior gone after mount (GitHub #289)" do
+    test "an AI generation failure because the target behavior was deleted redirects with a flash",
+         %{conn: conn, patient: patient, target_behavior: target_behavior} do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      send(view.pid, {:ai_proposals_failed, :target_behavior_deleted})
+
+      {path, flash} = assert_redirect(view)
+      assert path == "/patients"
+      assert flash["error"] =~ "conducta objetivo"
+    end
+
+    test "any other AI generation failure keeps the page and shows the generic flash",
+         %{conn: conn, patient: patient, target_behavior: target_behavior} do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      send(view.pid, {:ai_proposals_failed, :timeout})
+
+      assert render(view) =~ "La generación de patrones de IA falló."
+      assert has_element?(view, "form#draft-form")
+    end
+
+    test "a timeline refresh after the target behavior was deleted redirects instead of keeping stale items",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_observation!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "Observacion que ya no existe"
+      )
+
+      {:ok, view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert html =~ "Observacion que ya no existe"
+
+      Repo.delete!(target_behavior)
+      send(view.pid, {:ai_proposals_ready, target_behavior.id})
+
+      {path, flash} = assert_redirect(view)
+      assert path == "/patients"
+      assert flash["error"] =~ "conducta objetivo"
+    end
+
+    test "a timeline refresh after losing authorization over the patient redirects with a flash",
+         %{conn: conn, patient: patient, target_behavior: target_behavior} do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      Repo.delete!(patient)
+      send(view.pid, {:ai_proposals_ready, target_behavior.id})
+
+      {path, flash} = assert_redirect(view)
+      assert path == "/patients"
+      assert flash["error"] =~ "autorizado"
+    end
+  end
+
   describe "immutable evidence excerpt + source reference display" do
     test "renders the byte-identical excerpt alongside its resolved source reference", %{
       conn: conn,
