@@ -275,7 +275,10 @@
               id="schedule-time"
               type="time"
               name="time"
-              value={format_session_time(@selected_patient.session_time)}
+              value={
+                @selected_patient.session_time &&
+                  format_session_time(@selected_patient.session_time)
+              }
               class="text-input text-input--compact"
             />
           </div>
@@ -435,12 +438,16 @@
     </div>
   </div>
   <%!-- ── Settings — professional-scoped bot config (collapsed) ── --%>
-  <details class="pta-settings">
-    <summary>Configuración de tu bot (aplica a todos tus pacientes)</summary>
+  <%!-- `open` is socket-bound (#287): a re-render after saving a message
+       used to collapse the native <details> and hide the feedback. --%>
+  <details class="pta-settings" id="bot-settings" open={@bot_settings_open}>
+    <summary id="bot-settings-summary" phx-click="toggle-bot-settings">
+      Configuración de tu bot (aplica a todos tus pacientes)
+    </summary>
 
     <div class="pta-settings__grid">
       <.form
-        for={%{}}
+        for={@crisis_form}
         id="crisis-message-form"
         phx-submit="save_crisis_message"
         class="pta-nudge pta-nudge--crisis"
@@ -453,18 +460,19 @@
         <p class="pta-hint pta-hint--xs" style="margin-bottom:10px;">
           Enviado automáticamente en crisis detectada por la IA.
         </p>
-        <textarea
-          name="crisis_message"
+        <.input
+          type="textarea"
+          field={@crisis_form[:crisis_message]}
           rows="4"
-          aria-label="Mensaje de contención"
           class="text-input text-input--multiline"
+          aria-label="Mensaje de contención"
           placeholder="Ej: Entiendo que estás pasando por un momento difícil…"
-        >{@current_professional.crisis_message}</textarea>
+        />
         <button type="submit" class="pta-nudge__submit">Actualizar</button>
       </.form>
 
       <.form
-        for={%{}}
+        for={@welcome_form}
         id="welcome-message-form"
         phx-submit="save_welcome_message"
         class="pta-nudge pta-nudge--welcome"
@@ -477,13 +485,14 @@
         <p class="pta-hint pta-hint--xs" style="margin-bottom:10px;">
           Enviado al vincular Telegram. Usá {"%{name}"} para incluir el nombre del paciente.
         </p>
-        <textarea
-          name="welcome_message"
+        <.input
+          type="textarea"
+          field={@welcome_form[:welcome_message]}
           rows="4"
-          aria-label="Mensaje de bienvenida"
           class="text-input text-input--multiline"
+          aria-label="Mensaje de bienvenida"
           placeholder="Ej: ¡Hola %{name}! Bienvenido a tu espacio…"
-        >{@current_professional.welcome_message}</textarea>
+        />
         <button type="submit" class="pta-nudge__submit">Actualizar</button>
       </.form>
     </div>
