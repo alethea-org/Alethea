@@ -19,7 +19,9 @@ defmodule AletheaWeb.ConsultationLive do
   use AletheaWeb, :live_view
 
   alias Alethea.ClinicalRecord.Rag.Consultation
-  alias AletheaWeb.GroundedChat.FollowupState
+  alias AletheaWeb.GroundedChat.{FollowupState, SourceCitation}
+
+  import AletheaWeb.GroundedChat.HypothesisPanel, only: [hypothesis_panel: 1]
 
   @impl true
   def mount(%{"patient_id" => patient_id}, _session, socket) do
@@ -105,12 +107,26 @@ defmodule AletheaWeb.ConsultationLive do
     # step without polluting the B1 ring buffer with non-evidence turns.
     next_state = FollowupState.record_turn(socket.assigns.followup_state, turn, query, refs)
 
+    # #235c/R10 — citations for the unified `citation/1` renderer, derived
+    # here once per turn and carried in the stream item (each turn keeps its
+    # own Fuentes) rather than recomputed on every render. Same 1:1 order as
+    # `answer.sources`, so the render function can zip both to recover
+    # `target_behavior_id` for the "Ver conducta objetivo" link
+    # (`%Citation{}` doesn't carry it).
+    citations = Enum.map(answer.sources, &SourceCitation.source_to_citation/1)
+
     socket
     |> assign(:state, :synthesis)
     |> assign(:turn, turn + 1)
     |> assign(:followup_state, next_state)
     |> assign(:last_answer, answer)
-    |> stream_insert(:messages, %{id: "turn-#{turn}", turn: turn, query: query, answer: answer})
+    |> stream_insert(:messages, %{
+      id: "turn-#{turn}",
+      turn: turn,
+      query: query,
+      answer: answer,
+      citations: citations
+    })
   end
 
   defp apply_answer(socket, _query, {:ok, %Consultation.Answer{outcome: :no_evidence}}) do
@@ -137,18 +153,6 @@ defmodule AletheaWeb.ConsultationLive do
     |> push_navigate(to: ~p"/patients")
   end
 
-  # Source presentation helpers, migrated from `PatientLive.ClinicalSearch`
-  # (retired in #234b): the consultation chat is now the only surface that
-  # renders server-derived sources.
-
-  defp source_kind_label("clinical_note"), do: "Nota clínica"
-  defp source_kind_label("consultation_evidence"), do: "Evidencia citada"
-  defp source_kind_label("clinician_observation"), do: "Observación del clínico"
-  defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
-  defp source_kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
-  defp source_kind_label("patient_message"), do: "Mensaje del paciente"
-  defp source_kind_label(other), do: other
-
   # B2 (#233): server-derived `source_ref`. Stable across renders, unique
   # per `(chunk_id, resource_type, resource_id)`. Used to populate the B1
   # slot — never contains excerpts, only metadata that re-derives from
@@ -157,14 +161,17 @@ defmodule AletheaWeb.ConsultationLive do
     "#{ref.chunk_id}:#{ref.resource_type}:#{ref.resource_id}"
   end
 
+  # Source presentation helper, migrated from `PatientLive.ClinicalSearch`
+  # (retired in #234b): the consultation chat is now the only surface that
+  # renders server-derived sources. `source_kind_label/1` and
+  # `format_datetime/1` were this migration's real casualties (#235c/AD4):
+  # `citation/1` now owns kind humanization (its private `kind_label/1`,
+  # moved verbatim) and date formatting (its existing `format_date/1`),
+  # so both are dead here.
   defp source_link(%{target_behavior_id: nil}, _patient_id), do: nil
 
   defp source_link(%{target_behavior_id: target_behavior_id}, patient_id) do
     ~p"/patients/#{patient_id}/target_behaviors/#{target_behavior_id}/review"
-  end
-
-  defp format_datetime(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
   end
 
   @impl true
@@ -224,28 +231,31 @@ defmodule AletheaWeb.ConsultationLive do
 
             <section id={"#{dom_id}-sources"} class="consultation__sources-panel">
               <h2 class="consultation__section-title">Fuentes</h2>
-              <ol class="consultation__sources">
-                <li :for={source <- message.answer.sources} class="consultation__source">
-                  <p class="consultation__source-excerpt">{source.excerpt}</p>
-                  <p class="consultation__source-meta">
-                    <span class="consultation__source-kind">{source_kind_label(source.kind)}</span>
-                    <span class="consultation__source-date">
-                      {format_datetime(source.occurred_at)}
-                    </span>
-                    <.link
-                      :if={source_link(source.reference, @patient_id)}
-                      navigate={source_link(source.reference, @patient_id)}
-                      class="consultation__source-link"
-                    >
-                      Ver conducta objetivo
-                    </.link>
-                  </p>
-                </li>
-              </ol>
+
+              <.citation
+                :for={{cite, source} <- Enum.zip(message.citations, message.answer.sources)}
+                citation={cite}
+                id={"#{dom_id}-citation-#{cite.source_ref}"}
+              >
+                <:link :if={source_link(source.reference, @patient_id)}>
+                  <.link
+                    navigate={source_link(source.reference, @patient_id)}
+                    class="consultation__source-link"
+                  >
+                    Ver conducta objetivo
+                  </.link>
+                </:link>
+              </.citation>
             </section>
           </article>
         </div>
       </div>
+
+      <.hypothesis_panel
+        :if={@state == :synthesis}
+        id={"consultation-hypothesis-turn-#{@turn}"}
+        hypothesis={@last_answer.hypothesis}
+      />
 
       <div :if={@state == :no_evidence} id="consultation-no-evidence" class="empty-state">
         <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>

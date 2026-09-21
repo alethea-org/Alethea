@@ -29,6 +29,7 @@ config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
 config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock
 config :alethea, :pattern_proposal_chain, Alethea.AI.PatternProposalChainMock
 config :alethea, :clinical_consultation_chain, Alethea.AI.ClinicalConsultationChainMock
+config :alethea, :clinical_hypothesis_chain, Alethea.AI.ClinicalHypothesisChainMock
 
 # Grounded clinical consultation (#226a): the facade dispatches to the
 # deterministic Fake in :test — no real retrieval, no LLM. The real

@@ -23,9 +23,10 @@ defmodule AletheaWeb.ConsultationLiveTest do
   import Mox
   import Phoenix.LiveViewTest
 
-  alias Alethea.AI.ClinicalConsultationChainMock
+  alias Alethea.AI.{ClinicalConsultationChainMock, ClinicalHypothesisChainMock}
   alias Alethea.Clinical.Message
   alias Alethea.ClinicalRecord.Rag.Consultation
+  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Hypothesis}
   alias Alethea.Repo
 
   @seeded_excerpt "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
@@ -35,11 +36,23 @@ defmodule AletheaWeb.ConsultationLiveTest do
   @linked_occurred_at ~U[2026-01-15 10:00:00.000000Z]
   @plain_occurred_at ~U[2026-02-03 18:30:00.000000Z]
 
+  # #235b — same interpretive/prose fixtures #235a's live_test.exs already
+  # established for HypothesisPolicy classification, reused verbatim here
+  # so the web-layer E2E describe classifies identically.
+  @interpretive_query "¿qué relación hay con el trabajo?"
+  @valid_hypothesis_prose "Podría existir una relación entre las caminatas pactadas y la mejoría del ánimo."
+  @diagnostic_prose "El paciente presenta un trastorno de ansiedad generalizada."
+
   setup [:register_and_log_in_professional]
 
   setup %{professional: professional} do
     patient = create_patient!(professional)
-    on_exit(fn -> reset_fake_outcome() end)
+
+    on_exit(fn ->
+      reset_fake_outcome()
+      reset_fake_hypothesis()
+    end)
+
     %{patient: patient}
   end
 
@@ -151,10 +164,10 @@ defmodule AletheaWeb.ConsultationLiveTest do
       html = render_async(view)
 
       assert has_element?(view, "section.consultation__synthesis")
-      assert has_element?(view, "ol.consultation__sources")
+      assert has_element?(view, "section.consultation__sources-panel")
 
       synthesis_html = view |> element("section.consultation__synthesis") |> render()
-      sources_html = view |> element("ol.consultation__sources") |> render()
+      sources_html = view |> element("section.consultation__sources-panel") |> render()
 
       assert synthesis_html =~ @synthesis
       refute synthesis_html =~ @seeded_excerpt
@@ -196,24 +209,61 @@ defmodule AletheaWeb.ConsultationLiveTest do
       submit_query(view, "¿qué hizo el paciente esta semana?")
       render_async(view)
 
-      linked_item = view |> element("ol.consultation__sources li", @linked_excerpt) |> render()
+      # Migrated (#235c/R10) to render through the unified
+      # `AletheaWeb.CoreComponents.citation/1` — a `<details>` per
+      # source, not the old hand-rolled `<ol><li>`. Date drops to
+      # day-level ISO (#235c task 3.2, decision accepted): citation/1
+      # never renders time-of-day.
+      linked_item = view |> element("#turn-0-sources details", @linked_excerpt) |> render()
 
       assert linked_item =~ @linked_excerpt
       assert linked_item =~ "Observación del clínico"
-      assert linked_item =~ "15/01/2026 10:00"
+      assert linked_item =~ "2026-01-15"
 
       assert linked_item =~
                ~s(href="/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      plain_item = view |> element("ol.consultation__sources li", @plain_excerpt) |> render()
+      assert linked_item =~ "Ver conducta objetivo"
+
+      plain_item = view |> element("#turn-0-sources details", @plain_excerpt) |> render()
 
       assert plain_item =~ @plain_excerpt
       assert plain_item =~ "Nota clínica"
-      assert plain_item =~ "03/02/2026 18:30"
+      assert plain_item =~ "2026-02-03"
       refute plain_item =~ "<a"
     end
 
-    test "a patient_message source renders the patient-voice label with its timestamp (sdd/telegram-rag-ingestion-262 #262, Slice 1)",
+    test "a source without a target behavior renders no dangling link and no error (#235c, R10)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      insert_chunk!(professional, patient, @plain_excerpt, near_vector(),
+        source_resource_type: "clinical_note",
+        target_behavior_id: nil,
+        occurred_at: @plain_occurred_at
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿qué hizo el paciente esta semana?")
+      html = render_async(view)
+
+      assert html =~ @plain_excerpt
+      refute html =~ "Ver conducta objetivo"
+
+      plain_item = view |> element("#turn-0-sources details", @plain_excerpt) |> render()
+      refute plain_item =~ "<a"
+    end
+
+    test "a patient_message source renders the patient-voice label with its date (sdd/telegram-rag-ingestion-262 #262, Slice 1)",
          %{
            conn: conn,
            professional: professional,
@@ -237,11 +287,12 @@ defmodule AletheaWeb.ConsultationLiveTest do
       submit_query(view, "¿qué reporto el paciente esta semana?")
       render_async(view)
 
-      item = view |> element("ol.consultation__sources li", @plain_excerpt) |> render()
+      item = view |> element("#turn-0-sources details", @plain_excerpt) |> render()
 
       assert item =~ @plain_excerpt
       assert item =~ "Mensaje del paciente"
-      assert item =~ "03/02/2026 18:30"
+      # #235c task 3.2: `citation/1` renders day-level ISO dates only.
+      assert item =~ "2026-02-03"
     end
 
     test "a provider failure renders the safe state with no synthesis and no sources", %{
@@ -261,8 +312,188 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
       assert html =~ "consultation-provider-error"
       refute has_element?(view, "section.consultation__synthesis")
-      refute has_element?(view, "ol.consultation__sources")
+      refute has_element?(view, "section.consultation__sources-panel")
       refute html =~ @seeded_excerpt
+    end
+  end
+
+  describe "per-turn Fuentes (#235c on the B2 thread)" do
+    test "the same source cited on two turns never repeats a DOM id", %{
+      conn: conn,
+      patient: patient
+    } do
+      set_fake_outcome(:synthesis)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      render_async(view)
+      submit_query(view, "¿y durante esta semana?")
+      html = render_async(view)
+
+      assert has_element?(view, "#turn-0-sources details")
+      assert has_element?(view, "#turn-1-sources details")
+
+      ids = html |> LazyHTML.from_fragment() |> LazyHTML.query("[id]") |> LazyHTML.attribute("id")
+
+      assert ids == Enum.uniq(ids)
+    end
+  end
+
+  describe "hypothesis panel over the real pipeline (#235)" do
+    setup [:use_live_consultation, :set_mox_global, :verify_on_exit!]
+
+    test "an interpretive turn's HTML contains the structural hypothesis panel section (R4)", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn _params -> {:ok, %{synthesis: @synthesis}} end)
+
+      stub(ClinicalHypothesisChainMock, :run, fn _params ->
+        {:ok, %{hypothesis: @valid_hypothesis_prose}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, @interpretive_query)
+      render_async(view)
+
+      assert has_element?(view, "section.review-hypothesis-panel")
+    end
+
+    test "a factual turn's HTML contains no hypothesis panel tag anywhere, not even hidden (R4)",
+         %{conn: conn, professional: professional, patient: patient} do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: @synthesis}}
+      end)
+
+      expect(ClinicalHypothesisChainMock, :run, 0, fn _params -> :never end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      html = render_async(view)
+
+      refute html =~ "review-hypothesis-panel"
+    end
+
+    test "the disclaimer precedes the statement and the citation's excerpt is the exact server-derived fragment (R5)",
+         %{conn: conn, professional: professional, patient: patient} do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn _params -> {:ok, %{synthesis: @synthesis}} end)
+
+      stub(ClinicalHypothesisChainMock, :run, fn _params ->
+        {:ok, %{hypothesis: @valid_hypothesis_prose}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, @interpretive_query)
+      html = render_async(view)
+
+      {disclaimer_pos, _} = :binary.match(html, "Disclaimer clínico")
+      {statement_pos, _} = :binary.match(html, @valid_hypothesis_prose)
+      assert disclaimer_pos < statement_pos
+
+      panel_html = view |> element("section.review-hypothesis-panel") |> render()
+      assert panel_html =~ "<details"
+      assert panel_html =~ "citation__summary"
+      refute panel_html =~ " open"
+
+      # #235c task 3.0: the excerpt is always in the DOM — native
+      # <details> hides it visually until opened, so a real click
+      # works with zero JS. Asserting presence here, directly on the
+      # panel's own render, is now the complete proof (no ground-truth
+      # workaround needed — that was only required while the excerpt
+      # was structurally absent from the collapsed render).
+      assert panel_html =~ @seeded_excerpt
+
+      assert {:ok, %Answer{hypothesis: %Hypothesis{sources: [source]}}} =
+               Consultation.answer(professional, patient.id, @interpretive_query, history: [])
+
+      short_chunk_id = source.reference.chunk_id |> to_string() |> String.slice(0, 8)
+      source_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
+
+      assert panel_html =~ ~s(id="citation-#{source_ref}")
+    end
+
+    test "diagnostic candidate prose yields hypothesis: nil and no panel in the DOM (R8 render half)",
+         %{conn: conn, professional: professional, patient: patient} do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn _params -> {:ok, %{synthesis: @synthesis}} end)
+
+      stub(ClinicalHypothesisChainMock, :run, fn _params ->
+        {:ok, %{hypothesis: @diagnostic_prose}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, @interpretive_query)
+      html = render_async(view)
+
+      assert html =~ "consultation-synthesis"
+      refute html =~ "review-hypothesis-panel"
+    end
+
+    test "#consultation-synthesis and the hypothesis panel are DOM siblings, neither nested (R12)",
+         %{conn: conn, professional: professional, patient: patient} do
+      insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
+      stub_query_embedding(near_vector())
+
+      stub(ClinicalConsultationChainMock, :run, fn _params -> {:ok, %{synthesis: @synthesis}} end)
+
+      stub(ClinicalHypothesisChainMock, :run, fn _params ->
+        {:ok, %{hypothesis: @valid_hypothesis_prose}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, @interpretive_query)
+      html = render_async(view)
+
+      lazy = LazyHTML.from_fragment(html)
+
+      assert lazy
+             |> LazyHTML.query("div.consultation > div#consultation-synthesis")
+             |> Enum.count() == 1
+
+      assert lazy
+             |> LazyHTML.query("div.consultation > section.review-hypothesis-panel")
+             |> Enum.count() == 1
+
+      assert lazy
+             |> LazyHTML.query("div#consultation-synthesis section.review-hypothesis-panel")
+             |> Enum.count() == 0
+
+      assert lazy
+             |> LazyHTML.query("section.review-hypothesis-panel div#consultation-synthesis")
+             |> Enum.count() == 0
+    end
+  end
+
+  describe "hypothesis panel via Consultation.Fake (#235b)" do
+    test "renders when the Fake carries a hypothesis (Judgment Day W1: selected_hypothesis/1 pass-through was previously untested)",
+         %{conn: conn, patient: patient} do
+      set_fake_outcome(:synthesis)
+      set_fake_hypothesis(canned_hypothesis!())
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      html = render_async(view)
+
+      assert html =~ "consultation-synthesis"
+      assert has_element?(view, "section.review-hypothesis-panel")
     end
   end
 
