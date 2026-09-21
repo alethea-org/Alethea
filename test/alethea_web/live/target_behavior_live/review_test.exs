@@ -247,9 +247,23 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
     test "suggest_patterns enqueues the AI worker by name and disables the trigger", %{
       conn: conn,
+      professional: professional,
       patient: patient,
       target_behavior: target_behavior
     } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Cita previa para habilitar sugerencias"
+      )
+
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
@@ -606,6 +620,395 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
                  patient.id,
                  target_behavior.id
                )
+    end
+  end
+
+  describe "clinical workbench header & counters (GitHub #290)" do
+    test "displays patient alias, target behavior description, and initial counters", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#clinical-workbench-header")
+      assert has_element?(view, "#patient-alias", patient.alias)
+      assert has_element?(view, "#target-behavior-description", "Conducta objetivo")
+      assert has_element?(view, "#stat-evidence .stat-tile__value", "0")
+      assert has_element?(view, "#stat-observations .stat-tile__value", "0")
+      assert has_element?(view, "#stat-proposals .stat-tile__value", "0")
+      assert has_element?(view, "#draft-status-label", "Borrador vacío")
+      assert html =~ patient.alias
+      assert html =~ "Conducta objetivo"
+    end
+
+    test "counters reflect evidence, observations, proposals, and draft status", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        ~U[2026-01-01 10:00:00.000000Z],
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia 1"
+      )
+
+      insert_observation!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        ~U[2026-01-01 11:00:00.000000Z],
+        "Observacion 1"
+      )
+
+      insert_proposal!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        ~U[2026-01-01 12:00:00.000000Z],
+        "Propuesta 1"
+      )
+
+      {:ok, _draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Hipotesis inicial guardada"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#stat-evidence .stat-tile__value", "1")
+      assert has_element?(view, "#stat-observations .stat-tile__value", "1")
+      assert has_element?(view, "#stat-proposals .stat-tile__value", "1")
+      assert has_element?(view, "#draft-status-label", "Guardado")
+    end
+
+    test "draft counter reflects legally deleted status", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      insert_tombstone!(
+        patient,
+        target_behavior,
+        DateTime.utc_now() |> DateTime.truncate(:second),
+        "functional_analysis_draft"
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#draft-status-label", "Eliminado legalmente")
+    end
+  end
+
+  describe "explicit empty states (GitHub #290)" do
+    test "renders empty states for evidence, observations, proposals, and draft when empty", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#empty-evidence")
+      assert has_element?(view, "#empty-evidence .empty-state__title", "Sin evidencia citada")
+
+      assert has_element?(view, "#empty-observations")
+
+      assert has_element?(
+               view,
+               "#empty-observations .empty-state__title",
+               "Sin observaciones del clínico"
+             )
+
+      assert has_element?(view, "#empty-proposals")
+      assert has_element?(view, "#empty-proposals .empty-state__title", "Sin propuestas de IA")
+
+      assert has_element?(view, "#empty-draft")
+
+      assert has_element?(
+               view,
+               "#empty-draft .empty-state__title",
+               "Sin borrador de análisis funcional"
+             )
+    end
+
+    test "empty states disappear as items are populated or created", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia previa"
+      )
+
+      insert_proposal!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "Propuesta previa"
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      refute has_element?(view, "#empty-evidence")
+      refute has_element?(view, "#empty-proposals")
+      assert has_element?(view, "#empty-observations")
+      assert has_element?(view, "#empty-draft")
+
+      # Adding an observation removes the observations empty state
+      view
+      |> form("#observation-form", %{"observation" => %{"body" => "Nueva observacion"}})
+      |> render_submit()
+
+      refute has_element?(view, "#empty-observations")
+      assert has_element?(view, "#stat-observations .stat-tile__value", "1")
+
+      # Saving draft removes the draft empty state
+      view
+      |> form("#draft-form", %{"draft" => %{"body" => "Borrador de prueba"}})
+      |> render_submit()
+
+      refute has_element?(view, "#empty-draft")
+      assert has_element?(view, "#draft-status-label", "Guardado")
+    end
+  end
+
+  describe "AI pattern suggestion guards and hints (GitHub #290)" do
+    test "suggest_patterns button is disabled with explanatory hint when evidence is insufficient",
+         %{
+           conn: conn,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#suggest-patterns[disabled]")
+      assert has_element?(view, "#ai-insufficient-evidence-hint")
+      assert has_element?(view, "#ai-insufficient-evidence-hint", "Requiere evidencia citada")
+
+      # Direct event dispatch without evidence is rejected with an error flash
+      html = render_click(view, "suggest_patterns", %{})
+      assert html =~ "No hay evidencia clínica suficiente"
+      assert all_enqueued(worker: "AletheaJobs.AIProposalWorker") == []
+    end
+
+    test "suggest_patterns button is enabled and hint is hidden when sufficient evidence exists",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para habilitar IA"
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      refute has_element?(view, "#suggest-patterns[disabled]")
+      refute has_element?(view, "#ai-insufficient-evidence-hint")
+
+      html =
+        view
+        |> element("#suggest-patterns")
+        |> render_click()
+
+      assert_enqueued(worker: "AletheaJobs.AIProposalWorker")
+      assert has_element?(view, "#suggest-patterns[disabled]")
+      assert html =~ "Generando"
+      assert html =~ "Generación de patrones solicitada."
+    end
+  end
+
+  describe "contextual action feedback and soft confirmation (GitHub #290)" do
+    test "saving an edited proposal displays info flash", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      proposal =
+        insert_proposal!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "Texto antes de editar"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> element("button[phx-click='start_edit_proposal'][phx-value-id='#{proposal.id}']")
+      |> render_click()
+
+      html =
+        view
+        |> form("#edit-proposal-#{proposal.id}", %{
+          "proposal" => %{"text" => "Texto editado con feedback"}
+        })
+        |> render_submit()
+
+      assert html =~ "Propuesta editada."
+    end
+
+    test "accepting a proposal adds to draft and displays specific info flash", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      proposal =
+        insert_proposal!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "Patron a incorporar al borrador"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      html =
+        view
+        |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
+        |> render_click()
+
+      assert html =~ "Propuesta aceptada y agregada al borrador."
+    end
+
+    test "accepting a proposal when draft is legally deleted warns clinician", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      proposal =
+        insert_proposal!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "Patron con borrador eliminado"
+        )
+
+      insert_tombstone!(
+        patient,
+        target_behavior,
+        DateTime.utc_now() |> DateTime.truncate(:second),
+        "functional_analysis_draft"
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      html =
+        view
+        |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
+        |> render_click()
+
+      assert html =~ "Propuesta aceptada, pero no pudo agregarse al borrador."
+    end
+
+    test "discarding a proposal displays info flash and button carries data-confirm", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      proposal =
+        insert_proposal!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "Patron a descartar"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               view,
+               "button[phx-click='discard_proposal'][phx-value-id='#{proposal.id}'][data-confirm]"
+             )
+
+      html =
+        view
+        |> element("button[phx-click='discard_proposal'][phx-value-id='#{proposal.id}']")
+        |> render_click()
+
+      assert html =~ "Propuesta descartada."
+    end
+
+    test "adding clinician observation displays info flash", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      html =
+        view
+        |> form("#observation-form", %{"observation" => %{"body" => "Observacion con feedback"}})
+        |> render_submit()
+
+      assert html =~ "Observación clínica agregada."
     end
   end
 
