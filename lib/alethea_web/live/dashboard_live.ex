@@ -551,12 +551,25 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
   end
 
-  def handle_info({:crisis_detected, %{patient_id: patient_id, level: level}}, socket) do
+  def handle_info(
+        {:crisis_detected, %{patient_id: patient_id, level: level} = payload},
+        socket
+      ) do
     professional = socket.assigns.current_professional
 
+    # #286: the broadcast's `patient_id` is the foundation UUID (needed
+    # downstream for the dead-letter FK, see WARNING-5 in
+    # TelegramMessageWorker.handle_crisis_path/9); this dashboard's
+    # `patients` assign and `Accounts.get_patient_for_professional/2`
+    # both key off the legacy `patients` table, so `legacy_patient_id`
+    # (when present) is the lookup key. `is_valid_uuid?` still branches
+    # to the mock-mode fallback (patients with non-UUID ids like "p2"),
+    # which never sends `legacy_patient_id` — unrelated to this fix.
+    lookup_id = Map.get(payload, :legacy_patient_id, patient_id)
+
     patient =
-      if is_valid_uuid?(patient_id) do
-        Accounts.get_patient_for_professional(professional.id, patient_id)
+      if is_valid_uuid?(lookup_id) do
+        Accounts.get_patient_for_professional(professional.id, lookup_id)
       else
         Enum.find(socket.assigns.patients, &(&1.id == patient_id))
       end
@@ -570,7 +583,7 @@ defmodule AletheaWeb.DashboardLive do
 
         notif =
           NotificationCenter.build_notification(:crisis_detected, %{
-            patient_id: patient_id,
+            patient_id: patient.id,
             patient_alias: patient.alias,
             level: level
           })

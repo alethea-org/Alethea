@@ -48,6 +48,60 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
+  describe "real-time crisis alerts with legacy_patient_id (real mode, #286)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      legacy_patient = legacy_patient_fixture(professional)
+
+      foundation_professional = professional_fixture()
+
+      foundation_patient =
+        patient_fixture(foundation_professional)
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      %{legacy_patient: legacy_patient, foundation_patient: foundation_patient}
+    end
+
+    test "renders the crisis banner without a page reload using legacy_patient_id", %{
+      conn: conn,
+      legacy_patient: legacy_patient,
+      foundation_patient: foundation_patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(
+        view.pid,
+        {:crisis_detected,
+         %{
+           patient_id: foundation_patient.id,
+           legacy_patient_id: legacy_patient.id,
+           level: :high,
+           triggers: ["autolesión"]
+         }}
+      )
+
+      assert render(view) =~
+               "Alerta Critica: El paciente #{legacy_patient.alias} ha entrado en crisis"
+
+      assert has_element?(view, "a.pta-chip--risk", legacy_patient.alias)
+    end
+
+    test "drops the alert (does not crash) when only the foundation patient_id is a UUID with no legacy_patient_id and it does not match any patients table row",
+         %{conn: conn, foundation_patient: foundation_patient} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(
+        view.pid,
+        {:crisis_detected, %{patient_id: foundation_patient.id, level: :high}}
+      )
+
+      refute render(view) =~ "Alerta Critica"
+    end
+  end
+
   describe "Patient Detail" do
     setup do
       Application.put_env(:alethea, :use_mock_data, true)
