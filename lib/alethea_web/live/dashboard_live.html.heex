@@ -138,16 +138,35 @@
       data-status-tone={status_tone(@weekly_summary)}
       class="pta-briefing"
     >
-      <p class="pt-eyebrow" style="margin-bottom:10px;">
-        Resumen semanal
-        <span :if={@weekly_summary}>· {format_summary_date(@weekly_summary.period_end)}</span>
-        <span
-          :if={@weekly_summary}
-          id="weekly-status-badge"
-          class={"pt-pill " <> status_pill(@weekly_summary.status_level)}
-        >
-          {@weekly_summary.status_level}
+      <p
+        class="pt-eyebrow"
+        style="margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;"
+      >
+        <span>
+          Resumen semanal
+          <span :if={@weekly_summary}>· {format_summary_date(@weekly_summary.period_end)}</span>
+          <span
+            :if={@weekly_summary}
+            id="weekly-status-badge"
+            class={"pt-pill " <> status_pill(@weekly_summary.status_level)}
+          >
+            {@weekly_summary.status_level}
+          </span>
         </span>
+        <button
+          id="generate-weekly-summary-button"
+          type="button"
+          phx-click="generate_weekly_summary"
+          disabled={@weekly_summary_status == :generating}
+          class="button-secondary button-secondary--sm"
+        >
+          <.icon
+            :if={@weekly_summary_status == :generating}
+            name="hero-arrow-path"
+            class="animate-spin"
+          />
+          {if @weekly_summary_status == :generating, do: "Generando…", else: "Generar ahora"}
+        </button>
       </p>
 
       <p :if={@weekly_summary} class="pta-briefing__text">{@weekly_summary.summary_text}</p>
