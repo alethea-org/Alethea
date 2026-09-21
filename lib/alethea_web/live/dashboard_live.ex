@@ -49,6 +49,9 @@ defmodule AletheaWeb.DashboardLive do
         DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week()
       )
       |> assign(:chat_decrypted, false)
+      |> assign(:bot_settings_open, false)
+      |> assign(:crisis_form, to_form(%{"crisis_message" => professional.crisis_message}))
+      |> assign(:welcome_form, to_form(%{"welcome_message" => professional.welcome_message}))
 
     # Telegram invite wiring (feature: patient telegram invites).
     # Real mode resolves the foundation professional once per session
@@ -165,51 +168,67 @@ defmodule AletheaWeb.DashboardLive do
 
   def handle_event("save_session_schedule", %{"day" => day, "time" => time}, socket) do
     patient = socket.assigns.selected_patient
-    day = String.to_integer(day)
-    time = Time.from_iso8601!(time <> ":00")
 
-    if socket.assigns.use_mock_data do
-      # En modo mock actualizamos solo en memoria (el id no es un UUID válido)
-      updated_patient = %{patient | session_day_of_week: day, session_time: time}
+    # Issue #287: empty or malformed day/time used to raise (String.to_integer /
+    # Time.from_iso8601!) and kill the LiveView. Validate first; the mock and
+    # real branches below keep their original behavior.
+    with {:ok, day} <- parse_session_day(day),
+         {:ok, time} <- parse_session_time(time) do
+      if socket.assigns.use_mock_data do
+        # En modo mock actualizamos solo en memoria (el id no es un UUID válido)
+        updated_patient = %{patient | session_day_of_week: day, session_time: time}
 
-      patients =
-        socket.assigns.patients
-        |> Enum.map(fn p -> if p.id == patient.id, do: updated_patient, else: p end)
+        patients =
+          socket.assigns.patients
+          |> Enum.map(fn p -> if p.id == patient.id, do: updated_patient, else: p end)
 
-      socket =
-        socket
-        |> put_flash(:info, "Horario de sesión actualizado correctamente.")
-        |> assign(:selected_patient, updated_patient)
-        |> assign(:patients, patients)
+        socket =
+          socket
+          |> put_flash(:info, "Horario de sesión actualizado correctamente.")
+          |> assign(:selected_patient, updated_patient)
+          |> assign(:patients, patients)
+          |> assign(:by_day, by_day(patients))
 
-      {:noreply, socket}
-    else
-      case Accounts.update_patient_session_schedule(patient, day, time) do
-        {:ok, updated_patient} ->
-          try do
-            AletheaJobs.SessionReminderWorker.cancel_pending(updated_patient.id)
-          rescue
-            error ->
-              Logger.warning(
-                "save_session_schedule: reminder cancel failed " <>
-                  "(patient_id=#{updated_patient.id}, reason=#{inspect(error)})"
-              )
-          end
+        {:noreply, socket}
+      else
+        case Accounts.update_patient_session_schedule(patient, day, time) do
+          {:ok, updated_patient} ->
+            try do
+              AletheaJobs.SessionReminderWorker.cancel_pending(updated_patient.id)
+            rescue
+              error ->
+                Logger.warning(
+                  "save_session_schedule: reminder cancel failed " <>
+                    "(patient_id=#{updated_patient.id}, reason=#{inspect(error)})"
+                )
+            end
 
-          patients = Accounts.list_patients(socket.assigns.current_professional.id)
+            patients = Accounts.list_patients(socket.assigns.current_professional.id)
 
-          socket =
-            socket
-            |> put_flash(:info, "Horario de sesión actualizado correctamente.")
-            |> assign(:selected_patient, updated_patient)
-            |> assign(:patients, patients)
+            socket =
+              socket
+              |> put_flash(:info, "Horario de sesión actualizado correctamente.")
+              |> assign(:selected_patient, updated_patient)
+              |> assign(:patients, patients)
+              |> assign(:by_day, by_day(patients))
 
-          {:noreply, socket}
+            {:noreply, socket}
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el horario.")}
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "No se pudo actualizar el horario.")}
+        end
       end
+    else
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Horario inválido: elegí un día y una hora.")}
     end
+  end
+
+  # Socket-bound open state for the bot settings disclosure (#287): a
+  # native <details> collapses on every LiveView re-render, losing the
+  # open state right after saving a message.
+  def handle_event("toggle-bot-settings", _params, socket) do
+    {:noreply, assign(socket, :bot_settings_open, not socket.assigns.bot_settings_open)}
   end
 
   def handle_event("save_crisis_message", %{"crisis_message" => message}, socket) do
@@ -221,6 +240,12 @@ defmodule AletheaWeb.DashboardLive do
           socket
           |> put_flash(:info, "Mensaje de contención actualizado.")
           |> assign(:current_professional, updated_professional)
+          # Rebuild the form from the persisted value (#287): the saved
+          # message must re-render in the textarea.
+          |> assign(
+            :crisis_form,
+            to_form(%{"crisis_message" => updated_professional.crisis_message})
+          )
 
         {:noreply, socket}
 
@@ -238,6 +263,12 @@ defmodule AletheaWeb.DashboardLive do
           socket
           |> put_flash(:info, "Mensaje de bienvenida actualizado.")
           |> assign(:current_professional, updated_professional)
+          # Rebuild the form from the persisted value (#287): the saved
+          # message must re-render in the textarea.
+          |> assign(
+            :welcome_form,
+            to_form(%{"welcome_message" => updated_professional.welcome_message})
+          )
 
         {:noreply, socket}
 
@@ -280,6 +311,28 @@ defmodule AletheaWeb.DashboardLive do
 
     {:noreply, socket}
   end
+
+  # Issue #287: safe day/time parsing for save_session_schedule —
+  # `<input type="time">` submits "HH:MM"; full times also parse as-is.
+  defp parse_session_day(day) when is_binary(day) do
+    case Integer.parse(day) do
+      {d, ""} when d in 1..7 -> {:ok, d}
+      _ -> {:error, :invalid_day}
+    end
+  end
+
+  defp parse_session_day(_), do: {:error, :invalid_day}
+
+  defp parse_session_time(""), do: {:error, :invalid_time}
+
+  defp parse_session_time(time) when is_binary(time) do
+    case Time.from_iso8601(time) do
+      {:ok, %Time{} = parsed} -> {:ok, parsed}
+      {:error, _} -> Time.from_iso8601(time <> ":00")
+    end
+  end
+
+  defp parse_session_time(_), do: {:error, :invalid_time}
 
   defp decrypt_real_messages(patient, professional_kek) do
     key_record = Accounts.get_encryption_key_for_patient(patient.id)

@@ -763,4 +763,75 @@ defmodule AletheaWeb.DashboardLiveTest do
       refute has_element?(view, "#telegram-invite-panel")
     end
   end
+
+  # Issue #287 — Dashboard failures when saving the session schedule
+  # (crash on empty/invalid input, stale week agenda) and bot message
+  # updates (settings disclosure collapsing, no value re-render).
+  describe "Issue #287 — session schedule and bot settings" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "flashes an error instead of crashing when the time is empty", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view
+      |> form("#schedule-form", %{day: "2", time: ""})
+      |> render_submit()
+
+      # The view survives the submit: render still answers with the flash.
+      assert render(view) =~ "Horario inválido"
+    end
+
+    test "flashes an error for an out-of-range time", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view
+      |> form("#schedule-form", %{day: "2", time: "25:99"})
+      |> render_submit()
+
+      assert render(view) =~ "Horario inválido"
+    end
+
+    test "relocates the patient in the week agenda after saving", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1?picker=week")
+
+      # Mock p1 (Lucca) starts on Monday (day 1).
+      assert has_element?(view, ".ptc-week div.ptc-day:nth-of-type(1) a.ptc-slot", "Lucca")
+
+      view
+      |> form("#schedule-form", %{day: "3", time: "10:30"})
+      |> render_submit()
+
+      assert has_element?(view, ".ptc-week div.ptc-day:nth-of-type(3) a.ptc-slot", "Lucca")
+      refute has_element?(view, ".ptc-week div.ptc-day:nth-of-type(1) a.ptc-slot", "Lucca")
+    end
+
+    test "keeps bot settings open with feedback after saving messages", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view |> element("#bot-settings-summary") |> render_click()
+
+      assert has_element?(view, "#bot-settings[open]")
+
+      view
+      |> form("#welcome-message-form", %{welcome_message: "¡Hola %{name}! Este es tu espacio."})
+      |> render_submit()
+
+      assert render(view) =~ "Mensaje de bienvenida actualizado."
+      assert has_element?(view, "#bot-settings[open]")
+
+      view
+      |> form("#crisis-message-form", %{crisis_message: "Estoy acá, no estás solo."})
+      |> render_submit()
+
+      assert render(view) =~ "Mensaje de contención actualizado."
+      assert has_element?(view, "#bot-settings[open]")
+
+      # The persisted message re-renders in the textarea.
+      assert has_element?(view, "#crisis-message-form textarea", "Estoy acá, no estás solo.")
+    end
+  end
 end
