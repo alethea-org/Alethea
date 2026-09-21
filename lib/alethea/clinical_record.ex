@@ -183,15 +183,23 @@ defmodule Alethea.ClinicalRecord do
   authorized patient's id, so a target behavior belonging to another
   patient — or a malformed id — yields `{:error, :not_found}` and never
   reveals whether that id exists elsewhere. A cross-patient attempt writes
-  a content-free denial audit row. No DEK is loaded, so this is safe for
-  read-only callers such as `TargetBehaviorLive.Review.mount/3`.
+  a content-free denial audit row. When DEK is available, decrypts
+  `encrypted_description` into the virtual `:description` field and
+  attaches `:patient` for clinical workbench views.
   """
   @spec get_target_behavior(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
           {:ok, TargetBehavior.t()} | {:error, :unauthorized | :not_found}
   def get_target_behavior(%Professional{} = professional, patient_id, target_behavior_id) do
     case Accounts.get_patient_for_professional(professional.id, patient_id) do
-      nil -> deny_access(professional.id, patient_id)
-      patient -> fetch_owned_target_behavior(professional, patient, target_behavior_id)
+      nil ->
+        deny_access(professional.id, patient_id)
+
+      patient ->
+        with {:ok, target_behavior} <-
+               fetch_owned_target_behavior(professional, patient, target_behavior_id) do
+          decrypted = decrypt_target_behavior(professional, patient, target_behavior)
+          {:ok, decrypted}
+        end
     end
   end
 
@@ -233,6 +241,17 @@ defmodule Alethea.ClinicalRecord do
 
         log_denied_audit(professional.id, audited_id, "target_behavior")
         {:error, :not_found}
+    end
+  end
+
+  defp decrypt_target_behavior(professional, patient, target_behavior) do
+    with {:ok, kek} <- Accounts.load_professional_kek(professional),
+         {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
+         {:ok, plaintext} <- PatientVault.decrypt(target_behavior.encrypted_description, dek) do
+      %{target_behavior | description: plaintext, patient: patient}
+    else
+      _ ->
+        %{target_behavior | description: "[No disponible]", patient: patient}
     end
   end
 

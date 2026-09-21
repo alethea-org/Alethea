@@ -1462,6 +1462,21 @@ defmodule Alethea.ClinicalRecordTest do
       assert row.resource_id == nil
     end
 
+    test "get_target_behavior/3 decrypts description and attaches patient",
+         %{
+           professional: professional,
+           patient_a: patient_a,
+           target_a: target_a
+         } do
+      assert {:ok, %TargetBehavior{description: description, patient: patient}} =
+               ClinicalRecord.get_target_behavior(professional, patient_a.id, target_a.id)
+
+      assert is_binary(description)
+      assert description != "[No disponible]"
+      assert patient.id == patient_a.id
+      assert patient.alias == patient_a.alias
+    end
+
     test "get_target_behavior/3 returns the row only for the owning patient",
          %{
            professional: professional,
