@@ -2147,3 +2147,329 @@ select.text-input {
   gap: var(--spacing-sm);
   flex-wrap: wrap;
 }
+
+/* =================================================================
+   Grounded clinical consultation — Citations (#230, #284)
+================================================================= */
+
+.citation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-sm);
+}
+
+.citation {
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-canvas);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+}
+
+.citation[open] {
+  border-color: var(--colors-border-strong);
+}
+
+.citation__summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs) var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  cursor: pointer;
+  background: var(--colors-surface-soft);
+  color: var(--colors-body);
+  font-size: var(--typography-body-md-size);
+  user-select: none;
+  list-style: none;
+}
+
+.citation__summary::-webkit-details-marker {
+  display: none;
+}
+
+.citation__summary::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--colors-muted);
+  border-bottom: 2px solid var(--colors-muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+.citation[open] > .citation__summary::before {
+  transform: rotate(45deg);
+}
+
+.citation__summary:focus-visible {
+  outline: 2px solid var(--colors-info-border);
+  outline-offset: -2px;
+}
+
+.citation__kind {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--colors-ink);
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  padding: 1px 6px;
+  border-radius: var(--rounded-xs);
+  white-space: nowrap;
+}
+
+.citation__date {
+  font-size: 12px;
+  color: var(--colors-muted);
+  white-space: nowrap;
+}
+
+.citation__ref {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--colors-muted);
+  white-space: nowrap;
+}
+
+.citation__link {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.citation__link a,
+.consultation__source-link {
+  color: var(--colors-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.citation__link a:hover,
+.consultation__source-link:hover {
+  color: var(--colors-primary);
+}
+
+.citation__link a:focus-visible,
+.consultation__source-link:focus-visible {
+  outline: 2px solid var(--colors-info-border);
+  outline-offset: 2px;
+}
+
+.citation__excerpt {
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--colors-body);
+  border-top: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* =================================================================
+   Grounded clinical consultation — Hypothesis Panel (#231, #284)
+================================================================= */
+
+.review-hypothesis-panel {
+  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-warn-soft);
+  border: 1px solid var(--colors-pill-border-warn);
+  border-left: 4px solid var(--colors-warn);
+}
+
+.review-hypothesis-panel h2 {
+  font-size: var(--typography-title-sm-size);
+  font-weight: 600;
+  color: var(--colors-ink);
+  margin-top: var(--spacing-xxs);
+  margin-bottom: var(--spacing-sm);
+  letter-spacing: -0.01em;
+}
+
+.review-hypothesis-panel__disclaimer {
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-pill-border-warn);
+  border-radius: var(--rounded-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--colors-body);
+}
+
+.review-hypothesis-panel__disclaimer strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-ink);
+  margin-bottom: 2px;
+}
+
+.review-hypothesis-panel__disclaimer p {
+  margin: 0;
+  color: var(--colors-body);
+}
+
+.review-hypothesis-panel__statement {
+  font-size: 15px;
+  line-height: 1.6;
+  font-weight: 500;
+  color: var(--colors-ink);
+  margin-bottom: var(--spacing-md);
+}
+
+.review-hypothesis-panel .citation-list {
+  margin-top: var(--spacing-sm);
+}
+
+/* =================================================================
+   Grounded clinical consultation — Thread & Surface (#235, #280, #284)
+================================================================= */
+
+.consultation {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--spacing-md) 0 var(--spacing-xxl);
+}
+
+#consultation-ask-form {
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+#consultation-new-conversation {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--colors-muted);
+  background: transparent;
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-sm);
+  cursor: pointer;
+  margin-bottom: var(--spacing-md);
+  transition: all 0.15s ease;
+}
+
+#consultation-new-conversation:hover {
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+  border-color: var(--colors-border-strong);
+}
+
+#consultation-new-conversation:focus-visible {
+  outline: 2px solid var(--colors-info-border);
+  outline-offset: 2px;
+}
+
+.consultation__thread,
+.consultation-synthesis {
+  margin-top: var(--spacing-lg);
+}
+
+.consultation__messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xl);
+}
+
+.consultation__turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: var(--spacing-lg);
+  border-radius: var(--rounded-lg);
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  box-shadow: 0 1px 3px rgba(24, 29, 38, 0.04);
+}
+
+.consultation__turn-query {
+  align-self: flex-start;
+  max-width: 85%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--colors-surface-soft);
+  border: 1px solid var(--colors-hairline);
+  border-left: 3px solid var(--colors-primary);
+  border-radius: var(--rounded-md);
+}
+
+.consultation__turn-query-text {
+  font-size: var(--typography-body-md-size);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--colors-ink);
+  margin: 0;
+}
+
+.consultation__synthesis {
+  padding: var(--spacing-md);
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+}
+
+.consultation__synthesis p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--colors-body);
+  margin: 0;
+}
+
+.consultation__section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--colors-muted);
+  margin-bottom: var(--spacing-xs);
+}
+
+.consultation__sources-panel {
+  margin-top: var(--spacing-xs);
+}
+
+.consultation__sources {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.notice--warning {
+  border-color: var(--colors-pill-border-warn);
+  background: var(--colors-warn-soft);
+  color: var(--colors-ink);
+}
+
+@media (max-width: 767px) {
+  .consultation__turn {
+    padding: var(--spacing-md);
+  }
+
+  .consultation__turn-query {
+    max-width: 100%;
+  }
+
+  .citation__link {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
