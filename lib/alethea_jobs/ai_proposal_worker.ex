@@ -80,6 +80,14 @@ defmodule AletheaJobs.AIProposalWorker do
         broadcast_failed(target_behavior_id, :unauthorized)
         {:error, :unauthorized}
 
+      {:error, :not_found} ->
+        Logger.warning(
+          "AIProposalWorker: target behavior not found for patient professional=#{professional.id} patient=#{patient_id}"
+        )
+
+        broadcast_failed(target_behavior_id, :not_found)
+        {:error, :not_found}
+
       {:error, reason} ->
         Logger.error("AIProposalWorker: review_timeline failed: #{inspect(reason)}")
         broadcast_failed(target_behavior_id, reason)

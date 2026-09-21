@@ -177,6 +177,65 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
+  @doc """
+  Loads a target behavior authorized by `(professional, patient_id,
+  target_behavior_id)` (GitHub #289). The row is fetched scoped by the
+  authorized patient's id, so a target behavior belonging to another
+  patient — or a malformed id — yields `{:error, :not_found}` and never
+  reveals whether that id exists elsewhere. A cross-patient attempt writes
+  a content-free denial audit row. No DEK is loaded, so this is safe for
+  read-only callers such as `TargetBehaviorLive.Review.mount/3`.
+  """
+  @spec get_target_behavior(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, TargetBehavior.t()} | {:error, :unauthorized | :not_found}
+  def get_target_behavior(%Professional{} = professional, patient_id, target_behavior_id) do
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil -> deny_access(professional.id, patient_id)
+      patient -> fetch_owned_target_behavior(professional, patient, target_behavior_id)
+    end
+  end
+
+  # `with_patient/3` plus the patient↔target-behavior ownership check
+  # (GitHub #289). Every function that reads or writes by `target_behavior_id`
+  # goes through here, so `fun` only runs for a target behavior that belongs
+  # to the authorized patient — otherwise nothing is read or written.
+  @spec with_target_behavior(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          (Patient.t(), keyring() -> result)
+        ) :: result | {:error, :unauthorized | :not_found}
+        when result: {:ok, term()} | {:error, term()}
+  defp with_target_behavior(professional, patient_id, target_behavior_id, fun)
+       when is_function(fun, 2) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, _target_behavior} <-
+             fetch_owned_target_behavior(professional, patient, target_behavior_id) do
+        fun.(patient, keyring)
+      end
+    end)
+  end
+
+  defp fetch_owned_target_behavior(professional, patient, target_behavior_id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(target_behavior_id),
+         %TargetBehavior{} = target_behavior <-
+           Repo.get_by(TargetBehavior, id: uuid, patient_id: patient.id) do
+      {:ok, target_behavior}
+    else
+      _ ->
+        # A malformed id cannot be stored in the `binary_id` audit column and
+        # must not be echoed into the audit trail — record the denial without it.
+        audited_id =
+          case Ecto.UUID.cast(target_behavior_id) do
+            {:ok, uuid} -> uuid
+            :error -> nil
+          end
+
+        log_denied_audit(professional.id, audited_id, "target_behavior")
+        {:error, :not_found}
+    end
+  end
+
   # Picks the correct DEK out of `keyring` for a row per its OWN stored
   # `encryption_version` (AD1, sdd/clinical-record-retention, GitHub #197)
   # — never a caller-wide assumption. Pre-change rows stay `1` forever
@@ -205,7 +264,7 @@ defmodule Alethea.ClinicalRecord do
         excerpt: excerpt,
         occurred_at: occurred_at
       }) do
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
       with {:ok, ciphertext} <- PatientVault.encrypt(excerpt, keyring.clinical_record_dek) do
         Ecto.Multi.new()
         |> Ecto.Multi.insert(
@@ -256,7 +315,7 @@ defmodule Alethea.ClinicalRecord do
         target_behavior_id,
         body
       ) do
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
       with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
         Ecto.Multi.new()
         |> Ecto.Multi.insert(
@@ -349,9 +408,9 @@ defmodule Alethea.ClinicalRecord do
   later executed, not at insert time.
   """
   @spec request_ai_proposals(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
-          {:ok, :requested} | {:error, :unauthorized | term()}
+          {:ok, :requested} | {:error, :unauthorized | :not_found | term()}
   def request_ai_proposals(%Professional{} = professional, patient_id, target_behavior_id) do
-    with_patient(professional, patient_id, fn patient, _keyring ->
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, _keyring ->
       Ecto.Multi.new()
       |> Ecto.Multi.insert(
         :audit,
@@ -474,7 +533,7 @@ defmodule Alethea.ClinicalRecord do
         target_behavior_id,
         body
       ) do
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
       with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
         changeset =
           FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
@@ -530,13 +589,13 @@ defmodule Alethea.ClinicalRecord do
   @spec get_functional_analysis_draft(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
           {:ok, FunctionalAnalysisDraft.t() | nil}
           | {:ok, {:legally_deleted, DateTime.t()}}
-          | {:error, :unauthorized | term()}
+          | {:error, :unauthorized | :not_found | term()}
   def get_functional_analysis_draft(
         %Professional{} = professional,
         patient_id,
         target_behavior_id
       ) do
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
       case Repo.get_by(FunctionalAnalysisDraft,
              target_behavior_id: target_behavior_id,
              patient_id: patient.id
@@ -585,9 +644,9 @@ defmodule Alethea.ClinicalRecord do
   through `get_functional_analysis_draft/3` instead.
   """
   @spec review_timeline(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
-          {:ok, [map()]} | {:error, :unauthorized | term()}
+          {:ok, [map()]} | {:error, :unauthorized | :not_found | term()}
   def review_timeline(%Professional{} = professional, patient_id, target_behavior_id) do
-    with_patient(professional, patient_id, fn _patient, keyring ->
+    with_target_behavior(professional, patient_id, target_behavior_id, fn _patient, keyring ->
       evidence =
         ConsultationEvidence
         |> where([e], e.target_behavior_id == ^target_behavior_id)

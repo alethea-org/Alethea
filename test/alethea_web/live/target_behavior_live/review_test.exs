@@ -101,6 +101,38 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "mount — cross-patient target behavior is denied (GitHub #289)" do
+    test "redirects with a flash when the URL pairs patient A with patient B's target behavior",
+         %{conn: conn, professional: professional, patient: patient_a} do
+      patient_b = create_patient!(professional)
+      target_b = create_target_behavior!(professional, patient_b)
+      dek_b = load_dek!(professional, patient_b)
+
+      insert_observation!(
+        professional,
+        patient_b,
+        target_b,
+        dek_b,
+        ~U[2026-01-01 10:00:00.000000Z],
+        "Observacion privada del paciente B"
+      )
+
+      assert {:error, {:live_redirect, %{to: "/patients", flash: flash}}} =
+               live(conn, ~p"/patients/#{patient_a.id}/target_behaviors/#{target_b.id}/review")
+
+      assert flash["error"] =~ "conducta objetivo"
+      refute inspect(flash) =~ "Observacion privada del paciente B"
+    end
+
+    test "redirects with a flash when the target behavior id is malformed",
+         %{conn: conn, patient: patient} do
+      assert {:error, {:live_redirect, %{to: "/patients", flash: flash}}} =
+               live(conn, ~p"/patients/#{patient.id}/target_behaviors/not-a-uuid/review")
+
+      assert flash["error"] =~ "conducta objetivo"
+    end
+  end
+
   describe "immutable evidence excerpt + source reference display" do
     test "renders the byte-identical excerpt alongside its resolved source reference", %{
       conn: conn,
