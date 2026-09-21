@@ -19,9 +19,9 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
   import Mox
   import Alethea.RagFixtures
 
-  alias Alethea.AI.ClinicalConsultationChainMock
+  alias Alethea.AI.{ClinicalConsultationChainMock, ClinicalHypothesisChainMock}
   alias Alethea.ClinicalRecord.Rag.Consultation
-  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Live, Source}
+  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Hypothesis, Live, Source}
   alias Alethea.ClinicalRecord.Rag.{Chunk, Retrieval}
   alias Alethea.ClinicalRecord.Tombstone
 
@@ -196,6 +196,72 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
 
       assert sources == Source.from_results(kept)
     end
+
+    # --- #235a / R1: interpretive query produces a gated hypothesis ---------
+
+    test "an interpretive query with sufficient evidence produces a hypothesis", %{
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(
+        professional,
+        patient,
+        "El paciente reporta mejoria del animo esta semana",
+        near_vector()
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "El paciente mejora su animo."}}
+      end)
+
+      expect(ClinicalHypothesisChainMock, :run, 1, fn %{
+                                                          question: q,
+                                                          excerpts: excerpts
+                                                        } ->
+        assert q == "¿qué relación hay con el trabajo?"
+        assert excerpts == ["El paciente reporta mejoria del animo esta semana"]
+
+        {:ok,
+         %{
+           hypothesis:
+             "Podria existir una relacion entre el estres laboral y la mejoria del animo."
+         }}
+      end)
+
+      assert {:ok,
+              %Answer{
+                outcome: :synthesis,
+                synthesis: "El paciente mejora su animo.",
+                hypothesis: %Hypothesis{}
+              }} = Live.answer(professional, patient.id, "¿qué relación hay con el trabajo?", [])
+    end
+
+    # --- #235a / R2 / PD4: factual query never invokes the hypothesis chain --
+
+    test "a factual query never invokes the hypothesis chain and leaves hypothesis nil", %{
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(
+        professional,
+        patient,
+        "El paciente reporta mejoria del animo esta semana",
+        near_vector()
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "El paciente mejora su animo."}}
+      end)
+
+      expect(ClinicalHypothesisChainMock, :run, 0, fn _params -> :never end)
+
+      assert {:ok, %Answer{outcome: :synthesis, hypothesis: nil}} =
+               Live.answer(professional, patient.id, "¿cómo va el ánimo?", [])
+    end
   end
 
   # --- 4.8 provider_failure is a safe state -------------------------------------
@@ -244,6 +310,99 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
     end
   end
 
+  # --- #235a / R3, R8 (domain half): the hypothesis path is additive and fail-silent --
+
+  describe "answer/4 — the hypothesis path is additive and fail-silent (#235)" do
+    setup %{professional: professional, patient: patient} do
+      insert_chunk!(
+        professional,
+        patient,
+        "El paciente reporta mejoria del animo esta semana",
+        near_vector()
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "El paciente mejora su animo."}}
+      end)
+
+      :ok
+    end
+
+    test "hypothesis chain raising an exception still yields outcome: :synthesis with synthesis/sources unaffected",
+         %{professional: professional, patient: patient} do
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params -> raise "boom" end)
+
+      assert {:ok,
+              %Answer{
+                outcome: :synthesis,
+                synthesis: "El paciente mejora su animo.",
+                hypothesis: nil,
+                sources: [%Source{}]
+              }} =
+               Live.answer(professional, patient.id, "¿qué relación hay con el trabajo?", [])
+    end
+
+    test "hypothesis chain returning {:error, _} still yields outcome: :synthesis with synthesis/sources unaffected",
+         %{professional: professional, patient: patient} do
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params -> {:error, :unparseable} end)
+
+      assert {:ok,
+              %Answer{
+                outcome: :synthesis,
+                synthesis: "El paciente mejora su animo.",
+                hypothesis: nil,
+                sources: [%Source{}]
+              }} =
+               Live.answer(professional, patient.id, "¿qué relación hay con el trabajo?", [])
+    end
+
+    test "hypothesis chain returning blank prose is rejected (:empty_statement) and still yields outcome: :synthesis",
+         %{professional: professional, patient: patient} do
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params -> {:ok, %{hypothesis: "   "}} end)
+
+      assert {:ok,
+              %Answer{
+                outcome: :synthesis,
+                synthesis: "El paciente mejora su animo.",
+                hypothesis: nil,
+                sources: [%Source{}]
+              }} =
+               Live.answer(professional, patient.id, "¿qué relación hay con el trabajo?", [])
+    end
+
+    test "hypothesis chain prose containing a diagnostic marker is rejected end-to-end (R8 domain half)",
+         %{professional: professional, patient: patient} do
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params ->
+        {:ok, %{hypothesis: "El paciente presenta un trastorno de ansiedad generalizada."}}
+      end)
+
+      assert {:ok,
+              %Answer{
+                outcome: :synthesis,
+                synthesis: "El paciente mejora su animo.",
+                hypothesis: nil
+              }} =
+               Live.answer(professional, patient.id, "¿qué relación hay con el trabajo?", [])
+    end
+
+    test "hypothesis chain prose containing a prescriptive marker is rejected end-to-end (R8 domain half)",
+         %{professional: professional, patient: patient} do
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params ->
+        {:ok, %{hypothesis: "Se recomienda iniciar tratamiento farmacologico cuanto antes."}}
+      end)
+
+      assert {:ok,
+              %Answer{
+                outcome: :synthesis,
+                synthesis: "El paciente mejora su animo.",
+                hypothesis: nil
+              }} =
+               Live.answer(professional, patient.id, "¿qué relación hay con el trabajo?", [])
+    end
+  end
+
   # --- 5.1 cross-patient isolation ---------------------------------------------
 
   describe "answer/4 — cross-patient isolation (adversarial query)" do
@@ -275,6 +434,46 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       refute leaked_resource_id in returned_resource_ids
       assert returned_resource_ids == [matching_a_id]
     end
+
+    # --- #235a / R6: interpretive-query variant --------------------------------
+
+    test "an interpretive adversarial query never surfaces patient B's evidence in the hypothesis either",
+         %{professional: professional, patient: patient_a} do
+      patient_b = create_patient!(professional)
+
+      secret_b_text = "El paciente B reporta ideacion suicida activa y un plan concreto"
+      leaked_resource_id = insert_chunk!(professional, patient_b, secret_b_text, near_vector())
+
+      matching_a_id =
+        insert_chunk!(
+          professional,
+          patient_a,
+          "Nota rutinaria sobre el paciente A",
+          near_vector()
+        )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "sintesis A"}}
+      end)
+
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params ->
+        {:ok, %{hypothesis: "Podria existir un patron en la nota rutinaria del paciente A."}}
+      end)
+
+      assert {:ok,
+              %Answer{outcome: :synthesis, sources: sources, hypothesis: %Hypothesis{} = hyp}} =
+               Live.answer(professional, patient_a.id, "¿qué patrón hay en la nota?", [])
+
+      returned_resource_ids = Enum.map(sources, & &1.reference.resource_id)
+      hypothesis_resource_ids = Enum.map(hyp.sources, & &1.reference.resource_id)
+
+      refute leaked_resource_id in returned_resource_ids
+      refute leaked_resource_id in hypothesis_resource_ids
+      assert returned_resource_ids == [matching_a_id]
+      assert hypothesis_resource_ids == [matching_a_id]
+    end
   end
 
   # --- 5.2 cross-tenant isolation ------------------------------------------------
@@ -304,6 +503,43 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       returned_resource_ids = Enum.map(sources, & &1.reference.resource_id)
       refute leaked_resource_id in returned_resource_ids
       assert returned_resource_ids == [own_id]
+    end
+
+    # --- #235a / R6: interpretive-query variant --------------------------------
+
+    test "an interpretive query never surfaces another professional's evidence in the hypothesis either" do
+      professional_1 = create_professional!()
+      patient_1 = create_patient!(professional_1)
+      professional_2 = create_professional!()
+      patient_2 = create_patient!(professional_2)
+
+      secret_text = "El paciente del Dr. 2 reporta un intento previo"
+      leaked_resource_id = insert_chunk!(professional_2, patient_2, secret_text, near_vector())
+
+      own_id =
+        insert_chunk!(professional_1, patient_1, "Nota rutinaria del Dr. 1", near_vector())
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "sintesis 1"}}
+      end)
+
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params ->
+        {:ok, %{hypothesis: "Podria existir una tendencia en la nota rutinaria del Dr. 1."}}
+      end)
+
+      assert {:ok,
+              %Answer{outcome: :synthesis, sources: sources, hypothesis: %Hypothesis{} = hyp}} =
+               Live.answer(professional_1, patient_1.id, "¿qué tendencia hay en la nota?", [])
+
+      returned_resource_ids = Enum.map(sources, & &1.reference.resource_id)
+      hypothesis_resource_ids = Enum.map(hyp.sources, & &1.reference.resource_id)
+
+      refute leaked_resource_id in returned_resource_ids
+      refute leaked_resource_id in hypothesis_resource_ids
+      assert returned_resource_ids == [own_id]
+      assert hypothesis_resource_ids == [own_id]
     end
   end
 
@@ -341,6 +577,33 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       assert {:ok, %Answer{outcome: :stale}} = Live.answer(professional, patient.id, "q", [])
 
       assert state_snapshot() == before_snapshot
+    end
+
+    # --- #235a / R7: a hypothesis turn leaves clinical state untouched too -----
+
+    test "a hypothesis-producing turn leaves chunks and oban jobs byte-identical, no Repo write", %{
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(professional, patient, "El paciente reporta mejoria del animo", near_vector())
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 1, fn _params ->
+        {:ok, %{synthesis: "sintesis"}}
+      end)
+
+      expect(ClinicalHypothesisChainMock, :run, 1, fn _params ->
+        {:ok, %{hypothesis: "Podria existir una relacion con el animo."}}
+      end)
+
+      before_snapshot = state_snapshot()
+      before_job_count = Repo.aggregate(Oban.Job, :count)
+
+      assert {:ok, %Answer{outcome: :synthesis, hypothesis: %Hypothesis{}}} =
+               Live.answer(professional, patient.id, "¿qué relación tiene con el animo?", [])
+
+      assert state_snapshot() == before_snapshot
+      assert Repo.aggregate(Oban.Job, :count) == before_job_count
     end
   end
 

@@ -5,8 +5,11 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Answer do
   `:provider_failure`) carry `synthesis: nil` and `sources: []`;
   `pending` is only meaningful for `:stale` (the queued indexing-job
   count). `hypothesis` is additive (ADR-010 §2, #229): non-nil only
-  alongside `outcome: :synthesis`; no production code path populates it
-  until #235 wires `HypothesisPolicy.evaluate/2` into this flow.
+  alongside `outcome: :synthesis`. #235 wires `HypothesisPolicy.evaluate/2`
+  into `Consultation.Live.synthesize/2`'s `maybe_hypothesis/3`, gated on
+  `HypothesisPolicy.interpretive_intent?/1` and fail-silent on any
+  hypothesis-path failure — a factual query, or a rejected/raising
+  hypothesis attempt, always yields `hypothesis: nil` here.
   """
 
   alias Alethea.ClinicalRecord.Rag.Consultation.{Hypothesis, Source}

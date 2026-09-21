@@ -23,7 +23,12 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Fake do
 
       :synthesis ->
         {:ok,
-         %Answer{outcome: :synthesis, synthesis: canned_synthesis(), sources: canned_sources()}}
+         %Answer{
+           outcome: :synthesis,
+           synthesis: canned_synthesis(),
+           sources: canned_sources(),
+           hypothesis: selected_hypothesis(opts)
+         }}
 
       :no_evidence ->
         {:ok, %Answer{outcome: :no_evidence, synthesis: nil, sources: []}}
@@ -49,6 +54,17 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Fake do
       Application.get_env(:alethea, :consultation_fake_outcome, :synthesis)
   end
 
+  # #235b/AD2 — pass-through only, never constructed here. A fake that
+  # called `HypothesisPolicy.evaluate/2` would be a second AST-scan call
+  # site (R9/R11) and would force an allowlist that hollows out the
+  # Hypothesis Wiring Gate's invariant. The real `%Hypothesis{}` is built
+  # in test-support (`Alethea.RagFixtures.canned_hypothesis!/0`) through
+  # the real policy, never hand-rolled.
+  defp selected_hypothesis(opts),
+    do:
+      Keyword.get(opts, :hypothesis) ||
+        Application.get_env(:alethea, :consultation_fake_hypothesis)
+
   defp pending_count(opts),
     do:
       Keyword.get(opts, :pending) ||
@@ -58,8 +74,17 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Fake do
     do:
       "Según los fragmentos citados, el paciente reporta una mejoría sostenida del ánimo en la última semana."
 
-  defp canned_sources do
-    Source.from_results([
+  defp canned_sources, do: Source.from_results(canned_results())
+
+  @doc """
+  The fixed retrieval-result fixture behind `:synthesis`'s `sources`.
+  Public and reused by `Alethea.RagFixtures.canned_hypothesis!/0`
+  (#235b/AD2) so the fake's sources and the fixture's hypothesis cite
+  the exact same fragment.
+  """
+  @spec canned_results() :: [map()]
+  def canned_results do
+    [
       %{
         chunk_id: "11111111-1111-1111-1111-111111111111",
         source_resource_type: "clinical_note",
@@ -68,6 +93,6 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Fake do
         target_behavior_id: nil,
         content: "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
       }
-    ])
+    ]
   end
 end

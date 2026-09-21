@@ -16,6 +16,7 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
 
   use ExUnit.Case, async: true
 
+  import Phoenix.Component
   import Phoenix.LiveViewTest
 
   alias Alethea.ClinicalRecord.Rag.Citation
@@ -45,7 +46,7 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
   end
 
   describe "<.citation> collapsed (default)" do
-    test "renders kind, ref and fecha as the summary — excerpt is hidden" do
+    test "renders kind, ref and fecha as the summary — excerpt is present but visually collapsed (native <details>, no `open` attribute)" do
       html = render_component(&CoreComponents.citation/1, citation: citation())
 
       assert html =~ "<details"
@@ -56,7 +57,12 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
 
       assert html =~ "2026-08-12"
 
-      refute html =~ "El paciente reportó insomnio"
+      # The excerpt is always in the DOM — native <details> hides it
+      # visually until opened, so a real click works with zero JS.
+      # Structurally omitting it here (the pre-fix behavior) made
+      # click-to-expand unreachable, since no production call site
+      # ever re-renders with `expanded: true` (#235c task 3.0).
+      assert html =~ "El paciente reportó insomnio"
     end
 
     test "uses a stable DOM id derived from the source_ref" do
@@ -66,11 +72,18 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
       assert html =~ "id=\"citation-#{c.source_ref}\""
     end
 
-    test "marks the summary as a button-equivalent control for ARIA" do
+    test "renders a plain <summary> with no stale ARIA state" do
       html = render_component(&CoreComponents.citation/1, citation: citation())
 
       assert html =~ "<summary"
-      assert html =~ "aria-controls=\"citation-#{citation().source_ref}\""
+
+      # #235c/Judgment Day: native <details>/<summary> already exposes
+      # open/closed to assistive tech; a server-rendered aria-expanded
+      # would go stale the moment a real click toggles it (unreachable
+      # before the excerpt-gating fix — see task 3.0 — and now a real
+      # regression to guard against).
+      refute html =~ "aria-expanded"
+      refute html =~ "aria-controls"
     end
   end
 
@@ -82,14 +95,6 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
       assert html =~ "<details"
       assert html =~ " open"
       assert html =~ "El paciente reportó insomnio recurrente"
-    end
-
-    test "aria-expanded reflects the open state" do
-      html = render_component(&CoreComponents.citation/1, citation: citation(), expanded: true)
-      assert html =~ "aria-expanded=\"true\""
-
-      html2 = render_component(&CoreComponents.citation/1, citation: citation())
-      assert html2 =~ "aria-expanded=\"false\""
     end
   end
 
@@ -113,6 +118,38 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
       assert html =~ "&amp;"
 
       assert html =~ "&#39;quoted&#39;"
+    end
+  end
+
+  describe "citation/1 — optional link slot" do
+    test "renders the :link slot's content inside <summary> when the caller passes it" do
+      assigns = %{citation: citation()}
+
+      html =
+        rendered_to_string(~H"""
+        <CoreComponents.citation citation={@citation}>
+          <:link>Ver conducta objetivo</:link>
+        </CoreComponents.citation>
+        """)
+
+      assert html =~ "Ver conducta objetivo"
+
+      summary_start = :binary.match(html, "<summary") |> elem(0)
+      summary_end = :binary.match(html, "</summary>") |> elem(0)
+      link_pos = :binary.match(html, "Ver conducta objetivo") |> elem(0)
+
+      assert summary_start < link_pos and link_pos < summary_end
+    end
+
+    test "no link and no error when the caller passes no :link slot" do
+      assigns = %{citation: citation()}
+
+      html =
+        rendered_to_string(~H"""
+        <CoreComponents.citation citation={@citation} />
+        """)
+
+      refute html =~ "citation__link"
     end
   end
 
