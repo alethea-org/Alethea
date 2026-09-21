@@ -3,6 +3,16 @@ defmodule AletheaJobs.ClinicalRecordOutboxWorker do
   Consumer of `Alethea.ClinicalRecord.Outbox` events
   (sdd/clinical-record-foundation, GitHub #194).
 
+  As of sdd/telegram-rag-ingestion-262 (GitHub #262, Slice 1) it also
+  consumes `Alethea.Clinical.Outbox` events (`patient_message_received`,
+  the "voz del paciente" producer) on the SAME queue — the name is kept
+  unchanged (Q4) because Oban persists it verbatim in
+  `oban_jobs.worker`; renaming would break in-flight/retryable jobs and
+  the job history's `worker` column. Both producers build the identical
+  5-key args shape, so this worker's `perform/1` pattern match and
+  `Indexer.index_event/1` dispatch are unchanged and generic over the
+  event source.
+
   Dispatches every eligible event to
   `Alethea.ClinicalRecord.Rag.Indexer.index_event/1`
   (sdd/clinical-rag-projection, GitHub #196, WU3, design section 4)

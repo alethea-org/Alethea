@@ -217,9 +217,9 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       end)
 
       expect(ClinicalHypothesisChainMock, :run, 1, fn %{
-                                                          question: q,
-                                                          excerpts: excerpts
-                                                        } ->
+                                                        question: q,
+                                                        excerpts: excerpts
+                                                      } ->
         assert q == "¿qué relación hay con el trabajo?"
         assert excerpts == ["El paciente reporta mejoria del animo esta semana"]
 
@@ -581,10 +581,11 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
 
     # --- #235a / R7: a hypothesis turn leaves clinical state untouched too -----
 
-    test "a hypothesis-producing turn leaves chunks and oban jobs byte-identical, no Repo write", %{
-      professional: professional,
-      patient: patient
-    } do
+    test "a hypothesis-producing turn leaves chunks and oban jobs byte-identical, no Repo write",
+         %{
+           professional: professional,
+           patient: patient
+         } do
       insert_chunk!(professional, patient, "El paciente reporta mejoria del animo", near_vector())
       stub_query_embedding(near_vector())
 

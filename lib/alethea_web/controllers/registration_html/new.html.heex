@@ -13,13 +13,13 @@
   </.link>
   <div>
     <h2 class="auth-panel__title">Una cuenta, todo el seguimiento.</h2>
-    
+
     <p class="auth-panel__lede">
       Invitás al paciente por Telegram, la conversación se cifra con su propia
       clave y vos leés el resumen semanal antes de la sesión.
     </p>
   </div>
-  
+
   <p class="auth-panel__proof">
     El borrado de datos es criptográfico: se destruye la clave del paciente en
     la bóveda, no se borran filas.
@@ -29,11 +29,11 @@
 <section class="auth-form-side">
   <div class="auth-form">
     <p class="pt-eyebrow">Cuenta profesional</p>
-    
+
     <h1 class="auth-form__title">Crear tu cuenta</h1>
-    
+
     <p class="auth-form__sub">Completá los datos para acceder a Alethea.</p>
-    
+
     <form action={~p"/register"} method="post" id="registration-form">
       <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
       <div class="field">
@@ -58,7 +58,7 @@
           <.icon name="hero-exclamation-circle" class="size-3" />{msg}
         </p>
       </div>
-      
+
       <div class="field">
         <label for="reg-email" class="field__label">Correo electrónico</label>
         <input
@@ -78,7 +78,7 @@
           <.icon name="hero-exclamation-circle" class="size-3" />{msg}
         </p>
       </div>
-      
+
       <div class="field">
         <label for="reg-password" class="field__label">Contraseña</label>
         <input
@@ -99,10 +99,10 @@
         >
           <.icon name="hero-exclamation-circle" class="size-3" />{msg}
         </p>
-        
+
         <p :if={@changeset.errors[:password] == nil} class="field__hint">Mínimo 12 caracteres</p>
       </div>
-      
+
       <button
         type="submit"
         id="register-submit-btn"
@@ -111,11 +111,11 @@
         Crear cuenta
       </button>
     </form>
-    
+
     <p class="auth-form__foot">
       ¿Ya tenés cuenta? <.link navigate={~p"/login"}>Iniciá sesión</.link>
     </p>
-    
+
     <p class="auth-form__note">
       <.icon name="hero-lock-closed" class="size-3" /> Cifrado a nivel de paciente
     </p>
