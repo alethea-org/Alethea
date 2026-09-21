@@ -461,8 +461,22 @@ defmodule AletheaWeb.DashboardLiveTest do
 
     test "clicking the button regenerates the summary asynchronously and shows a success flash",
          %{conn: conn, patient: patient} do
+      test_pid = self()
+
+      # The chain blocks until the test releases it. Without the gate, the
+      # mocked chain returns instantly, so the async task can finish (and the
+      # button return to idle) before the in-flight `disabled` assertion runs —
+      # a race that made this test fail intermittently (GitHub #297).
       Alethea.AI.WeeklySummaryChainMock
       |> expect(:run, fn _summaries, _trends ->
+        send(test_pid, {:chain_started, self()})
+
+        receive do
+          :release -> :ok
+        after
+          5_000 -> :ok
+        end
+
         {:ok,
          %{
            summary_text: "Resumen recién generado bajo demanda.",
@@ -480,8 +494,10 @@ defmodule AletheaWeb.DashboardLiveTest do
       html = view |> element("#generate-weekly-summary-button") |> render_click()
 
       assert html =~ "Generando"
+      assert_receive {:chain_started, chain_pid}
       assert has_element?(view, "#generate-weekly-summary-button[disabled]")
 
+      send(chain_pid, :release)
       html = render_async(view)
 
       assert html =~ "Resumen semanal generado correctamente."
