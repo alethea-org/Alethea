@@ -17,7 +17,7 @@ Branch: `fix/dashboard-schedule-bot-287` (from origin/main @ bd76704)
 - [x] T3 — Socket-bound bot settings disclosure: `@bot_settings_open` assign, `toggle-bot-settings` event, `open={@bot_settings_open}` + summary id/hook in template.
 - [x] T4 — Structured message forms: `to_form` assigns (`:crisis_form`, `:welcome_form`), `<.input type="textarea">`, rebuild form assigns after save so the saved value re-renders.
 - [x] T5 — Tests: empty/invalid time → error flash, no crash; by_day relocation in week picker; settings stay open after submit; welcome/crisis feedback + persisted value.
-- [ ] T6 — Verification: focused `mix test test/alethea_web/live/dashboard_live_test.exs`, then full `mix precommit`; native review under RDD.
+- [x] T6 — Verification: focused `mix test test/alethea_web/live/dashboard_live_test.exs`, then full `mix precommit`; native review under RDD.
 
 ## Edit surfaces
 
@@ -43,7 +43,11 @@ Branch: `fix/dashboard-schedule-bot-287` (from origin/main @ bd76704)
 
 ## Review status
 
-- Native RDD review: pending after work-unit commit.
+- Native RDD review: approved and acknowledged; authority burned.
+- Lineage: `review-b5b3b3de7a016c84`.
+- Target: `sha256:be50b7a671ac948c8b2568baa746fe0892f36ce4317fa1dae8a50920ccc53065`.
+- Advisory: `R3-001` at `test/alethea_web/live/dashboard_live_test.exs:685` (`WARNING`, informational only); no correction opened.
+- Post-review assessment: native assess schema was incompatible (`unassessable`), but explicit `nativeReviewOutcome: closed` produced no independent-verifier requirement.
 
 ## Commits
 
