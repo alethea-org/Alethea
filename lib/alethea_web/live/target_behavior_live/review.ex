@@ -71,16 +71,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         {:ok, socket}
 
       {:error, :unauthorized} ->
-        {:ok,
-         socket
-         |> put_flash(:error, "No estás autorizado para ver esta línea de tiempo clínica.")
-         |> push_navigate(to: ~p"/patients")}
+        {:ok, redirect_to_patients(socket, :unauthorized)}
 
       {:error, :not_found} ->
-        {:ok,
-         socket
-         |> put_flash(:error, "La conducta objetivo no existe o no pertenece a este paciente.")
-         |> push_navigate(to: ~p"/patients")}
+        {:ok, redirect_to_patients(socket, :not_found)}
     end
   end
 
@@ -242,7 +236,14 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     end
   end
 
+  # The worker found the target behavior gone (deleted mid-generation, e.g. by
+  # retention): the page cannot be served any more, so leave (GitHub #289).
   @impl true
+  def handle_info({:ai_proposals_failed, reason}, socket)
+      when reason in [:target_behavior_deleted, :not_found] do
+    {:noreply, redirect_to_patients(socket, :not_found)}
+  end
+
   def handle_info({:ai_proposals_failed, _reason}, socket) do
     {:noreply,
      socket
@@ -274,9 +275,29 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         |> assign(:timeline_index, timeline_index(items))
         |> stream(:timeline, items, reset: true)
 
+      # Access or the target behavior itself is gone since mount: leave rather
+      # than keep the previous (now stale) stream on screen (GitHub #289).
+      {:error, :unauthorized} ->
+        redirect_to_patients(socket, :unauthorized)
+
+      {:error, :not_found} ->
+        redirect_to_patients(socket, :not_found)
+
       {:error, _reason} ->
         socket
     end
+  end
+
+  defp redirect_to_patients(socket, :unauthorized) do
+    socket
+    |> put_flash(:error, "No estás autorizado para ver esta línea de tiempo clínica.")
+    |> push_navigate(to: ~p"/patients")
+  end
+
+  defp redirect_to_patients(socket, :not_found) do
+    socket
+    |> put_flash(:error, "La conducta objetivo no existe o no pertenece a este paciente.")
+    |> push_navigate(to: ~p"/patients")
   end
 
   defp timeline_index(items), do: Map.new(items, &{&1.id, &1})

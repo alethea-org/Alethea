@@ -88,6 +88,13 @@ defmodule Alethea.ClinicalRecord.AIProposal do
     ])
     |> put_change(:status, "pending")
     |> validate_inclusion(:status, @statuses)
+    # The composite FK (GitHub #289) also fires when the target behavior was
+    # deleted after the caller read it (e.g. by retention while an AI
+    # generation was in flight). Declaring it turns that into a changeset
+    # error instead of a raised `Ecto.ConstraintError`.
+    |> foreign_key_constraint(:target_behavior_id,
+      name: :ai_proposals_target_behavior_patient_fkey
+    )
   end
 
   @doc """
