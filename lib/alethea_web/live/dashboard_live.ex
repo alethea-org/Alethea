@@ -39,6 +39,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:critical_patients, critical_patients)
       |> assign(:selected_patient, nil)
       |> assign(:weekly_summary, nil)
+      |> assign(:weekly_summary_status, :idle)
       |> assign(:session_summaries, [])
       |> assign(:emotion_rows, [])
       |> assign(:emotion_chart_data, [])
@@ -260,6 +261,24 @@ defmodule AletheaWeb.DashboardLive do
 
   def handle_event("dismiss_invite", _params, socket) do
     {:noreply, assign(socket, :invite_panel, nil)}
+  end
+
+  # On-demand weekly summary generation (#288). `selected_patient` was
+  # already authorized via `find_patient/2` when the briefing loaded, so
+  # it is reused as-is here — no client-supplied patient id is trusted.
+  # `AletheaJobs.WeeklyReportWorker.perform/1` is a plain reusable function
+  # (see `Alethea.Operator.DemoProcessor`), so it can run outside Oban.
+  def handle_event("generate_weekly_summary", _params, socket) do
+    patient = socket.assigns.selected_patient
+
+    socket =
+      socket
+      |> assign(:weekly_summary_status, :generating)
+      |> start_async(:generate_weekly_summary, fn ->
+        AletheaJobs.WeeklyReportWorker.perform(%Oban.Job{args: %{"patient_id" => patient.id}})
+      end)
+
+    {:noreply, socket}
   end
 
   defp decrypt_real_messages(patient, professional_kek) do
@@ -562,6 +581,37 @@ defmodule AletheaWeb.DashboardLive do
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
+  def handle_async(:generate_weekly_summary, {:ok, :ok}, socket) do
+    patient = socket.assigns.selected_patient
+    weekly_summary = Alethea.Clinical.latest_weekly_summary(patient.id)
+
+    socket =
+      socket
+      |> assign(:weekly_summary_status, :idle)
+      |> assign(:weekly_summary, weekly_summary)
+      |> put_flash(:info, "Resumen semanal generado correctamente.")
+
+    {:noreply, socket}
+  end
+
+  def handle_async(:generate_weekly_summary, {:ok, {:error, _reason}}, socket) do
+    socket =
+      socket
+      |> assign(:weekly_summary_status, :idle)
+      |> put_flash(:error, "No se pudo generar el resumen semanal.")
+
+    {:noreply, socket}
+  end
+
+  def handle_async(:generate_weekly_summary, {:exit, _reason}, socket) do
+    socket =
+      socket
+      |> assign(:weekly_summary_status, :idle)
+      |> put_flash(:error, "El asistente de IA no respondió. Intentá nuevamente en unos minutos.")
+
+    {:noreply, socket}
+  end
+
   defp upsert_critical_patient(patients, patient) do
     patients
     |> reject_patient(patient.id)
@@ -719,7 +769,7 @@ defmodule AletheaWeb.DashboardLive do
     ~H"""
     <div id={@id} class="pta-metric">
       <div class="pta-metric__label">{@label}</div>
-
+      
       <div class="pta-metric__value">{@value}</div>
     </div>
     """

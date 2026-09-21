@@ -4,6 +4,7 @@ defmodule AletheaWeb.DashboardLiveTest do
   import Phoenix.LiveViewTest
 
   import Ecto.Query
+  import Mox
   import Alethea.FoundationTestHelper
 
   alias Alethea.Accounts
@@ -430,6 +431,93 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       {:ok, summary} = Alethea.Clinical.save_summary(Map.merge(defaults, attrs))
       summary
+    end
+  end
+
+  describe "Generate weekly summary on demand (#288)" do
+    setup [:set_mox_global, :verify_on_exit!]
+
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      {:ok, patient} =
+        Accounts.create_patient(%{
+          alias: "Paciente Real",
+          professional_id: professional.id
+        })
+
+      %{patient: patient}
+    end
+
+    test "renders a button to generate the weekly summary on demand", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#generate-weekly-summary-button", "Generar ahora")
+    end
+
+    test "clicking the button regenerates the summary asynchronously and shows a success flash",
+         %{conn: conn, patient: patient} do
+      Alethea.AI.WeeklySummaryChainMock
+      |> expect(:run, fn _summaries, _trends ->
+        {:ok,
+         %{
+           summary_text: "Resumen recién generado bajo demanda.",
+           status_level: "Estable",
+           anxiety_score: 0.3,
+           social_score: 0.5,
+           emotional_range: %{},
+           crisis_events: 0,
+           session_count: 0
+         }}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      html = view |> element("#generate-weekly-summary-button") |> render_click()
+
+      assert html =~ "Generando"
+      assert has_element?(view, "#generate-weekly-summary-button[disabled]")
+
+      html = render_async(view)
+
+      assert html =~ "Resumen semanal generado correctamente."
+      assert html =~ "Resumen recién generado bajo demanda."
+      refute has_element?(view, "#generate-weekly-summary-button[disabled]")
+    end
+
+    test "shows an error flash when the AI chain fails to produce a report", %{
+      conn: conn,
+      patient: patient
+    } do
+      Alethea.AI.WeeklySummaryChainMock
+      |> expect(:run, fn _summaries, _trends -> {:error, :invalid_json} end)
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view |> element("#generate-weekly-summary-button") |> render_click()
+      html = render_async(view)
+
+      assert html =~ "No se pudo generar el resumen semanal."
+    end
+
+    test "shows a distinct error when the AI provider does not respond", %{
+      conn: conn,
+      patient: patient
+    } do
+      Alethea.AI.WeeklySummaryChainMock
+      |> expect(:run, fn _summaries, _trends -> raise "timeout talking to Ollama" end)
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view |> element("#generate-weekly-summary-button") |> render_click()
+      html = render_async(view)
+
+      assert html =~ "El asistente de IA no respondió"
+      refute html =~ "No se pudo generar el resumen semanal."
     end
   end
 
