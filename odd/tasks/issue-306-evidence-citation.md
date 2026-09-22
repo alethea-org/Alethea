@@ -35,7 +35,7 @@ Let an authorized clinician select a patient-scoped clinical note or message, co
 
 - Current branch: `feat/306-evidence-citation`.
 - Delivery strategy: one feature PR closing approved issue #306.
-- Review workload: approximately 1,147 changed lines across a cohesive domain + LiveView flow and its focused tests. The maintainer explicitly accepted `size:exception` on 2026-09-22 because a single PR preserves the end-to-end security boundary and both natural domain/UI slices remain above 400 lines when their tests stay with behavior.
+- Review workload: 1,402 changed lines across a cohesive domain + LiveView flow, focused tests, and this evidence document. The maintainer explicitly accepted `size:exception` on 2026-09-22 because a single PR preserves the end-to-end security boundary and both natural domain/UI slices remain above 400 lines when their tests stay with behavior.
 
 ## Tasks
 
@@ -50,7 +50,7 @@ Let an authorized clinician select a patient-scoped clinical note or message, co
     - `test/alethea/clinical_record_test.exs`
   - TDD evidence: RED — 5 expected undefined-API failures; GREEN — 79 focused context tests passed after triangulating exact errors, zero-side-effect rejections, unauthorized access, and clinical-note citation.
   - Independent verification: no blocking defect; confirmed patient scoping, exact substring validation, source-derived timestamps, key selection, atomic encryption/audit/outbox persistence, and inbound-first provenance. Compatibility API is now deprecated.
-  - Commit evidence: pending work-unit commit.
+  - Commit evidence: `206e49d` (`feat(clinical): cite workbench evidence`).
 
 - [x] **EVIDENCE-CITE-2 — Add the workbench selector and confirmation flow**
   - Status: completed; uncommitted pending explicit user authorization.
@@ -62,7 +62,7 @@ Let an authorized clinician select a patient-scoped clinical note or message, co
     - `test/alethea_web/live/target_behavior_live/review_test.exs`
     - `priv/static/assets/css/app.css`
   - TDD evidence: RED — 6 expected citation-flow failures; GREEN/refactor — 46 focused LiveView tests passed, including forged selection, mismatch, cancellation, and source removal before confirmation.
-  - Commit evidence: pending work-unit commit.
+  - Commit evidence: `206e49d` (`feat(clinical): cite workbench evidence`).
 
 - [x] **EVIDENCE-CITE-3 — Verify the complete issue behavior**
   - Status: completed.
@@ -94,4 +94,5 @@ Let an authorized clinician select a patient-scoped clinical note or message, co
 - Workbench selector, exact-excerpt confirmation, cancellation, immediate timeline refresh, AI guard update, and consolidated guidance implemented; 47 focused LiveView tests pass.
 - Final `mix precommit` passes with 1412 tests, 5 skipped; `git diff --check` passes.
 - The maintainer authorized commit, push, PR creation, issue approval, and a single-PR `size:exception` delivery.
-- Review workload warning accepted: the feature diff is approximately 1,147 changed lines plus two new files, exceeding the usual 400-line review budget; most growth is focused test coverage, and the security-sensitive domain/UI behavior is intentionally kept together for end-to-end review.
+- Review workload warning accepted: the feature commit contains 1,402 changed lines across six files, exceeding the usual 400-line review budget; most growth is focused test coverage, and the security-sensitive domain/UI behavior is intentionally kept together for end-to-end review.
+- Work-unit commit created: `206e49d` (`feat(clinical): cite workbench evidence`).
