@@ -445,7 +445,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         <:subtitle>
           Cronología de evidencia, observaciones y propuestas de IA para esta conducta objetivo.
         </:subtitle>
-        
+
         <:actions>
           <div class="review-ai-action">
             <button
@@ -469,7 +469,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           </div>
         </:actions>
       </.header>
-      
+
       <section
         class="clinical-workbench-header"
         id="clinical-workbench-header"
@@ -482,7 +482,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               {@patient_alias}
             </strong>
           </div>
-          
+
           <div class="clinical-workbench-header__behavior">
             <span class="clinical-workbench-header__label">Conducta objetivo</span>
             <span class="clinical-workbench-header__value" id="target-behavior-description">
@@ -490,44 +490,44 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </span>
           </div>
         </div>
-        
+
         <div class="stat-strip" id="review-stat-strip">
           <div class="stat-tile" id="stat-evidence">
             <div class="stat-tile__label">Evidencias citadas</div>
-            
+
             <div class="stat-tile__value">{@evidence_count}</div>
-            
+
             <div class="stat-tile__desc">Citas de consultas</div>
           </div>
-          
+
           <div class="stat-tile" id="stat-observations">
             <div class="stat-tile__label">Observaciones</div>
-            
+
             <div class="stat-tile__value">{@observation_count}</div>
-            
+
             <div class="stat-tile__desc">Notas del profesional</div>
           </div>
-          
+
           <div class="stat-tile" id="stat-proposals">
             <div class="stat-tile__label">Propuestas IA</div>
-            
+
             <div class="stat-tile__value">{@proposal_count}</div>
-            
+
             <div class="stat-tile__desc">Hipótesis sugeridas</div>
           </div>
-          
+
           <div class="stat-tile" id="stat-draft">
             <div class="stat-tile__label">Estado del borrador</div>
-            
+
             <div class="stat-tile__value stat-tile__value--status" id="draft-status-label">
               {draft_status_label(@draft_status)}
             </div>
-            
+
             <div class="stat-tile__desc">Análisis funcional</div>
           </div>
         </div>
       </section>
-      
+
       <div
         :if={@evidence_count == 0}
         id="empty-evidence"
@@ -535,12 +535,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       >
         <.icon name="hero-magnifying-glass" class="empty-state__icon" />
         <p class="empty-state__title">Sin evidencia citada</p>
-        
+
         <p class="empty-state__text">
           Aún no se han citado fragmentos de notas ni mensajes para esta conducta. Cita evidencia desde las consultas clínicas para fundamentar el análisis funcional.
         </p>
       </div>
-      
+
       <div
         :if={@proposal_count == 0}
         id="empty-proposals"
@@ -548,7 +548,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       >
         <.icon name="hero-presentation-chart-line" class="empty-state__icon" />
         <p class="empty-state__title">Sin propuestas de IA</p>
-        
+
         <p class="empty-state__text">
           {if @has_sufficient_evidence,
             do: "Hay evidencia disponible para solicitar sugerencias de patrones.",
@@ -556,7 +556,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               "No se han generado propuestas. Agrega evidencia citada para habilitar sugerencias de patrones."}
         </p>
       </div>
-      
+
       <ol id="review-timeline" phx-update="stream" class="review-timeline">
         <li
           :for={{dom_id, item} <- @streams.timeline}
@@ -576,9 +576,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               Propuesta de IA (provisional) · {status_label(item.status)}
             </span>
           </div>
-          
+
           <p :if={item.kind != :legally_deleted} class="review-item__text">{item.text}</p>
-          
+
           <p
             :if={item.kind == :legally_deleted}
             class="review-item__text review-item__text--tombstone"
@@ -586,11 +586,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             <.icon name="hero-lock-closed" class="size-3" />
             Eliminado legalmente el {format_datetime(item.occurred_at)}
           </p>
-          
+
           <div :if={item.kind == :consultation_evidence} class="review-item__source">
             <.icon name="hero-magnifying-glass" class="size-3" /> {source_label(item.source)}
           </div>
-          
+
           <div
             :if={item.kind == :ai_proposal and item.status in ["pending", "edited"]}
             class="review-item__actions"
@@ -622,7 +622,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               Descartar
             </button>
           </div>
-          
+
           <.form
             :if={@editing_proposal_id == item.id}
             for={to_form(%{"text" => item.text}, as: "proposal")}
@@ -644,15 +644,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           </.form>
         </li>
       </ol>
-      
+
       <div :if={map_size(@timeline_index) == 0} class="empty-state">
         <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
         <p class="empty-state__title">Todavía no hay entradas en esta línea de tiempo</p>
       </div>
-      
+
       <div class="review-observation">
         <h2 class="pt-h2">Agregar observación clínica</h2>
-        
+
         <div
           :if={@observation_count == 0}
           id="empty-observations"
@@ -660,12 +660,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         >
           <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
           <p class="empty-state__title">Sin observaciones del clínico</p>
-          
+
           <p class="empty-state__text">
             No has registrado observaciones directas para esta conducta. Puedes agregar tu primera observación en el formulario a continuación.
           </p>
         </div>
-        
+
         <.form for={@observation_form} id="observation-form" phx-submit="add_observation">
           <.input field={@observation_form[:body]} type="textarea" label="Observación (sin cita)" />
           <div class="form-actions">
@@ -675,15 +675,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           </div>
         </.form>
       </div>
-      
+
       <div class="review-draft">
         <h2 class="pt-h2">Borrador de análisis funcional</h2>
-        
+
         <div :if={@draft_tombstoned_at} id="draft-tombstone" class="tombstone-note">
           <.icon name="hero-lock-closed" class="size-3" />
           Eliminado legalmente el {format_datetime(@draft_tombstoned_at)}
         </div>
-        
+
         <div
           :if={@draft_status == :empty and !@draft_tombstoned_at}
           id="empty-draft"
@@ -691,12 +691,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         >
           <.icon name="hero-information-circle" class="empty-state__icon" />
           <p class="empty-state__title">Sin borrador de análisis funcional</p>
-          
+
           <p class="empty-state__text">
             El borrador está vacío. Puedes redactar directamente tu hipótesis o aceptar propuestas sugeridas para construirlas aquí.
           </p>
         </div>
-        
+
         <.form :if={!@draft_tombstoned_at} for={@draft_form} id="draft-form" phx-submit="save_draft">
           <.input
             field={@draft_form[:body]}

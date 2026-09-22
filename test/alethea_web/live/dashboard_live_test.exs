@@ -687,6 +687,21 @@ defmodule AletheaWeb.DashboardLiveTest do
       refute has_element?(view, "#target-behaviors", "Conducta exclusiva de otro paciente")
     end
 
+    test "offers target behavior creation beside clinical notes for the selected patient", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(
+               view,
+               "#patient-record-actions #new-target-behavior-link[href='/patients/#{patient.id}/target_behaviors/new']",
+               "Nueva conducta objetivo"
+             )
+
+      assert has_element?(view, "#patient-record-actions #patient-clinical-notes-link")
+    end
+
     test "resets the behavior stream when patient selection changes", %{
       conn: conn,
       professional: professional,

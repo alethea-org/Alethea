@@ -121,7 +121,7 @@
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
       <h2 class="pt-h2">Briefing · {@selected_patient.alias}</h2>
 
-      <div style="display:flex; align-items:center; gap:8px;">
+      <div id="patient-record-actions" style="display:flex; align-items:center; gap:8px;">
         <span class={"pt-pill " <> mood_pill(@mood_signal)}>{@mood_signal.label}</span>
         <.link
           id="patient-clinical-notes-link"
@@ -129,6 +129,13 @@
           class="button-secondary button-secondary--sm"
         >
           Notas clínicas
+        </.link>
+        <.link
+          id="new-target-behavior-link"
+          navigate={~p"/patients/#{@selected_patient.id}/target_behaviors/new"}
+          class="button-primary button-primary--sm"
+        >
+          Nueva conducta objetivo
         </.link>
       </div>
     </div>

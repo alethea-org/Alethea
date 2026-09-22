@@ -119,6 +119,12 @@ defmodule AletheaWeb.Router do
       live("/patients/new", PatientLive.Index, :new)
 
       live(
+        "/patients/:patient_id/target_behaviors/new",
+        TargetBehaviorLive.New,
+        :new
+      )
+
+      live(
         "/patients/:patient_id/target_behaviors/:id/review",
         TargetBehaviorLive.Review,
         :show
