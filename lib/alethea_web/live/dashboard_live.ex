@@ -4,6 +4,7 @@ defmodule AletheaWeb.DashboardLive do
   require Logger
   alias Alethea.Accounts
   alias Alethea.Clinical.{MockData, Message}
+  alias Alethea.ClinicalRecord
   alias AletheaWeb.DashboardLive.Components.EmotionChart
   alias Alethea.Encryption.PatientVault
   alias AletheaWeb.DashboardLive.Components.NotificationCenter
@@ -44,6 +45,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:emotion_rows, [])
       |> assign(:emotion_chart_data, [])
       |> assign(:mood_signal, default_mood_signal())
+      |> assign(:target_behaviors_empty?, true)
       |> assign(
         :today_day_of_week,
         DateTime.utc_now() |> DateTime.to_date() |> Date.day_of_week()
@@ -85,6 +87,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:invited_ids, MapSet.new())
       |> assign(:invite_panel, nil)
       |> stream(:decrypted_messages, [])
+      |> stream(:target_behaviors, [], dom_id: &"target-behavior-#{&1.id}")
 
     {:ok, socket}
   end
@@ -99,7 +102,9 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:by_day, by_day(socket.assigns.patients))
     |> assign(:selected_patient, nil)
     |> assign(:chat_decrypted, false)
+    |> assign(:target_behaviors_empty?, true)
     |> stream(:decrypted_messages, [], reset: true)
+    |> stream(:target_behaviors, [], reset: true)
   end
 
   defp apply_action(socket, :show, %{"id" => id} = params) do
@@ -122,6 +127,7 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:chat_decrypted, false)
       |> stream(:decrypted_messages, [], reset: true)
       |> load_patient_details(patient)
+      |> load_target_behaviors(patient)
     else
       socket
       |> put_flash(:error, "Paciente no encontrado o no autorizado.")
@@ -551,6 +557,23 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
   end
 
+  defp load_target_behaviors(socket, patient) do
+    target_behaviors = target_behaviors_for(socket, patient)
+
+    socket
+    |> assign(:target_behaviors_empty?, target_behaviors == [])
+    |> stream(:target_behaviors, target_behaviors, reset: true)
+  end
+
+  defp target_behaviors_for(%{assigns: %{use_mock_data: true}}, _patient), do: []
+
+  defp target_behaviors_for(socket, patient) do
+    case ClinicalRecord.list_target_behaviors(socket.assigns.current_professional, patient.id) do
+      {:ok, target_behaviors} -> target_behaviors
+      {:error, _reason} -> []
+    end
+  end
+
   def handle_info(
         {:crisis_detected, %{patient_id: patient_id, level: level} = payload},
         socket
@@ -771,6 +794,10 @@ defmodule AletheaWeb.DashboardLive do
   defp default_mood_signal do
     %{label: "Sin datos"}
   end
+
+  defp functional_analysis_status_label(:saved), do: "Guardado"
+  defp functional_analysis_status_label(:legally_deleted), do: "Eliminado legalmente"
+  defp functional_analysis_status_label(:not_started), do: "No iniciado"
 
   defp format_session_time(%Time{} = time) do
     Calendar.strftime(time, "%H:%M")

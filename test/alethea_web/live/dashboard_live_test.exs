@@ -9,6 +9,8 @@ defmodule AletheaWeb.DashboardLiveTest do
 
   alias Alethea.Accounts
   alias Alethea.Clinical.Trend
+  alias Alethea.ClinicalRecord
+  alias Alethea.ClinicalRecord.Retention
   alias Alethea.Foundation.Accounts.Patient, as: FoundationPatient
   alias Alethea.Foundation.Accounts.PatientAuthCode
   alias Alethea.Jobs.TelegramOutboundWorker
@@ -588,6 +590,144 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert html =~ "El asistente de IA no respondió"
       refute html =~ "No se pudo generar el resumen semanal."
+    end
+  end
+
+  describe "target behaviors (real mode)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional, %{alias: "Paciente con conductas"})
+      other_patient = legacy_patient_fixture(professional, %{alias: "Paciente sin conductas"})
+
+      %{patient: patient, other_patient: other_patient}
+    end
+
+    test "lists only the selected patient's behaviors with status summaries and exact review links",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           other_patient: other_patient
+         } do
+      {:ok, not_started} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Evita iniciar conversaciones en sesión"
+        )
+
+      {:ok, saved} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Interrumpe actividades ante consignas nuevas"
+        )
+
+      {:ok, deleted} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Se retira cuando aumenta la demanda"
+        )
+
+      {:ok, _other_behavior} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          other_patient.id,
+          "Conducta exclusiva de otro paciente"
+        )
+
+      {:ok, _saved_draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          saved.id,
+          "Borrador guardado"
+        )
+
+      {:ok, deleted_draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          deleted.id,
+          "Borrador que será eliminado"
+        )
+
+      {:ok, _tombstone} =
+        Retention.legally_delete_record(
+          {"functional_analysis_draft", deleted_draft.id},
+          actor: professional,
+          trigger: "manual"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#target-behaviors-section", "Conductas objetivo")
+
+      assert has_element?(
+               view,
+               "#target-behavior-#{not_started.id}",
+               "Evita iniciar conversaciones en sesión"
+             )
+
+      assert has_element?(view, "#target-behavior-status-#{not_started.id}", "No iniciado")
+      assert has_element?(view, "#target-behavior-status-#{saved.id}", "Guardado")
+      assert has_element?(view, "#target-behavior-status-#{deleted.id}", "Eliminado legalmente")
+
+      for behavior <- [not_started, saved, deleted] do
+        assert has_element?(
+                 view,
+                 "#target-behavior-review-link-#{behavior.id}[href='/patients/#{patient.id}/target_behaviors/#{behavior.id}/review']",
+                 "Revisar análisis funcional"
+               )
+      end
+
+      refute has_element?(view, "#target-behaviors", "Conducta exclusiva de otro paciente")
+    end
+
+    test "resets the behavior stream when patient selection changes", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      other_patient: other_patient
+    } do
+      {:ok, behavior} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Conducta visible solo en el primer paciente"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+      assert has_element?(view, "#target-behavior-#{behavior.id}")
+
+      render_patch(view, ~p"/dashboard/patients/#{other_patient.id}")
+
+      refute has_element?(view, "#target-behavior-#{behavior.id}")
+
+      assert has_element?(
+               view,
+               "#target-behaviors-empty",
+               "Las conductas objetivo aparecen cuando se crean desde el registro clínico"
+             )
+    end
+  end
+
+  describe "target behaviors (mock mode)" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "renders the explicit empty collection state", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      assert has_element?(view, "#target-behaviors-section", "Conductas objetivo")
+      assert has_element?(view, "#target-behaviors-empty")
+      refute has_element?(view, "#target-behaviors > [id^='target-behavior-']")
     end
   end
 
