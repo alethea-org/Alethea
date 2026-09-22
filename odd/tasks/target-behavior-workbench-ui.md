@@ -61,20 +61,26 @@ Replace the long vertical review page with a responsive two-column clinical work
   - TDD evidence: RED — 5 undefined structured-API failures; GREEN — 84 focused context tests passed.
   - Independent verification: no functional defects; confirmed authorization/target ownership, version-2 encryption, exact canonical ciphertext plaintext, atomic audit/outbox reuse, tombstone behavior, legacy compatibility, and previous-notes-only fallback. Pre-existing untracked package files remain unrelated and untouched.
 
-- [ ] **WORKBENCH-UI-3 — Build responsive two-column workbench**
-  - Status: pending.
+- [x] **WORKBENCH-UI-3 — Build responsive two-column workbench**
+  - Status: completed; pending work-unit commit.
   - Route: delegated writer; strict TDD.
   - Outcome: compact patient/status header, left tabbed inputs, right E-O-R-C editor, responsive fallback, compact observation entry, and readable centered cards.
+  - TDD evidence: initial partial implementation produced 11 stale-test failures; migrated behavior tests, added tab/toggle accessibility coverage, and completed roving browser focus through a colocated hook; focused suite now passes 54 tests.
+  - Independent verification: confirmed stream-safe tab filtering, responsive two-column/single-column CSS, all 11 structured fields, centered bounded cards, citation/proposal/tombstone preservation, full tab ARIA semantics, and observation toggle. The source feed remains deliberately unchanged for WORKBENCH-UI-4.
 
-- [ ] **WORKBENCH-UI-4 — Replace source buttons with full-content feed cards**
-  - Status: pending.
+- [x] **WORKBENCH-UI-4 — Replace source buttons with full-content feed cards**
+  - Status: completed; pending work-unit commit.
   - Route: delegated writer; strict TDD.
   - Outcome: opening citation shows complete source content, metadata, direction, and provenance in domain order inside an internal scroll area while retaining exact-excerpt confirmation.
+  - TDD evidence: RED lacked `#evidence-source-feed`; GREEN focused LiveView suite passed 54 tests.
+  - Verification evidence: complete content, formatted dates, inbound/outbound/note variants, domain ordering, absence of load-more controls, and exact-excerpt flow are covered; the feed uses bounded internal scrolling and responsive cards.
 
-- [ ] **WORKBENCH-UI-5 — Add pending proposal inbox and previous notes**
-  - Status: pending.
+- [x] **WORKBENCH-UI-5 — Add pending proposal inbox and previous notes**
+  - Status: completed; pending work-unit commit.
   - Route: delegated writer; strict TDD.
   - Outcome: proposals never auto-populate E-O-R-C; legacy drafts remain visible as previous notes for manual use.
+  - TDD evidence: RED — 7 failures for missing inbox/previous-notes UI and legacy merge expectations; GREEN — 58 focused LiveView tests passed.
+  - Independent verification: confirmed status-only proposal acceptance leaves structured and legacy drafts byte-identical, creates no clinical note, and keeps accepted proposals visible without pending actions; legacy and structured previous notes remount visibly and remain preserved through saves.
 
 - [ ] **WORKBENCH-UI-6 — Verify the redesigned workbench**
   - Status: pending.
