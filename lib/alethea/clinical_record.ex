@@ -28,6 +28,7 @@ defmodule Alethea.ClinicalRecord do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
+    EvidenceSource,
     FunctionalAnalysisDraft,
     Outbox,
     TargetBehavior
@@ -346,11 +347,74 @@ defmodule Alethea.ClinicalRecord do
   defp dek_for(%{encryption_version: 2}, keyring), do: keyring.clinical_record_dek
 
   @doc """
+  Lists the complete, decrypted clinical notes and journaling messages that an
+  authorized professional may cite for a patient. The read-only
+  `EvidenceSource` adapter owns all cross-context source reads and prioritizes
+  inbound messages while retaining direction and provenance metadata.
+  """
+  @spec list_evidence_sources(Professional.t(), Ecto.UUID.t()) ::
+          {:ok, [EvidenceSource.t()]} | {:error, :unauthorized | term()}
+  def list_evidence_sources(%Professional{} = professional, patient_id) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      EvidenceSource.list(patient.id, keyring)
+    end)
+  end
+
+  @doc """
+  Creates immutable consultation evidence from a trusted patient-owned source.
+
+  The client supplies only source identity and an excerpt candidate. This
+  function re-fetches and decrypts the authoritative source under the
+  authorized patient, requires the candidate to occur exactly in its plaintext,
+  and derives `occurred_at` from the source before using the existing encrypted
+  evidence, audit, and outbox transaction.
+  """
+  @spec cite_evidence_source(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t(), %{
+          required(:source_kind) => String.t(),
+          required(:source_id) => Ecto.UUID.t(),
+          required(:excerpt) => String.t()
+        }) ::
+          {:ok, ConsultationEvidence.t()}
+          | {:error,
+             :unauthorized
+             | :not_found
+             | :unsupported_source
+             | :excerpt_not_found
+             | Ecto.Changeset.t()
+             | term()}
+  def cite_evidence_source(%Professional{} = professional, patient_id, target_behavior_id, %{
+        source_kind: source_kind,
+        source_id: source_id,
+        excerpt: excerpt
+      }) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+      with {:ok, source} <-
+             EvidenceSource.fetch(source_kind, source_id, patient.id, keyring),
+           :ok <- exact_excerpt(source.content, excerpt) do
+        insert_consultation_evidence(
+          professional,
+          patient,
+          target_behavior_id,
+          keyring,
+          Atom.to_string(source.kind),
+          source.id,
+          excerpt,
+          source.occurred_at
+        )
+      end
+    end)
+  end
+
+  @doc """
   Cites a source-derived fact (a `clinical_note` or a `message`) onto the
   review timeline. Copies and encrypts the exact `excerpt` under the
   patient's DEK at citation time (design A3) — `attrs` carries `source_kind`,
   `source_id` (untyped, no FK — design A2), `excerpt`, and `occurred_at`.
+
+  This compatibility API trusts its caller. New UI paths must use
+  `cite_evidence_source/4`, which validates source ownership and plaintext.
   """
+  @deprecated "Compatibility only; use cite_evidence_source/4 to validate source ownership and plaintext"
   @spec add_consultation_evidence(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t(), %{
           required(:source_kind) => String.t(),
           required(:source_id) => Ecto.UUID.t(),
@@ -366,37 +430,66 @@ defmodule Alethea.ClinicalRecord do
         occurred_at: occurred_at
       }) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
-      with {:ok, ciphertext} <- PatientVault.encrypt(excerpt, keyring.clinical_record_dek) do
-        Ecto.Multi.new()
-        |> Ecto.Multi.insert(
-          :record,
-          ConsultationEvidence.changeset(%ConsultationEvidence{}, %{
-            source_kind: source_kind,
-            source_id: source_id,
-            encrypted_excerpt: ciphertext,
-            encryption_version: 2,
-            occurred_at: occurred_at,
-            patient_id: patient.id,
-            professional_id: professional.id,
-            target_behavior_id: target_behavior_id
-          })
-        )
-        |> Ecto.Multi.insert(:audit, fn %{record: record} ->
-          Audit.changeset(%Audit{
-            professional_id: professional.id,
-            action: "consultation_evidence_created",
-            resource_type: "consultation_evidence",
-            resource_id: record.id,
-            outcome: "success"
-          })
-        end)
-        |> Oban.insert(:outbox_event, fn %{record: record} ->
-          Outbox.event("consultation_evidence_created", record)
-        end)
-        |> Repo.transaction()
-        |> finalize_record_multi()
-      end
+      insert_consultation_evidence(
+        professional,
+        patient,
+        target_behavior_id,
+        keyring,
+        source_kind,
+        source_id,
+        excerpt,
+        occurred_at
+      )
     end)
+  end
+
+  defp exact_excerpt(plaintext, excerpt)
+       when is_binary(excerpt) and byte_size(excerpt) > 0 do
+    if String.contains?(plaintext, excerpt), do: :ok, else: {:error, :excerpt_not_found}
+  end
+
+  defp exact_excerpt(_plaintext, _excerpt), do: {:error, :excerpt_not_found}
+
+  defp insert_consultation_evidence(
+         professional,
+         patient,
+         target_behavior_id,
+         keyring,
+         source_kind,
+         source_id,
+         excerpt,
+         occurred_at
+       ) do
+    with {:ok, ciphertext} <- PatientVault.encrypt(excerpt, keyring.clinical_record_dek) do
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(
+        :record,
+        ConsultationEvidence.changeset(%ConsultationEvidence{}, %{
+          source_kind: source_kind,
+          source_id: source_id,
+          encrypted_excerpt: ciphertext,
+          encryption_version: 2,
+          occurred_at: occurred_at,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior_id
+        })
+      )
+      |> Ecto.Multi.insert(:audit, fn %{record: record} ->
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "consultation_evidence_created",
+          resource_type: "consultation_evidence",
+          resource_id: record.id,
+          outcome: "success"
+        })
+      end)
+      |> Oban.insert(:outbox_event, fn %{record: record} ->
+        Outbox.event("consultation_evidence_created", record)
+      end)
+      |> Repo.transaction()
+      |> finalize_record_multi()
+    end
   end
 
   @doc """

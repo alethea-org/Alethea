@@ -80,6 +80,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:draft_status, draft_status)
           |> assign(:generation_pending, false)
           |> assign(:editing_proposal_id, nil)
+          |> assign(:citation_step, nil)
+          |> assign(:evidence_sources, [])
+          |> assign(:selected_evidence_source, nil)
+          |> assign(:citation_excerpt, nil)
+          |> assign(:citation_error, nil)
+          |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
           |> assign(:timeline_index, timeline_index(items))
           |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
           |> assign(:draft_form, to_form(%{"body" => draft_body}, as: "draft"))
@@ -118,6 +124,130 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo guardar la observación.")}
     end
+  end
+
+  @impl true
+  def handle_event("open_evidence_citation", _params, socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+
+    case ClinicalRecord.list_evidence_sources(professional, patient_id) do
+      {:ok, sources} ->
+        {:noreply,
+         socket
+         |> reset_citation()
+         |> assign(:citation_step, :select)
+         |> assign(:evidence_sources, sources)}
+
+      {:error, _reason} ->
+        {:noreply,
+         socket
+         |> reset_citation()
+         |> assign(:citation_step, :select)
+         |> assign(:citation_error, "No se pudieron cargar las fuentes de evidencia.")}
+    end
+  end
+
+  @impl true
+  def handle_event("select_evidence_source", %{"id" => id, "kind" => kind}, socket) do
+    source =
+      Enum.find(socket.assigns.evidence_sources, fn source ->
+        source.id == id and Atom.to_string(source.kind) == kind
+      end)
+
+    if source do
+      {:noreply,
+       socket
+       |> assign(:citation_step, :excerpt)
+       |> assign(:selected_evidence_source, source)
+       |> assign(:citation_excerpt, nil)
+       |> assign(:citation_error, nil)
+       |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))}
+    else
+      {:noreply,
+       assign(
+         socket,
+         :citation_error,
+         "La fuente seleccionada no está disponible para este paciente."
+       )}
+    end
+  end
+
+  @impl true
+  def handle_event("prepare_evidence_citation", %{"citation" => %{"excerpt" => excerpt}}, socket) do
+    source = socket.assigns.selected_evidence_source
+
+    cond do
+      is_nil(source) ->
+        {:noreply, assign(socket, :citation_error, "Seleccioná una fuente antes de continuar.")}
+
+      excerpt == "" or String.trim(excerpt) == "" ->
+        {:noreply,
+         socket
+         |> assign(:citation_form, to_form(%{"excerpt" => excerpt}, as: "citation"))
+         |> assign(:citation_error, "Ingresá el fragmento exacto que querés citar.")}
+
+      not String.contains?(source.content, excerpt) ->
+        {:noreply,
+         socket
+         |> assign(:citation_form, to_form(%{"excerpt" => excerpt}, as: "citation"))
+         |> assign(:citation_error, "El fragmento debe coincidir exactamente con la fuente.")}
+
+      true ->
+        {:noreply,
+         socket
+         |> assign(:citation_step, :confirm)
+         |> assign(:citation_excerpt, excerpt)
+         |> assign(:citation_error, nil)
+         |> assign(:citation_form, to_form(%{"excerpt" => excerpt}, as: "citation"))}
+    end
+  end
+
+  @impl true
+  def handle_event("confirm_evidence_citation", _params, socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+    source = socket.assigns.selected_evidence_source
+    excerpt = socket.assigns.citation_excerpt
+
+    result =
+      if source && is_binary(excerpt) do
+        ClinicalRecord.cite_evidence_source(
+          professional,
+          patient_id,
+          target_behavior_id,
+          %{
+            source_kind: Atom.to_string(source.kind),
+            source_id: source.id,
+            excerpt: excerpt
+          }
+        )
+      else
+        {:error, :invalid_citation_state}
+      end
+
+    case result do
+      {:ok, _evidence} ->
+        {:noreply,
+         socket
+         |> reset_citation()
+         |> load_timeline()
+         |> put_flash(:info, "Evidencia citada correctamente.")}
+
+      {:error, _reason} ->
+        {:noreply,
+         assign(
+           socket,
+           :citation_error,
+           "No se pudo citar la evidencia. Revisá el fragmento y volvé a intentar."
+         )}
+    end
+  end
+
+  @impl true
+  def handle_event("cancel_evidence_citation", _params, socket) do
+    {:noreply, reset_citation(socket)}
   end
 
   @impl true
@@ -361,6 +491,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     end
   end
 
+  defp reset_citation(socket) do
+    socket
+    |> assign(:citation_step, nil)
+    |> assign(:evidence_sources, [])
+    |> assign(:selected_evidence_source, nil)
+    |> assign(:citation_excerpt, nil)
+    |> assign(:citation_error, nil)
+    |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
+  end
+
   defp redirect_to_patients(socket, :unauthorized) do
     socket
     |> put_flash(:error, "No estás autorizado para ver esta línea de tiempo clínica.")
@@ -432,6 +572,30 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp source_label(_), do: "Fuente no disponible"
 
+  defp evidence_source_type_label(%{kind: :clinical_note}), do: "Nota clínica"
+
+  defp evidence_source_type_label(%{kind: :message, direction: "inbound"}),
+    do: "Mensaje entrante"
+
+  defp evidence_source_type_label(%{kind: :message, direction: "outbound"}),
+    do: "Mensaje saliente"
+
+  defp evidence_source_type_label(%{kind: :message}), do: "Mensaje"
+
+  defp evidence_source_provenance(%{kind: :message, behavior_type: "spontaneous"}),
+    do: "espontáneo"
+
+  defp evidence_source_provenance(%{kind: :message, behavior_type: "elicited"}),
+    do: "provocado"
+
+  defp evidence_source_provenance(%{kind: :message, behavior_type: "crisis_bypass"}),
+    do: "respuesta de crisis"
+
+  defp evidence_source_provenance(%{kind: :message, behavior_type: behavior_type}),
+    do: behavior_type || "sin clasificación"
+
+  defp evidence_source_provenance(%{kind: :clinical_note}), do: "registro profesional"
+
   defp format_datetime(%DateTime{} = datetime) do
     Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
   end
@@ -447,13 +611,30 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         </:subtitle>
 
         <:actions>
+          <button
+            type="button"
+            id="cite-evidence-header"
+            phx-click="open_evidence_citation"
+            class={[
+              "button-primary--sm",
+              if(@has_sufficient_evidence, do: "button-secondary", else: "button-primary")
+            ]}
+          >
+            <.icon name="hero-magnifying-glass" class="size-4" /> Citar evidencia
+          </button>
           <div class="review-ai-action">
             <button
               type="button"
               id="suggest-patterns"
               phx-click="suggest_patterns"
               disabled={@generation_pending or !@has_sufficient_evidence}
-              class="button-secondary button-secondary--sm"
+              class={[
+                "button-secondary--sm",
+                if(@has_sufficient_evidence and @proposal_count == 0,
+                  do: "button-primary",
+                  else: "button-secondary"
+                )
+              ]}
             >
               <.icon name="hero-presentation-chart-line" class="size-4" style="margin-right:6px;" /> {if @generation_pending,
                 do: "Generando patrones…",
@@ -529,33 +710,149 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       </section>
 
       <div
-        :if={@evidence_count == 0}
-        id="empty-evidence"
+        :if={@evidence_count == 0 or @proposal_count == 0}
+        id="evidence-guide"
         class="empty-state empty-state--compact review-empty-banner"
       >
-        <.icon name="hero-magnifying-glass" class="empty-state__icon" />
-        <p class="empty-state__title">Sin evidencia citada</p>
-
-        <p class="empty-state__text">
-          Aún no se han citado fragmentos de notas ni mensajes para esta conducta. Cita evidencia desde las consultas clínicas para fundamentar el análisis funcional.
-        </p>
+        <%= if @evidence_count == 0 do %>
+          <.icon name="hero-magnifying-glass" class="empty-state__icon" />
+          <p class="empty-state__title">Fundamentá el análisis con evidencia clínica</p>
+          <p class="empty-state__text">
+            Citá un fragmento exacto de una nota o mensaje del paciente. Después podrás solicitar sugerencias de patrones sin ocultar ni reemplazar tu borrador clínico.
+          </p>
+          <button
+            type="button"
+            id="cite-evidence-guide"
+            phx-click="open_evidence_citation"
+            class="button-primary button-primary--sm"
+          >
+            <.icon name="hero-magnifying-glass" class="size-4" /> Citar evidencia
+          </button>
+        <% else %>
+          <.icon name="hero-presentation-chart-line" class="empty-state__icon" />
+          <p class="empty-state__title">Convertí la evidencia en hipótesis de trabajo</p>
+          <p class="empty-state__text">
+            Ya hay evidencia citada. Solicitá sugerencias de patrones para revisarlas antes de incorporarlas al borrador clínico.
+          </p>
+          <button
+            type="button"
+            id="suggest-patterns-guide"
+            phx-click="suggest_patterns"
+            disabled={@generation_pending}
+            class="button-primary button-primary--sm"
+          >
+            <.icon name="hero-presentation-chart-line" class="size-4" /> {if @generation_pending,
+              do: "Generando patrones…",
+              else: "Sugerir patrones (IA)"}
+          </button>
+        <% end %>
       </div>
 
-      <div
-        :if={@proposal_count == 0}
-        id="empty-proposals"
-        class="empty-state empty-state--compact review-empty-banner"
-      >
-        <.icon name="hero-presentation-chart-line" class="empty-state__icon" />
-        <p class="empty-state__title">Sin propuestas de IA</p>
+      <section :if={@citation_step} id="evidence-citation-flow" class="review-observation">
+        <div class="review-item__meta">
+          <h2 class="pt-h2">Citar evidencia</h2>
+          <span class="badge badge--uncited">
+            Paso {if @citation_step == :select,
+              do: "1",
+              else: if(@citation_step == :excerpt, do: "2", else: "3")} de 3
+          </span>
+        </div>
 
-        <p class="empty-state__text">
-          {if @has_sufficient_evidence,
-            do: "Hay evidencia disponible para solicitar sugerencias de patrones.",
-            else:
-              "No se han generado propuestas. Agrega evidencia citada para habilitar sugerencias de patrones."}
+        <p :if={@citation_error} id="evidence-citation-error" class="field__error">
+          {@citation_error}
         </p>
-      </div>
+
+        <div :if={@citation_step == :select} id="evidence-source-list">
+          <p :if={@evidence_sources == []} class="pt-muted">
+            No hay notas ni mensajes disponibles para citar.
+          </p>
+          <button
+            :for={source <- @evidence_sources}
+            type="button"
+            id={"evidence-source-#{source.id}"}
+            phx-click="select_evidence_source"
+            phx-value-id={source.id}
+            phx-value-kind={source.kind}
+            class="review-item button-secondary"
+          >
+            <strong>{evidence_source_type_label(source)}</strong>
+            <span>{format_datetime(source.occurred_at)}</span>
+            <span>{evidence_source_provenance(source)}</span>
+          </button>
+        </div>
+
+        <div :if={@citation_step == :excerpt and @selected_evidence_source}>
+          <div class="review-item__meta">
+            <strong>{evidence_source_type_label(@selected_evidence_source)}</strong>
+            <span>{format_datetime(@selected_evidence_source.occurred_at)}</span>
+            <span>{evidence_source_provenance(@selected_evidence_source)}</span>
+          </div>
+          <p id="evidence-source-content" class="review-item__text">
+            {@selected_evidence_source.content}
+          </p>
+          <.form
+            for={@citation_form}
+            id="evidence-excerpt-form"
+            phx-submit="prepare_evidence_citation"
+          >
+            <.input
+              field={@citation_form[:excerpt]}
+              type="textarea"
+              label="Fragmento exacto"
+              placeholder="Copiá un fragmento exacto de la fuente"
+            />
+            <div class="form-actions">
+              <button type="submit" class="button-primary button-primary--sm">
+                Revisar cita
+              </button>
+            </div>
+          </.form>
+        </div>
+
+        <div
+          :if={@citation_step == :confirm and @selected_evidence_source}
+          id="evidence-citation-confirmation"
+        >
+          <p><strong>Verificá la cita antes de guardarla.</strong></p>
+          <dl>
+            <dt>Fuente</dt>
+            <dd id="citation-confirm-source">
+              {evidence_source_type_label(@selected_evidence_source)} · {evidence_source_provenance(
+                @selected_evidence_source
+              )}
+            </dd>
+            <dt>Fecha</dt>
+            <dd id="citation-confirm-date">
+              {format_datetime(@selected_evidence_source.occurred_at)}
+            </dd>
+            <dt>Fragmento exacto</dt>
+            <dd id="citation-confirm-excerpt">{@citation_excerpt}</dd>
+            <dt>Destino</dt>
+            <dd id="citation-confirm-destination">
+              Conducta objetivo: {@target_behavior_description}
+            </dd>
+          </dl>
+          <button
+            type="button"
+            id="confirm-evidence-citation"
+            phx-click="confirm_evidence_citation"
+            class="button-primary button-primary--sm"
+          >
+            Confirmar cita
+          </button>
+        </div>
+
+        <div class="form-actions">
+          <button
+            type="button"
+            id="cancel-evidence-citation"
+            phx-click="cancel_evidence_citation"
+            class="button-secondary button-secondary--sm"
+          >
+            Cancelar
+          </button>
+        </div>
+      </section>
 
       <ol id="review-timeline" phx-update="stream" class="review-timeline">
         <li

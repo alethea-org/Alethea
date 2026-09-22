@@ -15,6 +15,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
   import Phoenix.LiveViewTest
 
   alias Alethea.Accounts
+  alias Alethea.Clinical, as: Journaling
   alias Alethea.ClinicalRecord
 
   alias Alethea.ClinicalRecord.{
@@ -28,6 +29,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
+  alias AletheaJobs.ClinicalRecordOutboxWorker
 
   @password "supersecret12"
 
@@ -821,8 +823,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
-  describe "explicit empty states (GitHub #290)" do
-    test "renders empty states for evidence, observations, proposals, and draft when empty", %{
+  describe "evidence citation flow (GitHub #306)" do
+    test "offers primary actions in the header and consolidated actionable guidance", %{
       conn: conn,
       patient: patient,
       target_behavior: target_behavior
@@ -830,8 +832,274 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      assert has_element?(view, "#empty-evidence")
-      assert has_element?(view, "#empty-evidence .empty-state__title", "Sin evidencia citada")
+      assert has_element?(view, "#cite-evidence-header", "Citar evidencia")
+      assert has_element?(view, "#evidence-guide")
+      assert has_element?(view, "#cite-evidence-guide", "Citar evidencia")
+      refute has_element?(view, "#empty-evidence")
+      refute has_element?(view, "#empty-proposals")
+      assert has_element?(view, "#draft-form")
+    end
+
+    test "guides the clinician to suggest patterns when evidence exists but proposals do not", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia suficiente para sugerir patrones"
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#evidence-guide")
+      assert has_element?(view, "#suggest-patterns-guide.button-primary", "Sugerir patrones (IA)")
+      refute has_element?(view, "#evidence-guide #cite-evidence-guide")
+      refute has_element?(view, "#cite-evidence-header.button-primary")
+      assert has_element?(view, "#draft-form")
+    end
+
+    test "opening lists patient sources in domain order with provenance, then selection shows full content",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      {:ok, note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, "Nota clínica completa")
+
+      inbound =
+        insert_message_source!(
+          patient,
+          dek,
+          "inbound",
+          "Mensaje entrante completo del paciente",
+          ~U[2026-09-16 09:00:00Z],
+          "spontaneous"
+        )
+
+      outbound =
+        insert_message_source!(
+          patient,
+          dek,
+          "outbound",
+          "Respuesta saliente completa",
+          ~U[2026-09-16 11:00:00Z],
+          "elicited"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      html = view |> element("#cite-evidence-header") |> render_click()
+
+      assert has_element?(view, "#evidence-citation-flow")
+      assert has_element?(view, "#evidence-source-#{inbound.id}", "Mensaje entrante")
+      assert has_element?(view, "#evidence-source-#{inbound.id}", "espontáneo")
+      assert has_element?(view, "#evidence-source-#{outbound.id}", "Mensaje saliente")
+      assert has_element?(view, "#evidence-source-#{outbound.id}", "provocado")
+      assert has_element?(view, "#evidence-source-#{note.id}", "Nota clínica")
+
+      assert {:ok, domain_sources} =
+               ClinicalRecord.list_evidence_sources(professional, patient.id)
+
+      rendered_positions =
+        Enum.map(domain_sources, fn source ->
+          :binary.match(html, source.id) |> elem(0)
+        end)
+
+      assert rendered_positions == Enum.sort(rendered_positions)
+
+      view
+      |> element("#evidence-source-#{inbound.id}")
+      |> render_click()
+
+      assert has_element?(
+               view,
+               "#evidence-source-content",
+               "Mensaje entrante completo del paciente"
+             )
+
+      assert has_element?(view, "form#evidence-excerpt-form")
+    end
+
+    test "excerpt review is explicit and only final confirmation persists and refreshes the UI",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, note} =
+        ClinicalRecord.create_clinical_note(
+          professional,
+          patient.id,
+          "La paciente reporta sueño interrumpido durante tres noches."
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#cite-evidence-header") |> render_click()
+      view |> element("#evidence-source-#{note.id}") |> render_click()
+
+      view
+      |> form("#evidence-excerpt-form", citation: %{excerpt: "sueño interrumpido"})
+      |> render_submit()
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+      assert has_element?(view, "#evidence-citation-confirmation")
+      assert has_element?(view, "#citation-confirm-source", "Nota clínica")
+      assert has_element?(view, "#citation-confirm-date")
+      assert has_element?(view, "#citation-confirm-excerpt", "sueño interrumpido")
+
+      assert has_element?(
+               view,
+               "#citation-confirm-destination",
+               target_behavior.description || "Conducta objetivo"
+             )
+
+      view |> element("#confirm-evidence-citation") |> render_click()
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 1
+      refute has_element?(view, "#evidence-citation-flow")
+      assert has_element?(view, "#stat-evidence .stat-tile__value", "1")
+      refute has_element?(view, "#suggest-patterns[disabled]")
+      assert has_element?(view, ".review-item--evidence", "sueño interrumpido")
+    end
+
+    test "cancelling selection, excerpt, or confirmation clears state without citation side effects",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, note} =
+        ClinicalRecord.create_clinical_note(
+          professional,
+          patient.id,
+          "Contenido exacto para citar"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#cite-evidence-header") |> render_click()
+      view |> element("#cancel-evidence-citation") |> render_click()
+      refute has_element?(view, "#evidence-citation-flow")
+
+      view |> element("#cite-evidence-header") |> render_click()
+      view |> element("#evidence-source-#{note.id}") |> render_click()
+      view |> element("#cancel-evidence-citation") |> render_click()
+      refute has_element?(view, "#evidence-citation-flow")
+
+      view |> element("#cite-evidence-header") |> render_click()
+      view |> element("#evidence-source-#{note.id}") |> render_click()
+
+      view
+      |> form("#evidence-excerpt-form", citation: %{excerpt: "exacto"})
+      |> render_submit()
+
+      view |> element("#cancel-evidence-citation") |> render_click()
+
+      refute has_element?(view, "#evidence-citation-flow")
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+
+      refute Enum.any?(all_enqueued(worker: ClinicalRecordOutboxWorker), fn job ->
+               job.args["event"] == "consultation_evidence_created"
+             end)
+    end
+
+    test "a source removed before final confirmation shows an error and preserves confirmation state",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, "Fuente que será retirada")
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#cite-evidence-header") |> render_click()
+      view |> element("#evidence-source-#{note.id}") |> render_click()
+
+      view
+      |> form("#evidence-excerpt-form", citation: %{excerpt: "será retirada"})
+      |> render_submit()
+
+      Repo.delete!(note)
+      view |> element("#confirm-evidence-citation") |> render_click()
+
+      assert has_element?(view, "#evidence-citation-error")
+      assert has_element?(view, "#evidence-citation-confirmation")
+      assert has_element?(view, "#citation-confirm-excerpt", "será retirada")
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+    end
+
+    test "invalid or forged citation state shows an error and preserves useful source state", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, "Texto autorizado exacto")
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#cite-evidence-header") |> render_click()
+
+      render_click(view, "select_evidence_source", %{
+        "kind" => "message",
+        "id" => Ecto.UUID.generate()
+      })
+
+      assert has_element?(view, "#evidence-citation-error")
+      assert has_element?(view, "#evidence-source-list")
+
+      view |> element("#evidence-source-#{note.id}") |> render_click()
+
+      view
+      |> form("#evidence-excerpt-form", citation: %{excerpt: "texto con mayúsculas distintas"})
+      |> render_submit()
+
+      assert has_element?(view, "#evidence-citation-error")
+      assert has_element?(view, "#evidence-source-content", "Texto autorizado exacto")
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+    end
+  end
+
+  describe "explicit empty states (GitHub #290)" do
+    test "renders consolidated evidence/proposal guidance plus observation and draft empty states",
+         %{
+           conn: conn,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#evidence-guide")
+      refute has_element?(view, "#empty-evidence")
+      refute has_element?(view, "#empty-proposals")
 
       assert has_element?(view, "#empty-observations")
 
@@ -841,9 +1109,6 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
                "Sin observaciones del clínico"
              )
 
-      assert has_element?(view, "#empty-proposals")
-      assert has_element?(view, "#empty-proposals .empty-state__title", "Sin propuestas de IA")
-
       assert has_element?(view, "#empty-draft")
 
       assert has_element?(
@@ -851,6 +1116,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
                "#empty-draft .empty-state__title",
                "Sin borrador de análisis funcional"
              )
+
+      assert has_element?(view, "#draft-form")
     end
 
     test "empty states disappear as items are populated or created", %{
@@ -884,6 +1151,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
+      refute has_element?(view, "#evidence-guide")
       refute has_element?(view, "#empty-evidence")
       refute has_element?(view, "#empty-proposals")
       assert has_element?(view, "#empty-observations")
@@ -1196,6 +1464,21 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       patient_id: patient.id,
       professional_id: professional.id,
       target_behavior_id: target_behavior.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_message_source!(patient, dek, direction, content, occurred_at, behavior_type) do
+    {:ok, ciphertext} = PatientVault.encrypt(content, dek)
+
+    %Journaling.Message{}
+    |> Journaling.Message.changeset(%{
+      direction: direction,
+      behavior_type: behavior_type,
+      encrypted_content: ciphertext,
+      encryption_version: 1,
+      timestamp: occurred_at,
+      patient_id: patient.id
     })
     |> Repo.insert!()
   end
