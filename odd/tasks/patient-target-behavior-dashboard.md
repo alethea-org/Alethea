@@ -42,7 +42,7 @@ The review workbench already exists, but its visible entry point is indirect and
 - Chain strategy: `stacked-to-main`, selected by the user after the forecast crossed 400 lines.
 - Forecast: revised to 400–500 authored changed lines after TB-1 produced 282 committed lines including the feature document.
 - Slice 1 boundary: `6d3cc29b6ecf3f56ee81508f3c67347d503de98c` (TB-1, targets `main`).
-- Slice 2 boundary: `4ee20153b31dcfdd792ab81a084a5c9ac7f0db15` (TB-2, initially targets slice 1, then retargets to `main` after slice 1 lands).
+- Slice 2 boundary: `4ee20157280f91e3232506a3c70a0ad4eec8a0a8` (TB-2, initially targets slice 1, then retargets to `main` after slice 1 lands).
 - Expected delivery: two stacked work-unit PR slices.
 - Engram mirror: pending because the local Engram provider was unavailable during initialization.
 
@@ -67,7 +67,7 @@ The review workbench already exists, but its visible entry point is indirect and
   - TDD evidence: RED `mix test test/alethea_web/live/dashboard_live_test.exs` — 37 passed, 3 failed, 1 skipped; GREEN and refactor rerun — 40 passed, 1 skipped.
   - Checks: parent fallback run after two independent-verifier attempts were blocked by a false outside-turn mutation signal: dashboard tests 40 passed, 1 skipped; combined context/dashboard tests 101 passed, 1 skipped; `git diff --check` passed; Pi LSP diagnostics found no source/test findings and had no HEEx server.
   - Runtime harness: authenticated `Phoenix.LiveViewTest.live/2` exercised encrypted SQL-sandbox records, scoped rows, status labels, exact links, stream reset, and empty states; no external service.
-  - Commit evidence: `4ee20153b31dcfdd792ab81a084a5c9ac7f0db15` (`feat(dashboard): surface target behaviors`).
+  - Commit evidence: `4ee20157280f91e3232506a3c70a0ad4eec8a0a8` (`feat(dashboard): surface target behaviors`).
   - Native review assessment/outcome: assessment was unassessable due to a schema-incompatible native response and therefore failed closed to high verification. Native review lineage `review-9563b05a4453a77c` reviewed slice 2 against TB-1, was approved, and was acknowledged. Advisory `R3-silent-target-behavior-load-failure` is informational follow-up scope and did not open a correction.
 
 ## Acceptance criteria
