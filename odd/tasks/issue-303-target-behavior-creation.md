@@ -36,7 +36,7 @@ Let an authorized clinician create a target behavior from the selected patient's
 - Base: `origin/main` at `05786f085af95c7465468a001ac62e6699a28cea`.
 - Base capability: issue #292 target-behavior dashboard listing.
 - Delivery strategy: one feature PR closing approved issue #303.
-- Review workload: 415 changed lines before final evidence; maintainer explicitly accepted `size:exception` because the cohesive change exceeds the 400-line budget by 15 lines, including 94 lines of ODD evidence.
+- Review workload: 487 changed lines after CI remediation; maintainer explicitly accepted `size:exception`. The feature and ODD evidence originally exceeded the 400-line budget by 15 lines; 70 additional whitespace-only lines format a pre-existing `review.ex` drift that blocked every PR's format check on current `main`.
 - Expected change: five bounded implementation/test files plus this evidence document; one cohesive work unit.
 
 ## Tasks
@@ -90,7 +90,7 @@ Let an authorized clinician create a target behavior from the selected patient's
 - Changed-file LSP diagnostics reported no findings for supported Elixir files; HEEx diagnostics were unavailable because no HEEx LSP is configured.
 - Final verification passed on the original base: focused issue suite 48 passed/1 skipped, review regression suite 38 passed, and full `mix precommit` 1385 passed/5 skipped.
 - Reverification from current `origin/main`: focused issue suite 48 passed/1 skipped and full `mix precommit` 1395 passed/5 skipped.
-- `mix precommit` normalized pre-existing whitespace in `review.ex`; that out-of-scope formatter mutation was rolled back exactly before staging.
+- `mix precommit` exposed pre-existing whitespace drift in `review.ex`. It was initially rolled back as out of scope, then the PR's format check failed for the same base drift. The maintainer explicitly authorized including the 35-line whitespace-only normalization in this PR.
 - Issue #303 was explicitly approved for delivery and now carries `status:approved`.
 - Work-unit commit created: `d8b9d56` (`feat(clinical): create target behaviors`).
 - Native review inspection was blocked by a missing package-local binary; it created no lineage and performed no mutation.
