@@ -60,8 +60,8 @@ defmodule Alethea.ObanTelemetry do
     )
   end
 
-  def handle_stop(_event, _measurements, metadata, _config) do
-    duration_ms = get_duration_ms(metadata)
+  def handle_stop(_event, measurements, metadata, _config) do
+    duration_ms = get_duration_ms(measurements)
 
     :telemetry.execute(
       [:alethea, :oban, :job, :stop],
@@ -71,7 +71,7 @@ defmodule Alethea.ObanTelemetry do
         queue: metadata.queue,
         job_id: metadata.id,
         attempt: metadata.attempt,
-        success: metadata.success
+        success: metadata.state == :success
       }
     )
 
@@ -86,8 +86,8 @@ defmodule Alethea.ObanTelemetry do
     end
   end
 
-  def handle_exception(_event, _measurements, metadata, _config) do
-    duration_ms = get_duration_ms(metadata)
+  def handle_exception(_event, measurements, metadata, _config) do
+    duration_ms = get_duration_ms(measurements)
 
     :telemetry.execute(
       [:alethea, :oban, :job, :exception],
@@ -129,7 +129,7 @@ defmodule Alethea.ObanTelemetry do
       Telemetry.Metrics.summary(
         "alethea.oban.job.stop.duration_ms",
         tags: [:worker, :queue],
-        unit: {:native, :millisecond},
+        unit: :millisecond,
         description: "Job execution duration"
       ),
 
@@ -142,7 +142,7 @@ defmodule Alethea.ObanTelemetry do
       Telemetry.Metrics.summary(
         "alethea.oban.job.exception.duration_ms",
         tags: [:worker, :queue],
-        unit: {:native, :millisecond},
+        unit: :millisecond,
         description: "Exception duration before failure"
       ),
 
@@ -184,8 +184,8 @@ defmodule Alethea.ObanTelemetry do
   # Helper Functions
   # ─────────────────────────────────────────────────────────────────────────
 
-  defp get_duration_ms(metadata) do
-    case metadata do
+  defp get_duration_ms(measurements) do
+    case measurements do
       %{duration: duration} when is_integer(duration) ->
         System.convert_time_unit(duration, :native, :millisecond)
 

@@ -27,7 +27,14 @@ defmodule AletheaJobs.AIProposalWorkerTest do
 
   alias Alethea.Accounts
   alias Alethea.ClinicalRecord
-  alias Alethea.ClinicalRecord.{AIProposal, ConsultationEvidence}
+
+  alias Alethea.ClinicalRecord.{
+    AIProposal,
+    ClinicianObservation,
+    ConsultationEvidence,
+    Tombstone
+  }
+
   alias AletheaJobs.AIProposalWorker
 
   @password "supersecret12"
@@ -85,6 +92,71 @@ defmodule AletheaJobs.AIProposalWorkerTest do
       assert length(proposals) == 2
       assert Enum.all?(proposals, &(&1.status == "pending"))
       assert Enum.all?(proposals, &(&1.professional_id == professional.id))
+    end
+  end
+
+  describe "perform/1 — heterogeneous review timeline" do
+    test "sends only cited evidence, persists returned proposals, and broadcasts ready", %{
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      cited_excerpt = "Cited consultation evidence"
+      clinician_observation = "Clinician observation must stay local"
+      previous_proposal = "Previous AI proposal must not be reused"
+      returned_proposal = "New proposal from cited evidence"
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        "clinical_note",
+        Ecto.UUID.generate(),
+        cited_excerpt
+      )
+
+      insert_observation!(professional, patient, target_behavior, clinician_observation)
+
+      previous =
+        insert_proposal!(professional, patient, target_behavior, previous_proposal)
+
+      insert_tombstone!(professional, patient, target_behavior)
+
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "target_behavior:#{target_behavior.id}")
+
+      Alethea.AI.PatternProposalChainMock
+      |> expect(:run, fn %{sanitized_evidence: evidence} ->
+        assert evidence == [cited_excerpt]
+        refute clinician_observation in evidence
+        refute previous_proposal in evidence
+
+        {:ok, %{proposals: [returned_proposal]}}
+      end)
+
+      assert :ok =
+               perform_job(AIProposalWorker, %{
+                 "professional_id" => professional.id,
+                 "patient_id" => patient.id,
+                 "target_behavior_id" => target_behavior.id
+               })
+
+      assert_receive {:ai_proposals_ready, target_behavior_id}
+      assert target_behavior_id == target_behavior.id
+
+      proposals =
+        AIProposal
+        |> Alethea.Repo.all()
+        |> Enum.filter(&(&1.target_behavior_id == target_behavior.id))
+
+      assert length(proposals) == 2
+      assert Enum.any?(proposals, &(&1.id == previous.id))
+
+      persisted = Enum.find(proposals, &(&1.id != previous.id))
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+
+      assert {:ok, ^returned_proposal} =
+               Alethea.Encryption.PatientVault.decrypt(persisted.encrypted_text, dek)
     end
   end
 
@@ -249,6 +321,54 @@ defmodule AletheaJobs.AIProposalWorkerTest do
       patient_id: patient.id,
       professional_id: professional.id,
       target_behavior_id: target_behavior.id
+    })
+    |> Alethea.Repo.insert!()
+  end
+
+  defp insert_observation!(professional, patient, target_behavior, body) do
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(body, dek)
+
+    %ClinicianObservation{}
+    |> ClinicianObservation.changeset(%{
+      encrypted_body: ciphertext,
+      occurred_at: ~U[2026-01-01 11:00:00.000000Z],
+      patient_id: patient.id,
+      professional_id: professional.id,
+      target_behavior_id: target_behavior.id
+    })
+    |> Alethea.Repo.insert!()
+  end
+
+  defp insert_proposal!(professional, patient, target_behavior, text) do
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(text, dek)
+
+    %AIProposal{}
+    |> AIProposal.changeset(%{
+      encrypted_original_text: ciphertext,
+      encrypted_text: ciphertext,
+      model_version: "test-model",
+      occurred_at: ~U[2026-01-01 12:00:00.000000Z],
+      patient_id: patient.id,
+      professional_id: professional.id,
+      target_behavior_id: target_behavior.id
+    })
+    |> Alethea.Repo.insert!()
+  end
+
+  defp insert_tombstone!(professional, patient, target_behavior) do
+    %Tombstone{}
+    |> Tombstone.changeset(%{
+      resource_type: "clinician_observation",
+      resource_id: Ecto.UUID.generate(),
+      target_behavior_id: target_behavior.id,
+      patient_id: patient.id,
+      deleted_at: ~U[2026-01-01 13:00:00Z],
+      deleted_by_id: professional.id,
+      trigger: "manual"
     })
     |> Alethea.Repo.insert!()
   end
