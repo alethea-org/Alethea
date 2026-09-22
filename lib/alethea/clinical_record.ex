@@ -146,6 +146,88 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
+  @doc """
+  Lists target behaviors for an authorized patient in reverse-chronological
+  order. Each result contains only the target behavior id, its decrypted
+  description, and a content-free functional-analysis status derived from the
+  current draft or its legal-deletion tombstone.
+  """
+  @spec list_target_behaviors(Professional.t(), Ecto.UUID.t()) ::
+          {:ok,
+           [
+             %{
+               id: Ecto.UUID.t(),
+               description: String.t(),
+               functional_analysis_status: :not_started | :saved | :legally_deleted
+             }
+           ]}
+          | {:error, :unauthorized | term()}
+  def list_target_behaviors(%Professional{} = professional, patient_id) do
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        deny_access(professional.id, patient_id)
+
+      patient ->
+        with {:ok, kek} <- Accounts.load_professional_kek(professional),
+             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
+          target_behaviors =
+            TargetBehavior
+            |> where([target], target.patient_id == ^patient.id)
+            |> order_by([target], desc: target.inserted_at, desc: target.id)
+            |> Repo.all()
+
+          {saved_ids, deleted_ids} =
+            functional_analysis_status_ids(patient.id, Enum.map(target_behaviors, & &1.id))
+
+          behaviors =
+            Enum.map(target_behaviors, fn target_behavior ->
+              %{
+                id: target_behavior.id,
+                description: decrypt_or_placeholder(target_behavior.encrypted_description, dek),
+                functional_analysis_status:
+                  functional_analysis_status(target_behavior.id, saved_ids, deleted_ids)
+              }
+            end)
+
+          {:ok, behaviors}
+        end
+    end
+  end
+
+  defp functional_analysis_status_ids(_patient_id, []), do: {MapSet.new(), MapSet.new()}
+
+  defp functional_analysis_status_ids(patient_id, target_behavior_ids) do
+    saved_ids =
+      FunctionalAnalysisDraft
+      |> where([draft], draft.patient_id == ^patient_id)
+      |> where([draft], draft.target_behavior_id in ^target_behavior_ids)
+      |> select([draft], draft.target_behavior_id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    deleted_ids =
+      Tombstone
+      |> where(
+        [tombstone],
+        tombstone.patient_id == ^patient_id and
+          tombstone.resource_type == "functional_analysis_draft" and
+          tombstone.target_behavior_id in ^target_behavior_ids
+      )
+      |> select([tombstone], tombstone.target_behavior_id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    {saved_ids, deleted_ids}
+  end
+
+  defp functional_analysis_status(target_behavior_id, saved_ids, deleted_ids) do
+    cond do
+      MapSet.member?(saved_ids, target_behavior_id) -> :saved
+      MapSet.member?(deleted_ids, target_behavior_id) -> :legally_deleted
+      true -> :not_started
+    end
+  end
+
   # Authorizes via `Accounts.get_patient_for_professional/2`, then loads the
   # professional's KEK and BOTH DEKs (the shared patient DEK and the
   # CR-scoped "patient_clinical_record" DEK, lazily provisioned here — D1,
