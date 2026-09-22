@@ -83,7 +83,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert evidence_pos < observation_pos
       assert observation_pos < proposal_pos
 
-      assert has_element?(view, "form#draft-form")
+      assert has_element?(view, "#functional-analysis-form")
     end
   end
 
@@ -156,7 +156,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       send(view.pid, {:ai_proposals_failed, :timeout})
 
       assert render(view) =~ "La generación de patrones de IA falló."
-      assert has_element?(view, "form#draft-form")
+      assert has_element?(view, "#functional-analysis-form")
     end
 
     test "a timeline refresh after the target behavior was deleted redirects instead of keeping stale items",
@@ -294,6 +294,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
+      view |> element("#toggle-observation-form") |> render_click()
+
       html =
         view
         |> form("#observation-form", observation: %{body: "Nueva observacion del clinico"})
@@ -348,7 +350,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert html =~ "Generando"
     end
 
-    test "a pending proposal renders provisional and never as note typography", %{
+    test "the proposals tab explains the provisional inbox and preserves proposal provenance", %{
       conn: conn,
       professional: professional,
       patient: patient,
@@ -365,10 +367,15 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         "Patron pendiente"
       )
 
-      {:ok, view, html} =
+      {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      assert html =~ "Patron pendiente"
+      refute has_element?(view, "#proposal-inbox")
+      view |> element("#input-tab-proposals") |> render_click()
+
+      assert has_element?(view, "#proposal-inbox", "provisionales")
+      assert has_element?(view, "#proposal-inbox", "E/O/R/C")
+      assert has_element?(view, ".review-item--proposal", "Patron pendiente")
       assert has_element?(view, ".review-item--proposal .badge--provisional")
       refute has_element?(view, ".review-item--proposal .review-item--note")
     end
@@ -416,13 +423,33 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert reloaded.status == "pending"
     end
 
-    test "accepting a proposal updates its status and merges its text into the draft", %{
-      conn: conn,
-      professional: professional,
-      patient: patient,
-      target_behavior: target_behavior
-    } do
+    test "accepting a proposal changes only its status and leaves structured draft content unchanged",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
       dek = load_dek!(professional, patient)
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   "antecedents_distal" => "Cambio de rutina",
+                   "response_motor" => "Evitó la tarea",
+                   "previous_notes" => "Texto legado conservado\nSin clasificar"
+                 }
+               )
+
+      assert {:ok, %{body: body_before}} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
 
       proposal =
         insert_proposal!(
@@ -441,20 +468,85 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
       |> render_click()
 
-      assert render(view) =~ "Propuesta aceptada y agregada al borrador."
+      assert render(view) =~
+               "Propuesta aceptada. Permanece disponible para clasificación y ubicación manual."
 
-      reloaded = Repo.get!(AIProposal, proposal.id)
-      assert reloaded.status == "accepted"
+      assert Repo.get!(AIProposal, proposal.id).status == "accepted"
+      assert has_element?(view, ".badge--status-accepted")
 
-      assert {:ok, %{body: body}} =
+      refute has_element?(
+               view,
+               "button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']"
+             )
+
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Cambio de rutina"
+             )
+
+      assert has_element?(view, "#functional-analysis-response-motor", "Evitó la tarea")
+      assert has_element?(view, "#previous-notes", "Texto legado conservado")
+
+      assert {:ok, %{body: ^body_before}} =
                ClinicalRecord.get_functional_analysis_draft(
                  professional,
                  patient.id,
                  target_behavior.id
                )
 
-      assert body =~ "Patron a aceptar"
+      assert Repo.aggregate(ClinicalNote, :count) == 0
+    end
 
+    test "accepting a proposal leaves a legacy free-text draft byte-identical", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+      legacy_body = "Primera línea\n  Sangría intacta\nÚltima línea"
+
+      assert {:ok, draft_before} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 legacy_body
+               )
+
+      proposal =
+        insert_proposal!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "No incorporar automáticamente"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
+      |> render_click()
+
+      assert Repo.get!(AIProposal, proposal.id).status == "accepted"
+
+      draft_after = Repo.get!(draft_before.__struct__, draft_before.id)
+      assert draft_after.encrypted_body == draft_before.encrypted_body
+      assert draft_after.encryption_version == draft_before.encryption_version
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.previous_notes == legacy_body
+      assert has_element?(view, "#previous-notes", "Primera línea")
       assert Repo.aggregate(ClinicalNote, :count) == 0
     end
 
@@ -535,8 +627,45 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
-  describe "editable functional-analysis draft and explicit note creation" do
-    test "saving the draft persists it without creating a clinical note", %{
+  describe "responsive clinical workbench" do
+    test "renders compact metadata, two stable panels, and tab controls with counts", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#clinical-workbench")
+      assert has_element?(view, "#workbench-inputs-panel")
+      assert has_element?(view, "#workbench-editor-panel")
+      assert has_element?(view, "#review-stat-strip.review-metadata-strip")
+
+      assert has_element?(
+               view,
+               "#input-tab-evidence[aria-selected='true'][aria-controls='review-timeline'][tabindex='0']",
+               "Evidencia citada 0"
+             )
+
+      assert has_element?(
+               view,
+               "#input-tab-observations[aria-controls='review-timeline'][tabindex='-1']",
+               "Observaciones 0"
+             )
+
+      assert has_element?(
+               view,
+               "#input-tab-proposals[aria-controls='review-timeline'][tabindex='-1']",
+               "Propuestas IA 0"
+             )
+
+      assert has_element?(
+               view,
+               "#review-timeline.review-timeline--evidence[role='tabpanel'][aria-labelledby='input-tab-evidence']"
+             )
+    end
+
+    test "ArrowLeft and ArrowRight move tab selection with wraparound", %{
       conn: conn,
       patient: patient,
       target_behavior: target_behavior
@@ -545,10 +674,337 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
       view
-      |> form("#draft-form", draft: %{body: "Analisis funcional editado a mano"})
+      |> element("#input-tab-evidence")
+      |> render_keydown(%{"key" => "ArrowRight"})
+
+      assert has_element?(
+               view,
+               "#input-tab-observations[aria-selected='true'][tabindex='0']"
+             )
+
+      assert has_element?(
+               view,
+               "#review-timeline[aria-labelledby='input-tab-observations']"
+             )
+
+      view
+      |> element("#input-tab-observations")
+      |> render_keydown(%{"key" => "ArrowLeft"})
+
+      assert has_element?(view, "#input-tab-evidence[aria-selected='true'][tabindex='0']")
+
+      view
+      |> element("#input-tab-evidence")
+      |> render_keydown(%{"key" => "ArrowLeft"})
+
+      assert has_element?(view, "#input-tab-proposals[aria-selected='true'][tabindex='0']")
+
+      view
+      |> element("#input-tab-proposals")
+      |> render_keydown(%{"key" => "ArrowRight"})
+
+      assert has_element?(view, "#input-tab-evidence[aria-selected='true'][tabindex='0']")
+    end
+
+    test "ArrowLeft and ArrowRight emit focus instructions for the newly selected tab", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> element("#input-tab-evidence")
+      |> render_keydown(%{"key" => "ArrowRight"})
+
+      assert_push_event(view, "focus_input_tab", %{id: "input-tab-observations"})
+
+      view
+      |> element("#input-tab-observations")
+      |> render_keydown(%{"key" => "ArrowLeft"})
+
+      assert_push_event(view, "focus_input_tab", %{id: "input-tab-evidence"})
+    end
+
+    test "switching tabs changes stream-safe parent state without removing timeline entries", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      observation =
+        insert_observation!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "Observación conservada en el stream"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#input-tab-observations") |> render_click()
+
+      assert has_element?(view, "#input-tab-observations[aria-selected='true']")
+      assert has_element?(view, "#review-timeline.review-timeline--observations")
+
+      assert has_element?(
+               view,
+               "#timeline-#{observation.id}",
+               "Observación conservada en el stream"
+             )
+    end
+
+    test "observation form starts collapsed and opens and cancels without persistence", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               view,
+               "#toggle-observation-form[aria-controls='observation-entry'][aria-expanded='false']"
+             )
+
+      refute has_element?(view, "#observation-form")
+
+      view |> element("#toggle-observation-form") |> render_click()
+
+      assert has_element?(
+               view,
+               "#toggle-observation-form[aria-controls='observation-entry'][aria-expanded='true']"
+             )
+
+      assert has_element?(view, "#observation-form")
+
+      view |> element("#toggle-observation-form") |> render_click()
+      assert has_element?(view, "#toggle-observation-form[aria-expanded='false']")
+      refute has_element?(view, "#observation-form")
+
+      view |> element("#toggle-observation-form") |> render_click()
+      view |> element("#cancel-observation") |> render_click()
+      refute has_element?(view, "#observation-form")
+      assert Repo.aggregate(ClinicianObservation, :count) == 0
+    end
+  end
+
+  describe "structured E-O-R-C editor" do
+    test "renders all eleven structured fields with stable IDs and blank missing values", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      for id <- [
+            "antecedents-distal",
+            "antecedents-immediate",
+            "organism-sleep",
+            "organism-pain-or-discomfort",
+            "organism-hunger-or-nutrition",
+            "organism-learning-history",
+            "response-physiological",
+            "response-cognitive",
+            "response-motor",
+            "consequences-short-term",
+            "consequences-long-term"
+          ] do
+        assert has_element?(view, "#functional-analysis-#{id}[value='']") or
+                 has_element?(view, "textarea#functional-analysis-#{id}")
+      end
+    end
+
+    test "does not render previous notes when their value is empty", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      refute has_element?(view, "#previous-notes")
+      assert has_element?(view, "input[name='functional_analysis[previous_notes]'][value='']")
+    end
+
+    test "remounts a legacy free-text draft as visible read-only previous notes", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      legacy_body = "Primera línea completa\n  segunda línea con sangría\nÚltima línea"
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 legacy_body
+               )
+
+      {:ok, view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#previous-notes")
+      assert has_element?(view, "#previous-notes .previous-notes__content")
+      assert html =~ legacy_body
+      assert html =~ "borrador anterior de texto libre"
+      assert html =~ "no se clasificó automáticamente"
+
+      assert has_element?(view, "input[name='functional_analysis[previous_notes]']")
+    end
+
+    test "remounts structured drafts with previous notes and preserves them byte-for-byte on save",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      previous_notes = "Legado estructurado\n  conservar espacios finales  \n"
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   "antecedents_immediate" => "Pedido inesperado",
+                   "previous_notes" => previous_notes
+                 }
+               )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#previous-notes", "Legado estructurado")
+      assert has_element?(view, "#functional-analysis-antecedents-immediate", "Pedido inesperado")
+
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{
+          antecedents_immediate: "Pedido actualizado",
+          previous_notes: previous_notes
+        }
+      )
       |> render_submit()
 
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.antecedents_immediate == "Pedido actualizado"
+      assert content.previous_notes == previous_notes
+
+      {:ok, remounted_view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(remounted_view, "#previous-notes", "Legado estructurado")
+    end
+
+    test "saves and restores E-O-R-C fields independently without creating a clinical note", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      params = %{
+        antecedents_distal: "Cambio de rutina",
+        antecedents_immediate: "Pedido inesperado",
+        organism_sleep: "Sueño interrumpido",
+        organism_pain_or_discomfort: "Sin dolor informado",
+        organism_hunger_or_nutrition: "Omitió el desayuno",
+        organism_learning_history: "Escalada aprendida",
+        response_physiological: "Respiración acelerada",
+        response_cognitive: "Anticipación de fracaso",
+        response_motor: "Evitó la tarea",
+        consequences_short_term: "Terminó la demanda",
+        consequences_long_term: "Refuerzo de evitación"
+      }
+
+      html =
+        view
+        |> form("#functional-analysis-form", functional_analysis: params)
+        |> render_submit()
+
+      assert html =~ "Análisis funcional guardado."
       assert Repo.aggregate(ClinicalNote, :count) == 0
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.antecedents_distal == "Cambio de rutina"
+      assert content.organism_sleep == "Sueño interrumpido"
+      assert content.response_motor == "Evitó la tarea"
+      assert content.consequences_long_term == "Refuerzo de evitación"
+
+      {:ok, restored_view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               restored_view,
+               "#functional-analysis-antecedents-distal",
+               "Cambio de rutina"
+             )
+
+      assert has_element?(
+               restored_view,
+               "#functional-analysis-consequences-long-term",
+               "Refuerzo de evitación"
+             )
+    end
+  end
+
+  describe "structured functional-analysis draft and explicit note creation" do
+    test "saving structured analysis persists it without creating a clinical note", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      html =
+        view
+        |> form("#functional-analysis-form",
+          functional_analysis: %{
+            antecedents_immediate: "Pedido inesperado",
+            response_motor: "Evitó la tarea"
+          }
+        )
+        |> render_submit()
+
+      assert html =~ "Análisis funcional guardado."
+      assert Repo.aggregate(ClinicalNote, :count) == 0
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.antecedents_immediate == "Pedido inesperado"
+      assert content.response_motor == "Evitó la tarea"
     end
 
     test "no longer offers duplicated clinical note form", %{
@@ -562,7 +1018,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       refute has_element?(view, "#note-form")
     end
 
-    test "draft textarea exposes guided clinical placeholder", %{
+    test "editor exposes guided E-O-R-C sections and stable fields", %{
       conn: conn,
       patient: patient,
       target_behavior: target_behavior
@@ -570,11 +1026,16 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      assert has_element?(view, "#draft-form textarea[placeholder*='Antecedentes']")
-      assert has_element?(view, "#draft-form textarea[placeholder*='Función hipotetizada']")
+      assert has_element?(view, "#functional-analysis-form")
+      assert has_element?(view, "#functional-analysis-antecedents")
+      assert has_element?(view, "#functional-analysis-organism")
+      assert has_element?(view, "#functional-analysis-response")
+      assert has_element?(view, "#functional-analysis-consequences")
+      assert has_element?(view, "#functional-analysis-antecedents-immediate")
+      assert has_element?(view, "#functional-analysis-response-motor")
     end
 
-    test "loading the clinical structure populates the draft form", %{
+    test "structured editor is ready without loading a draft template", %{
       conn: conn,
       patient: patient,
       target_behavior: target_behavior
@@ -582,18 +1043,11 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      assert has_element?(view, "#insert-draft-structure-button")
-
-      view
-      |> element("#insert-draft-structure-button")
-      |> render_click()
-
-      rendered = render(view)
-      assert rendered =~ "Antecedentes:"
-      assert rendered =~ "Función hipotetizada:"
-      assert rendered =~ "Evidencia pendiente / dudas:"
-
-      refute has_element?(view, "#insert-draft-structure-button")
+      assert has_element?(view, "#functional-analysis-antecedents-distal")
+      assert has_element?(view, "#functional-analysis-organism-learning-history")
+      assert has_element?(view, "#functional-analysis-response-cognitive")
+      assert has_element?(view, "#functional-analysis-consequences-long-term")
+      assert has_element?(view, "#save-functional-analysis")
     end
   end
 
@@ -837,7 +1291,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert has_element?(view, "#cite-evidence-guide", "Citar evidencia")
       refute has_element?(view, "#empty-evidence")
       refute has_element?(view, "#empty-proposals")
-      assert has_element?(view, "#draft-form")
+      assert has_element?(view, "#functional-analysis-form")
     end
 
     test "guides the clinician to suggest patterns when evidence exists but proposals do not", %{
@@ -866,10 +1320,10 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert has_element?(view, "#suggest-patterns-guide.button-primary", "Sugerir patrones (IA)")
       refute has_element?(view, "#evidence-guide #cite-evidence-guide")
       refute has_element?(view, "#cite-evidence-header.button-primary")
-      assert has_element?(view, "#draft-form")
+      assert has_element?(view, "#functional-analysis-form")
     end
 
-    test "opening lists patient sources in domain order with provenance, then selection shows full content",
+    test "opening shows every full source in an accessible feed and preserves domain order",
          %{
            conn: conn,
            professional: professional,
@@ -907,18 +1361,97 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       html = view |> element("#cite-evidence-header") |> render_click()
 
       assert has_element?(view, "#evidence-citation-flow")
-      assert has_element?(view, "#evidence-source-#{inbound.id}", "Mensaje entrante")
-      assert has_element?(view, "#evidence-source-#{inbound.id}", "espontáneo")
-      assert has_element?(view, "#evidence-source-#{outbound.id}", "Mensaje saliente")
-      assert has_element?(view, "#evidence-source-#{outbound.id}", "provocado")
-      assert has_element?(view, "#evidence-source-#{note.id}", "Nota clínica")
+
+      assert has_element?(
+               view,
+               "#evidence-source-feed[aria-labelledby='evidence-source-feed-label'][aria-describedby='evidence-source-feed-description']"
+             )
+
+      assert has_element?(view, "#evidence-source-feed-label", "Fuentes disponibles")
+
+      assert has_element?(
+               view,
+               "#evidence-source-feed-description",
+               "contenido completo"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{inbound.id}.evidence-source-card--inbound .evidence-source-card__content",
+               "Mensaje entrante completo del paciente"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{inbound.id} .evidence-source-card__type",
+               "Mensaje entrante"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{inbound.id} .evidence-source-card__provenance",
+               "espontáneo"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{outbound.id}.evidence-source-card--outbound .evidence-source-card__content",
+               "Respuesta saliente completa"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{outbound.id} .evidence-source-card__type",
+               "Mensaje saliente"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{outbound.id} .evidence-source-card__provenance",
+               "provocado"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{note.id}.evidence-source-card--clinical-note .evidence-source-card__content",
+               "Nota clínica completa"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{note.id} .evidence-source-card__type",
+               "Nota clínica"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{note.id} .evidence-source-card__provenance",
+               "registro profesional"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{inbound.id} .evidence-source-card__date",
+               "16/09/2026 09:00"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-source-#{outbound.id} .evidence-source-card__date",
+               "16/09/2026 11:00"
+             )
+
+      assert has_element?(view, "#evidence-source-#{note.id} .evidence-source-card__date")
+      refute has_element?(view, "#evidence-source-load-more")
+      refute has_element?(view, "[data-role='evidence-source-load-more']")
+      refute has_element?(view, "#evidence-source-feed button", "Cargar más")
 
       assert {:ok, domain_sources} =
                ClinicalRecord.list_evidence_sources(professional, patient.id)
 
       rendered_positions =
         Enum.map(domain_sources, fn source ->
-          :binary.match(html, source.id) |> elem(0)
+          :binary.match(html, ~s(id="evidence-source-#{source.id}")) |> elem(0)
         end)
 
       assert rendered_positions == Enum.sort(rendered_positions)
@@ -1101,6 +1634,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       refute has_element?(view, "#empty-evidence")
       refute has_element?(view, "#empty-proposals")
 
+      view |> element("#input-tab-observations") |> render_click()
+
       assert has_element?(view, "#empty-observations")
 
       assert has_element?(
@@ -1114,10 +1649,10 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert has_element?(
                view,
                "#empty-draft .empty-state__title",
-               "Sin borrador de análisis funcional"
+               "Sin análisis funcional guardado"
              )
 
-      assert has_element?(view, "#draft-form")
+      assert has_element?(view, "#functional-analysis-form")
     end
 
     test "empty states disappear as items are populated or created", %{
@@ -1154,10 +1689,15 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       refute has_element?(view, "#evidence-guide")
       refute has_element?(view, "#empty-evidence")
       refute has_element?(view, "#empty-proposals")
+
+      view |> element("#input-tab-observations") |> render_click()
+
       assert has_element?(view, "#empty-observations")
       assert has_element?(view, "#empty-draft")
 
       # Adding an observation removes the observations empty state
+      view |> element("#toggle-observation-form") |> render_click()
+
       view
       |> form("#observation-form", %{"observation" => %{"body" => "Nueva observacion"}})
       |> render_submit()
@@ -1165,9 +1705,11 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       refute has_element?(view, "#empty-observations")
       assert has_element?(view, "#stat-observations .stat-tile__value", "1")
 
-      # Saving draft removes the draft empty state
+      # Saving structured analysis removes the draft empty state
       view
-      |> form("#draft-form", %{"draft" => %{"body" => "Borrador de prueba"}})
+      |> form("#functional-analysis-form", %{
+        "functional_analysis" => %{"response_motor" => "Evitó la tarea"}
+      })
       |> render_submit()
 
       refute has_element?(view, "#empty-draft")
@@ -1269,7 +1811,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert html =~ "Propuesta editada."
     end
 
-    test "accepting a proposal adds to draft and displays specific info flash", %{
+    test "accepting a proposal keeps it for manual placement and displays specific info flash", %{
       conn: conn,
       professional: professional,
       patient: patient,
@@ -1295,15 +1837,17 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
         |> render_click()
 
-      assert html =~ "Propuesta aceptada y agregada al borrador."
+      assert html =~
+               "Propuesta aceptada. Permanece disponible para clasificación y ubicación manual."
     end
 
-    test "accepting a proposal when draft is legally deleted warns clinician", %{
-      conn: conn,
-      professional: professional,
-      patient: patient,
-      target_behavior: target_behavior
-    } do
+    test "accepting a proposal when draft is legally deleted still changes only proposal status",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
       dek = load_dek!(professional, patient)
 
       proposal =
@@ -1331,7 +1875,11 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
         |> render_click()
 
-      assert html =~ "Propuesta aceptada, pero no pudo agregarse al borrador."
+      assert html =~
+               "Propuesta aceptada. Permanece disponible para clasificación y ubicación manual."
+
+      assert Repo.get!(AIProposal, proposal.id).status == "accepted"
+      assert has_element?(view, "#draft-tombstone")
     end
 
     test "discarding a proposal displays info flash and button carries data-confirm", %{
@@ -1375,6 +1923,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     } do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#toggle-observation-form") |> render_click()
 
       html =
         view

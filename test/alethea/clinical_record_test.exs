@@ -25,6 +25,7 @@ defmodule Alethea.ClinicalRecordTest do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
+    FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
     TargetBehavior,
     Tombstone
@@ -1525,6 +1526,193 @@ defmodule Alethea.ClinicalRecordTest do
       assert structure =~ "Consecuencias"
       assert structure =~ "Función hipotetizada"
       assert structure =~ "Evidencia pendiente / dudas"
+    end
+  end
+
+  describe "structured functional analysis content" do
+    test "round trips normalized content through canonical encrypted plaintext and reuses audit/outbox",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      params = %{
+        "antecedents_distal" => "Conflict earlier in the day",
+        "antecedents_immediate" => "A demand was presented",
+        "response_motor" => "Left the room",
+        "consequences_short_term" => "The demand stopped"
+      }
+
+      assert {:ok, %FunctionalAnalysisDraft{} = draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 params
+               )
+
+      refute draft.encrypted_body =~ "Conflict earlier in the day"
+      assert draft.encryption_version == 2
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, canonical_plaintext} =
+               Alethea.Encryption.PatientVault.decrypt(
+                 draft.encrypted_body,
+                 clinical_record_dek
+               )
+
+      expected_content = FunctionalAnalysisContent.new(params)
+      assert canonical_plaintext == FunctionalAnalysisContent.serialize(expected_content)
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content == expected_content
+      assert content.organism_sleep == ""
+      assert content.previous_notes == ""
+
+      assert Repo.aggregate(
+               from(a in AuditLog,
+                 where:
+                   a.professional_id == ^professional.id and
+                     a.action == "functional_analysis_draft_saved"
+               ),
+               :count
+             ) == 1
+
+      assert_enqueued(
+        worker: ClinicalRecordOutboxWorker,
+        args: %{"event" => "functional_analysis_draft_saved"}
+      )
+    end
+
+    test "returns legacy draft bodies only as previous notes", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "Unclassified historical formulation"
+               )
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content == %FunctionalAnalysisContent{
+               previous_notes: "Unclassified historical formulation"
+             }
+    end
+
+    test "preserves professional authorization and patient-target isolation", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      other_professional = create_professional!()
+      other_patient = create_patient!(professional)
+      other_target = create_target_behavior!(professional, other_patient)
+      params = %{"antecedents_distal" => "Must remain isolated"}
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 other_professional,
+                 patient.id,
+                 target_behavior.id,
+                 params
+               )
+
+      assert {:error, :not_found} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 other_target.id,
+                 params
+               )
+
+      assert {:error, :not_found} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 other_target.id
+               )
+
+      assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
+    end
+
+    test "returns no content when no draft exists", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+
+    test "preserves a draft tombstone and refuses to recreate deleted content", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Body to delete"
+        )
+
+      Repo.delete!(draft)
+
+      tombstone =
+        %Tombstone{}
+        |> Tombstone.changeset(%{
+          resource_type: "functional_analysis_draft",
+          resource_id: draft.id,
+          target_behavior_id: target_behavior.id,
+          patient_id: patient.id,
+          deleted_at: ~U[2026-09-16 12:00:00Z],
+          deleted_by_id: professional.id,
+          trigger: "manual"
+        })
+        |> Repo.insert!()
+
+      assert {:ok, {:legally_deleted, deleted_at}} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert deleted_at == tombstone.deleted_at
+
+      assert {:error, :legally_deleted} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Must not be recreated"}
+               )
+
+      assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
     end
   end
 

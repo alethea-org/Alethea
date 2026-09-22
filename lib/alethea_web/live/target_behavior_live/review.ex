@@ -32,7 +32,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   use AletheaWeb, :live_view
 
   alias Alethea.ClinicalRecord
-  alias Alethea.ClinicalRecord.FunctionalAnalysisDraft
+  alias Alethea.ClinicalRecord.FunctionalAnalysisContent
 
   @impl true
   def mount(%{"patient_id" => patient_id, "id" => target_behavior_id}, _session, socket) do
@@ -48,19 +48,19 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         proposal_count = Enum.count(items, &(&1.kind == :ai_proposal))
         has_sufficient_evidence = evidence_count > 0
 
-        {draft_body, draft_tombstoned_at} =
-          case ClinicalRecord.get_functional_analysis_draft(
+        {functional_analysis_content, draft_tombstoned_at} =
+          case ClinicalRecord.get_functional_analysis_content(
                  professional,
                  patient_id,
                  target_behavior_id
                ) do
-            {:ok, nil} -> {"", nil}
-            {:ok, {:legally_deleted, deleted_at}} -> {"", deleted_at}
-            {:ok, draft} -> {draft.body, nil}
-            {:error, _reason} -> {"", nil}
+            {:ok, nil} -> {%FunctionalAnalysisContent{}, nil}
+            {:ok, {:legally_deleted, deleted_at}} -> {%FunctionalAnalysisContent{}, deleted_at}
+            {:ok, content} -> {content, nil}
+            {:error, _reason} -> {%FunctionalAnalysisContent{}, nil}
           end
 
-        draft_status = compute_draft_status(draft_tombstoned_at, draft_body)
+        draft_status = compute_draft_status(draft_tombstoned_at, functional_analysis_content)
 
         if connected?(socket) do
           Phoenix.PubSub.subscribe(Alethea.PubSub, "target_behavior:#{target_behavior_id}")
@@ -80,6 +80,8 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:draft_status, draft_status)
           |> assign(:generation_pending, false)
           |> assign(:editing_proposal_id, nil)
+          |> assign(:active_input_tab, :evidence)
+          |> assign(:observation_form_open, false)
           |> assign(:citation_step, nil)
           |> assign(:evidence_sources, [])
           |> assign(:selected_evidence_source, nil)
@@ -88,7 +90,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
           |> assign(:timeline_index, timeline_index(items))
           |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
-          |> assign(:draft_form, to_form(%{"body" => draft_body}, as: "draft"))
+          |> assign(
+            :functional_analysis_form,
+            to_form(content_params(functional_analysis_content), as: "functional_analysis")
+          )
           |> assign(:draft_tombstoned_at, draft_tombstoned_at)
           |> stream(:timeline, items)
 
@@ -100,6 +105,38 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:error, :not_found} ->
         {:ok, redirect_to_patients(socket, :not_found)}
     end
+  end
+
+  @impl true
+  def handle_event("select_input_tab", %{"tab" => tab}, socket)
+      when tab in ["evidence", "observations", "proposals"] do
+    {:noreply, assign(socket, :active_input_tab, String.to_existing_atom(tab))}
+  end
+
+  @impl true
+  def handle_event("navigate_input_tab", %{"key" => key}, socket)
+      when key in ["ArrowLeft", "ArrowRight"] do
+    next_tab = adjacent_input_tab(socket.assigns.active_input_tab, key)
+
+    {:noreply,
+     socket
+     |> assign(:active_input_tab, next_tab)
+     |> push_event("focus_input_tab", %{id: input_tab_id(next_tab)})}
+  end
+
+  def handle_event("navigate_input_tab", _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_event("toggle_observation_form", _params, socket) do
+    {:noreply, assign(socket, :observation_form_open, !socket.assigns.observation_form_open)}
+  end
+
+  @impl true
+  def handle_event("cancel_observation", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:observation_form_open, false)
+     |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))}
   end
 
   @impl true
@@ -118,6 +155,8 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         {:noreply,
          socket
          |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
+         |> assign(:observation_form_open, false)
+         |> assign(:active_input_tab, :observations)
          |> load_timeline()
          |> put_flash(:info, "Observación clínica agregada.")}
 
@@ -326,41 +365,21 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   @impl true
   def handle_event("accept_proposal", %{"id" => id}, socket) do
-    if socket.assigns.draft_tombstoned_at do
-      {:noreply,
-       put_flash(socket, :info, "Propuesta aceptada, pero no pudo agregarse al borrador.")}
-    else
-      professional = socket.assigns.current_professional
-      patient_id = socket.assigns.patient_id
-      target_behavior_id = socket.assigns.target_behavior_id
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
 
-      case ClinicalRecord.accept_ai_proposal_into_draft(
-             professional,
-             patient_id,
-             target_behavior_id,
-             id
-           ) do
-        {:ok, %{draft: _draft}} ->
-          draft_body =
-            case ClinicalRecord.get_functional_analysis_draft(
-                   professional,
-                   patient_id,
-                   target_behavior_id
-                 ) do
-              {:ok, %{body: body}} -> body
-              _other -> ""
-            end
+    case ClinicalRecord.accept_ai_proposal(professional, patient_id, id) do
+      {:ok, _proposal} ->
+        {:noreply,
+         socket
+         |> load_timeline()
+         |> put_flash(
+           :info,
+           "Propuesta aceptada. Permanece disponible para clasificación y ubicación manual."
+         )}
 
-          {:noreply,
-           socket
-           |> load_timeline()
-           |> assign(:draft_form, to_form(%{"body" => draft_body}, as: "draft"))
-           |> assign(:draft_status, :saved)
-           |> put_flash(:info, "Propuesta aceptada y agregada al borrador.")}
-
-        {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, "No se pudo aceptar la propuesta.")}
-      end
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo aceptar la propuesta.")}
     end
   end
 
@@ -382,39 +401,32 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
-  def handle_event("save_draft", %{"draft" => %{"body" => body}}, socket) do
+  def handle_event("save_functional_analysis", %{"functional_analysis" => params}, socket) do
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
     target_behavior_id = socket.assigns.target_behavior_id
 
-    case ClinicalRecord.upsert_functional_analysis_draft(
+    case ClinicalRecord.upsert_functional_analysis_content(
            professional,
            patient_id,
            target_behavior_id,
-           body
+           params
          ) do
       {:ok, _draft} ->
-        draft_status = compute_draft_status(socket.assigns.draft_tombstoned_at, body)
+        content = FunctionalAnalysisContent.new(params)
 
         {:noreply,
          socket
-         |> assign(:draft_form, to_form(%{"body" => body}, as: "draft"))
-         |> assign(:draft_status, draft_status)
-         |> put_flash(:info, "Borrador guardado.")}
+         |> assign(
+           :functional_analysis_form,
+           to_form(content_params(content), as: "functional_analysis")
+         )
+         |> assign(:draft_status, compute_draft_status(nil, content))
+         |> put_flash(:info, "Análisis funcional guardado.")}
 
       {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "No se pudo guardar el borrador.")}
+        {:noreply, put_flash(socket, :error, "No se pudo guardar el análisis funcional.")}
     end
-  end
-
-  @impl true
-  def handle_event("insert_draft_structure", _params, socket) do
-    {:noreply,
-     assign(
-       socket,
-       :draft_form,
-       to_form(%{"body" => FunctionalAnalysisDraft.default_structure()}, as: "draft")
-     )}
   end
 
   @impl true
@@ -515,12 +527,39 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp timeline_index(items), do: Map.new(items, &{&1.id, &1})
 
-  defp compute_draft_status(tombstoned_at, body) do
+  defp compute_draft_status(tombstoned_at, %FunctionalAnalysisContent{} = content) do
     cond do
-      tombstoned_at != nil -> :tombstoned
-      is_nil(body) or String.trim(body) == "" -> :empty
-      true -> :saved
+      tombstoned_at != nil ->
+        :tombstoned
+
+      content
+      |> Map.from_struct()
+      |> Map.values()
+      |> Enum.all?(&(String.trim(&1) == "")) ->
+        :empty
+
+      true ->
+        :saved
     end
+  end
+
+  defp content_params(%FunctionalAnalysisContent{} = content) do
+    content
+    |> Map.from_struct()
+    |> Map.new(fn {field, value} -> {Atom.to_string(field), value} end)
+  end
+
+  defp timeline_tab_class(:evidence), do: "review-timeline--evidence"
+  defp timeline_tab_class(:observations), do: "review-timeline--observations"
+  defp timeline_tab_class(:proposals), do: "review-timeline--proposals"
+
+  defp input_tab_id(tab), do: "input-tab-#{tab}"
+
+  defp adjacent_input_tab(active_tab, key) do
+    tabs = [:evidence, :observations, :proposals]
+    offset = if key == "ArrowRight", do: 1, else: -1
+    active_index = Enum.find_index(tabs, &(&1 == active_tab))
+    Enum.at(tabs, Integer.mod(active_index + offset, length(tabs)))
   end
 
   defp draft_status_label(:empty), do: "Borrador vacío"
@@ -595,6 +634,17 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     do: behavior_type || "sin clasificación"
 
   defp evidence_source_provenance(%{kind: :clinical_note}), do: "registro profesional"
+
+  defp evidence_source_card_class(%{kind: :clinical_note}),
+    do: "evidence-source-card--clinical-note"
+
+  defp evidence_source_card_class(%{kind: :message, direction: "inbound"}),
+    do: "evidence-source-card--inbound"
+
+  defp evidence_source_card_class(%{kind: :message, direction: "outbound"}),
+    do: "evidence-source-card--outbound"
+
+  defp evidence_source_card_class(%{kind: :message}), do: "evidence-source-card--message"
 
   defp format_datetime(%DateTime{} = datetime) do
     Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
@@ -672,7 +722,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           </div>
         </div>
 
-        <div class="stat-strip" id="review-stat-strip">
+        <div class="stat-strip review-metadata-strip" id="review-stat-strip">
           <div class="stat-tile" id="stat-evidence">
             <div class="stat-tile__label">Evidencias citadas</div>
 
@@ -709,311 +759,559 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         </div>
       </section>
 
-      <div
-        :if={@evidence_count == 0 or @proposal_count == 0}
-        id="evidence-guide"
-        class="empty-state empty-state--compact review-empty-banner"
-      >
-        <%= if @evidence_count == 0 do %>
-          <.icon name="hero-magnifying-glass" class="empty-state__icon" />
-          <p class="empty-state__title">Fundamentá el análisis con evidencia clínica</p>
-          <p class="empty-state__text">
-            Citá un fragmento exacto de una nota o mensaje del paciente. Después podrás solicitar sugerencias de patrones sin ocultar ni reemplazar tu borrador clínico.
-          </p>
-          <button
-            type="button"
-            id="cite-evidence-guide"
-            phx-click="open_evidence_citation"
-            class="button-primary button-primary--sm"
-          >
-            <.icon name="hero-magnifying-glass" class="size-4" /> Citar evidencia
-          </button>
-        <% else %>
-          <.icon name="hero-presentation-chart-line" class="empty-state__icon" />
-          <p class="empty-state__title">Convertí la evidencia en hipótesis de trabajo</p>
-          <p class="empty-state__text">
-            Ya hay evidencia citada. Solicitá sugerencias de patrones para revisarlas antes de incorporarlas al borrador clínico.
-          </p>
-          <button
-            type="button"
-            id="suggest-patterns-guide"
-            phx-click="suggest_patterns"
-            disabled={@generation_pending}
-            class="button-primary button-primary--sm"
-          >
-            <.icon name="hero-presentation-chart-line" class="size-4" /> {if @generation_pending,
-              do: "Generando patrones…",
-              else: "Sugerir patrones (IA)"}
-          </button>
-        <% end %>
-      </div>
-
-      <section :if={@citation_step} id="evidence-citation-flow" class="review-observation">
-        <div class="review-item__meta">
-          <h2 class="pt-h2">Citar evidencia</h2>
-          <span class="badge badge--uncited">
-            Paso {if @citation_step == :select,
-              do: "1",
-              else: if(@citation_step == :excerpt, do: "2", else: "3")} de 3
-          </span>
-        </div>
-
-        <p :if={@citation_error} id="evidence-citation-error" class="field__error">
-          {@citation_error}
-        </p>
-
-        <div :if={@citation_step == :select} id="evidence-source-list">
-          <p :if={@evidence_sources == []} class="pt-muted">
-            No hay notas ni mensajes disponibles para citar.
-          </p>
-          <button
-            :for={source <- @evidence_sources}
-            type="button"
-            id={"evidence-source-#{source.id}"}
-            phx-click="select_evidence_source"
-            phx-value-id={source.id}
-            phx-value-kind={source.kind}
-            class="review-item button-secondary"
-          >
-            <strong>{evidence_source_type_label(source)}</strong>
-            <span>{format_datetime(source.occurred_at)}</span>
-            <span>{evidence_source_provenance(source)}</span>
-          </button>
-        </div>
-
-        <div :if={@citation_step == :excerpt and @selected_evidence_source}>
-          <div class="review-item__meta">
-            <strong>{evidence_source_type_label(@selected_evidence_source)}</strong>
-            <span>{format_datetime(@selected_evidence_source.occurred_at)}</span>
-            <span>{evidence_source_provenance(@selected_evidence_source)}</span>
-          </div>
-          <p id="evidence-source-content" class="review-item__text">
-            {@selected_evidence_source.content}
-          </p>
-          <.form
-            for={@citation_form}
-            id="evidence-excerpt-form"
-            phx-submit="prepare_evidence_citation"
-          >
-            <.input
-              field={@citation_form[:excerpt]}
-              type="textarea"
-              label="Fragmento exacto"
-              placeholder="Copiá un fragmento exacto de la fuente"
-            />
-            <div class="form-actions">
-              <button type="submit" class="button-primary button-primary--sm">
-                Revisar cita
-              </button>
+      <div id="clinical-workbench" class="clinical-workbench">
+        <section id="workbench-inputs-panel" class="workbench-panel workbench-inputs-panel">
+          <div class="workbench-panel__header">
+            <div>
+              <span class="pt-eyebrow">Insumos clínicos</span>
+              <h2 class="t-title-sm">Evidencia y observaciones</h2>
             </div>
-          </.form>
-        </div>
-
-        <div
-          :if={@citation_step == :confirm and @selected_evidence_source}
-          id="evidence-citation-confirmation"
-        >
-          <p><strong>Verificá la cita antes de guardarla.</strong></p>
-          <dl>
-            <dt>Fuente</dt>
-            <dd id="citation-confirm-source">
-              {evidence_source_type_label(@selected_evidence_source)} · {evidence_source_provenance(
-                @selected_evidence_source
-              )}
-            </dd>
-            <dt>Fecha</dt>
-            <dd id="citation-confirm-date">
-              {format_datetime(@selected_evidence_source.occurred_at)}
-            </dd>
-            <dt>Fragmento exacto</dt>
-            <dd id="citation-confirm-excerpt">{@citation_excerpt}</dd>
-            <dt>Destino</dt>
-            <dd id="citation-confirm-destination">
-              Conducta objetivo: {@target_behavior_description}
-            </dd>
-          </dl>
-          <button
-            type="button"
-            id="confirm-evidence-citation"
-            phx-click="confirm_evidence_citation"
-            class="button-primary button-primary--sm"
-          >
-            Confirmar cita
-          </button>
-        </div>
-
-        <div class="form-actions">
-          <button
-            type="button"
-            id="cancel-evidence-citation"
-            phx-click="cancel_evidence_citation"
-            class="button-secondary button-secondary--sm"
-          >
-            Cancelar
-          </button>
-        </div>
-      </section>
-
-      <ol id="review-timeline" phx-update="stream" class="review-timeline">
-        <li
-          :for={{dom_id, item} <- @streams.timeline}
-          id={dom_id}
-          class={["review-item", review_item_class(item.kind)]}
-        >
-          <div class="review-item__meta">
-            <span class="review-item__kind">{kind_label(item.kind)}</span>
-            <span class="review-item__time">{format_datetime(item.occurred_at)}</span>
-            <span :if={item.kind == :clinician_observation} class="badge badge--uncited">
-              Sin cita — agregado por el clínico
-            </span>
-            <span
-              :if={item.kind == :ai_proposal}
-              class={["badge", "badge--provisional", "badge--status-#{item.status}"]}
+            <button
+              type="button"
+              id="toggle-observation-form"
+              phx-click="toggle_observation_form"
+              aria-controls="observation-entry"
+              aria-expanded={to_string(@observation_form_open)}
+              class="button-secondary button-secondary--sm"
             >
-              Propuesta de IA (provisional) · {status_label(item.status)}
-            </span>
-          </div>
-
-          <p :if={item.kind != :legally_deleted} class="review-item__text">{item.text}</p>
-
-          <p
-            :if={item.kind == :legally_deleted}
-            class="review-item__text review-item__text--tombstone"
-          >
-            <.icon name="hero-lock-closed" class="size-3" />
-            Eliminado legalmente el {format_datetime(item.occurred_at)}
-          </p>
-
-          <div :if={item.kind == :consultation_evidence} class="review-item__source">
-            <.icon name="hero-magnifying-glass" class="size-3" /> {source_label(item.source)}
+              <.icon name="hero-plus" class="size-4" /> Observación
+            </button>
           </div>
 
           <div
-            :if={item.kind == :ai_proposal and item.status in ["pending", "edited"]}
-            class="review-item__actions"
+            id="input-tabs"
+            class="review-tabs"
+            role="tablist"
+            aria-label="Filtrar insumos clínicos"
+            phx-hook=".InputTabs"
           >
             <button
-              :if={@editing_proposal_id != item.id}
               type="button"
-              phx-click="start_edit_proposal"
-              phx-value-id={item.id}
-              class="link-button"
+              role="tab"
+              id="input-tab-evidence"
+              phx-click="select_input_tab"
+              phx-keydown="navigate_input_tab"
+              phx-value-tab="evidence"
+              aria-controls="review-timeline"
+              aria-selected={to_string(@active_input_tab == :evidence)}
+              tabindex={if(@active_input_tab == :evidence, do: "0", else: "-1")}
+              class={["review-tab", @active_input_tab == :evidence && "review-tab--active"]}
             >
-              Editar
+              Evidencia citada <span>{@evidence_count}</span>
             </button>
             <button
               type="button"
-              phx-click="accept_proposal"
-              phx-value-id={item.id}
-              class="button-primary button-primary--sm"
+              role="tab"
+              id="input-tab-observations"
+              phx-click="select_input_tab"
+              phx-keydown="navigate_input_tab"
+              phx-value-tab="observations"
+              aria-controls="review-timeline"
+              aria-selected={to_string(@active_input_tab == :observations)}
+              tabindex={if(@active_input_tab == :observations, do: "0", else: "-1")}
+              class={["review-tab", @active_input_tab == :observations && "review-tab--active"]}
             >
-              Aceptar
+              Observaciones <span>{@observation_count}</span>
             </button>
             <button
               type="button"
-              phx-click="discard_proposal"
-              phx-value-id={item.id}
-              data-confirm="¿Estás seguro de que deseas descartar esta propuesta de IA?"
-              class="button-secondary button-secondary--sm"
+              role="tab"
+              id="input-tab-proposals"
+              phx-click="select_input_tab"
+              phx-keydown="navigate_input_tab"
+              phx-value-tab="proposals"
+              aria-controls="review-timeline"
+              aria-selected={to_string(@active_input_tab == :proposals)}
+              tabindex={if(@active_input_tab == :proposals, do: "0", else: "-1")}
+              class={["review-tab", @active_input_tab == :proposals && "review-tab--active"]}
             >
-              Descartar
+              Propuestas IA <span>{@proposal_count}</span>
             </button>
           </div>
 
-          <.form
-            :if={@editing_proposal_id == item.id}
-            for={to_form(%{"text" => item.text}, as: "proposal")}
-            id={"edit-proposal-#{item.id}"}
-            phx-submit="save_edit_proposal"
+          <script :type={Phoenix.LiveView.ColocatedHook} name=".InputTabs">
+            export default {
+              mounted() {
+                this.handleEvent("focus_input_tab", ({ id }) => {
+                  const tab = document.getElementById(id)
+
+                  if (tab && this.el.contains(tab)) tab.focus()
+                })
+              }
+            }
+          </script>
+
+          <div
+            :if={@evidence_count == 0 or @proposal_count == 0}
+            id="evidence-guide"
+            class="empty-state empty-state--compact review-empty-banner"
           >
-            <input type="hidden" name="proposal_id" value={item.id} />
-            <.input type="textarea" name="proposal[text]" value={item.text} label="Editar propuesta" />
-            <div class="form-actions">
-              <button type="submit" class="button-primary button-primary--sm">Guardar edición</button>
+            <%= if @evidence_count == 0 do %>
+              <.icon name="hero-magnifying-glass" class="empty-state__icon" />
+              <p class="empty-state__title">Fundamentá el análisis con evidencia clínica</p>
+              <p class="empty-state__text">
+                Citá un fragmento exacto de una nota o mensaje del paciente. Después podrás solicitar sugerencias de patrones sin ocultar ni reemplazar tu borrador clínico.
+              </p>
               <button
                 type="button"
-                phx-click="cancel_edit_proposal"
+                id="cite-evidence-guide"
+                phx-click="open_evidence_citation"
+                class="button-primary button-primary--sm"
+              >
+                <.icon name="hero-magnifying-glass" class="size-4" /> Citar evidencia
+              </button>
+            <% else %>
+              <.icon name="hero-presentation-chart-line" class="empty-state__icon" />
+              <p class="empty-state__title">Convertí la evidencia en hipótesis de trabajo</p>
+              <p class="empty-state__text">
+                Ya hay evidencia citada. Solicitá sugerencias de patrones para revisarlas antes de incorporarlas al borrador clínico.
+              </p>
+              <button
+                type="button"
+                id="suggest-patterns-guide"
+                phx-click="suggest_patterns"
+                disabled={@generation_pending}
+                class="button-primary button-primary--sm"
+              >
+                <.icon name="hero-presentation-chart-line" class="size-4" /> {if @generation_pending,
+                  do: "Generando patrones…",
+                  else: "Sugerir patrones (IA)"}
+              </button>
+            <% end %>
+          </div>
+
+          <section :if={@citation_step} id="evidence-citation-flow" class="review-observation">
+            <div class="review-item__meta">
+              <h2 class="pt-h2">Citar evidencia</h2>
+              <span class="badge badge--uncited">
+                Paso {if @citation_step == :select,
+                  do: "1",
+                  else: if(@citation_step == :excerpt, do: "2", else: "3")} de 3
+              </span>
+            </div>
+
+            <p :if={@citation_error} id="evidence-citation-error" class="field__error">
+              {@citation_error}
+            </p>
+
+            <div :if={@citation_step == :select} id="evidence-source-list">
+              <h3 id="evidence-source-feed-label" class="t-title-sm">Fuentes disponibles</h3>
+              <p id="evidence-source-feed-description" class="pt-muted">
+                Seleccioná una fuente para citar. Cada tarjeta muestra el contenido completo y su procedencia.
+              </p>
+              <div
+                id="evidence-source-feed"
+                aria-labelledby="evidence-source-feed-label"
+                aria-describedby="evidence-source-feed-description"
+              >
+                <p :if={@evidence_sources == []} class="pt-muted">
+                  No hay notas ni mensajes disponibles para citar.
+                </p>
+                <button
+                  :for={source <- @evidence_sources}
+                  type="button"
+                  id={"evidence-source-#{source.id}"}
+                  phx-click="select_evidence_source"
+                  phx-value-id={source.id}
+                  phx-value-kind={source.kind}
+                  class={["evidence-source-card", evidence_source_card_class(source)]}
+                >
+                  <span class="evidence-source-card__meta">
+                    <strong class="evidence-source-card__type">
+                      {evidence_source_type_label(source)}
+                    </strong>
+                    <span class="evidence-source-card__date">
+                      {format_datetime(source.occurred_at)}
+                    </span>
+                    <span class="evidence-source-card__provenance">
+                      {evidence_source_provenance(source)}
+                    </span>
+                  </span>
+                  <span class="evidence-source-card__content">{source.content}</span>
+                </button>
+              </div>
+            </div>
+
+            <div :if={@citation_step == :excerpt and @selected_evidence_source}>
+              <div class="review-item__meta">
+                <strong>{evidence_source_type_label(@selected_evidence_source)}</strong>
+                <span>{format_datetime(@selected_evidence_source.occurred_at)}</span>
+                <span>{evidence_source_provenance(@selected_evidence_source)}</span>
+              </div>
+              <p id="evidence-source-content" class="review-item__text">
+                {@selected_evidence_source.content}
+              </p>
+              <.form
+                for={@citation_form}
+                id="evidence-excerpt-form"
+                phx-submit="prepare_evidence_citation"
+              >
+                <.input
+                  field={@citation_form[:excerpt]}
+                  type="textarea"
+                  label="Fragmento exacto"
+                  placeholder="Copiá un fragmento exacto de la fuente"
+                />
+                <div class="form-actions">
+                  <button type="submit" class="button-primary button-primary--sm">
+                    Revisar cita
+                  </button>
+                </div>
+              </.form>
+            </div>
+
+            <div
+              :if={@citation_step == :confirm and @selected_evidence_source}
+              id="evidence-citation-confirmation"
+            >
+              <p><strong>Verificá la cita antes de guardarla.</strong></p>
+              <dl>
+                <dt>Fuente</dt>
+                <dd id="citation-confirm-source">
+                  {evidence_source_type_label(@selected_evidence_source)} · {evidence_source_provenance(
+                    @selected_evidence_source
+                  )}
+                </dd>
+                <dt>Fecha</dt>
+                <dd id="citation-confirm-date">
+                  {format_datetime(@selected_evidence_source.occurred_at)}
+                </dd>
+                <dt>Fragmento exacto</dt>
+                <dd id="citation-confirm-excerpt">{@citation_excerpt}</dd>
+                <dt>Destino</dt>
+                <dd id="citation-confirm-destination">
+                  Conducta objetivo: {@target_behavior_description}
+                </dd>
+              </dl>
+              <button
+                type="button"
+                id="confirm-evidence-citation"
+                phx-click="confirm_evidence_citation"
+                class="button-primary button-primary--sm"
+              >
+                Confirmar cita
+              </button>
+            </div>
+
+            <div class="form-actions">
+              <button
+                type="button"
+                id="cancel-evidence-citation"
+                phx-click="cancel_evidence_citation"
                 class="button-secondary button-secondary--sm"
               >
                 Cancelar
               </button>
             </div>
-          </.form>
-        </li>
-      </ol>
+          </section>
 
-      <div :if={map_size(@timeline_index) == 0} class="empty-state">
-        <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
-        <p class="empty-state__title">Todavía no hay entradas en esta línea de tiempo</p>
-      </div>
-
-      <div class="review-observation">
-        <h2 class="pt-h2">Agregar observación clínica</h2>
-
-        <div
-          :if={@observation_count == 0}
-          id="empty-observations"
-          class="empty-state empty-state--compact mb-4"
-        >
-          <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
-          <p class="empty-state__title">Sin observaciones del clínico</p>
-
-          <p class="empty-state__text">
-            No has registrado observaciones directas para esta conducta. Puedes agregar tu primera observación en el formulario a continuación.
-          </p>
-        </div>
-
-        <.form for={@observation_form} id="observation-form" phx-submit="add_observation">
-          <.input field={@observation_form[:body]} type="textarea" label="Observación (sin cita)" />
-          <div class="form-actions">
-            <button type="submit" class="button-primary button-primary--sm">
-              Agregar observación
-            </button>
+          <div
+            :if={@active_input_tab == :proposals}
+            id="proposal-inbox"
+            class="proposal-inbox"
+          >
+            <.icon name="hero-information-circle" class="size-4" />
+            <div>
+              <strong>Las propuestas de IA son provisionales.</strong>
+              <p>
+                Aceptarlas no modifica el análisis. Revisá y ubicá manualmente cada contenido en E/O/R/C cuando corresponda.
+              </p>
+            </div>
           </div>
-        </.form>
-      </div>
 
-      <div class="review-draft">
-        <h2 class="pt-h2">Borrador de análisis funcional</h2>
-
-        <div :if={@draft_tombstoned_at} id="draft-tombstone" class="tombstone-note">
-          <.icon name="hero-lock-closed" class="size-3" />
-          Eliminado legalmente el {format_datetime(@draft_tombstoned_at)}
-        </div>
-
-        <div
-          :if={@draft_status == :empty and !@draft_tombstoned_at}
-          id="empty-draft"
-          class="empty-state empty-state--compact mb-4"
-        >
-          <.icon name="hero-information-circle" class="empty-state__icon" />
-          <p class="empty-state__title">Sin borrador de análisis funcional</p>
-
-          <p class="empty-state__text">
-            El borrador está vacío. Puedes redactar directamente tu hipótesis o aceptar propuestas sugeridas para construirlas aquí.
-          </p>
-        </div>
-
-        <.form :if={!@draft_tombstoned_at} for={@draft_form} id="draft-form" phx-submit="save_draft">
-          <.input
-            field={@draft_form[:body]}
-            type="textarea"
-            label="Análisis funcional (editable)"
-            placeholder={FunctionalAnalysisDraft.default_structure()}
-          />
-          <div class="form-actions">
-            <button
-              :if={@draft_form[:body].value in [nil, ""]}
-              type="button"
-              id="insert-draft-structure-button"
-              phx-click="insert_draft_structure"
-              class="button-secondary button-secondary--sm"
+          <ol
+            id="review-timeline"
+            role="tabpanel"
+            aria-labelledby={input_tab_id(@active_input_tab)}
+            phx-update="stream"
+            class={["review-timeline", timeline_tab_class(@active_input_tab)]}
+          >
+            <li
+              :for={{dom_id, item} <- @streams.timeline}
+              id={dom_id}
+              class={["review-item", review_item_class(item.kind)]}
             >
-              Cargar estructura clínica inicial
-            </button>
-            <button type="submit" class="button-primary button-primary--sm">Guardar borrador</button>
+              <div class="review-item__meta">
+                <span class="review-item__kind">{kind_label(item.kind)}</span>
+                <span class="review-item__time">{format_datetime(item.occurred_at)}</span>
+                <span :if={item.kind == :clinician_observation} class="badge badge--uncited">
+                  Sin cita — agregado por el clínico
+                </span>
+                <span
+                  :if={item.kind == :ai_proposal}
+                  class={["badge", "badge--provisional", "badge--status-#{item.status}"]}
+                >
+                  Propuesta de IA (provisional) · {status_label(item.status)}
+                </span>
+              </div>
+
+              <p :if={item.kind != :legally_deleted} class="review-item__text">{item.text}</p>
+
+              <p
+                :if={item.kind == :legally_deleted}
+                class="review-item__text review-item__text--tombstone"
+              >
+                <.icon name="hero-lock-closed" class="size-3" />
+                Eliminado legalmente el {format_datetime(item.occurred_at)}
+              </p>
+
+              <div :if={item.kind == :consultation_evidence} class="review-item__source">
+                <.icon name="hero-magnifying-glass" class="size-3" /> {source_label(item.source)}
+              </div>
+
+              <div
+                :if={item.kind == :ai_proposal and item.status in ["pending", "edited"]}
+                class="review-item__actions"
+              >
+                <button
+                  :if={@editing_proposal_id != item.id}
+                  type="button"
+                  phx-click="start_edit_proposal"
+                  phx-value-id={item.id}
+                  class="link-button"
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  phx-click="accept_proposal"
+                  phx-value-id={item.id}
+                  class="button-primary button-primary--sm"
+                >
+                  Aceptar
+                </button>
+                <button
+                  type="button"
+                  phx-click="discard_proposal"
+                  phx-value-id={item.id}
+                  data-confirm="¿Estás seguro de que deseas descartar esta propuesta de IA?"
+                  class="button-secondary button-secondary--sm"
+                >
+                  Descartar
+                </button>
+              </div>
+
+              <.form
+                :if={@editing_proposal_id == item.id}
+                for={to_form(%{"text" => item.text}, as: "proposal")}
+                id={"edit-proposal-#{item.id}"}
+                phx-submit="save_edit_proposal"
+              >
+                <input type="hidden" name="proposal_id" value={item.id} />
+                <.input
+                  type="textarea"
+                  name="proposal[text]"
+                  value={item.text}
+                  label="Editar propuesta"
+                />
+                <div class="form-actions">
+                  <button type="submit" class="button-primary button-primary--sm">
+                    Guardar edición
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="cancel_edit_proposal"
+                    class="button-secondary button-secondary--sm"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </.form>
+            </li>
+          </ol>
+
+          <div :if={map_size(@timeline_index) == 0} class="empty-state">
+            <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
+            <p class="empty-state__title">Todavía no hay entradas en esta línea de tiempo</p>
           </div>
-        </.form>
+
+          <div :if={@observation_form_open} class="review-observation" id="observation-entry">
+            <h3 class="t-title-sm">Agregar observación clínica</h3>
+            <.form for={@observation_form} id="observation-form" phx-submit="add_observation">
+              <.input
+                field={@observation_form[:body]}
+                type="textarea"
+                label="Observación (sin cita)"
+              />
+              <div class="form-actions">
+                <button type="submit" class="button-primary button-primary--sm">
+                  Agregar observación
+                </button>
+                <button
+                  type="button"
+                  id="cancel-observation"
+                  phx-click="cancel_observation"
+                  class="button-secondary button-secondary--sm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </.form>
+          </div>
+
+          <div
+            :if={@observation_count == 0 and @active_input_tab == :observations}
+            id="empty-observations"
+            class="empty-state empty-state--compact"
+          >
+            <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
+            <p class="empty-state__title">Sin observaciones del clínico</p>
+            <p class="empty-state__text">Todavía no registraste observaciones directas.</p>
+          </div>
+        </section>
+
+        <aside id="workbench-editor-panel" class="workbench-panel workbench-editor-panel">
+          <div class="review-draft">
+            <div class="workbench-panel__header">
+              <div>
+                <span class="pt-eyebrow">Formulación clínica</span>
+                <h2 class="t-title-sm">Análisis funcional E-O-R-C</h2>
+              </div>
+              <span id="editor-draft-status" class="review-status-chip">
+                {draft_status_label(@draft_status)}
+              </span>
+            </div>
+
+            <div :if={@draft_tombstoned_at} id="draft-tombstone" class="tombstone-note">
+              <.icon name="hero-lock-closed" class="size-3" />
+              Eliminado legalmente el {format_datetime(@draft_tombstoned_at)}
+            </div>
+
+            <div
+              :if={@draft_status == :empty and !@draft_tombstoned_at}
+              id="empty-draft"
+              class="empty-state empty-state--compact"
+            >
+              <.icon name="hero-information-circle" class="empty-state__icon" />
+              <p class="empty-state__title">Sin análisis funcional guardado</p>
+              <p class="empty-state__text">
+                Completá únicamente los campos respaldados por la revisión clínica.
+              </p>
+            </div>
+
+            <.form
+              :if={!@draft_tombstoned_at}
+              for={@functional_analysis_form}
+              id="functional-analysis-form"
+              phx-submit="save_functional_analysis"
+              class="functional-analysis-form"
+            >
+              <.input field={@functional_analysis_form[:previous_notes]} type="hidden" />
+
+              <section
+                :if={@functional_analysis_form[:previous_notes].value not in [nil, ""]}
+                id="previous-notes"
+                class="previous-notes"
+                aria-labelledby="previous-notes-title"
+              >
+                <div class="previous-notes__header">
+                  <.icon name="hero-information-circle" class="size-4" />
+                  <h3 id="previous-notes-title">Notas anteriores</h3>
+                </div>
+                <p class="previous-notes__explanation">
+                  Este texto se preservó del borrador anterior de texto libre y no se clasificó automáticamente. Usalo como referencia para ubicar manualmente su contenido en E/O/R/C.
+                </p>
+                <pre class="previous-notes__content">{@functional_analysis_form[:previous_notes].value}</pre>
+              </section>
+
+              <fieldset class="functional-analysis-section" id="functional-analysis-antecedents">
+                <legend><span>E</span> Antecedentes</legend>
+                <.input
+                  field={@functional_analysis_form[:antecedents_distal]}
+                  id="functional-analysis-antecedents-distal"
+                  type="textarea"
+                  label="Antecedentes distales"
+                />
+                <.input
+                  field={@functional_analysis_form[:antecedents_immediate]}
+                  id="functional-analysis-antecedents-immediate"
+                  type="textarea"
+                  label="Antecedentes inmediatos"
+                />
+              </fieldset>
+
+              <fieldset class="functional-analysis-section" id="functional-analysis-organism">
+                <legend><span>O</span> Organismo</legend>
+                <div class="functional-analysis-grid">
+                  <.input
+                    field={@functional_analysis_form[:organism_sleep]}
+                    id="functional-analysis-organism-sleep"
+                    type="textarea"
+                    label="Sueño"
+                  />
+                  <.input
+                    field={@functional_analysis_form[:organism_pain_or_discomfort]}
+                    id="functional-analysis-organism-pain-or-discomfort"
+                    type="textarea"
+                    label="Dolor o malestar"
+                  />
+                  <.input
+                    field={@functional_analysis_form[:organism_hunger_or_nutrition]}
+                    id="functional-analysis-organism-hunger-or-nutrition"
+                    type="textarea"
+                    label="Hambre o nutrición"
+                  />
+                  <.input
+                    field={@functional_analysis_form[:organism_learning_history]}
+                    id="functional-analysis-organism-learning-history"
+                    type="textarea"
+                    label="Historia de aprendizaje"
+                  />
+                </div>
+              </fieldset>
+
+              <fieldset class="functional-analysis-section" id="functional-analysis-response">
+                <legend><span>R</span> Respuesta</legend>
+                <div class="functional-analysis-grid">
+                  <.input
+                    field={@functional_analysis_form[:response_physiological]}
+                    id="functional-analysis-response-physiological"
+                    type="textarea"
+                    label="Fisiológica"
+                  />
+                  <.input
+                    field={@functional_analysis_form[:response_cognitive]}
+                    id="functional-analysis-response-cognitive"
+                    type="textarea"
+                    label="Cognitiva"
+                  />
+                  <.input
+                    field={@functional_analysis_form[:response_motor]}
+                    id="functional-analysis-response-motor"
+                    type="textarea"
+                    label="Motora o conductual"
+                  />
+                </div>
+              </fieldset>
+
+              <fieldset class="functional-analysis-section" id="functional-analysis-consequences">
+                <legend><span>C</span> Consecuencias</legend>
+                <.input
+                  field={@functional_analysis_form[:consequences_short_term]}
+                  id="functional-analysis-consequences-short-term"
+                  type="textarea"
+                  label="A corto plazo"
+                />
+                <.input
+                  field={@functional_analysis_form[:consequences_long_term]}
+                  id="functional-analysis-consequences-long-term"
+                  type="textarea"
+                  label="A largo plazo"
+                />
+              </fieldset>
+
+              <div class="form-actions functional-analysis-actions">
+                <button
+                  type="submit"
+                  id="save-functional-analysis"
+                  class="button-primary button-primary--sm"
+                >
+                  <.icon name="hero-check" class="size-4" /> Guardar análisis
+                </button>
+              </div>
+            </.form>
+          </div>
+        </aside>
       </div>
     </div>
     """

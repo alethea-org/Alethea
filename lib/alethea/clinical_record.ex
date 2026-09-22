@@ -29,6 +29,7 @@ defmodule Alethea.ClinicalRecord do
     ClinicianObservation,
     ConsultationEvidence,
     EvidenceSource,
+    FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
     Outbox,
     TargetBehavior
@@ -843,37 +844,58 @@ defmodule Alethea.ClinicalRecord do
         body
       ) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
-      with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
-        changeset =
-          FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
-            encrypted_body: ciphertext,
-            encryption_version: 2,
-            patient_id: patient.id,
-            professional_id: professional.id,
-            target_behavior_id: target_behavior_id
-          })
+      persist_functional_analysis_draft(
+        professional,
+        patient,
+        target_behavior_id,
+        body,
+        keyring
+      )
+    end)
+  end
 
-        Ecto.Multi.new()
-        |> Ecto.Multi.insert(:record, changeset,
-          on_conflict:
-            {:replace, [:encrypted_body, :encryption_version, :professional_id, :updated_at]},
-          conflict_target: :target_behavior_id,
-          returning: true
-        )
-        |> Ecto.Multi.insert(:audit, fn %{record: record} ->
-          Audit.changeset(%Audit{
-            professional_id: professional.id,
-            action: "functional_analysis_draft_saved",
-            resource_type: "functional_analysis_draft",
-            resource_id: record.id,
-            outcome: "success"
-          })
-        end)
-        |> Oban.insert(:outbox_event, fn %{record: record} ->
-          Outbox.event("functional_analysis_draft_saved", record)
-        end)
-        |> Repo.transaction()
-        |> finalize_record_multi()
+  @doc """
+  Normalizes string-keyed E-O-R-C parameters and saves their deterministic
+  canonical JSON representation through the existing encrypted draft
+  transaction. The canonical serialization is the plaintext encrypted into
+  `FunctionalAnalysisDraft.encrypted_body`, so existing decrypted-body RAG
+  indexing continues to receive that same complete representation.
+
+  A legal-deletion tombstone is never replaced with a new draft.
+  """
+  @spec upsert_functional_analysis_content(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          map()
+        ) ::
+          {:ok, FunctionalAnalysisDraft.t()}
+          | {:error, :unauthorized | :not_found | :legally_deleted | Ecto.Changeset.t() | term()}
+  def upsert_functional_analysis_content(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        params
+      )
+      when is_map(params) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+      case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
+        %Tombstone{resource_id: resource_id} ->
+          deny_access(professional.id, resource_id, "functional_analysis_draft")
+
+        nil ->
+          body =
+            params
+            |> FunctionalAnalysisContent.new()
+            |> FunctionalAnalysisContent.serialize()
+
+          persist_functional_analysis_draft(
+            professional,
+            patient,
+            target_behavior_id,
+            body,
+            keyring
+          )
       end
     end)
   end
@@ -920,6 +942,35 @@ defmodule Alethea.ClinicalRecord do
            %{draft | body: decrypt_or_placeholder(draft.encrypted_body, dek_for(draft, keyring))}}
       end
     end)
+  end
+
+  @doc """
+  Retrieves normalized E-O-R-C content from the existing draft lookup.
+  Legacy plaintext is preserved byte-for-byte only in `previous_notes`; no
+  clinical meaning is inferred. Missing and legally deleted drafts retain the
+  compatibility API's distinct return values.
+  """
+  @spec get_functional_analysis_content(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t()
+        ) ::
+          {:ok, FunctionalAnalysisContent.t() | nil}
+          | {:ok, {:legally_deleted, DateTime.t()}}
+          | {:error, :unauthorized | :not_found | term()}
+  def get_functional_analysis_content(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id
+      ) do
+    case get_functional_analysis_draft(professional, patient_id, target_behavior_id) do
+      {:ok, %FunctionalAnalysisDraft{body: body}} ->
+        {_format, content} = FunctionalAnalysisContent.parse(body)
+        {:ok, content}
+
+      other ->
+        other
+    end
   end
 
   @doc """
@@ -1102,6 +1153,47 @@ defmodule Alethea.ClinicalRecord do
     |> Oban.insert(:outbox_event, fn %{record: record} -> Outbox.event(action, record) end)
     |> Repo.transaction()
     |> finalize_record_multi()
+  end
+
+  defp persist_functional_analysis_draft(
+         professional,
+         patient,
+         target_behavior_id,
+         body,
+         keyring
+       ) do
+    with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
+      changeset =
+        FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
+          encrypted_body: ciphertext,
+          encryption_version: 2,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior_id
+        })
+
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(:record, changeset,
+        on_conflict:
+          {:replace, [:encrypted_body, :encryption_version, :professional_id, :updated_at]},
+        conflict_target: :target_behavior_id,
+        returning: true
+      )
+      |> Ecto.Multi.insert(:audit, fn %{record: record} ->
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "functional_analysis_draft_saved",
+          resource_type: "functional_analysis_draft",
+          resource_id: record.id,
+          outcome: "success"
+        })
+      end)
+      |> Oban.insert(:outbox_event, fn %{record: record} ->
+        Outbox.event("functional_analysis_draft_saved", record)
+      end)
+      |> Repo.transaction()
+      |> finalize_record_multi()
+    end
   end
 
   defp finalize_record_multi(transaction_result) do
