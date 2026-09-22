@@ -584,6 +584,306 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "trusted evidence sources" do
+    test "lists only the authorized patient's decrypted notes and messages with inbound messages first",
+         %{professional: professional, patient: patient} do
+      other_patient = create_patient!(professional)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      note =
+        insert_clinical_note_source!(
+          professional,
+          patient,
+          clinical_record_dek,
+          2,
+          "Complete clinical note",
+          ~U[2026-09-16 10:00:00Z]
+        )
+
+      inbound =
+        insert_message_source!(
+          patient,
+          patient_dek,
+          "inbound",
+          "Patient's complete inbound message",
+          ~U[2026-09-16 09:00:00Z]
+        )
+
+      outbound =
+        insert_message_source!(
+          patient,
+          patient_dek,
+          "outbound",
+          "Clinician's newer outbound message",
+          ~U[2026-09-16 11:00:00Z]
+        )
+
+      _foreign =
+        insert_message_source!(
+          other_patient,
+          patient_dek_for!(professional, other_patient),
+          "inbound",
+          "Foreign patient content",
+          ~U[2026-09-16 12:00:00Z]
+        )
+
+      assert {:ok, sources} = ClinicalRecord.list_evidence_sources(professional, patient.id)
+      assert Enum.map(sources, & &1.id) == [inbound.id, outbound.id, note.id]
+
+      assert [inbound_source, outbound_source, note_source] = sources
+      assert inbound_source.kind == :message
+      assert inbound_source.content == "Patient's complete inbound message"
+      assert inbound_source.direction == "inbound"
+      assert inbound_source.behavior_type == "spontaneous"
+      assert inbound_source.occurred_at == ~U[2026-09-16 09:00:00Z]
+
+      assert outbound_source.direction == "outbound"
+      assert outbound_source.content == "Clinician's newer outbound message"
+
+      assert note_source.kind == :clinical_note
+      assert note_source.content == "Complete clinical note"
+      assert note_source.direction == nil
+      assert note_source.professional_id == professional.id
+      assert note_source.occurred_at == ~U[2026-09-16 10:00:00Z]
+    end
+
+    test "listing denies an unauthorized professional", %{patient: patient} do
+      assert {:error, :unauthorized} =
+               ClinicalRecord.list_evidence_sources(create_professional!(), patient.id)
+    end
+
+    test "cites an authoritative exact excerpt and derives source time with encryption, audit, and outbox",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+
+      source =
+        insert_message_source!(
+          patient,
+          patient_dek,
+          "inbound",
+          "I slept poorly for three nights.",
+          ~U[2026-09-15 08:30:00Z]
+        )
+
+      assert {:ok, %ConsultationEvidence{} = evidence} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{source_kind: "message", source_id: source.id, excerpt: "slept poorly"}
+               )
+
+      assert evidence.source_kind == "message"
+      assert evidence.source_id == source.id
+      assert DateTime.compare(evidence.occurred_at, source.timestamp) == :eq
+      refute evidence.encrypted_excerpt == "slept poorly"
+
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, "slept poorly"} =
+               Alethea.Encryption.PatientVault.decrypt(
+                 evidence.encrypted_excerpt,
+                 clinical_record_dek
+               )
+
+      assert %AuditLog{resource_id: evidence_id, details: %{"outcome" => "success"}} =
+               Repo.get_by!(AuditLog,
+                 professional_id: professional.id,
+                 action: "consultation_evidence_created",
+                 resource_type: "consultation_evidence"
+               )
+
+      assert evidence_id == evidence.id
+
+      assert_enqueued(
+        worker: ClinicalRecordOutboxWorker,
+        args: %{"event" => "consultation_evidence_created"}
+      )
+    end
+
+    test "cites a clinical note using its timestamp and encrypted storage", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      source =
+        insert_clinical_note_source!(
+          professional,
+          patient,
+          clinical_record_dek,
+          2,
+          "Patient reports restful sleep.",
+          ~U[2026-09-17 14:45:00Z]
+        )
+
+      assert {:ok, %ConsultationEvidence{} = evidence} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "clinical_note",
+                   source_id: source.id,
+                   excerpt: "restful sleep"
+                 }
+               )
+
+      assert evidence.source_kind == "clinical_note"
+      assert evidence.source_id == source.id
+      assert DateTime.compare(evidence.occurred_at, source.inserted_at) == :eq
+      refute evidence.encrypted_excerpt == "restful sleep"
+
+      assert {:ok, "restful sleep"} =
+               Alethea.Encryption.PatientVault.decrypt(
+                 evidence.encrypted_excerpt,
+                 clinical_record_dek
+               )
+    end
+
+    test "unsupported source kind returns unsupported_source without citation side effects", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:error, :unsupported_source} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "summary",
+                   source_id: Ecto.UUID.generate(),
+                   excerpt: "anything"
+                 }
+               )
+
+      assert_no_citation_side_effects()
+    end
+
+    test "malformed source id returns not_found without citation side effects", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{source_kind: "message", source_id: "not-a-uuid", excerpt: "anything"}
+               )
+
+      assert_no_citation_side_effects()
+    end
+
+    test "missing source returns not_found without citation side effects", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "message",
+                   source_id: Ecto.UUID.generate(),
+                   excerpt: "anything"
+                 }
+               )
+
+      assert_no_citation_side_effects()
+    end
+
+    test "foreign source returns not_found without citation side effects", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      other_patient = create_patient!(professional)
+
+      foreign_source =
+        insert_message_source!(
+          other_patient,
+          patient_dek_for!(professional, other_patient),
+          "inbound",
+          "Foreign source",
+          ~U[2026-09-15 08:30:00Z]
+        )
+
+      assert {:error, :not_found} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "message",
+                   source_id: foreign_source.id,
+                   excerpt: "Foreign source"
+                 }
+               )
+
+      assert_no_citation_side_effects()
+    end
+
+    test "direct citation denies an unauthorized professional without citation side effects", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.cite_evidence_source(
+                 other_professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "message",
+                   source_id: Ecto.UUID.generate(),
+                   excerpt: "anything"
+                 }
+               )
+
+      assert_no_citation_side_effects()
+    end
+
+    test "rejects an excerpt that is not an exact substring of authoritative plaintext", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      {:ok, source} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, "Exact source wording")
+
+      assert {:error, :excerpt_not_found} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "clinical_note",
+                   source_id: source.id,
+                   excerpt: "exact source wording"
+                 }
+               )
+
+      assert_no_citation_side_effects()
+    end
+  end
+
   describe "add_consultation_evidence/4 — authorized" do
     test "persists the row scoped to the target behavior and enqueues the outbox job", %{
       professional: professional,
@@ -1850,6 +2150,60 @@ defmodule Alethea.ClinicalRecordTest do
       trigger: "manual"
     })
     |> Repo.insert!()
+  end
+
+  defp insert_clinical_note_source!(
+         professional,
+         patient,
+         dek,
+         encryption_version,
+         body,
+         occurred_at
+       ) do
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(body, dek)
+
+    %ClinicalNote{inserted_at: occurred_at}
+    |> ClinicalNote.changeset(%{
+      encrypted_body: ciphertext,
+      encryption_version: encryption_version,
+      patient_id: patient.id,
+      professional_id: professional.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_message_source!(patient, dek, direction, content, occurred_at) do
+    {:ok, ciphertext} = Alethea.Encryption.PatientVault.encrypt(content, dek)
+
+    %Journaling.Message{}
+    |> Journaling.Message.changeset(%{
+      direction: direction,
+      behavior_type: "spontaneous",
+      encrypted_content: ciphertext,
+      encryption_version: 1,
+      timestamp: occurred_at,
+      patient_id: patient.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp patient_dek_for!(professional, patient) do
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+    dek
+  end
+
+  defp assert_no_citation_side_effects do
+    assert Repo.aggregate(ConsultationEvidence, :count) == 0
+
+    assert AuditLog
+           |> where([audit], audit.action == "consultation_evidence_created")
+           |> Repo.aggregate(:count) == 0
+
+    refute_enqueued(
+      worker: ClinicalRecordOutboxWorker,
+      args: %{"event" => "consultation_evidence_created"}
+    )
   end
 
   defp insert_evidence!(
