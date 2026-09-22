@@ -63,14 +63,16 @@ Turn the target behavior review into a responsive two-column clinical workbench 
   - TDD evidence: RED reproduced `KeyError: key :text not found` on a target-scoped tombstone; GREEN focused suite passed 9 tests.
   - Independent verification: confirmed the chain receives only the cited excerpt while observations, prior proposals, and tombstones remain excluded; persistence, readiness broadcast, and authorization regressions pass.
 
-- [ ] **WORKBENCH-RELIABILITY-2 — Fix Oban stop telemetry compatibility**
-  - Status: pending.
+- [x] **WORKBENCH-RELIABILITY-2 — Fix Oban stop telemetry compatibility**
+  - Status: completed; pending work-unit commit.
   - Route: delegated writer; strict TDD.
   - RED: direct handler test with Oban 2.22 `state`/`result` metadata and duration measurement reproduces the `:success` KeyError and duration loss.
   - GREEN: derive success from stop state/result and duration from measurements without exposing job args.
   - Allowed edit surfaces:
     - `lib/alethea/oban_telemetry.ex`
     - `test/alethea/oban_telemetry_test.exs`
+  - TDD evidence: RED reproduced two `KeyError: key :success not found` failures and then a metric double-conversion failure; GREEN focused suite passed 7 tests.
+  - Independent verification: confirmed identity-millisecond metrics, exact PII-safe metadata, correct success mapping, consistent exception duration, and an attached handler that remains active for the real event fixture.
 
 - [ ] **WORKBENCH-RELIABILITY-3 — Verify PR 1 candidate**
   - Status: pending.
