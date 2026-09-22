@@ -1048,6 +1048,33 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert is_struct(at, DateTime)
     end
 
+    test "broadcasts :crisis_detected with legacy_patient_id alongside the foundation patient_id (#286)",
+         ctx do
+      _ = ctx
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("me voy a suicidar",
+                     telegram_message_id: 711,
+                     telegram_update_id: 81
+                   )
+               })
+
+      assert_receive {:crisis_detected,
+                      %{
+                        patient_id: patient_id,
+                        legacy_patient_id: legacy_patient_id
+                      }},
+                     1_000
+
+      assert patient_id == ctx.foundation_patient.id
+
+      assert legacy_patient_id == ctx.legacy_patient.id,
+             "#286: dashboard/patient-list LiveViews key off the legacy `patients` table, " <>
+               "so the broadcast must also carry the legacy patient id"
+    end
+
     test "uses the legacy Patient's professional.crisis_message as the outbound body", ctx do
       _ = ctx
 

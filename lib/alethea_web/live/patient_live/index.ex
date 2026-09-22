@@ -33,8 +33,13 @@ defmodule AletheaWeb.PatientLive.Index do
   end
 
   @impl true
-  def handle_info({:crisis_detected, %{patient_id: patient_id}}, socket) do
-    patient = Accounts.get_patient!(patient_id)
+  def handle_info({:crisis_detected, %{patient_id: patient_id} = payload}, socket) do
+    # #286: `patient_id` is the foundation UUID (see WARNING-5 in
+    # TelegramMessageWorker.handle_crisis_path/9); this LiveView reads
+    # the legacy `patients` table, so `legacy_patient_id` is the
+    # correct lookup key when present.
+    legacy_patient_id = Map.get(payload, :legacy_patient_id, patient_id)
+    patient = Accounts.get_patient!(legacy_patient_id)
 
     if patient.professional_id == socket.assigns.current_professional.id do
       {:noreply, stream_insert(socket, :patients, patient)}

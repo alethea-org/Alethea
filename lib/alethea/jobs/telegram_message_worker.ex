@@ -719,12 +719,17 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         # `foundation_outbound_dead_letters.patient_id` requires the
         # UUID; previously the worker passed the legacy integer and
         # the FK silently didn't exist.
+        # #286: the dashboard/patient-list LiveViews look patients up
+        # in the legacy `patients` table, so `legacy_patient_id` rides
+        # alongside `patient_id` — `patient_id` keeps meaning the
+        # foundation UUID (still required by the dead-letter FK above).
         Phoenix.PubSub.broadcast(
           Alethea.PubSub,
           "psychologist:alerts",
           {:crisis_detected,
            %{
              patient_id: foundation_patient.id,
+             legacy_patient_id: legacy_patient.id,
              chat_id_hash: chat_id_hash,
              level: level,
              triggers: triggers,
