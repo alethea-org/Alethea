@@ -1205,7 +1205,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 aria-labelledby="previous-notes-title"
               >
                 <div class="previous-notes__header">
-                  <.icon name="hero-document-text" class="size-4" />
+                  <.icon name="hero-information-circle" class="size-4" />
                   <h3 id="previous-notes-title">Notas anteriores</h3>
                 </div>
                 <p class="previous-notes__explanation">
