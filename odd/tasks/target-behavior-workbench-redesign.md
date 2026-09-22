@@ -39,6 +39,7 @@ Turn the target behavior review into a responsive two-column clinical workbench 
 ### PR 1 — AI proposal and telemetry reliability
 
 - Branch: `fix/ai-proposal-timeline`.
+- Linked approved issue: #308 (`[Bug]: Corregir propuestas IA y telemetría de Oban`).
 - Boundary: worker evidence filtering, tombstone safety, Oban 2.22 stop metadata/duration compatibility, and focused regression tests.
 - Independent rollback: revert worker/telemetry files and their focused tests.
 - Runtime harness: focused worker and telemetry tests; full `mix precommit` before delivery.
@@ -53,7 +54,7 @@ Turn the target behavior review into a responsive two-column clinical workbench 
 ## Tasks
 
 - [x] **WORKBENCH-RELIABILITY-1 — Reproduce and fix AI proposal timeline handling**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - RED: worker job with cited evidence, clinician observation, previous proposal, and tombstone proves only cited evidence reaches the chain and no missing-text crash occurs.
   - GREEN: filter timeline inputs by `:consultation_evidence` before extracting text.
@@ -65,7 +66,7 @@ Turn the target behavior review into a responsive two-column clinical workbench 
   - Commit evidence: `9a97e93` (`fix(ai): filter proposal evidence inputs`).
 
 - [x] **WORKBENCH-RELIABILITY-2 — Fix Oban stop telemetry compatibility**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - RED: direct handler test with Oban 2.22 `state`/`result` metadata and duration measurement reproduces the `:success` KeyError and duration loss.
   - GREEN: derive success from stop state/result and duration from measurements without exposing job args.
@@ -112,11 +113,11 @@ Turn the target behavior review into a responsive two-column clinical workbench 
 
 ### Reliability
 
-- [ ] Pattern generation does not crash when the timeline contains tombstones.
-- [ ] Only cited consultation evidence is sent to the pattern proposal chain.
-- [ ] Oban successful stop events do not detach the telemetry handler.
-- [ ] Emitted job duration uses Oban measurements and success derives from supported metadata.
-- [ ] Telemetry emits no clinical content or job args.
+- [x] Pattern generation does not crash when the timeline contains tombstones.
+- [x] Only cited consultation evidence is sent to the pattern proposal chain.
+- [x] Oban successful stop events do not detach the telemetry handler.
+- [x] Emitted job duration uses Oban measurements and success derives from supported metadata.
+- [x] Telemetry emits no clinical content or job args.
 
 ### Workbench UI
 
@@ -142,4 +143,5 @@ Turn the target behavior review into a responsive two-column clinical workbench 
 - Maintainer selected two independent PRs rather than a single combined size exception.
 - PR 1 candidate complete on `fix/ai-proposal-timeline`: only cited evidence reaches the chain, tombstones cannot cause missing-text access, and Oban 2.22 stop telemetry remains attached with accurate millisecond durations.
 - PR 1 verification: 16 focused tests passed; full `mix precommit` passed with 1417 tests and 5 skipped; diff check and diagnostics passed.
-- Review workload: PR 1 is 414 changed lines including this ODD evidence document, slightly above the 400-line budget. The production/test fix is cohesive and already split from the much larger UI redesign; delivery needs an explicit small `size:exception` or further artifact strategy before PR creation.
+- Review workload: PR 1 is slightly above the 400-line budget including this ODD evidence document. The production/test fix is cohesive and already split from the much larger UI redesign; the maintainer explicitly accepted the documented size exception before publication.
+- Issue #308 was created from the repository bug form and approved by the authenticated repository administrator.
