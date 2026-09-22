@@ -202,6 +202,49 @@
         />
       </div>
     </article>
+    <%!-- Target behaviors — patient-scoped entry points to functional analysis. --%>
+    <section id="target-behaviors-section" class="pt-card">
+      <div class="pt-card__head">
+        <span class="pt-h2">Conductas objetivo</span>
+        <span class="pt-eyebrow">Análisis funcional</span>
+      </div>
+
+      <div id="target-behaviors" phx-update="stream" class="pt-card__body">
+        <div :if={@target_behaviors_empty?} id="target-behaviors-empty" class="empty-state">
+          <p class="empty-state__text" style="margin-bottom:0;">
+            Las conductas objetivo aparecen cuando se crean desde el registro clínico del paciente.
+          </p>
+        </div>
+
+        <article
+          :for={{id, behavior} <- @streams.target_behaviors}
+          id={id}
+          class="pta-timeline__item"
+        >
+          <p id={"target-behavior-description-#{behavior.id}"} class="pt-muted">
+            {behavior.description}
+          </p>
+
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:8px;">
+            <span
+              id={"target-behavior-status-#{behavior.id}"}
+              class="pt-pill pt-pill--neutral"
+            >
+              {functional_analysis_status_label(behavior.functional_analysis_status)}
+            </span>
+            <.link
+              id={"target-behavior-review-link-#{behavior.id}"}
+              navigate={
+                ~p"/patients/#{@selected_patient.id}/target_behaviors/#{behavior.id}/review"
+              }
+              class="button-secondary button-secondary--sm"
+            >
+              Revisar análisis funcional
+            </.link>
+          </div>
+        </article>
+      </div>
+    </section>
     <%!-- Emotion trends — one meter per emotion --%>
     <div :if={@emotion_rows != []} id="emotion-trends" class="pt-card">
       <div class="pt-card__head">
