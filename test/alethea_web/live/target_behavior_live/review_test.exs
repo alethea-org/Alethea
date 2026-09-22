@@ -439,7 +439,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
       |> render_click()
 
-      assert render(view) =~ "Propuesta aceptada e incorporada al borrador."
+      assert render(view) =~ "Propuesta aceptada y agregada al borrador."
 
       reloaded = Repo.get!(AIProposal, proposal.id)
       assert reloaded.status == "accepted"
