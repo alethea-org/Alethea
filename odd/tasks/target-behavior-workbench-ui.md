@@ -66,7 +66,8 @@ Replace the long vertical review page with a responsive two-column clinical work
   - Route: delegated writer; strict TDD.
   - Outcome: compact patient/status header, left tabbed inputs, right E-O-R-C editor, responsive fallback, compact observation entry, and readable centered cards.
   - TDD evidence: initial partial implementation produced 11 stale-test failures; migrated behavior tests, added tab/toggle accessibility coverage, and completed roving browser focus through a colocated hook; focused suite now passes 54 tests.
-  - Independent verification: confirmed stream-safe tab filtering, responsive two-column/single-column CSS, all 11 structured fields, centered bounded cards, citation/proposal/tombstone preservation, full tab ARIA semantics, and observation toggle. The source feed remains deliberately unchanged for WORKBENCH-UI-4.
+  - Independent verification: confirmed stream-safe tab filtering, responsive two-column/single-column CSS, all 11 structured fields, centered bounded cards, citation/proposal/tombstone preservation, full tab ARIA semantics, observation toggle, and browser focus movement through a contained colocated hook. The source feed remained deliberately unchanged until WORKBENCH-UI-4.
+  - Commit evidence: `283f150` (`feat(clinical): redesign behavior workbench`).
 
 - [x] **WORKBENCH-UI-4 — Replace source buttons with full-content feed cards**
   - Status: completed; pending work-unit commit.
@@ -74,6 +75,7 @@ Replace the long vertical review page with a responsive two-column clinical work
   - Outcome: opening citation shows complete source content, metadata, direction, and provenance in domain order inside an internal scroll area while retaining exact-excerpt confirmation.
   - TDD evidence: RED lacked `#evidence-source-feed`; GREEN focused LiveView suite passed 54 tests.
   - Verification evidence: complete content, formatted dates, inbound/outbound/note variants, domain ordering, absence of load-more controls, and exact-excerpt flow are covered; the feed uses bounded internal scrolling and responsive cards.
+  - Commit evidence: `283f150` (`feat(clinical): redesign behavior workbench`).
 
 - [x] **WORKBENCH-UI-5 — Add pending proposal inbox and previous notes**
   - Status: completed; pending work-unit commit.
@@ -81,27 +83,31 @@ Replace the long vertical review page with a responsive two-column clinical work
   - Outcome: proposals never auto-populate E-O-R-C; legacy drafts remain visible as previous notes for manual use.
   - TDD evidence: RED — 7 failures for missing inbox/previous-notes UI and legacy merge expectations; GREEN — 58 focused LiveView tests passed.
   - Independent verification: confirmed status-only proposal acceptance leaves structured and legacy drafts byte-identical, creates no clinical note, and keeps accepted proposals visible without pending actions; legacy and structured previous notes remount visibly and remain preserved through saves.
+  - Commit evidence: `283f150` (`feat(clinical): redesign behavior workbench`).
 
-- [ ] **WORKBENCH-UI-6 — Verify the redesigned workbench**
-  - Status: pending.
+- [x] **WORKBENCH-UI-6 — Verify the redesigned workbench**
+  - Status: completed.
   - Route: delegated verifier.
-  - Checks: focused context and LiveView suites, visual/responsive evidence when available, `mix precommit`, diff check, and changed-file diagnostics.
+  - Checks: focused codec/context/LiveView suite — 153 passed; final LiveView suite — 58 passed; icon suite — 3 passed; `mix precommit` — 1,439 passed, 5 skipped; committed and working diff checks passed; six changed Elixir files reported no diagnostics.
+  - Static verification: confirmed two-column and narrow breakpoints, bounded internal source scrolling, stream-safe tabs, contained focus movement, status-only proposal acceptance, previous-notes preservation, citation security, and unchanged authorization/encryption/audit/outbox contracts.
+  - Visual verification: unavailable because no browser harness exists in this session; computed layout and browser rendering remain a human review item.
+  - Commit evidence: not applicable; verification is read-only.
 
 ## Acceptance criteria
 
-- [ ] Desktop workbench shows inputs/evidence and analysis editor side by side.
-- [ ] Narrow screens remain usable in a single-column layout.
-- [ ] Source feed cards show complete source text before selection.
-- [ ] Source feed has bounded height and internal scrolling without pagination controls.
-- [ ] Evidence, observations, and AI proposals use distinct readable cards and filters.
-- [ ] Evidence cards are centered within a bounded reading width.
-- [ ] Status metrics render as a compact metadata strip rather than tall KPI tiles.
-- [ ] Observation entry is compact/collapsible.
-- [ ] E, O, R, and C fields save and restore independently.
-- [ ] Legacy text is preserved as previous notes without inferred classification.
-- [ ] AI proposals stay pending until manually placed.
-- [ ] Citation confirmation, timeline refresh, and AI evidence guard continue working.
-- [ ] Existing authorization and clinical-record security tests remain green.
+- [x] Desktop workbench shows inputs/evidence and analysis editor side by side.
+- [x] Narrow screens remain usable in a single-column layout.
+- [x] Source feed cards show complete source text before selection.
+- [x] Source feed has bounded height and internal scrolling without pagination controls.
+- [x] Evidence, observations, and AI proposals use distinct readable cards and filters.
+- [x] Evidence cards are centered within a bounded reading width.
+- [x] Status metrics render as a compact metadata strip rather than tall KPI tiles.
+- [x] Observation entry is compact/collapsible.
+- [x] E, O, R, and C fields save and restore independently.
+- [x] Legacy text is preserved as previous notes without inferred classification.
+- [x] AI proposals stay pending until manually placed.
+- [x] Citation confirmation, timeline refresh, and AI evidence guard continue working.
+- [x] Existing authorization and clinical-record security tests remain green.
 
 ## Progress and evidence
 
@@ -109,3 +115,9 @@ Replace the long vertical review page with a responsive two-column clinical work
 - Read-only mapping confirmed the stylesheet lacks review timeline/card classes and the source adapter already returns complete authorized content in the desired order.
 - The existing draft uses one encrypted body; a canonical text codec avoids migrations and preserves downstream RAG indexing.
 - User selected internal scrolling, structured E-O-R-C, pending AI proposals, and preservation of legacy drafts as previous notes.
+- Workbench implementation committed in `283f150`; source cards show complete content, accessible tabs preserve streamed items, and accepted proposals no longer mutate the draft.
+- Compose healthcheck formatting remediation committed separately in `044dc72`; `docker compose config --quiet` and diff check passed with unchanged semantics.
+- Unsupported icon found by full precommit was replaced in `cc3f505`; icon coverage and final precommit pass.
+- Final verification: focused codec/context/LiveView suite 153 passed; final LiveView suite 58 passed; full `mix precommit` 1,439 passed with 5 skipped; diff checks and diagnostics passed.
+- Browser visual verification was unavailable; desktop/mobile rendering remains a human review item.
+- Review workload: 2,718 changed lines across nine tracked paths. One honest slicing pass already separated reliability into its own branch; the remaining codec, persistence, UI, CSS, and behavior tests form one integrated workbench capability. Delivery requires explicit `size:exception` acceptance.
