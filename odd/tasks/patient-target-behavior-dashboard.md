@@ -35,8 +35,8 @@ The review workbench already exists, but its visible entry point is indirect and
 
 ## Delivery and review
 
-- Base feature branch / slice 1: `feature/292-target-behavior-dashboard`.
-- Current branch / slice 2: `feature/292-target-behavior-dashboard-ui`.
+- Base feature branch / slice 1: `feat/292-target-behavior-dashboard`.
+- Current branch / slice 2: `feat/292-target-behavior-dashboard-ui`.
 - Initial review boundary: `a512f9650d038fc8a69d284a0c8df104a7517059`.
 - Delivery strategy: `ask-on-risk`.
 - Chain strategy: `stacked-to-main`, selected by the user after the forecast crossed 400 lines.
