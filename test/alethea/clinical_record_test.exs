@@ -286,6 +286,123 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "list_target_behaviors/2" do
+    test "returns only the authorized patient's decrypted behaviors with derived draft status in deterministic order",
+         %{professional: professional, patient: patient} do
+      other_patient = create_patient!(professional)
+
+      assert {:ok, _other_target} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 other_patient.id,
+                 "Conducta de otro paciente"
+               )
+
+      assert {:ok, oldest} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 patient.id,
+                 "Conducta sin borrador"
+               )
+
+      assert {:ok, saved} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 patient.id,
+                 "Conducta con borrador"
+               )
+
+      assert {:ok, tombstoned} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 patient.id,
+                 "Conducta con borrador eliminado"
+               )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 saved.id,
+                 "Contenido que no debe salir en el listado"
+               )
+
+      deleted_draft =
+        %FunctionalAnalysisDraft{}
+        |> FunctionalAnalysisDraft.changeset(%{
+          encrypted_body: <<1, 2, 3>>,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: tombstoned.id
+        })
+        |> Repo.insert!()
+
+      Repo.delete!(deleted_draft)
+
+      %Tombstone{}
+      |> Tombstone.changeset(%{
+        resource_type: "functional_analysis_draft",
+        resource_id: deleted_draft.id,
+        target_behavior_id: tombstoned.id,
+        patient_id: patient.id,
+        deleted_at: ~U[2026-09-16 12:00:00Z],
+        deleted_by_id: professional.id,
+        trigger: "manual"
+      })
+      |> Repo.insert!()
+
+      assert {:ok, behaviors} =
+               ClinicalRecord.list_target_behaviors(professional, patient.id)
+
+      assert Enum.map(behaviors, & &1.id) ==
+               [oldest, saved, tombstoned]
+               |> Enum.sort_by(&{&1.inserted_at, &1.id}, :desc)
+               |> Enum.map(& &1.id)
+
+      by_id = Map.new(behaviors, &{&1.id, &1})
+
+      assert by_id[oldest.id] == %{
+               id: oldest.id,
+               description: "Conducta sin borrador",
+               functional_analysis_status: :not_started
+             }
+
+      assert by_id[saved.id] == %{
+               id: saved.id,
+               description: "Conducta con borrador",
+               functional_analysis_status: :saved
+             }
+
+      assert by_id[tombstoned.id] == %{
+               id: tombstoned.id,
+               description: "Conducta con borrador eliminado",
+               functional_analysis_status: :legally_deleted
+             }
+    end
+
+    test "returns an empty list when the authorized patient has no target behaviors", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:ok, []} = ClinicalRecord.list_target_behaviors(professional, patient.id)
+    end
+
+    test "denies a professional who is not responsible for the patient", %{patient: patient} do
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.list_target_behaviors(other_professional, patient.id)
+
+      assert [audit] =
+               AuditLog
+               |> where([a], a.professional_id == ^other_professional.id)
+               |> Repo.all()
+
+      assert audit.action == "clinical_record_access_denied"
+      assert audit.details == %{"outcome" => "denied"}
+    end
+  end
+
   describe "create_clinical_note/3 — atomicity" do
     test "a failure past :record rolls back the whole Multi (no row, no audit, no job)", %{
       professional: professional,
