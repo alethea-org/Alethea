@@ -35,42 +35,48 @@ The review workbench already exists, but its visible entry point is indirect and
 
 ## Delivery and review
 
-- Branch: `feature/292-target-behavior-dashboard`.
+- Base feature branch / slice 1: `feature/292-target-behavior-dashboard`.
+- Current branch / slice 2: `feature/292-target-behavior-dashboard-ui`.
 - Initial review boundary: `a512f9650d038fc8a69d284a0c8df104a7517059`.
 - Delivery strategy: `ask-on-risk`.
-- Forecast: 170–220 authored changed lines, excluding generated files.
-- Expected delivery: one PR slice, two work-unit commits.
+- Chain strategy: `stacked-to-main`, selected by the user after the forecast crossed 400 lines.
+- Forecast: revised to 400–500 authored changed lines after TB-1 produced 282 committed lines including the feature document.
+- Slice 1 boundary: `6d3cc29b6ecf3f56ee81508f3c67347d503de98c` (TB-1, targets `main`).
+- Slice 2 boundary: pending TB-2 commit (initially targets slice 1, then retargets to `main` after slice 1 lands).
+- Expected delivery: two stacked work-unit PR slices.
 - Engram mirror: pending because the local Engram provider was unavailable during initialization.
 
 ## Tasks
 
-- [ ] **TB-1 — Add the authorized target-behavior listing API**
-  - Status: in progress.
+- [x] **TB-1 — Add the authorized target-behavior listing API**
+  - Status: completed and independently verified.
   - Route: delegated writer; multi-file write trigger (`lib` plus context tests).
   - RED: prove patient scoping, decrypted descriptions, deterministic ordering, derived draft state, empty results, and unauthorized access.
   - GREEN: add the smallest `ClinicalRecord.list_target_behaviors/2` implementation.
   - REFACTOR: reuse existing authorization/decryption helpers and avoid leaking draft bodies.
-  - Checks: focused clinical-record tests.
-  - Commit evidence: pending.
-  - Native review assessment/outcome: pending.
+  - Checks: `mix test test/alethea/clinical_record_test.exs` — 61 passed in writer, parent spot check, and independent verifier runs; `git diff --check` passed.
+  - Commit evidence: `6d3cc29b6ecf3f56ee81508f3c67347d503de98c` (`feat(clinical): list patient target behaviors`).
+  - Native review assessment/outcome: assessment was unassessable due to a schema-incompatible native response; risk therefore failed closed to high verification. Independent verification passed, and native review lineage `review-03b45440ad3a0774` was approved and acknowledged.
 
 - [ ] **TB-2 — Render dashboard access and LiveView coverage**
+  - Status: implementation and checks complete; work-unit commit and native review pending.
   - Route: delegated writer; multi-file write trigger (LiveView, template, and tests).
   - RED: prove visible listing, exact stable review link, saved-state summary, patient isolation through the authorized data path, and explanatory empty state.
   - GREEN: stream the target behaviors and render the identified dashboard section.
   - REFACTOR: keep stable DOM IDs and reuse existing dashboard presentation patterns.
-  - Checks: focused dashboard LiveView tests, then the combined feature command.
-  - Runtime harness: authenticated `Phoenix.LiveViewTest.live/2` against encrypted SQL-sandbox records; no external service.
+  - TDD evidence: RED `mix test test/alethea_web/live/dashboard_live_test.exs` — 37 passed, 3 failed, 1 skipped; GREEN and refactor rerun — 40 passed, 1 skipped.
+  - Checks: parent fallback run after two independent-verifier attempts were blocked by a false outside-turn mutation signal: dashboard tests 40 passed, 1 skipped; combined context/dashboard tests 101 passed, 1 skipped; `git diff --check` passed; Pi LSP diagnostics found no source/test findings and had no HEEx server.
+  - Runtime harness: authenticated `Phoenix.LiveViewTest.live/2` exercised encrypted SQL-sandbox records, scoped rows, status labels, exact links, stream reset, and empty states; no external service.
   - Commit evidence: pending.
   - Native review assessment/outcome: pending.
 
 ## Acceptance criteria
 
-- [ ] A clinician can reach the functional-analysis workbench from the patient dashboard without using RAG.
-- [ ] The list contains only target behaviors belonging to the authorized patient.
-- [ ] Every behavior has a stable workbench link.
-- [ ] The empty state explains how target behaviors are created or appear.
-- [ ] LiveView tests cover listing, the correct link, and no behaviors.
+- [x] A clinician can reach the functional-analysis workbench from the patient dashboard without using RAG.
+- [x] The list contains only target behaviors belonging to the authorized patient.
+- [x] Every behavior has a stable workbench link.
+- [x] The empty state explains how target behaviors are created or appear.
+- [x] LiveView tests cover listing, the correct link, and no behaviors.
 
 ## Progress and evidence
 
@@ -80,4 +86,4 @@ The review workbench already exists, but its visible entry point is indirect and
 
 ## Next step
 
-TB-1 is in progress with a bounded writer using strict TDD.
+Create the slice-2 work-unit commit, run native candidate assessment/review, then run the repository precommit suite.
