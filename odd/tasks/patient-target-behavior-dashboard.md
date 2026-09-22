@@ -42,7 +42,7 @@ The review workbench already exists, but its visible entry point is indirect and
 - Chain strategy: `stacked-to-main`, selected by the user after the forecast crossed 400 lines.
 - Forecast: revised to 400–500 authored changed lines after TB-1 produced 282 committed lines including the feature document.
 - Slice 1 boundary: `6d3cc29b6ecf3f56ee81508f3c67347d503de98c` (TB-1, targets `main`).
-- Slice 2 boundary: pending TB-2 commit (initially targets slice 1, then retargets to `main` after slice 1 lands).
+- Slice 2 boundary: `4ee20153b31dcfdd792ab81a084a5c9ac7f0db15` (TB-2, initially targets slice 1, then retargets to `main` after slice 1 lands).
 - Expected delivery: two stacked work-unit PR slices.
 - Engram mirror: pending because the local Engram provider was unavailable during initialization.
 
@@ -58,8 +58,8 @@ The review workbench already exists, but its visible entry point is indirect and
   - Commit evidence: `6d3cc29b6ecf3f56ee81508f3c67347d503de98c` (`feat(clinical): list patient target behaviors`).
   - Native review assessment/outcome: assessment was unassessable due to a schema-incompatible native response; risk therefore failed closed to high verification. Independent verification passed, and native review lineage `review-03b45440ad3a0774` was approved and acknowledged.
 
-- [ ] **TB-2 — Render dashboard access and LiveView coverage**
-  - Status: implementation and checks complete; work-unit commit and native review pending.
+- [x] **TB-2 — Render dashboard access and LiveView coverage**
+  - Status: completed, committed, verified, and natively reviewed.
   - Route: delegated writer; multi-file write trigger (LiveView, template, and tests).
   - RED: prove visible listing, exact stable review link, saved-state summary, patient isolation through the authorized data path, and explanatory empty state.
   - GREEN: stream the target behaviors and render the identified dashboard section.
@@ -67,8 +67,8 @@ The review workbench already exists, but its visible entry point is indirect and
   - TDD evidence: RED `mix test test/alethea_web/live/dashboard_live_test.exs` — 37 passed, 3 failed, 1 skipped; GREEN and refactor rerun — 40 passed, 1 skipped.
   - Checks: parent fallback run after two independent-verifier attempts were blocked by a false outside-turn mutation signal: dashboard tests 40 passed, 1 skipped; combined context/dashboard tests 101 passed, 1 skipped; `git diff --check` passed; Pi LSP diagnostics found no source/test findings and had no HEEx server.
   - Runtime harness: authenticated `Phoenix.LiveViewTest.live/2` exercised encrypted SQL-sandbox records, scoped rows, status labels, exact links, stream reset, and empty states; no external service.
-  - Commit evidence: pending.
-  - Native review assessment/outcome: pending.
+  - Commit evidence: `4ee20153b31dcfdd792ab81a084a5c9ac7f0db15` (`feat(dashboard): surface target behaviors`).
+  - Native review assessment/outcome: assessment was unassessable due to a schema-incompatible native response and therefore failed closed to high verification. Native review lineage `review-9563b05a4453a77c` reviewed slice 2 against TB-1, was approved, and was acknowledged. Advisory `R3-silent-target-behavior-load-failure` is informational follow-up scope and did not open a correction.
 
 ## Acceptance criteria
 
@@ -82,8 +82,13 @@ The review workbench already exists, but its visible entry point is indirect and
 
 - Issue `#292` requirements inspected on 2026-09-16.
 - Read-only repository mapping completed by `gentle-ai-explore`.
-- No blocking product decision remains; draft state is derived from existing draft/tombstone data.
+- No blocking product decision remained; draft state is derived from existing draft/tombstone data.
+- Focused verification passed: 61 context tests, 40 dashboard tests with 1 skipped, and 101 combined tests with 1 skipped.
+- Full-suite diagnosis passed serially with 1374 tests and 5 skipped after the first `mix precommit` attempt timed out intermittently.
+- Final `mix precommit` passed with 1374 tests and 5 skipped; only pre-existing warnings and expected negative-path logs were emitted.
+- Both work-unit commits received approved and acknowledged native reviews.
+- Engram synchronization remains pending because the local provider was unavailable throughout the work.
 
 ## Next step
 
-Create the slice-2 work-unit commit, run native candidate assessment/review, then run the repository precommit suite.
+Commit this final evidence record. Delivery remains two stacked PR slices: TB-1 to `main`, then TB-2 to TB-1 and later retargeted to `main`. The informational silent-load-failure advisory remains separate follow-up scope.
