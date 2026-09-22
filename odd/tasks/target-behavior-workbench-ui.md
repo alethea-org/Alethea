@@ -52,11 +52,14 @@ Replace the long vertical review page with a responsive two-column clinical work
     - `test/alethea/clinical_record/functional_analysis_content_test.exs`
   - TDD evidence: RED failed because the content module was undefined; GREEN focused suite passed 11 tests.
   - Independent verification: confirmed all 11 E-O-R-C fields, deterministic versioned serialization, explicit empties, byte-for-byte legacy fallback, and fail-closed malformed/unsupported envelopes with no inference or migration.
+  - Commit evidence: `e499a35` (`feat(clinical): encode structured EORC drafts`).
 
-- [ ] **WORKBENCH-UI-2 — Integrate structured draft persistence**
-  - Status: pending.
+- [x] **WORKBENCH-UI-2 — Integrate structured draft persistence**
+  - Status: completed; pending work-unit commit.
   - Route: delegated writer; strict TDD.
   - Outcome: ClinicalRecord accepts and retrieves canonical structured content while preserving the existing encrypted body, audit, outbox, RAG, retention, and legacy API compatibility.
+  - TDD evidence: RED — 5 undefined structured-API failures; GREEN — 84 focused context tests passed.
+  - Independent verification: no functional defects; confirmed authorization/target ownership, version-2 encryption, exact canonical ciphertext plaintext, atomic audit/outbox reuse, tombstone behavior, legacy compatibility, and previous-notes-only fallback. Pre-existing untracked package files remain unrelated and untouched.
 
 - [ ] **WORKBENCH-UI-3 — Build responsive two-column workbench**
   - Status: pending.
