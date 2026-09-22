@@ -286,6 +286,123 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "list_target_behaviors/2" do
+    test "returns only the authorized patient's decrypted behaviors with derived draft status in deterministic order",
+         %{professional: professional, patient: patient} do
+      other_patient = create_patient!(professional)
+
+      assert {:ok, _other_target} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 other_patient.id,
+                 "Conducta de otro paciente"
+               )
+
+      assert {:ok, oldest} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 patient.id,
+                 "Conducta sin borrador"
+               )
+
+      assert {:ok, saved} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 patient.id,
+                 "Conducta con borrador"
+               )
+
+      assert {:ok, tombstoned} =
+               ClinicalRecord.create_target_behavior(
+                 professional,
+                 patient.id,
+                 "Conducta con borrador eliminado"
+               )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 saved.id,
+                 "Contenido que no debe salir en el listado"
+               )
+
+      deleted_draft =
+        %FunctionalAnalysisDraft{}
+        |> FunctionalAnalysisDraft.changeset(%{
+          encrypted_body: <<1, 2, 3>>,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: tombstoned.id
+        })
+        |> Repo.insert!()
+
+      Repo.delete!(deleted_draft)
+
+      %Tombstone{}
+      |> Tombstone.changeset(%{
+        resource_type: "functional_analysis_draft",
+        resource_id: deleted_draft.id,
+        target_behavior_id: tombstoned.id,
+        patient_id: patient.id,
+        deleted_at: ~U[2026-09-16 12:00:00Z],
+        deleted_by_id: professional.id,
+        trigger: "manual"
+      })
+      |> Repo.insert!()
+
+      assert {:ok, behaviors} =
+               ClinicalRecord.list_target_behaviors(professional, patient.id)
+
+      assert Enum.map(behaviors, & &1.id) ==
+               [oldest, saved, tombstoned]
+               |> Enum.sort_by(&{&1.inserted_at, &1.id}, :desc)
+               |> Enum.map(& &1.id)
+
+      by_id = Map.new(behaviors, &{&1.id, &1})
+
+      assert by_id[oldest.id] == %{
+               id: oldest.id,
+               description: "Conducta sin borrador",
+               functional_analysis_status: :not_started
+             }
+
+      assert by_id[saved.id] == %{
+               id: saved.id,
+               description: "Conducta con borrador",
+               functional_analysis_status: :saved
+             }
+
+      assert by_id[tombstoned.id] == %{
+               id: tombstoned.id,
+               description: "Conducta con borrador eliminado",
+               functional_analysis_status: :legally_deleted
+             }
+    end
+
+    test "returns an empty list when the authorized patient has no target behaviors", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:ok, []} = ClinicalRecord.list_target_behaviors(professional, patient.id)
+    end
+
+    test "denies a professional who is not responsible for the patient", %{patient: patient} do
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.list_target_behaviors(other_professional, patient.id)
+
+      assert [audit] =
+               AuditLog
+               |> where([a], a.professional_id == ^other_professional.id)
+               |> Repo.all()
+
+      assert audit.action == "clinical_record_access_denied"
+      assert audit.details == %{"outcome" => "denied"}
+    end
+  end
+
   describe "create_clinical_note/3 — atomicity" do
     test "a failure past :record rolls back the whole Multi (no row, no audit, no job)", %{
       professional: professional,
@@ -1553,6 +1670,172 @@ defmodule Alethea.ClinicalRecordTest do
       assert item_v1.text == "Observacion cifrada con la DEK compartida"
       assert item_v2.id == v2_observation.id
       assert item_v2.text == "Observacion cifrada con la DEK de ClinicalRecord"
+    end
+  end
+
+  describe "cross-patient target_behavior ownership (GitHub #289)" do
+    # Same professional owns BOTH patients, so `get_patient_for_professional/2`
+    # passes for either — the only thing standing between patient A's URL and
+    # patient B's target behavior is the (patient_id, target_behavior_id) check.
+    setup %{professional: professional, patient: patient_a} do
+      patient_b = create_patient!(professional)
+      target_a = create_target_behavior!(professional, patient_a)
+      target_b = create_target_behavior!(professional, patient_b)
+
+      %{patient_a: patient_a, patient_b: patient_b, target_a: target_a, target_b: target_b}
+    end
+
+    test "review_timeline/3 rejects a target behavior of another patient",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.review_timeline(professional, patient_a.id, target_b.id)
+    end
+
+    test "review_timeline/3 rejects a malformed target behavior id without raising",
+         %{professional: professional, patient_a: patient_a} do
+      assert {:error, :not_found} =
+               ClinicalRecord.review_timeline(professional, patient_a.id, "not-a-uuid")
+    end
+
+    test "review_timeline/3 still works for the patient's own target behavior",
+         %{professional: professional, patient_a: patient_a, target_a: target_a} do
+      assert {:ok, []} = ClinicalRecord.review_timeline(professional, patient_a.id, target_a.id)
+    end
+
+    test "add_clinician_observation/4 rejects a cross-patient target and inserts nothing",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.add_clinician_observation(
+                 professional,
+                 patient_a.id,
+                 target_b.id,
+                 "cross-patient body"
+               )
+
+      assert Repo.aggregate(ClinicianObservation, :count) == 0
+    end
+
+    test "add_consultation_evidence/4 rejects a cross-patient target and inserts nothing",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.add_consultation_evidence(
+                 professional,
+                 patient_a.id,
+                 target_b.id,
+                 %{
+                   source_kind: "clinical_note",
+                   source_id: Ecto.UUID.generate(),
+                   excerpt: "cross-patient excerpt",
+                   occurred_at: DateTime.utc_now()
+                 }
+               )
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+    end
+
+    test "request_ai_proposals/3 rejects a cross-patient target: no job, no audit",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.request_ai_proposals(professional, patient_a.id, target_b.id)
+
+      assert all_enqueued(worker: "AletheaJobs.AIProposalWorker") == []
+
+      assert [] =
+               AuditLog
+               |> where([a], a.action == "ai_proposals_requested")
+               |> Repo.all()
+    end
+
+    test "upsert_functional_analysis_draft/4 rejects a cross-patient target and inserts nothing",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient_a.id,
+                 target_b.id,
+                 "cross-patient draft"
+               )
+
+      assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
+    end
+
+    test "get_functional_analysis_draft/3 rejects a cross-patient target",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient_a.id,
+                 target_b.id
+               )
+    end
+
+    test "a cross-patient attempt writes a content-free denial audit row",
+         %{professional: professional, patient_a: patient_a, target_b: target_b} do
+      assert {:error, :not_found} =
+               ClinicalRecord.review_timeline(professional, patient_a.id, target_b.id)
+
+      assert [row] =
+               AuditLog
+               |> where([a], a.action == "clinical_record_access_denied")
+               |> where([a], a.resource_type == "target_behavior")
+               |> Repo.all()
+
+      assert row.professional_id == professional.id
+      assert row.resource_id == target_b.id
+      assert row.details == %{"outcome" => "denied"}
+    end
+
+    test "a malformed target id is audited without echoing the id",
+         %{professional: professional, patient_a: patient_a} do
+      assert {:error, :not_found} =
+               ClinicalRecord.review_timeline(professional, patient_a.id, "not-a-uuid")
+
+      assert [row] =
+               AuditLog
+               |> where([a], a.action == "clinical_record_access_denied")
+               |> where([a], a.resource_type == "target_behavior")
+               |> Repo.all()
+
+      assert row.resource_id == nil
+    end
+
+    test "get_target_behavior/3 decrypts description and attaches patient",
+         %{
+           professional: professional,
+           patient_a: patient_a,
+           target_a: target_a
+         } do
+      assert {:ok, %TargetBehavior{description: description, patient: patient}} =
+               ClinicalRecord.get_target_behavior(professional, patient_a.id, target_a.id)
+
+      assert is_binary(description)
+      assert description != "[No disponible]"
+      assert patient.id == patient_a.id
+      assert patient.alias == patient_a.alias
+    end
+
+    test "get_target_behavior/3 returns the row only for the owning patient",
+         %{
+           professional: professional,
+           patient_a: patient_a,
+           target_a: target_a,
+           target_b: target_b
+         } do
+      assert {:ok, %TargetBehavior{id: id}} =
+               ClinicalRecord.get_target_behavior(professional, patient_a.id, target_a.id)
+
+      assert id == target_a.id
+
+      assert {:error, :not_found} =
+               ClinicalRecord.get_target_behavior(professional, patient_a.id, target_b.id)
+    end
+
+    test "get_target_behavior/3 denies a professional not responsible for the patient",
+         %{patient_a: patient_a, target_a: target_a} do
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.get_target_behavior(other_professional, patient_a.id, target_a.id)
     end
   end
 

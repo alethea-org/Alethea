@@ -9,6 +9,8 @@ defmodule AletheaWeb.DashboardLiveTest do
 
   alias Alethea.Accounts
   alias Alethea.Clinical.Trend
+  alias Alethea.ClinicalRecord
+  alias Alethea.ClinicalRecord.Retention
   alias Alethea.Foundation.Accounts.Patient, as: FoundationPatient
   alias Alethea.Foundation.Accounts.PatientAuthCode
   alias Alethea.Jobs.TelegramOutboundWorker
@@ -45,6 +47,60 @@ defmodule AletheaWeb.DashboardLiveTest do
       # The critical patient surfaces in the editorial triage strip
       # as a `pta-chip pta-chip--risk` link to the patient's detail.
       assert has_element?(view, "a.pta-chip--risk", "Maria Garcia")
+    end
+  end
+
+  describe "real-time crisis alerts with legacy_patient_id (real mode, #286)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      legacy_patient = legacy_patient_fixture(professional)
+
+      foundation_professional = professional_fixture()
+
+      foundation_patient =
+        patient_fixture(foundation_professional)
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      %{legacy_patient: legacy_patient, foundation_patient: foundation_patient}
+    end
+
+    test "renders the crisis banner without a page reload using legacy_patient_id", %{
+      conn: conn,
+      legacy_patient: legacy_patient,
+      foundation_patient: foundation_patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(
+        view.pid,
+        {:crisis_detected,
+         %{
+           patient_id: foundation_patient.id,
+           legacy_patient_id: legacy_patient.id,
+           level: :high,
+           triggers: ["autolesión"]
+         }}
+      )
+
+      assert render(view) =~
+               "Alerta Critica: El paciente #{legacy_patient.alias} ha entrado en crisis"
+
+      assert has_element?(view, "a.pta-chip--risk", legacy_patient.alias)
+    end
+
+    test "drops the alert (does not crash) when only the foundation patient_id is a UUID with no legacy_patient_id and it does not match any patients table row",
+         %{conn: conn, foundation_patient: foundation_patient} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(
+        view.pid,
+        {:crisis_detected, %{patient_id: foundation_patient.id, level: :high}}
+      )
+
+      refute render(view) =~ "Alerta Critica"
     end
   end
 
@@ -461,8 +517,22 @@ defmodule AletheaWeb.DashboardLiveTest do
 
     test "clicking the button regenerates the summary asynchronously and shows a success flash",
          %{conn: conn, patient: patient} do
+      test_pid = self()
+
+      # The chain blocks until the test releases it. Without the gate, the
+      # mocked chain returns instantly, so the async task can finish (and the
+      # button return to idle) before the in-flight `disabled` assertion runs —
+      # a race that made this test fail intermittently (GitHub #297).
       Alethea.AI.WeeklySummaryChainMock
       |> expect(:run, fn _summaries, _trends ->
+        send(test_pid, {:chain_started, self()})
+
+        receive do
+          :release -> :ok
+        after
+          5_000 -> :ok
+        end
+
         {:ok,
          %{
            summary_text: "Resumen recién generado bajo demanda.",
@@ -480,8 +550,10 @@ defmodule AletheaWeb.DashboardLiveTest do
       html = view |> element("#generate-weekly-summary-button") |> render_click()
 
       assert html =~ "Generando"
+      assert_receive {:chain_started, chain_pid}
       assert has_element?(view, "#generate-weekly-summary-button[disabled]")
 
+      send(chain_pid, :release)
       html = render_async(view)
 
       assert html =~ "Resumen semanal generado correctamente."
@@ -518,6 +590,144 @@ defmodule AletheaWeb.DashboardLiveTest do
 
       assert html =~ "El asistente de IA no respondió"
       refute html =~ "No se pudo generar el resumen semanal."
+    end
+  end
+
+  describe "target behaviors (real mode)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional, %{alias: "Paciente con conductas"})
+      other_patient = legacy_patient_fixture(professional, %{alias: "Paciente sin conductas"})
+
+      %{patient: patient, other_patient: other_patient}
+    end
+
+    test "lists only the selected patient's behaviors with status summaries and exact review links",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           other_patient: other_patient
+         } do
+      {:ok, not_started} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Evita iniciar conversaciones en sesión"
+        )
+
+      {:ok, saved} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Interrumpe actividades ante consignas nuevas"
+        )
+
+      {:ok, deleted} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Se retira cuando aumenta la demanda"
+        )
+
+      {:ok, _other_behavior} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          other_patient.id,
+          "Conducta exclusiva de otro paciente"
+        )
+
+      {:ok, _saved_draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          saved.id,
+          "Borrador guardado"
+        )
+
+      {:ok, deleted_draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          deleted.id,
+          "Borrador que será eliminado"
+        )
+
+      {:ok, _tombstone} =
+        Retention.legally_delete_record(
+          {"functional_analysis_draft", deleted_draft.id},
+          actor: professional,
+          trigger: "manual"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#target-behaviors-section", "Conductas objetivo")
+
+      assert has_element?(
+               view,
+               "#target-behavior-#{not_started.id}",
+               "Evita iniciar conversaciones en sesión"
+             )
+
+      assert has_element?(view, "#target-behavior-status-#{not_started.id}", "No iniciado")
+      assert has_element?(view, "#target-behavior-status-#{saved.id}", "Guardado")
+      assert has_element?(view, "#target-behavior-status-#{deleted.id}", "Eliminado legalmente")
+
+      for behavior <- [not_started, saved, deleted] do
+        assert has_element?(
+                 view,
+                 "#target-behavior-review-link-#{behavior.id}[href='/patients/#{patient.id}/target_behaviors/#{behavior.id}/review']",
+                 "Revisar análisis funcional"
+               )
+      end
+
+      refute has_element?(view, "#target-behaviors", "Conducta exclusiva de otro paciente")
+    end
+
+    test "resets the behavior stream when patient selection changes", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      other_patient: other_patient
+    } do
+      {:ok, behavior} =
+        ClinicalRecord.create_target_behavior(
+          professional,
+          patient.id,
+          "Conducta visible solo en el primer paciente"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+      assert has_element?(view, "#target-behavior-#{behavior.id}")
+
+      render_patch(view, ~p"/dashboard/patients/#{other_patient.id}")
+
+      refute has_element?(view, "#target-behavior-#{behavior.id}")
+
+      assert has_element?(
+               view,
+               "#target-behaviors-empty",
+               "Las conductas objetivo aparecen cuando se crean desde el registro clínico"
+             )
+    end
+  end
+
+  describe "target behaviors (mock mode)" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "renders the explicit empty collection state", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      assert has_element?(view, "#target-behaviors-section", "Conductas objetivo")
+      assert has_element?(view, "#target-behaviors-empty")
+      refute has_element?(view, "#target-behaviors > [id^='target-behavior-']")
     end
   end
 
@@ -761,6 +971,77 @@ defmodule AletheaWeb.DashboardLiveTest do
       view |> element("#invite-dismiss") |> render_click()
 
       refute has_element?(view, "#telegram-invite-panel")
+    end
+  end
+
+  # Issue #287 — Dashboard failures when saving the session schedule
+  # (crash on empty/invalid input, stale week agenda) and bot message
+  # updates (settings disclosure collapsing, no value re-render).
+  describe "Issue #287 — session schedule and bot settings" do
+    setup do
+      Application.put_env(:alethea, :use_mock_data, true)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+      :ok
+    end
+
+    test "flashes an error instead of crashing when the time is empty", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view
+      |> form("#schedule-form", %{day: "2", time: ""})
+      |> render_submit()
+
+      # The view survives the submit: render still answers with the flash.
+      assert render(view) =~ "Horario inválido"
+    end
+
+    test "flashes an error for an out-of-range time", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view
+      |> form("#schedule-form", %{day: "2", time: "25:99"})
+      |> render_submit()
+
+      assert render(view) =~ "Horario inválido"
+    end
+
+    test "relocates the patient in the week agenda after saving", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1?picker=week")
+
+      # Mock p1 (Lucca) starts on Monday (day 1).
+      assert has_element?(view, ".ptc-week div.ptc-day:nth-of-type(1) a.ptc-slot", "Lucca")
+
+      view
+      |> form("#schedule-form", %{day: "3", time: "10:30"})
+      |> render_submit()
+
+      assert has_element?(view, ".ptc-week div.ptc-day:nth-of-type(3) a.ptc-slot", "Lucca")
+      refute has_element?(view, ".ptc-week div.ptc-day:nth-of-type(1) a.ptc-slot", "Lucca")
+    end
+
+    test "keeps bot settings open with feedback after saving messages", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view |> element("#bot-settings-summary") |> render_click()
+
+      assert has_element?(view, "#bot-settings[open]")
+
+      view
+      |> form("#welcome-message-form", %{welcome_message: "¡Hola %{name}! Este es tu espacio."})
+      |> render_submit()
+
+      assert render(view) =~ "Mensaje de bienvenida actualizado."
+      assert has_element?(view, "#bot-settings[open]")
+
+      view
+      |> form("#crisis-message-form", %{crisis_message: "Estoy acá, no estás solo."})
+      |> render_submit()
+
+      assert render(view) =~ "Mensaje de contención actualizado."
+      assert has_element?(view, "#bot-settings[open]")
+
+      # The persisted message re-renders in the textarea.
+      assert has_element?(view, "#crisis-message-form textarea", "Estoy acá, no estás solo.")
     end
   end
 end

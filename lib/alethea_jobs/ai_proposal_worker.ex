@@ -24,7 +24,10 @@ defmodule AletheaJobs.AIProposalWorker do
   `AletheaJobs.AIProposalWorkerTest` ("structural safety" describe
   block). A chain failure, an authorization denial, or an encryption
   failure all degrade the same way: broadcast `:ai_proposals_failed` and
-  insert nothing — never a partial or fabricated proposal.
+  insert nothing — never a partial or fabricated proposal. All proposals
+  of one run are inserted in a single transaction so that holds even when
+  a later insert fails; a target behavior deleted mid-generation (e.g. by
+  retention) fails terminally as `:target_behavior_deleted`, never retried.
   """
   use Oban.Worker, queue: :ai_analysis, max_attempts: 1, unique: [period: 60, fields: [:args]]
 
@@ -80,6 +83,14 @@ defmodule AletheaJobs.AIProposalWorker do
         broadcast_failed(target_behavior_id, :unauthorized)
         {:error, :unauthorized}
 
+      {:error, :not_found} ->
+        Logger.warning(
+          "AIProposalWorker: target behavior not found for patient professional=#{professional.id} patient=#{patient_id}"
+        )
+
+        broadcast_failed(target_behavior_id, :not_found)
+        {:error, :not_found}
+
       {:error, reason} ->
         Logger.error("AIProposalWorker: review_timeline failed: #{inspect(reason)}")
         broadcast_failed(target_behavior_id, reason)
@@ -115,26 +126,31 @@ defmodule AletheaJobs.AIProposalWorker do
       occurred_at = DateTime.utc_now()
       model_version = LLMConfig.get(:pattern_proposal).model
 
-      results =
-        Enum.map(proposals, fn text ->
-          insert_proposal(
-            professional,
-            patient,
-            dek,
-            target_behavior_id,
-            text,
-            occurred_at,
-            model_version
-          )
-        end)
+      case insert_all(
+             professional,
+             patient,
+             dek,
+             target_behavior_id,
+             proposals,
+             occurred_at,
+             model_version
+           ) do
+        :ok ->
+          broadcast_ready(target_behavior_id)
+          :ok
 
-      if Enum.all?(results, &match?({:ok, _}, &1)) do
-        broadcast_ready(target_behavior_id)
-        :ok
-      else
-        Logger.error("AIProposalWorker: one or more proposal inserts failed")
-        broadcast_failed(target_behavior_id, :insert_failed)
-        {:error, :insert_failed}
+        {:error, :target_behavior_deleted} ->
+          Logger.warning(
+            "AIProposalWorker: target behavior deleted during generation professional=#{professional.id} patient=#{patient.id}"
+          )
+
+          broadcast_failed(target_behavior_id, :target_behavior_deleted)
+          {:error, :target_behavior_deleted}
+
+        {:error, reason} ->
+          Logger.error("AIProposalWorker: proposal insert failed: #{inspect(reason)}")
+          broadcast_failed(target_behavior_id, reason)
+          {:error, reason}
       end
     else
       nil ->
@@ -147,12 +163,67 @@ defmodule AletheaJobs.AIProposalWorker do
     end
   end
 
-  # Builds and inserts a single new `AIProposal` row. `attrs` never
+  # Inserts every proposal in ONE transaction: either all persist or none
+  # do, so a failure part-way never leaves a partial set behind (GitHub
+  # #289). A target behavior deleted after the timeline was read — e.g. by
+  # retention while the LLM call was in flight — is a permanent condition,
+  # reported as `:target_behavior_deleted` rather than retried.
+  defp insert_all(
+         professional,
+         patient,
+         dek,
+         target_behavior_id,
+         proposals,
+         occurred_at,
+         model_version
+       ) do
+    proposals
+    |> Enum.with_index()
+    |> Enum.reduce_while(Ecto.Multi.new(), fn {text, index}, multi ->
+      case proposal_changeset(
+             professional,
+             patient,
+             dek,
+             target_behavior_id,
+             text,
+             occurred_at,
+             model_version
+           ) do
+        {:ok, changeset} -> {:cont, Ecto.Multi.insert(multi, {:proposal, index}, changeset)}
+        {:error, _reason} -> {:halt, :encryption_failed}
+      end
+    end)
+    |> case do
+      %Ecto.Multi{} = multi -> run_insert(multi)
+      :encryption_failed -> {:error, :insert_failed}
+    end
+  end
+
+  defp run_insert(multi) do
+    case Repo.transaction(multi) do
+      {:ok, _changes} ->
+        :ok
+
+      {:error, _step, %Ecto.Changeset{} = changeset, _changes} ->
+        if target_behavior_deleted?(changeset),
+          do: {:error, :target_behavior_deleted},
+          else: {:error, :insert_failed}
+    end
+  end
+
+  defp target_behavior_deleted?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {:target_behavior_id, {_message, opts}} -> opts[:constraint] == :foreign
+      _other -> false
+    end)
+  end
+
+  # Builds the changeset for a single new `AIProposal` row. `attrs` never
   # includes a `:status` key — `AIProposal.changeset/2` always forces
   # "pending" itself (design A6). `encrypted_original_text` and
   # `encrypted_text` start identical: this is the model's output at
   # generation time, before any clinician has looked at it.
-  defp insert_proposal(
+  defp proposal_changeset(
          professional,
          patient,
          dek,
@@ -162,17 +233,16 @@ defmodule AletheaJobs.AIProposalWorker do
          model_version
        ) do
     with {:ok, ciphertext} <- PatientVault.encrypt(text, dek) do
-      %AIProposal{}
-      |> AIProposal.changeset(%{
-        encrypted_original_text: ciphertext,
-        encrypted_text: ciphertext,
-        model_version: model_version,
-        occurred_at: occurred_at,
-        patient_id: patient.id,
-        professional_id: professional.id,
-        target_behavior_id: target_behavior_id
-      })
-      |> Repo.insert()
+      {:ok,
+       AIProposal.changeset(%AIProposal{}, %{
+         encrypted_original_text: ciphertext,
+         encrypted_text: ciphertext,
+         model_version: model_version,
+         occurred_at: occurred_at,
+         patient_id: patient.id,
+         professional_id: professional.id,
+         target_behavior_id: target_behavior_id
+       })}
     end
   end
 

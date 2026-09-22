@@ -2,9 +2,11 @@ defmodule AletheaWeb.PatientLive.IndexTest do
   use AletheaWeb.ConnCase
 
   import Alethea.RagFixtures
+  import Alethea.FoundationTestHelper
   import Phoenix.LiveViewTest
 
   alias Alethea.Accounts
+  alias Alethea.Repo
 
   setup [:register_and_log_in_professional]
 
@@ -56,6 +58,52 @@ defmodule AletheaWeb.PatientLive.IndexTest do
 
       refute has_element?(view, ~s(a[href="/patients/#{patient.id}/clinical-search"]))
       refute html =~ "Búsqueda clínica"
+    end
+  end
+
+  describe "crisis alert stream update via legacy_patient_id (#286)" do
+    test "updates the patient's urgent_intervention in the stream without raising Ecto.NoResultsError",
+         %{conn: conn, professional: professional} do
+      legacy_patient = legacy_patient_fixture(professional)
+
+      foundation_professional = professional_fixture()
+
+      foundation_patient =
+        patient_fixture(foundation_professional)
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients")
+
+      send(
+        view.pid,
+        {:crisis_detected,
+         %{
+           patient_id: foundation_patient.id,
+           legacy_patient_id: legacy_patient.id,
+           level: :high,
+           triggers: ["autolesión"]
+         }}
+      )
+
+      assert Process.alive?(view.pid)
+      assert render(view) =~ legacy_patient.alias
+    end
+
+    test "raising Accounts.get_patient!(foundation_patient_id) would fail without legacy_patient_id (documents #286 bug shape)",
+         %{professional: professional} do
+      legacy_patient = legacy_patient_fixture(professional)
+
+      foundation_professional = professional_fixture()
+
+      foundation_patient =
+        patient_fixture(foundation_professional)
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      assert_raise Ecto.NoResultsError, fn ->
+        Accounts.get_patient!(foundation_patient.id)
+      end
     end
   end
 

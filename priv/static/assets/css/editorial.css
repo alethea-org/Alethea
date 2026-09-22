@@ -2473,3 +2473,93 @@ select.text-input {
   }
 }
 
+
+/* =================================================================
+   Clinical review workbench — layout additions (#290)
+================================================================= */
+
+.clinical-workbench-header {
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.clinical-workbench-header__info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-md) var(--spacing-xl);
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-lg);
+}
+
+.clinical-workbench-header__patient,
+.clinical-workbench-header__behavior {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clinical-workbench-header__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-muted);
+}
+
+.clinical-workbench-header__value {
+  font-size: var(--typography-body-md-size);
+  color: var(--colors-ink);
+}
+
+.stat-tile__value--status {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.review-ai-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.review-ai-hint {
+  font-size: 12px;
+  color: var(--colors-muted);
+  margin: 0;
+}
+
+.empty-state--compact {
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
+}
+
+.empty-state--compact .empty-state__icon {
+  margin-bottom: var(--spacing-xs);
+}
+
+.empty-state--compact .empty-state__text {
+  margin-bottom: 0;
+  font-size: 13px;
+}
+
+.review-empty-banner {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.review-empty-banner .empty-state__icon {
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.review-empty-banner .empty-state__text {
+  margin: 0;
+  max-width: 100%;
+}
