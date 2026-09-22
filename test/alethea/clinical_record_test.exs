@@ -1008,6 +1008,226 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "accept_ai_proposal_into_draft/4 — atomic accept + draft merge (#291)" do
+    test "authorized, no prior draft: proposal accepted and draft created in one transaction", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      assert {:ok, %{proposal: accepted, draft: draft}} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      assert accepted.id == proposal.id
+      assert accepted.status == "accepted"
+
+      assert draft.target_behavior_id == target_behavior.id
+      assert draft.patient_id == patient.id
+
+      # Verify the draft body contains the proposal text
+      assert {:ok, %{body: body}} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert body =~ "Patron sugerido por IA"
+
+      # Both audit rows written under the atomic action
+      audit_rows =
+        AuditLog
+        |> where(
+          [a],
+          a.professional_id == ^professional.id and
+            a.action == "ai_proposal_accepted_into_draft"
+        )
+        |> Repo.all()
+
+      assert length(audit_rows) == 2
+
+      resource_types = Enum.map(audit_rows, & &1.resource_type) |> Enum.sort()
+      assert resource_types == ["ai_proposal", "functional_analysis_draft"]
+
+      # Both outbox jobs enqueued
+      assert_enqueued(worker: ClinicalRecordOutboxWorker)
+    end
+
+    test "authorized, existing draft: proposal text is appended to current draft body", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      # Create an existing draft first
+      {:ok, _draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Contenido previo del borrador"
+        )
+
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      assert {:ok, %{proposal: accepted, draft: _draft}} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      assert accepted.status == "accepted"
+
+      assert {:ok, %{body: body}} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert body =~ "Contenido previo del borrador"
+      assert body =~ "Patron sugerido por IA"
+    end
+
+    test "unauthorized: denies, proposal and draft unchanged", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 other_professional,
+                 patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      reloaded = Repo.get!(AIProposal, proposal.id)
+      assert reloaded.status == "pending"
+
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+
+    test "cross-patient id guess fails: proposal and draft unchanged", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      other_professional = create_professional!()
+      other_patient = create_patient!(other_professional)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 other_professional,
+                 other_patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      reloaded = Repo.get!(AIProposal, proposal.id)
+      assert reloaded.status == "pending"
+    end
+
+    test "proposal not found: returns not_found error", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 Ecto.UUID.generate()
+               )
+    end
+
+    test "target behavior not found: returns not_found error", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:error, :not_found} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 Ecto.UUID.generate(),
+                 Ecto.UUID.generate()
+               )
+    end
+
+    test "transaction rollback: when draft persistence fails, proposal status remains pending", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      Repo.query!(
+        "ALTER TABLE functional_analysis_drafts ADD CONSTRAINT clinical_record_test_force_failure_draft CHECK (encryption_version <> 2)"
+      )
+
+      assert_raise Ecto.ConstraintError, fn ->
+        ClinicalRecord.accept_ai_proposal_into_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          proposal.id
+        )
+      end
+
+      # Proposal status is NOT accepted (rolled back)
+      reloaded = Repo.get!(AIProposal, proposal.id)
+      assert reloaded.status == "pending"
+
+      # No draft exists
+      assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
+
+      # No audit row persisted for this action
+      audit_rows =
+        AuditLog
+        |> where([a], a.action == "ai_proposal_accepted_into_draft")
+        |> Repo.all()
+
+      assert audit_rows == []
+
+      refute_enqueued(
+        worker: ClinicalRecordOutboxWorker,
+        args: %{"event" => "ai_proposal_accepted_into_draft"}
+      )
+    end
+  end
+
+  describe "FunctionalAnalysisDraft.default_structure/0" do
+    test "contains minimal clinical sections for functional analysis" do
+      structure = FunctionalAnalysisDraft.default_structure()
+
+      assert structure =~ "Antecedentes"
+      assert structure =~ "Conducta"
+      assert structure =~ "Consecuencias"
+      assert structure =~ "Función hipotetizada"
+      assert structure =~ "Evidencia pendiente / dudas"
+    end
+  end
+
   describe "upsert_functional_analysis_draft/4" do
     test "authorized: first call inserts, second call replaces the same row", %{
       professional: professional,

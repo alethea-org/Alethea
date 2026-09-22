@@ -439,6 +439,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> element("button[phx-click='accept_proposal'][phx-value-id='#{proposal.id}']")
       |> render_click()
 
+      assert render(view) =~ "Propuesta aceptada y agregada al borrador."
+
       reloaded = Repo.get!(AIProposal, proposal.id)
       assert reloaded.status == "accepted"
 
@@ -556,6 +558,40 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
       refute has_element?(view, "#note-form")
+    end
+
+    test "draft textarea exposes guided clinical placeholder", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#draft-form textarea[placeholder*='Antecedentes']")
+      assert has_element?(view, "#draft-form textarea[placeholder*='Función hipotetizada']")
+    end
+
+    test "loading the clinical structure populates the draft form", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#insert-draft-structure-button")
+
+      view
+      |> element("#insert-draft-structure-button")
+      |> render_click()
+
+      rendered = render(view)
+      assert rendered =~ "Antecedentes:"
+      assert rendered =~ "Función hipotetizada:"
+      assert rendered =~ "Evidencia pendiente / dudas:"
+
+      refute has_element?(view, "#insert-draft-structure-button")
     end
   end
 
