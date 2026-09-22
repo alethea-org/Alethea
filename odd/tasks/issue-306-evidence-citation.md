@@ -96,3 +96,5 @@ Let an authorized clinician select a patient-scoped clinical note or message, co
 - The maintainer authorized commit, push, PR creation, issue approval, and a single-PR `size:exception` delivery.
 - Review workload warning accepted: the feature commit contains 1,402 changed lines across six files, exceeding the usual 400-line review budget; most growth is focused test coverage, and the security-sensitive domain/UI behavior is intentionally kept together for end-to-end review.
 - Work-unit commit created: `206e49d` (`feat(clinical): cite workbench evidence`).
+- Delivery evidence recorded in `4afcebe` (`docs(odd): record issue 306 delivery`).
+- Pull request opened: #307 (`feat(clinical): cite workbench evidence`) with exactly one `type:feature` label and explicit `size:exception` rationale.
