@@ -101,6 +101,7 @@ defmodule AletheaJobs.AIProposalWorker do
   defp run_chain(professional, patient_id, target_behavior_id, timeline) do
     sanitized_evidence =
       timeline
+      |> Enum.filter(&(&1.kind == :consultation_evidence))
       |> Enum.map(& &1.text)
       |> Enum.map(&Sanitizer.sanitize/1)
       |> Enum.reject(&(&1 == ""))
