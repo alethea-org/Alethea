@@ -36,14 +36,15 @@ Replace the long vertical review page with a responsive two-column clinical work
 ## Delivery
 
 - Branch: `feat/target-behavior-workbench-redesign`.
+- Linked approved issue: #309 (`[Feature]: Rediseñar el workbench clínico en dos columnas E-O-R-C`).
 - Base: `origin/main` after issue #306.
 - Separate from reliability branch `fix/ai-proposal-timeline` so both PRs can be reviewed independently.
-- Review budget: expected above 400 lines because the responsive shell, structured draft contract, and behavior-first tests form one UI workbench capability. Perform one honest slicing assessment before delivery; request `size:exception` if no smaller independently useful slice fits.
+- Review budget: 2,718 changed lines because the responsive shell, structured draft contract, and behavior-first tests form one UI workbench capability. One honest slicing pass already separated reliability; the maintainer explicitly accepted the remaining documented size exception before publication.
 
 ## Tasks
 
 - [x] **WORKBENCH-UI-1 — Define canonical E-O-R-C draft representation**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - RED: serializer/parser tests cover round-trip E, O, R, C and pending content plus a legacy free-text fallback.
   - GREEN: add a deterministic deep module that serializes structured fields into the existing encrypted body and returns legacy bodies as previous notes without inference.
@@ -55,14 +56,14 @@ Replace the long vertical review page with a responsive two-column clinical work
   - Commit evidence: `e499a35` (`feat(clinical): encode structured EORC drafts`).
 
 - [x] **WORKBENCH-UI-2 — Integrate structured draft persistence**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - Outcome: ClinicalRecord accepts and retrieves canonical structured content while preserving the existing encrypted body, audit, outbox, RAG, retention, and legacy API compatibility.
   - TDD evidence: RED — 5 undefined structured-API failures; GREEN — 84 focused context tests passed.
   - Independent verification: no functional defects; confirmed authorization/target ownership, version-2 encryption, exact canonical ciphertext plaintext, atomic audit/outbox reuse, tombstone behavior, legacy compatibility, and previous-notes-only fallback. Pre-existing untracked package files remain unrelated and untouched.
 
 - [x] **WORKBENCH-UI-3 — Build responsive two-column workbench**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - Outcome: compact patient/status header, left tabbed inputs, right E-O-R-C editor, responsive fallback, compact observation entry, and readable centered cards.
   - TDD evidence: initial partial implementation produced 11 stale-test failures; migrated behavior tests, added tab/toggle accessibility coverage, and completed roving browser focus through a colocated hook; focused suite now passes 54 tests.
@@ -70,7 +71,7 @@ Replace the long vertical review page with a responsive two-column clinical work
   - Commit evidence: `283f150` (`feat(clinical): redesign behavior workbench`).
 
 - [x] **WORKBENCH-UI-4 — Replace source buttons with full-content feed cards**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - Outcome: opening citation shows complete source content, metadata, direction, and provenance in domain order inside an internal scroll area while retaining exact-excerpt confirmation.
   - TDD evidence: RED lacked `#evidence-source-feed`; GREEN focused LiveView suite passed 54 tests.
@@ -78,7 +79,7 @@ Replace the long vertical review page with a responsive two-column clinical work
   - Commit evidence: `283f150` (`feat(clinical): redesign behavior workbench`).
 
 - [x] **WORKBENCH-UI-5 — Add pending proposal inbox and previous notes**
-  - Status: completed; pending work-unit commit.
+  - Status: completed and committed.
   - Route: delegated writer; strict TDD.
   - Outcome: proposals never auto-populate E-O-R-C; legacy drafts remain visible as previous notes for manual use.
   - TDD evidence: RED — 7 failures for missing inbox/previous-notes UI and legacy merge expectations; GREEN — 58 focused LiveView tests passed.
@@ -120,4 +121,5 @@ Replace the long vertical review page with a responsive two-column clinical work
 - Unsupported icon found by full precommit was replaced in `cc3f505`; icon coverage and final precommit pass.
 - Final verification: focused codec/context/LiveView suite 153 passed; final LiveView suite 58 passed; full `mix precommit` 1,439 passed with 5 skipped; diff checks and diagnostics passed.
 - Browser visual verification was unavailable; desktop/mobile rendering remains a human review item.
-- Review workload: 2,718 changed lines across nine tracked paths. One honest slicing pass already separated reliability into its own branch; the remaining codec, persistence, UI, CSS, and behavior tests form one integrated workbench capability. Delivery requires explicit `size:exception` acceptance.
+- Review workload: 2,718 changed lines across nine tracked paths. One honest slicing pass already separated reliability into its own branch; the remaining codec, persistence, UI, CSS, and behavior tests form one integrated workbench capability. The maintainer explicitly accepted the documented size exception.
+- Issue #309 was created from the repository feature form and approved by the authenticated repository administrator.
