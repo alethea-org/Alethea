@@ -41,8 +41,8 @@ Let an authorized clinician create a target behavior from the selected patient's
 
 ## Tasks
 
-- [ ] **TB-CREATE-1 — Specify and implement the creation flow**
-  - Status: implemented and independently verified; commit/push/PR authorized.
+- [x] **TB-CREATE-1 — Specify and implement the creation flow**
+  - Status: completed and committed.
   - Route: delegated writer; multi-file write trigger.
   - RED: add LiveView tests for dashboard entry, form context, blank validation, successful creation/redirect, cancellation, and unauthorized access.
   - GREEN: add the route, dedicated LiveView, and dashboard action using `ClinicalRecord.create_target_behavior/3`.
@@ -57,7 +57,7 @@ Let an authorized clinician create a target behavior from the selected patient's
   - Writer checks: `mix precommit` — 1385 passed, 5 skipped; `git diff --check` passed.
   - Runtime evidence: valid submission trimmed and encrypted the description, enqueued the outbox event, displayed success feedback, and navigated to the exact new workbench.
   - Rollback evidence: blank submission, cancellation, and unauthorized mount created no target behavior or outbox job.
-  - Commit evidence: pending creation.
+  - Commit evidence: `d8b9d56` (`feat(clinical): create target behaviors`).
 
 - [x] **TB-CREATE-2 — Verify the complete issue behavior**
   - Status: completed.
@@ -70,15 +70,15 @@ Let an authorized clinician create a target behavior from the selected patient's
 
 ## Acceptance criteria
 
-- [ ] The selected patient's dashboard exposes "Nueva conducta objetivo" beside clinical notes.
-- [ ] The action opens a dedicated form identifying the patient.
-- [ ] A valid description creates a target behavior and shows success feedback.
-- [ ] The created behavior is available on the patient dashboard and links to its workbench.
-- [ ] Cancellation creates no record.
-- [ ] Unauthorized professionals cannot create a behavior for another patient's record.
-- [ ] Persistence retains the existing encryption, audit, and outbox flow.
-- [ ] Validation and operational errors are visible and clear.
-- [ ] LiveView tests cover all requested paths.
+- [x] The selected patient's dashboard exposes "Nueva conducta objetivo" beside clinical notes.
+- [x] The action opens a dedicated form identifying the patient.
+- [x] A valid description creates a target behavior and shows success feedback.
+- [x] The created behavior is available on the patient dashboard and links to its workbench.
+- [x] Cancellation creates no record.
+- [x] Unauthorized professionals cannot create a behavior for another patient's record.
+- [x] Persistence retains the existing encryption, audit, and outbox flow.
+- [x] Validation and operational errors are visible and clear.
+- [x] LiveView tests cover all requested paths.
 
 ## Progress and evidence
 
@@ -92,4 +92,5 @@ Let an authorized clinician create a target behavior from the selected patient's
 - Reverification from current `origin/main`: focused issue suite 48 passed/1 skipped and full `mix precommit` 1395 passed/5 skipped.
 - `mix precommit` normalized pre-existing whitespace in `review.ex`; that out-of-scope formatter mutation was rolled back exactly before staging.
 - Issue #303 was explicitly approved for delivery and now carries `status:approved`.
+- Work-unit commit created: `d8b9d56` (`feat(clinical): create target behaviors`).
 - Native review inspection was blocked by a missing package-local binary; it created no lineage and performed no mutation.
