@@ -62,6 +62,7 @@ Turn the target behavior review into a responsive two-column clinical workbench 
     - `test/alethea_jobs/ai_proposal_worker_test.exs`
   - TDD evidence: RED reproduced `KeyError: key :text not found` on a target-scoped tombstone; GREEN focused suite passed 9 tests.
   - Independent verification: confirmed the chain receives only the cited excerpt while observations, prior proposals, and tombstones remain excluded; persistence, readiness broadcast, and authorization regressions pass.
+  - Commit evidence: `9a97e93` (`fix(ai): filter proposal evidence inputs`).
 
 - [x] **WORKBENCH-RELIABILITY-2 — Fix Oban stop telemetry compatibility**
   - Status: completed; pending work-unit commit.
@@ -73,11 +74,14 @@ Turn the target behavior review into a responsive two-column clinical workbench 
     - `test/alethea/oban_telemetry_test.exs`
   - TDD evidence: RED reproduced two `KeyError: key :success not found` failures and then a metric double-conversion failure; GREEN focused suite passed 7 tests.
   - Independent verification: confirmed identity-millisecond metrics, exact PII-safe metadata, correct success mapping, consistent exception duration, and an attached handler that remains active for the real event fixture.
+  - Commit evidence: `a7ef5f2` (`fix(oban): handle stop telemetry metadata`).
 
-- [ ] **WORKBENCH-RELIABILITY-3 — Verify PR 1 candidate**
-  - Status: pending.
+- [x] **WORKBENCH-RELIABILITY-3 — Verify PR 1 candidate**
+  - Status: completed.
   - Route: delegated verifier.
-  - Checks: both focused suites, `mix precommit`, `git diff --check`, and changed-file diagnostics.
+  - Checks: focused suites — 16 passed; `mix precommit` — 1417 passed, 5 skipped; `git diff --check origin/main...HEAD` passed; changed-file diagnostics reported no findings.
+  - Review findings: no critical, high, or medium findings; one low note that the ODD tracking document is part of the PR scope.
+  - Commit evidence: not applicable; verification is read-only.
 
 - [ ] **WORKBENCH-UI-1 — Define canonical E-O-R-C draft representation**
   - Status: pending until PR 1 completes.
@@ -133,6 +137,9 @@ Turn the target behavior review into a responsive two-column clinical workbench 
 - Read-only mapping confirmed missing workbench/timeline CSS, metadata-only source buttons, eager source loading, and vertical layout.
 - Confirmed Oban 2.22 telemetry incompatibility: stop metadata provides `state`/`result`, not `success`.
 - Confirmed worker safety defect: heterogeneous timeline items are blindly mapped through `.text`; tombstones omit that key.
-- Confirmed worker policy defect: observations and prior proposals currently enter the AI evidence payload.
+- Confirmed worker policy defect: observations and prior proposals previously entered the AI evidence payload.
 - User selected fixed-height internal source scrolling, a pending AI proposal inbox, and structured E-O-R-C editing.
-- Maintainer selected two independent PRs rather than a single size exception.
+- Maintainer selected two independent PRs rather than a single combined size exception.
+- PR 1 candidate complete on `fix/ai-proposal-timeline`: only cited evidence reaches the chain, tombstones cannot cause missing-text access, and Oban 2.22 stop telemetry remains attached with accurate millisecond durations.
+- PR 1 verification: 16 focused tests passed; full `mix precommit` passed with 1417 tests and 5 skipped; diff check and diagnostics passed.
+- Review workload: PR 1 is 414 changed lines including this ODD evidence document, slightly above the 400-line budget. The production/test fix is cohesive and already split from the much larger UI redesign; delivery needs an explicit small `size:exception` or further artifact strategy before PR creation.
