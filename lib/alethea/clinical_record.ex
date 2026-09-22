@@ -409,6 +409,121 @@ defmodule Alethea.ClinicalRecord do
   end
 
   @doc """
+  Atomically accepts an AI proposal and merges its text into the
+  functional-analysis draft — all-or-nothing (#291). If the draft update
+  fails, the proposal stays in its previous status (no partial accept).
+
+  The proposal text is appended to the existing draft body (or to an
+  empty string if no draft exists yet). Both the proposal status update,
+  the draft upsert, audit rows, and outbox events are committed in a
+  single `Ecto.Multi` transaction.
+  """
+  @spec accept_ai_proposal_into_draft(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t()
+        ) ::
+          {:ok, %{proposal: AIProposal.t(), draft: FunctionalAnalysisDraft.t()}}
+          | {:error, :unauthorized | :not_found | :legally_deleted | Ecto.Changeset.t() | term()}
+  def accept_ai_proposal_into_draft(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        proposal_id
+      ) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      dek = keyring.clinical_record_dek
+
+      with {:behavior, %TargetBehavior{}} <-
+             {:behavior,
+              Repo.get_by(TargetBehavior,
+                id: target_behavior_id,
+                patient_id: patient.id
+              )},
+           {:proposal, %AIProposal{} = proposal} <-
+             {:proposal,
+              Repo.get_by(AIProposal,
+                id: proposal_id,
+                patient_id: patient.id,
+                target_behavior_id: target_behavior_id
+              )},
+           {:ok, proposal_text} <-
+             PatientVault.decrypt(proposal.encrypted_text, dek_for(proposal, keyring)) do
+        current_body = load_current_draft_body(patient.id, target_behavior_id, keyring)
+        new_body = merge_draft_body(current_body, proposal_text)
+
+        with {:ok, ciphertext} <- PatientVault.encrypt(new_body, dek) do
+          draft_changeset =
+            FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
+              encrypted_body: ciphertext,
+              encryption_version: 2,
+              patient_id: patient.id,
+              professional_id: professional.id,
+              target_behavior_id: target_behavior_id
+            })
+
+          action = "ai_proposal_accepted_into_draft"
+
+          Ecto.Multi.new()
+          |> Ecto.Multi.update(
+            :proposal,
+            AIProposal.update_changeset(proposal, %{status: "accepted"})
+          )
+          |> Ecto.Multi.insert(:draft, draft_changeset,
+            on_conflict:
+              {:replace, [:encrypted_body, :encryption_version, :professional_id, :updated_at]},
+            conflict_target: :target_behavior_id,
+            returning: true
+          )
+          |> Ecto.Multi.insert(:audit_proposal, fn %{proposal: record} ->
+            Audit.changeset(%Audit{
+              professional_id: professional.id,
+              action: action,
+              resource_type: "ai_proposal",
+              resource_id: record.id,
+              outcome: "success"
+            })
+          end)
+          |> Ecto.Multi.insert(:audit_draft, fn %{draft: record} ->
+            Audit.changeset(%Audit{
+              professional_id: professional.id,
+              action: action,
+              resource_type: "functional_analysis_draft",
+              resource_id: record.id,
+              outcome: "success"
+            })
+          end)
+          |> Oban.insert(:outbox_proposal, fn %{proposal: record} ->
+            Outbox.event(action, record)
+          end)
+          |> Oban.insert(:outbox_draft, fn %{draft: record} ->
+            Outbox.event(action, record)
+          end)
+          |> Repo.transaction()
+          |> case do
+            {:ok, %{proposal: proposal, draft: draft}} ->
+              {:ok, %{proposal: proposal, draft: draft}}
+
+            {:error, step, reason, _changes} ->
+              Logger.warning("clinical_record multi failed at #{step}")
+              {:error, reason}
+          end
+        end
+      else
+        {:behavior, nil} ->
+          tombstone_gate(professional.id, target_behavior_id, "target_behavior")
+
+        {:proposal, nil} ->
+          tombstone_gate(professional.id, proposal_id, "ai_proposal")
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
   Edits an AI proposal's displayed text. `encrypted_original_text` is never
   touched — `AIProposal.update_changeset/2` structurally excludes it from
   its cast list (design D3, write-once).
@@ -679,6 +794,34 @@ defmodule Alethea.ClinicalRecord do
       {:ok, plaintext} -> plaintext
       {:error, _reason} -> "[Error al descifrar]"
     end
+  end
+
+  # Reads and decrypts the current draft body for a target behavior,
+  # returning an empty string when no draft exists yet. Used by
+  # `accept_ai_proposal_into_draft/4` to build the merged body from DB
+  # state instead of socket state (#291).
+  defp load_current_draft_body(patient_id, target_behavior_id, keyring) do
+    case Repo.get_by(FunctionalAnalysisDraft,
+           target_behavior_id: target_behavior_id,
+           patient_id: patient_id
+         ) do
+      nil ->
+        ""
+
+      draft ->
+        case PatientVault.decrypt(draft.encrypted_body, dek_for(draft, keyring)) do
+          {:ok, body} -> body
+          {:error, _reason} -> ""
+        end
+    end
+  end
+
+  # Appends `proposal_text` to `current_body`, separated by a newline.
+  # Returns a trimmed string so we never get leading/trailing whitespace.
+  defp merge_draft_body("", proposal_text), do: String.trim(proposal_text)
+
+  defp merge_draft_body(current_body, proposal_text) do
+    String.trim(current_body <> "\n" <> proposal_text)
   end
 
   defp update_ai_proposal_status(professional, patient, proposal_id, attrs, action) do

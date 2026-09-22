@@ -21,6 +21,7 @@ defmodule Alethea.ClinicalRecord.Audit do
   @actions ~w(target_behavior_created clinical_note_created clinical_record_access_denied
               consultation_evidence_created clinician_observation_created
               clinician_observation_updated ai_proposals_requested ai_proposal_accepted
+              ai_proposal_accepted_into_draft
               ai_proposal_edited ai_proposal_discarded functional_analysis_draft_saved
               legal_hold_applied legal_hold_released clinical_record_legally_deleted
               clinical_record_key_destroyed)

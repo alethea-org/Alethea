@@ -58,4 +58,23 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisDraft do
     |> validate_required([:encrypted_body, :patient_id, :professional_id, :target_behavior_id])
     |> unique_constraint(:target_behavior_id)
   end
+
+  @default_structure """
+  Antecedentes:
+
+  Conducta:
+
+  Consecuencias:
+
+  Función hipotetizada:
+
+  Evidencia pendiente / dudas:
+  """
+
+  @doc """
+  Returns the default structured template with minimal clinical sections
+  for a functional analysis draft (#291).
+  """
+  @spec default_structure() :: String.t()
+  def default_structure, do: @default_structure
 end

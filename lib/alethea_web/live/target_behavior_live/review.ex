@@ -32,6 +32,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   use AletheaWeb, :live_view
 
   alias Alethea.ClinicalRecord
+  alias Alethea.ClinicalRecord.FunctionalAnalysisDraft
 
   @impl true
   def mount(%{"patient_id" => patient_id, "id" => target_behavior_id}, _session, socket) do
@@ -169,18 +170,30 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   def handle_event("accept_proposal", %{"id" => id}, socket) do
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
 
-    case ClinicalRecord.accept_ai_proposal(professional, patient_id, id) do
-      {:ok, _proposal} ->
-        accepted_text =
-          socket.assigns.timeline_index
-          |> Map.get(id, %{})
-          |> Map.get(:text)
+    case ClinicalRecord.accept_ai_proposal_into_draft(
+           professional,
+           patient_id,
+           target_behavior_id,
+           id
+         ) do
+      {:ok, %{draft: _draft}} ->
+        draft_body =
+          case ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient_id,
+                 target_behavior_id
+               ) do
+            {:ok, %{body: body}} -> body
+            _other -> ""
+          end
 
         {:noreply,
          socket
          |> load_timeline()
-         |> merge_into_draft(accepted_text)}
+         |> assign(:draft_form, to_form(%{"body" => draft_body}, as: "draft"))
+         |> put_flash(:info, "Propuesta aceptada e incorporada al borrador.")}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo aceptar la propuesta.")}
@@ -222,6 +235,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo guardar el borrador.")}
     end
+  end
+
+  @impl true
+  def handle_event("insert_draft_structure", _params, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :draft_form,
+       to_form(%{"body" => FunctionalAnalysisDraft.default_structure()}, as: "draft")
+     )}
   end
 
   @impl true
@@ -280,27 +303,6 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     case Map.get(socket.assigns.timeline_index, id) do
       nil -> socket
       item -> stream_insert(socket, :timeline, item)
-    end
-  end
-
-  defp merge_into_draft(socket, nil), do: socket
-
-  defp merge_into_draft(socket, proposal_text) do
-    professional = socket.assigns.current_professional
-    patient_id = socket.assigns.patient_id
-    target_behavior_id = socket.assigns.target_behavior_id
-
-    current_body = socket.assigns.draft_form[:body].value || ""
-    new_body = String.trim(current_body <> "\n" <> proposal_text)
-
-    case ClinicalRecord.upsert_functional_analysis_draft(
-           professional,
-           patient_id,
-           target_behavior_id,
-           new_body
-         ) do
-      {:ok, _draft} -> assign(socket, :draft_form, to_form(%{"body" => new_body}, as: "draft"))
-      {:error, _reason} -> socket
     end
   end
 
@@ -475,8 +477,22 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         </div>
 
         <.form :if={!@draft_tombstoned_at} for={@draft_form} id="draft-form" phx-submit="save_draft">
-          <.input field={@draft_form[:body]} type="textarea" label="Análisis funcional (editable)" />
+          <.input
+            field={@draft_form[:body]}
+            type="textarea"
+            label="Análisis funcional (editable)"
+            placeholder={FunctionalAnalysisDraft.default_structure()}
+          />
           <div class="form-actions">
+            <button
+              :if={@draft_form[:body].value in [nil, ""]}
+              type="button"
+              id="insert-draft-structure-button"
+              phx-click="insert_draft_structure"
+              class="button-secondary button-secondary--sm"
+            >
+              Cargar estructura clínica inicial
+            </button>
             <button type="submit" class="button-primary button-primary--sm">Guardar borrador</button>
           </div>
         </.form>
