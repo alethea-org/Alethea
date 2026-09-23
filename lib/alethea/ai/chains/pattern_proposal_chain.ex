@@ -101,8 +101,18 @@ defmodule Alethea.AI.Chains.PatternProposalChain do
   """
   @spec parse_proposals(String.t()) :: [String.t()]
   def parse_proposals(raw) when is_binary(raw) do
-    case StructuredOutput.parse_json_response(raw) do
+    cleaned =
+      raw
+      |> String.trim()
+      |> String.replace(~r/^```(?:json)?\s*/i, "")
+      |> String.replace(~r/\s*```$/i, "")
+      |> String.trim()
+
+    case StructuredOutput.parse_json_response(cleaned) do
       {:ok, %{"proposals" => proposals}} when is_list(proposals) ->
+        Enum.filter(proposals, &is_binary/1)
+
+      {:ok, %{"properties" => %{"proposals" => proposals}}} when is_list(proposals) ->
         Enum.filter(proposals, &is_binary/1)
 
       _ ->
