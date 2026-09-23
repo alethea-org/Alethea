@@ -14,11 +14,14 @@ defmodule Alethea.ClinicalRecordTest do
   use Oban.Testing, repo: Alethea.Repo
 
   import Ecto.Query
+  import Mox
 
   alias Alethea.Accounts
   alias Alethea.Accounts.AuditLog
   alias Alethea.Clinical, as: Journaling
   alias Alethea.ClinicalRecord
+
+  alias Alethea.ClinicalRecord.Rag.{Chunk, Indexer}
 
   alias Alethea.ClinicalRecord.{
     AIProposal,
@@ -35,6 +38,8 @@ defmodule Alethea.ClinicalRecordTest do
   alias AletheaJobs.ClinicalRecordOutboxWorker
 
   @password "supersecret12"
+
+  setup :verify_on_exit!
 
   setup do
     professional = create_professional!()
@@ -2522,6 +2527,137 @@ defmodule Alethea.ClinicalRecordTest do
       assert {:error, :unauthorized} =
                ClinicalRecord.get_target_behavior(other_professional, patient_a.id, target_a.id)
     end
+  end
+
+  describe "suggest_evidence_candidates/4" do
+    test "authorized professional receives ranked candidates with affinity metadata", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      resource_id = insert_rag_chunk!(professional, patient, "Conducta objetivo observada")
+      stub_rag_query_embedding()
+
+      assert {:ok, [candidate]} =
+               ClinicalRecord.suggest_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 limit: 1
+               )
+
+      assert candidate.source_resource_id == resource_id
+      assert is_integer(candidate.match_percentage)
+      assert candidate.affinity_badge.percentage == candidate.match_percentage
+      assert candidate.affinity_badge.tier == candidate.affinity_tier
+    end
+
+    test "excludes chunks dismissed for the target behavior", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      dismissed_resource = insert_rag_chunk!(professional, patient, "Conducta descartada")
+      kept_resource = insert_rag_chunk!(professional, patient, "Conducta conservada")
+      dismissed_chunk = Repo.get_by!(Chunk, source_resource_id: dismissed_resource)
+
+      assert {:ok, _dismissal} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 dismissed_chunk.id
+               )
+
+      stub_rag_query_embedding()
+
+      assert {:ok, candidates} =
+               ClinicalRecord.suggest_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 []
+               )
+
+      assert Enum.map(candidates, & &1.source_resource_id) == [kept_resource]
+    end
+
+    test "blank target behavior description returns an empty list without embedding", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:ok, target_behavior} =
+               ClinicalRecord.create_target_behavior(professional, patient.id, "   ")
+
+      deny_rag_query_embedding()
+
+      assert {:ok, []} =
+               ClinicalRecord.suggest_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 []
+               )
+    end
+
+    test "non-treating professional is denied", %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      stranger = create_professional!()
+
+      assert {:error, reason} =
+               ClinicalRecord.suggest_evidence_candidates(
+                 stranger,
+                 patient.id,
+                 target_behavior.id,
+                 []
+               )
+
+      assert reason in [:unauthorized, :not_found]
+    end
+  end
+
+  defp deny_rag_query_embedding do
+    Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+    on_exit(fn ->
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake, persistent: true)
+    end)
+  end
+
+  defp stub_rag_query_embedding do
+    deny_rag_query_embedding()
+    vector = [1.0 | List.duplicate(0.0, 1023)]
+
+    Alethea.AI.EmbeddingsMock
+    |> stub(:embed, fn _query, [] -> {:ok, vector} end)
+    |> stub(:dimensions, fn -> 1024 end)
+    |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+  end
+
+  defp insert_rag_chunk!(professional, patient, text) do
+    resource_id = Ecto.UUID.generate()
+
+    {:ok, ciphertext} =
+      Alethea.Encryption.PatientVault.encrypt(text, patient_dek_for!(professional, patient))
+
+    attrs = [
+      %{
+        source_resource_type: "clinical_note",
+        source_resource_id: resource_id,
+        chunk_index: 0,
+        encrypted_content: ciphertext,
+        embedding: [1.0 | List.duplicate(0.0, 1023)],
+        embedding_model: "fake-embeddings-bge-m3",
+        token_count: 10,
+        full_event: true,
+        source_occurred_at: DateTime.utc_now(),
+        patient_id: patient.id,
+        professional_id: professional.id
+      }
+    ]
+
+    {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
+    resource_id
   end
 
   defp insert_tombstone!(professional, patient, resource_type, resource_id) do
