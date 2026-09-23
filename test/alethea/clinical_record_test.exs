@@ -25,6 +25,7 @@ defmodule Alethea.ClinicalRecordTest do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
+    DismissedEvidenceSuggestion,
     FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
     TargetBehavior,
@@ -2158,6 +2159,202 @@ defmodule Alethea.ClinicalRecordTest do
       assert item_v1.text == "Observacion cifrada con la DEK compartida"
       assert item_v2.id == v2_observation.id
       assert item_v2.text == "Observacion cifrada con la DEK de ClinicalRecord"
+    end
+  end
+
+  describe "dismissed evidence suggestions" do
+    test "authorized professional dismisses by chunk id and lists ids and records", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      older_chunk_id = Ecto.UUID.generate()
+      newer_chunk_id = Ecto.UUID.generate()
+
+      assert {:ok, %DismissedEvidenceSuggestion{} = older} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   chunk_id: older_chunk_id,
+                   dismissed_at: ~U[2026-09-23 10:00:00.000000Z]
+                 }
+               )
+
+      assert {:ok, %DismissedEvidenceSuggestion{} = newer} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 newer_chunk_id
+               )
+
+      assert older.chunk_id == older_chunk_id
+      assert newer.chunk_id == newer_chunk_id
+
+      assert {:ok, ids} =
+               ClinicalRecord.list_dismissed_suggestion_ids(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert MapSet.new(ids) == MapSet.new([older_chunk_id, newer_chunk_id])
+
+      assert {:ok, [first, second]} =
+               ClinicalRecord.list_dismissed_evidence_suggestions(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert [first.id, second.id] == [newer.id, older.id]
+    end
+
+    test "dismisses map attributes and lists distinct chunk and resource ids", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      chunk_id = Ecto.UUID.generate()
+      resource_id = Ecto.UUID.generate()
+
+      assert {:ok, dismissal} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   chunk_id: chunk_id,
+                   resource_id: resource_id,
+                   resource_type: "clinical_note"
+                 }
+               )
+
+      assert dismissal.resource_id == resource_id
+      assert dismissal.resource_type == "clinical_note"
+
+      assert {:ok, ids} =
+               ClinicalRecord.list_dismissed_suggestion_ids(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert MapSet.new(ids) == MapSet.new([chunk_id, resource_id])
+    end
+
+    test "dismissal is idempotent and writes one success audit", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      chunk_id = Ecto.UUID.generate()
+
+      assert {:ok, first} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 chunk_id
+               )
+
+      assert {:ok, second} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 chunk_id
+               )
+
+      assert second.id == first.id
+      assert Repo.aggregate(DismissedEvidenceSuggestion, :count) == 1
+
+      assert [audit] =
+               AuditLog
+               |> where([a], a.action == "evidence_suggestion_dismissed")
+               |> Repo.all()
+
+      assert audit.resource_type == "dismissed_evidence_suggestion"
+      assert audit.resource_id == first.id
+      assert audit.professional_id == professional.id
+      assert audit.details == %{"outcome" => "success"}
+    end
+
+    test "unauthorized professional cannot dismiss and logs denial", %{
+      patient: patient
+    } do
+      professional = create_professional!()
+
+      owner = Repo.get!(Alethea.Accounts.Professional, patient.professional_id)
+      target_behavior = create_target_behavior!(owner, patient)
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 Ecto.UUID.generate()
+               )
+
+      assert Repo.aggregate(DismissedEvidenceSuggestion, :count) == 0
+
+      assert [audit] =
+               AuditLog
+               |> where([a], a.professional_id == ^professional.id)
+               |> where([a], a.action == "clinical_record_access_denied")
+               |> Repo.all()
+
+      assert audit.resource_id == patient.id
+      assert audit.details == %{"outcome" => "denied"}
+    end
+
+    test "cross-patient target behavior returns not found and logs denial", %{
+      professional: professional,
+      patient: patient
+    } do
+      other_patient = create_patient!(professional)
+      other_target = create_target_behavior!(professional, other_patient)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 other_target.id,
+                 Ecto.UUID.generate()
+               )
+
+      assert Repo.aggregate(DismissedEvidenceSuggestion, :count) == 0
+
+      assert [audit] =
+               AuditLog
+               |> where([a], a.action == "clinical_record_access_denied")
+               |> where([a], a.resource_type == "target_behavior")
+               |> where([a], a.resource_id == ^other_target.id)
+               |> Repo.all()
+
+      assert audit.professional_id == professional.id
+      assert audit.details == %{"outcome" => "denied"}
+    end
+
+    test "deleting a target behavior cascades to its dismissals", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, dismissal} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 Ecto.UUID.generate()
+               )
+
+      Repo.delete!(target_behavior)
+
+      refute Repo.get(DismissedEvidenceSuggestion, dismissal.id)
     end
   end
 
