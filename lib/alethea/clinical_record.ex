@@ -28,6 +28,7 @@ defmodule Alethea.ClinicalRecord do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
+    DismissedEvidenceSuggestion,
     EvidenceSource,
     FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
@@ -359,6 +360,186 @@ defmodule Alethea.ClinicalRecord do
     with_patient(professional, patient_id, fn patient, keyring ->
       EvidenceSource.list(patient.id, keyring)
     end)
+  end
+
+  @doc """
+  Records a dismissed evidence suggestion for an authorized target behavior.
+
+  Passing a UUID string is shorthand for `%{chunk_id: uuid}`. Repeating a
+  dismissal for an existing chunk or resource returns the existing row without
+  writing a duplicate audit entry.
+  """
+  @spec dismiss_evidence_suggestion(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t() | map()
+        ) ::
+          {:ok, DismissedEvidenceSuggestion.t()}
+          | {:error, :unauthorized | :not_found | Ecto.Changeset.t() | term()}
+  def dismiss_evidence_suggestion(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        attrs_or_chunk_id
+      ) do
+    attrs = normalize_dismissal_attrs(attrs_or_chunk_id)
+
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, _keyring ->
+      case find_existing_dismissal(target_behavior_id, attrs) do
+        %DismissedEvidenceSuggestion{} = dismissal ->
+          {:ok, dismissal}
+
+        nil ->
+          persist_dismissed_evidence_suggestion(
+            professional,
+            patient,
+            target_behavior_id,
+            attrs
+          )
+      end
+    end)
+  end
+
+  @doc """
+  Lists the distinct, non-nil chunk and resource identifiers dismissed for an
+  authorized target behavior.
+  """
+  @spec list_dismissed_suggestion_ids(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, [Ecto.UUID.t()]} | {:error, :unauthorized | :not_found | term()}
+  def list_dismissed_suggestion_ids(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id
+      ) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn _patient, _keyring ->
+      ids =
+        DismissedEvidenceSuggestion
+        |> where([dismissal], dismissal.target_behavior_id == ^target_behavior_id)
+        |> select([dismissal], {dismissal.chunk_id, dismissal.resource_id})
+        |> Repo.all()
+        |> Enum.flat_map(fn {chunk_id, resource_id} -> [chunk_id, resource_id] end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      {:ok, ids}
+    end)
+  end
+
+  @doc """
+  Lists dismissed evidence suggestions for an authorized target behavior in
+  reverse dismissal order.
+  """
+  @spec list_dismissed_evidence_suggestions(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t()
+        ) ::
+          {:ok, [DismissedEvidenceSuggestion.t()]}
+          | {:error, :unauthorized | :not_found | term()}
+  def list_dismissed_evidence_suggestions(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id
+      ) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn _patient, _keyring ->
+      dismissals =
+        DismissedEvidenceSuggestion
+        |> where([dismissal], dismissal.target_behavior_id == ^target_behavior_id)
+        |> order_by([dismissal], desc: dismissal.dismissed_at, desc: dismissal.id)
+        |> Repo.all()
+
+      {:ok, dismissals}
+    end)
+  end
+
+  defp normalize_dismissal_attrs(chunk_id) when is_binary(chunk_id) do
+    %{chunk_id: chunk_id, resource_id: nil, resource_type: nil, dismissed_at: nil}
+  end
+
+  defp normalize_dismissal_attrs(attrs) when is_map(attrs) do
+    %{
+      chunk_id: Map.get(attrs, :chunk_id) || Map.get(attrs, "chunk_id"),
+      resource_id: Map.get(attrs, :resource_id) || Map.get(attrs, "resource_id"),
+      resource_type: Map.get(attrs, :resource_type) || Map.get(attrs, "resource_type"),
+      dismissed_at: Map.get(attrs, :dismissed_at) || Map.get(attrs, "dismissed_at")
+    }
+  end
+
+  defp find_existing_dismissal(target_behavior_id, attrs) do
+    chunk_id = attrs.chunk_id
+    resource_id = attrs.resource_id
+
+    case {chunk_id, resource_id} do
+      {nil, nil} ->
+        nil
+
+      {chunk_id, nil} ->
+        Repo.get_by(DismissedEvidenceSuggestion,
+          target_behavior_id: target_behavior_id,
+          chunk_id: chunk_id
+        )
+
+      {nil, resource_id} ->
+        Repo.get_by(DismissedEvidenceSuggestion,
+          target_behavior_id: target_behavior_id,
+          resource_id: resource_id
+        )
+
+      {chunk_id, resource_id} ->
+        DismissedEvidenceSuggestion
+        |> where(
+          [dismissal],
+          dismissal.target_behavior_id == ^target_behavior_id and
+            (dismissal.chunk_id == ^chunk_id or dismissal.resource_id == ^resource_id)
+        )
+        |> order_by([dismissal], desc: dismissal.dismissed_at, desc: dismissal.id)
+        |> Repo.one()
+    end
+  end
+
+  defp persist_dismissed_evidence_suggestion(
+         professional,
+         patient,
+         target_behavior_id,
+         attrs
+       ) do
+    changeset =
+      DismissedEvidenceSuggestion.changeset(
+        %DismissedEvidenceSuggestion{},
+        Map.merge(attrs, %{
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior_id
+        })
+      )
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:record, changeset)
+    |> Ecto.Multi.insert(:audit, fn %{record: record} ->
+      Audit.changeset(%Audit{
+        professional_id: professional.id,
+        action: "evidence_suggestion_dismissed",
+        resource_type: "dismissed_evidence_suggestion",
+        resource_id: record.id,
+        outcome: "success"
+      })
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{record: record}} ->
+        {:ok, record}
+
+      {:error, :record, reason, _changes} ->
+        case find_existing_dismissal(target_behavior_id, attrs) do
+          %DismissedEvidenceSuggestion{} = dismissal -> {:ok, dismissal}
+          nil -> {:error, reason}
+        end
+
+      {:error, step, reason, _changes} ->
+        Logger.warning("clinical_record dismissal multi failed at #{step}")
+        {:error, reason}
+    end
   end
 
   @doc """

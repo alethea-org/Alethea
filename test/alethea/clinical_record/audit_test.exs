@@ -81,6 +81,22 @@ defmodule Alethea.ClinicalRecord.AuditTest do
       assert changeset.valid?
       assert get_change(changeset, :details) == %{"outcome" => "success"}
     end
+
+    test "accepts evidence_suggestion_dismissed/dismissed_evidence_suggestion", %{
+      professional: professional
+    } do
+      changeset =
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "evidence_suggestion_dismissed",
+          resource_type: "dismissed_evidence_suggestion",
+          resource_id: Ecto.UUID.generate(),
+          outcome: "success"
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :details) == %{"outcome" => "success"}
+    end
   end
 
   describe "changeset/1 — PR1b vocabulary (sdd/alethea/issue-195-clinical-review-workbench, task 2.7)" do
