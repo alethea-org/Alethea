@@ -2704,6 +2704,69 @@ select.text-input {
 
 .suggested-evidence-panel__header h3 { margin: 2px 0 0; }
 
+.evidence-search-bar {
+  margin-bottom: var(--spacing-md);
+}
+
+.evidence-search-bar form {
+  margin: 0;
+}
+
+.evidence-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.evidence-search-field > .field {
+  flex: 1;
+  margin: 0;
+}
+
+.evidence-search-icon {
+  position: absolute;
+  left: var(--spacing-sm);
+  z-index: 1;
+  color: var(--colors-muted);
+  pointer-events: none;
+}
+
+.evidence-search-input {
+  width: 100%;
+  padding-left: calc(var(--spacing-lg) + var(--spacing-xs));
+  padding-right: calc(var(--spacing-lg) + var(--spacing-xs));
+  background: var(--colors-canvas);
+}
+
+.evidence-search-field:focus-within .evidence-search-icon {
+  color: var(--colors-primary);
+}
+
+.evidence-search-clear-button {
+  position: absolute;
+  right: var(--spacing-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rounded-pill);
+  background: transparent;
+  color: var(--colors-muted);
+  cursor: pointer;
+}
+
+.evidence-search-clear-button:hover {
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+}
+
+.evidence-search-empty {
+  margin-top: 0;
+}
+
 .suggested-candidates-list {
   display: flex;
   flex-direction: column;

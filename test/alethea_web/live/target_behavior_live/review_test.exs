@@ -12,6 +12,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
   """
   use AletheaWeb.ConnCase
   use Oban.Testing, repo: Alethea.Repo
+  import Mox
   import Phoenix.LiveViewTest
 
   alias Alethea.Accounts
@@ -2057,6 +2058,188 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
       assert has_element?(view, "#suggested-candidates-empty")
       refute has_element?(view, "#suggested-candidates-list")
+    end
+  end
+
+  describe "evidence semantic search bar (#322)" do
+    test "renders the debounced search input above the evidence candidates", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#suggested-evidence-panel #evidence-search-bar")
+
+      assert has_element?(
+               view,
+               "#evidence-search-input[placeholder='Buscar en el historial clínico (ej. angustia en el supermercado)…'][phx-debounce='400']"
+             )
+    end
+
+    test "searches asynchronously and renders matching chunks with provenance metadata", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      query = "angustia en el supermercado"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+      occurred_at = ~U[2026-03-01 10:00:00.000000Z]
+      test_pid = self()
+
+      set_mox_global()
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> stub(:embed, fn
+        ^query, [] ->
+          send(test_pid, {:search_embedding_started, self()})
+
+          receive do
+            :release_search_embedding -> {:ok, query_vector}
+          end
+
+        other_query, [] ->
+          Alethea.AI.Embeddings.Fake.embed(other_query, [])
+      end)
+      |> stub(:dimensions, fn -> 1024 end)
+      |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+
+      chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Refirió angustia intensa mientras hacía compras en el supermercado.",
+          query_vector,
+          "clinical_note",
+          occurred_at
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      loading_html =
+        view
+        |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+        |> render_change()
+
+      assert loading_html =~ "evidence-search-loading"
+      assert_receive {:search_embedding_started, search_task_pid}
+      send(search_task_pid, :release_search_embedding)
+
+      render_async(view)
+
+      card_selector = "#evidence-search-result-#{chunk.id}"
+      assert has_element?(view, "#evidence-search-results-list #{card_selector}")
+
+      assert element(view, "#{card_selector} .suggested-candidate-card__content") |> render() =~
+               "angustia intensa"
+
+      assert element(view, "#{card_selector} .badge--source-kind") |> render() =~ "Nota clínica"
+      assert has_element?(view, "#{card_selector} .badge--affinity")
+
+      assert element(view, "#{card_selector} .suggested-candidate-card__time") |> render() =~
+               "01/03/2026 10:00"
+    end
+
+    test "renders a clean empty state when the query has no matches", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => "sin coincidencias"}})
+      |> render_change()
+
+      render_async(view)
+
+      assert has_element?(view, "#evidence-search-empty")
+      refute has_element?(view, "#evidence-search-results-list")
+    end
+
+    test "clear button restores the default suggested candidates view", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      query = "angustia en el supermercado"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+
+      insert_rag_chunk!(
+        professional,
+        patient,
+        "Angustia en el supermercado",
+        query_vector,
+        "patient_message",
+        ~U[2026-03-01 10:00:00.000000Z]
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+      |> render_change()
+
+      render_async(view)
+      assert has_element?(view, "#evidence-search-results-list")
+
+      view |> element("#clear-evidence-search") |> render_click()
+
+      assert has_element?(view, "#suggested-candidates-list")
+      refute has_element?(view, "#evidence-search-results-list")
+    end
+
+    test "submitting an empty query restores the default suggested candidates view", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      query = "angustia en el supermercado"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+
+      insert_rag_chunk!(
+        professional,
+        patient,
+        "Angustia en el supermercado",
+        query_vector,
+        "patient_message",
+        ~U[2026-03-01 10:00:00.000000Z]
+      )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+      |> render_change()
+
+      render_async(view)
+      assert has_element?(view, "#evidence-search-results-list")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => ""}})
+      |> render_change()
+
+      assert has_element?(view, "#suggested-candidates-list")
+      refute has_element?(view, "#evidence-search-results-list")
     end
   end
 
