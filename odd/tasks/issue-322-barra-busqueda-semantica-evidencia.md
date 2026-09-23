@@ -84,6 +84,8 @@ Implement an interactive semantic search input with debouncing positioned in the
 - GREEN: Focused suite `mix test test/alethea/clinical_record_test.exs test/alethea_web/live/target_behavior_live/review_test.exs` passed all 163 tests cleanly.
 - TRIANGULATE / REFACTOR: Covered matching chunks with full provenance metadata (date, source kind badge, affinity badge, excerpt), clean empty state on no matches, restoring default suggestions upon clicking clear button, and restoring default suggestions upon submitting empty query.
 - VALIDATION: `mix precommit` executed successfully with 1484 tests passed, 5 skipped, 0 failures.
-- COMMIT: `7b4abdc` (`feat(clinical): interactive semantic search in evidence panel (#322)`).
+- COMMIT: `edf9d31` (`feat(clinical): interactive semantic search in evidence panel (#322)`).
+- PULL REQUEST: #335 (`feat(clinical): interactive semantic search in evidence panel (#322)`).
+
 
 
