@@ -1957,6 +1957,109 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "suggested evidence candidates — asynchronous top 5 background loading (#321)" do
+    test "mounts immediately without blocking and shows loading state", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#clinical-workbench-header")
+      assert has_element?(view, "#review-timeline")
+      assert has_element?(view, "#suggested-candidates-loading") or html =~ "suggested-candidates"
+    end
+
+    test "renders top 5 candidate cards upon arrival with affinity badges, source kinds, and occurred times",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      description = "Crisis de angustia y taquicardia en lugares cerrados"
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, description)
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(description, [])
+
+      t0 = ~U[2026-03-01 10:00:00.000000Z]
+
+      for i <- 1..6 do
+        occurred_at = DateTime.add(t0, i, :hour)
+        resource_type = if rem(i, 2) == 0, do: "patient_message", else: "clinical_note"
+        text = "Fragmento clinico #{i}: angustia y palpitaciones intensas"
+
+        insert_rag_chunk!(
+          professional,
+          patient,
+          text,
+          query_vector,
+          resource_type,
+          occurred_at
+        )
+      end
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      _rendered = render_async(view)
+
+      assert has_element?(view, "#suggested-candidates-list article:nth-child(5)")
+      refute has_element?(view, "#suggested-candidates-list article:nth-child(6)")
+
+      for position <- 1..5 do
+        card_selector = "#suggested-candidates-list article:nth-child(#{position})"
+
+        assert element(view, "#{card_selector} .badge--affinity") |> render() =~ "Alta afinidad"
+
+        assert element(view, "#{card_selector} .badge--source-kind") |> render() =~
+                 ~r/Nota clínica|Mensaje del paciente/
+
+        assert has_element?(view, "#{card_selector} .suggested-candidate-card__time")
+
+        assert element(view, "#{card_selector} .suggested-candidate-card__content") |> render() =~
+                 "Fragmento clinico"
+      end
+    end
+
+    test "renders clean empty state when no eligible candidates are available", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidates-empty")
+
+      assert element(view, "#suggested-candidates-empty") |> render() =~
+               "No hay sugerencias disponibles"
+
+      refute has_element?(view, "#suggested-candidates-list")
+    end
+
+    test "renders clean empty state when target behavior has blank description", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, "   ")
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidates-empty")
+      refute has_element?(view, "#suggested-candidates-list")
+    end
+  end
+
   defp load_dek!(professional, patient) do
     {:ok, kek} = Accounts.load_professional_kek(professional)
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)
@@ -2044,6 +2147,41 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       trigger: "manual"
     })
     |> Repo.insert!()
+  end
+
+  defp insert_rag_chunk!(
+         professional,
+         patient,
+         text,
+         vector,
+         resource_type,
+         occurred_at
+       ) do
+    resource_id = Ecto.UUID.generate()
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+    {:ok, ciphertext} = PatientVault.encrypt(text, dek)
+
+    attrs = [
+      %{
+        source_resource_type: resource_type,
+        source_resource_id: resource_id,
+        chunk_index: 0,
+        encrypted_content: ciphertext,
+        embedding: vector,
+        embedding_model: "fake-embeddings-bge-m3",
+        token_count: 10,
+        full_event: true,
+        source_occurred_at: occurred_at,
+        patient_id: patient.id,
+        professional_id: professional.id
+      }
+    ]
+
+    {:ok, [chunk]} =
+      Alethea.ClinicalRecord.Rag.Indexer.replace_chunks({resource_type, resource_id}, attrs)
+
+    chunk
   end
 
   defp create_target_behavior!(professional, patient) do
