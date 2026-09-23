@@ -20,7 +20,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
 
   ## Security boundary: decrypt happens strictly AFTER the SQL LIMIT
 
-  `fetch_candidates/3` issues one SQL query that already carries
+  `fetch_candidates/4` issues one SQL query that already carries
   `LIMIT :candidate_limit` — Postgres, not this module, is what bounds
   the row set before a single byte is decrypted. `score_candidate/5`
   then hard-matches `PatientVault.decrypt/2`'s result: a decrypt
@@ -32,7 +32,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
 
   ## Cross-patient isolation
 
-  Enforced structurally: `fetch_candidates/3`'s WHERE clause scopes by
+  Enforced structurally: `fetch_candidates/4`'s WHERE clause scopes by
   `patient_id` before the ANN `ORDER BY`/`LIMIT` ever runs, so no
   amount of adversarial query crafting can pull another patient's rows
   into the candidate set — see the spec's "Cross-patient query never
@@ -65,12 +65,14 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   alias Alethea.Accounts
   alias Alethea.Accounts.Professional
   alias Alethea.AI
+  alias Alethea.ClinicalRecord.DismissedEvidenceSuggestion
   alias Alethea.ClinicalRecord.Rag.Chunk
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
 
   @candidate_limit 50
   @default_limit 10
+  @suggest_default_limit 5
   @dense_weight 0.7
   @lexical_weight 0.3
   @phrase_bonus 0.2
@@ -96,6 +98,13 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     unos vosostras vosotros vuestra vuestras vuestro vuestros y ya yo
   ))
 
+  @type affinity_tier :: :high | :medium | :low
+  @type affinity_badge :: %{
+          tier: affinity_tier(),
+          label: String.t(),
+          percentage: non_neg_integer()
+        }
+
   @type result :: %{
           chunk_id: Ecto.UUID.t(),
           source_resource_type: String.t(),
@@ -107,7 +116,10 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
           content: String.t(),
           dense_distance: float(),
           lexical_score: float(),
-          score: float()
+          score: float(),
+          match_percentage: non_neg_integer(),
+          affinity_tier: affinity_tier(),
+          affinity_badge: affinity_badge()
         }
 
   @type envelope :: %{
@@ -167,6 +179,38 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   end
 
   @doc """
+  Returns evidence suggestions with a default result limit of five.
+
+  Blank queries return metadata without invoking the embeddings adapter.
+  Candidate exclusions in `opts` are applied in SQL before ANN ordering and
+  limiting.
+  """
+  @spec suggest(Professional.t(), Ecto.UUID.t(), String.t(), keyword()) ::
+          {:ok, envelope()} | {:error, :unauthorized | term()}
+  def suggest(%Professional{} = professional, patient_id, query, opts \\ [])
+      when is_binary(patient_id) and is_binary(query) do
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        {:error, :unauthorized}
+
+      patient ->
+        if String.trim(query) == "" do
+          {:ok,
+           %{
+             results: [],
+             chunk_count: count_chunks(patient.id),
+             freshness: freshness(patient.id)
+           }}
+        else
+          with {:ok, keyring} <- load_keyring(professional, patient) do
+            opts = Keyword.put_new(opts, :limit, @suggest_default_limit)
+            do_search(patient, keyring, query, opts)
+          end
+        end
+    end
+  end
+
+  @doc """
   Authorizes access to `patient_id` and returns the inexpensive metadata
   required to render the search page before a query is submitted. Unlike
   `search/4`, this function never embeds or decrypts content.
@@ -186,6 +230,19 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     end
   end
 
+  defp load_keyring(professional, patient) do
+    with {:ok, kek} <- Accounts.load_professional_kek(professional),
+         {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek) do
+      clinical_record_dek =
+        case Accounts.load_clinical_record_dek(patient, kek) do
+          {:ok, dek} -> dek
+          {:error, _reason} -> nil
+        end
+
+      {:ok, %{patient_dek: patient_dek, clinical_record_dek: clinical_record_dek}}
+    end
+  end
+
   defp do_search(patient, keyring, query, opts) do
     candidate_limit = Keyword.get(opts, :candidate_limit, @candidate_limit)
     result_limit = Keyword.get(opts, :limit, @default_limit)
@@ -195,7 +252,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     with {:ok, query_vector} <- embed_query(query) do
       results =
         patient.id
-        |> fetch_candidates(query_vector, candidate_limit)
+        |> fetch_candidates(query_vector, candidate_limit, opts)
         |> Enum.map(&score_candidate(&1, query, keyring, dense_weight, lexical_weight))
         |> Enum.sort_by(& &1.score, :desc)
         |> Enum.take(result_limit)
@@ -224,9 +281,12 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   # `score_candidate/5` (the only caller that decrypts) only ever sees
   # rows already inside this window. See the moduledoc's "Security
   # boundary" section.
-  defp fetch_candidates(patient_id, query_vector, candidate_limit) do
+  defp fetch_candidates(patient_id, query_vector, candidate_limit, opts) do
     Chunk
     |> where([c], c.patient_id == ^patient_id)
+    |> exclude_dismissed(Keyword.get(opts, :target_behavior_id))
+    |> exclude_ids(:id, Keyword.get(opts, :exclude_chunk_ids, []))
+    |> exclude_ids(:source_resource_id, Keyword.get(opts, :exclude_resource_ids, []))
     |> select([c], %{
       chunk: c,
       dense_distance: selected_as(cosine_distance(c.embedding, ^query_vector), :dense_distance)
@@ -235,6 +295,32 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     |> limit(^candidate_limit)
     |> Repo.all()
   end
+
+  defp exclude_dismissed(query, nil), do: query
+
+  defp exclude_dismissed(query, target_behavior_id) do
+    dismissed_chunks =
+      from(d in DismissedEvidenceSuggestion,
+        where: d.target_behavior_id == ^target_behavior_id and not is_nil(d.chunk_id),
+        select: d.chunk_id
+      )
+
+    dismissed_resources =
+      from(d in DismissedEvidenceSuggestion,
+        where: d.target_behavior_id == ^target_behavior_id and not is_nil(d.resource_id),
+        select: d.resource_id
+      )
+
+    query
+    |> where([c], c.id not in subquery(dismissed_chunks))
+    |> where([c], c.source_resource_id not in subquery(dismissed_resources))
+  end
+
+  defp exclude_ids(query, _field, ids) when ids in [nil, []], do: query
+  defp exclude_ids(query, :id, ids), do: where(query, [c], c.id not in ^ids)
+
+  defp exclude_ids(query, :source_resource_id, ids),
+    do: where(query, [c], c.source_resource_id not in ^ids)
 
   # Picks the correct DEK out of `keyring` for a chunk per its OWN stored
   # `encryption_version` (AD1, sdd/clinical-record-retention, GitHub #197)
@@ -274,6 +360,10 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
         lexical_weight: lexical_weight
       )
 
+    match_percentage = normalize_match_percentage(score)
+    tier = affinity_tier(match_percentage)
+    badge = affinity_badge(match_percentage)
+
     %{
       chunk_id: chunk.id,
       source_resource_type: chunk.source_resource_type,
@@ -285,9 +375,55 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
       content: content,
       dense_distance: dense_distance,
       lexical_score: lexical,
-      score: score
+      score: score,
+      match_percentage: match_percentage,
+      affinity_tier: tier,
+      affinity_badge: badge
     }
   end
+
+  @doc """
+  Converts a numeric match score to a rounded percentage clamped to 0..100.
+  """
+  @spec normalize_match_percentage(number()) :: non_neg_integer()
+  def normalize_match_percentage(score) when is_number(score) do
+    score
+    |> max(0.0)
+    |> min(1.0)
+    |> Kernel.*(100)
+    |> round()
+  end
+
+  @doc "Returns the affinity tier for an integer percentage or float score."
+  @spec affinity_tier(integer() | float()) :: affinity_tier()
+  def affinity_tier(value) when is_number(value) do
+    percentage = affinity_percentage(value)
+
+    cond do
+      percentage > 75 -> :high
+      percentage >= 50 -> :medium
+      true -> :low
+    end
+  end
+
+  @doc "Returns the localized label for an affinity tier."
+  @spec affinity_label(affinity_tier()) :: String.t()
+  def affinity_label(:high), do: "Alta afinidad"
+  def affinity_label(:medium), do: "Media afinidad"
+  def affinity_label(:low), do: "Baja afinidad"
+
+  @doc "Builds the display badge for an integer percentage or float score."
+  @spec affinity_badge(integer() | float()) :: affinity_badge()
+  def affinity_badge(value) when is_number(value) do
+    percentage = affinity_percentage(value)
+    tier = affinity_tier(percentage)
+    %{tier: tier, label: affinity_label(tier), percentage: percentage}
+  end
+
+  defp affinity_percentage(value) when is_float(value) and value <= 1.0,
+    do: normalize_match_percentage(value)
+
+  defp affinity_percentage(value), do: value |> round() |> max(0) |> min(100)
 
   # --- 5.5/5.6 freshness --------------------------------------------------
 

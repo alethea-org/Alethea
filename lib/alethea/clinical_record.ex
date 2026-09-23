@@ -36,6 +36,7 @@ defmodule Alethea.ClinicalRecord do
     TargetBehavior
   }
 
+  alias Alethea.ClinicalRecord.Rag.Retrieval
   alias Alethea.ClinicalRecord.SourceRef
   alias Alethea.ClinicalRecord.Tombstone
   alias Alethea.Encryption.PatientVault
@@ -360,6 +361,54 @@ defmodule Alethea.ClinicalRecord do
     with_patient(professional, patient_id, fn patient, keyring ->
       EvidenceSource.list(patient.id, keyring)
     end)
+  end
+
+  @doc """
+  Suggests patient-scoped RAG evidence for an authorized target behavior.
+
+  The explicit `:query` or `:description` option overrides the target
+  behavior description. Blank descriptions produce no suggestions and do not
+  invoke the embeddings adapter.
+  """
+  @spec suggest_evidence_candidates(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          keyword()
+        ) ::
+          {:ok, [Retrieval.result()]}
+          | {:error, :unauthorized | :not_found | term()}
+  def suggest_evidence_candidates(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        opts \\ []
+      ) do
+    with {:ok, target_behavior} <-
+           get_target_behavior(professional, patient_id, target_behavior_id) do
+      description = opts[:query] || opts[:description] || target_behavior.description
+
+      if blank_description?(description) do
+        {:ok, []}
+      else
+        case Retrieval.suggest(
+               professional,
+               patient_id,
+               description,
+               Keyword.put(opts, :target_behavior_id, target_behavior_id)
+             ) do
+          {:ok, %{results: results}} -> {:ok, results}
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    end
+  end
+
+  defp blank_description?(description) do
+    case List.wrap(description) do
+      [] -> true
+      [value] -> String.trim(value) == ""
+    end
   end
 
   @doc """

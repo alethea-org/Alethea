@@ -28,7 +28,8 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
   import Mox
 
   alias Alethea.Accounts
-  alias Alethea.ClinicalRecord.Rag.{Indexer, Retrieval}
+  alias Alethea.ClinicalRecord
+  alias Alethea.ClinicalRecord.Rag.{Chunk, Indexer, Retrieval}
   alias Alethea.Encryption.PatientVault
   alias AletheaJobs.ClinicalRecordOutboxWorker
 
@@ -106,6 +107,68 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
 
       score = Retrieval.merge_score(1.0, 1.0, dense_weight: 0.5, lexical_weight: 0.5)
       assert_in_delta score, 0.5, 0.0001
+    end
+  end
+
+  # --- Affinity scoring and tier badges (GitHub #318) -------------------
+
+  describe "normalize_match_percentage/1 — score to clamped 0..100 integer" do
+    test "converts scores between 0 and 1 into integer percentages" do
+      assert Retrieval.normalize_match_percentage(0.85) == 85
+      assert Retrieval.normalize_match_percentage(1.0) == 100
+      assert Retrieval.normalize_match_percentage(0.0) == 0
+      assert Retrieval.normalize_match_percentage(0.756) == 76
+    end
+
+    test "clamps out-of-range scores to [0, 100]" do
+      assert Retrieval.normalize_match_percentage(-0.3) == 0
+      assert Retrieval.normalize_match_percentage(1.5) == 100
+    end
+  end
+
+  describe "affinity_tier/1 and affinity_label/1 — tier thresholds (>75, 50..75, <50)" do
+    test "classifies percentage thresholds into :high, :medium, and :low" do
+      assert Retrieval.affinity_tier(100) == :high
+      assert Retrieval.affinity_tier(76) == :high
+      assert Retrieval.affinity_tier(75) == :medium
+      assert Retrieval.affinity_tier(50) == :medium
+      assert Retrieval.affinity_tier(49) == :low
+      assert Retrieval.affinity_tier(0) == :low
+    end
+
+    test "classifies float scores <= 1.0" do
+      assert Retrieval.affinity_tier(0.82) == :high
+      assert Retrieval.affinity_tier(0.75) == :medium
+      assert Retrieval.affinity_tier(0.50) == :medium
+      assert Retrieval.affinity_tier(0.35) == :low
+    end
+
+    test "affinity_label/1 maps tier atom to Spanish label" do
+      assert Retrieval.affinity_label(:high) == "Alta afinidad"
+      assert Retrieval.affinity_label(:medium) == "Media afinidad"
+      assert Retrieval.affinity_label(:low) == "Baja afinidad"
+    end
+  end
+
+  describe "affinity_badge/1 — structured UI badge envelope" do
+    test "returns badge map with tier, label, and percentage" do
+      assert Retrieval.affinity_badge(85) == %{
+               tier: :high,
+               label: "Alta afinidad",
+               percentage: 85
+             }
+
+      assert Retrieval.affinity_badge(60) == %{
+               tier: :medium,
+               label: "Media afinidad",
+               percentage: 60
+             }
+
+      assert Retrieval.affinity_badge(30) == %{
+               tier: :low,
+               label: "Baja afinidad",
+               percentage: 30
+             }
     end
   end
 
@@ -223,6 +286,150 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
 
       returned_ids = Enum.map(results, & &1.source_resource_id)
       assert Enum.sort(returned_ids) == Enum.sort([near_id_1, near_id_2])
+    end
+  end
+
+  describe "suggest/4 — evidence candidate defaults and exclusions" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, "evitación social")
+
+      %{professional: professional, patient: patient, target_behavior: target_behavior}
+    end
+
+    test "returns at most five results by default", %{
+      professional: professional,
+      patient: patient
+    } do
+      for index <- 1..6 do
+        insert_chunk!(professional, patient, "Nota relevante #{index}", near_vector())
+      end
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "nota relevante")
+
+      assert length(results) == 5
+    end
+
+    test "blank query returns an empty envelope without embedding", %{
+      professional: professional,
+      patient: patient
+    } do
+      deny_query_embedding()
+
+      assert {:ok, %{results: [], chunk_count: 0}} =
+               Retrieval.suggest(professional, patient.id, "  \n ")
+    end
+
+    test "excludes a chunk dismissed for the target behavior", %{
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dismissed_resource = insert_chunk!(professional, patient, "Descartada", near_vector())
+      kept_resource = insert_chunk!(professional, patient, "Conservada", near_vector())
+      dismissed_chunk_id = chunk_id_for_resource!(dismissed_resource)
+
+      assert {:ok, _dismissal} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 dismissed_chunk_id
+               )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "nota",
+                 target_behavior_id: target_behavior.id
+               )
+
+      assert Enum.map(results, & &1.source_resource_id) == [kept_resource]
+    end
+
+    test "excludes all chunks from a resource dismissed for the target behavior", %{
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dismissed_resource = insert_chunk!(professional, patient, "Descartada", near_vector())
+      kept_resource = insert_chunk!(professional, patient, "Conservada", near_vector())
+
+      assert {:ok, _dismissal} =
+               ClinicalRecord.dismiss_evidence_suggestion(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{resource_id: dismissed_resource, resource_type: "clinical_note"}
+               )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "nota",
+                 target_behavior_id: target_behavior.id
+               )
+
+      assert Enum.map(results, & &1.source_resource_id) == [kept_resource]
+    end
+
+    test "excludes chunk ids passed directly in opts", %{
+      professional: professional,
+      patient: patient
+    } do
+      excluded_resource = insert_chunk!(professional, patient, "Excluida", near_vector())
+      kept_resource = insert_chunk!(professional, patient, "Conservada", near_vector())
+      excluded_chunk_id = chunk_id_for_resource!(excluded_resource)
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "nota",
+                 exclude_chunk_ids: [excluded_chunk_id]
+               )
+
+      assert Enum.map(results, & &1.source_resource_id) == [kept_resource]
+    end
+
+    test "filters before the candidate limit and decrypts only the retained window", %{
+      professional: professional,
+      patient: patient
+    } do
+      excluded_resource = insert_chunk!(professional, patient, "Excluida", near_vector())
+      retained_resource = insert_chunk!(professional, patient, "Cercana", near_vector())
+      far_resource = insert_chunk!(professional, patient, "Lejana", far_vector())
+      insert_corrupt_chunk!(professional, patient, far_vector())
+      excluded_chunk_id = chunk_id_for_resource!(excluded_resource)
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "nota",
+                 candidate_limit: 2,
+                 limit: 10,
+                 exclude_chunk_ids: [excluded_chunk_id]
+               )
+
+      assert Enum.sort(Enum.map(results, & &1.source_resource_id)) ==
+               Enum.sort([retained_resource, far_resource])
+    end
+
+    test "preserves cross-patient isolation", %{professional: professional, patient: patient} do
+      other_patient = create_patient!(professional)
+      own_resource = insert_chunk!(professional, patient, "Propia", near_vector())
+      foreign_resource = insert_chunk!(professional, other_patient, "Ajena", near_vector())
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "nota")
+
+      result_ids = Enum.map(results, & &1.source_resource_id)
+      assert own_resource in result_ids
+      refute foreign_resource in result_ids
     end
   end
 
@@ -375,6 +582,14 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
   defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
   defp far_vector, do: [0.0, 1.0 | List.duplicate(0.0, 1022)]
 
+  defp deny_query_embedding do
+    Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+    on_exit(fn ->
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake, persistent: true)
+    end)
+  end
+
   defp stub_query_embedding(vector) do
     Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
 
@@ -412,6 +627,12 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
 
     {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
     resource_id
+  end
+
+  defp chunk_id_for_resource!(resource_id) do
+    Chunk
+    |> Alethea.Repo.get_by!(source_resource_id: resource_id)
+    |> Map.fetch!(:id)
   end
 
   defp insert_versioned_chunk!(professional, patient, text, vector, dek, encryption_version) do
