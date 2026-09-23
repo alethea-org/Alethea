@@ -81,3 +81,6 @@ Implement asynchronous background loading and visual presentation of the top 5 s
 - GREEN: Focused suite `mix test test/alethea_web/live/target_behavior_live/review_test.exs` passed all 62 tests cleanly.
 - TRIANGULATE: Verified instant mount, top 5 cutoff limit (6th excluded), card affinity badges, source kinds, occurred dates, chunk texts, clean empty state when no chunks exist, and clean empty state on blank descriptions.
 - VALIDATION: `mix precommit` executed successfully with 1477 tests passed, 0 failures, 5 skipped.
+- COMMIT: `9b1696e` (`feat(clinical): async top 5 evidence suggestions in workbench (#321)`).
+- PULL REQUEST: #333 (`feat(clinical): async top 5 evidence suggestions in workbench (#321)`).
+
