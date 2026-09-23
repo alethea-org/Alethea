@@ -88,6 +88,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:citation_excerpt, nil)
           |> assign(:citation_error, nil)
           |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
+          |> assign(:search_query, "")
+          |> assign(:search_form, to_form(%{"query" => ""}, as: "search"))
+          |> assign(
+            :search_results,
+            Phoenix.LiveView.AsyncResult.ok(%Phoenix.LiveView.AsyncResult{}, [])
+          )
           |> assign(:timeline_index, timeline_index(items))
           |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
           |> assign(
@@ -116,6 +122,42 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:error, :not_found} ->
         {:ok, redirect_to_patients(socket, :not_found)}
     end
+  end
+
+  @impl true
+  def handle_event("search_evidence", %{"search" => %{"query" => query}}, socket) do
+    query = String.trim(query)
+
+    if query == "" do
+      {:noreply, reset_evidence_search(socket)}
+    else
+      professional = socket.assigns.current_professional
+      patient_id = socket.assigns.patient_id
+      target_behavior_id = socket.assigns.target_behavior_id
+
+      {:noreply,
+       socket
+       |> assign(:search_query, query)
+       |> assign(:search_form, to_form(%{"query" => query}, as: "search"))
+       |> assign(:search_results, %Phoenix.LiveView.AsyncResult{})
+       |> assign_async(:search_results, fn ->
+         case ClinicalRecord.search_evidence_candidates(
+                professional,
+                patient_id,
+                target_behavior_id,
+                query,
+                limit: 10
+              ) do
+           {:ok, results} -> {:ok, %{search_results: results}}
+           {:error, reason} -> {:error, reason}
+         end
+       end)}
+    end
+  end
+
+  @impl true
+  def handle_event("clear_evidence_search", _params, socket) do
+    {:noreply, reset_evidence_search(socket)}
   end
 
   @impl true
@@ -512,6 +554,17 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:error, _reason} ->
         socket
     end
+  end
+
+  defp reset_evidence_search(socket) do
+    socket
+    |> cancel_async(:search_results)
+    |> assign(:search_query, "")
+    |> assign(:search_form, to_form(%{"query" => ""}, as: "search"))
+    |> assign(
+      :search_results,
+      Phoenix.LiveView.AsyncResult.ok(%Phoenix.LiveView.AsyncResult{}, [])
+    )
   end
 
   defp reset_citation(socket) do
@@ -1051,12 +1104,50 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           >
             <header class="suggested-evidence-panel__header">
               <div>
-                <span class="pt-eyebrow">Sugerencias</span>
-                <h3 class="t-title-sm">Evidencia potencialmente relevante</h3>
+                <span class="pt-eyebrow">
+                  {if @search_query != "", do: "Búsqueda semántica", else: "Sugerencias"}
+                </span>
+                <h3 class="t-title-sm">
+                  {if @search_query != "",
+                    do: "Resultados en el historial",
+                    else: "Evidencia potencialmente relevante"}
+                </h3>
               </div>
             </header>
 
-            <.async_result :let={candidates} assign={@suggested_candidates}>
+            <div id="evidence-search-bar" class="evidence-search-bar">
+              <.form
+                for={@search_form}
+                id="evidence-search-form"
+                phx-change="search_evidence"
+                phx-submit="search_evidence"
+              >
+                <div class="evidence-search-field">
+                  <.icon name="hero-magnifying-glass" class="evidence-search-icon size-4" />
+                  <.input
+                    field={@search_form[:query]}
+                    type="search"
+                    id="evidence-search-input"
+                    placeholder="Buscar en el historial clínico (ej. angustia en el supermercado)…"
+                    phx-debounce="400"
+                    autocomplete="off"
+                    class={["text-input", "evidence-search-input"]}
+                  />
+                  <button
+                    :if={@search_query != ""}
+                    type="button"
+                    id="clear-evidence-search"
+                    phx-click="clear_evidence_search"
+                    class="evidence-search-clear-button"
+                    aria-label="Limpiar búsqueda"
+                  >
+                    <.icon name="hero-x-mark" class="size-4" />
+                  </button>
+                </div>
+              </.form>
+            </div>
+
+            <.async_result :let={candidates} :if={@search_query == ""} assign={@suggested_candidates}>
               <:loading>
                 <div id="suggested-candidates-loading" class="pt-muted">
                   Buscando fragmentos relevantes…
@@ -1116,6 +1207,70 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     </time>
                   </header>
                   <p class="suggested-candidate-card__content">{candidate.content}</p>
+                </article>
+              </div>
+            </.async_result>
+
+            <.async_result :let={results} :if={@search_query != ""} assign={@search_results}>
+              <:loading>
+                <div id="evidence-search-loading" class="pt-muted">
+                  Buscando en el historial clínico…
+                </div>
+              </:loading>
+              <:failed :let={_reason}>
+                <div id="evidence-search-error" class="field__error">
+                  No se pudieron cargar los resultados de búsqueda.
+                </div>
+              </:failed>
+
+              <div
+                :if={results == []}
+                id="evidence-search-empty"
+                class="empty-state empty-state--compact evidence-search-empty"
+              >
+                <.icon name="hero-magnifying-glass" class="empty-state__icon" />
+                <p class="empty-state__title">No se encontraron coincidencias</p>
+                <p class="empty-state__text">
+                  Probá con otras palabras o una descripción más amplia.
+                </p>
+              </div>
+
+              <div
+                :if={results != []}
+                id="evidence-search-results-list"
+                class="suggested-candidates-list evidence-search-results-list"
+              >
+                <article
+                  :for={result <- results}
+                  id={"evidence-search-result-#{result.chunk_id}"}
+                  class={[
+                    "suggested-candidate-card",
+                    "suggested-candidate-card--#{result.affinity_tier}"
+                  ]}
+                >
+                  <header class="suggested-candidate-card__meta">
+                    <span class={[
+                      "badge",
+                      "badge--affinity",
+                      "badge--affinity-#{result.affinity_tier}"
+                    ]}>
+                      {result.affinity_badge.label}
+                    </span>
+                    <span class={[
+                      "badge",
+                      "badge--source-kind",
+                      "badge--source-#{result.source_resource_type}"
+                    ]}>
+                      {source_kind_label(result.source_resource_type)}
+                    </span>
+                    <time
+                      datetime={format_iso_datetime(result.source_occurred_at)}
+                      class="suggested-candidate-card__time"
+                    >
+                      {format_datetime(result.source_occurred_at)}
+                    </time>
+                  </header>
+                  <p class="suggested-candidate-card__content">{result.content}</p>
                 </article>
               </div>
             </.async_result>

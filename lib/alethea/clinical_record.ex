@@ -412,6 +412,37 @@ defmodule Alethea.ClinicalRecord do
   end
 
   @doc """
+  Searches patient-scoped RAG evidence for an authorized target behavior using a
+  natural-language query.
+
+  Delegates to `suggest_evidence_candidates/4` with `query: query`, preserving
+  candidate ranking, affinity scoring, and dismissal filters.
+  """
+  @spec search_evidence_candidates(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          String.t(),
+          keyword()
+        ) ::
+          {:ok, [Retrieval.result()]}
+          | {:error, :unauthorized | :not_found | term()}
+  def search_evidence_candidates(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        query,
+        opts \\ []
+      ) do
+    suggest_evidence_candidates(
+      professional,
+      patient_id,
+      target_behavior_id,
+      Keyword.put(opts, :query, query)
+    )
+  end
+
+  @doc """
   Records a dismissed evidence suggestion for an authorized target behavior.
 
   Passing a UUID string is shorthand for `%{chunk_id: uuid}`. Repeating a
