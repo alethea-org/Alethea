@@ -38,6 +38,12 @@ defmodule Alethea.AI.Chains.PatternProposalChainTest do
       assert PatternProposalChain.parse_proposals(raw) == ["Patron A", "Patron B"]
     end
 
+    test "extracts proposals when wrapped under properties key (SLM schema echo)" do
+      raw = ~s({"properties": {"proposals": ["Patron A", "Patron B"]}, "required": ["proposals"]})
+
+      assert PatternProposalChain.parse_proposals(raw) == ["Patron A", "Patron B"]
+    end
+
     test "drops non-string entries from the proposals list" do
       raw = ~s({"proposals": ["Patron valido", 42, null]})
 
