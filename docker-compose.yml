@@ -23,7 +23,6 @@ services:
       - PORT=4000
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/alethea_dev
       - SECRET_KEY_BASE=dev_secret_key_base_that_is_at_least_64_chars_long_for_production_safety
-      - CLOAK_AES_KEY=0000000000000000000000000000000000000000000000000000000000000000
       - EMOTION_SIDECAR_URL=http://emotion-sidecar:8080
       - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-phi-4-mini}
@@ -95,6 +94,7 @@ services:
     environment:
       - MP_SMTP_AUTH_ACCEPT_ANY=1
       - MP_SMTP_AUTH_AUTHENTICATE=1
+      - MP_SMTP_AUTH_ALLOW_INSECURE=1
 
 volumes:
   postgres_data:
