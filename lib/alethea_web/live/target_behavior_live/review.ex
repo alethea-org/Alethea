@@ -95,6 +95,17 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             to_form(content_params(functional_analysis_content), as: "functional_analysis")
           )
           |> assign(:draft_tombstoned_at, draft_tombstoned_at)
+          |> assign_async(:suggested_candidates, fn ->
+            case ClinicalRecord.suggest_evidence_candidates(
+                   professional,
+                   patient_id,
+                   target_behavior_id,
+                   limit: 5
+                 ) do
+              {:ok, candidates} -> {:ok, %{suggested_candidates: candidates}}
+              {:error, reason} -> {:error, reason}
+            end
+          end)
           |> stream(:timeline, items)
 
         {:ok, socket}
@@ -646,9 +657,22 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp evidence_source_card_class(%{kind: :message}), do: "evidence-source-card--message"
 
+  defp source_kind_label("clinical_note"), do: "Nota clínica"
+  defp source_kind_label("patient_message"), do: "Mensaje del paciente"
+  defp source_kind_label("consultation_evidence"), do: "Evidencia citada"
+  defp source_kind_label("clinician_observation"), do: "Observación del clínico"
+  defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
+  defp source_kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
+  defp source_kind_label(kind), do: Phoenix.Naming.humanize(kind)
+
+  defp format_iso_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp format_iso_datetime(nil), do: ""
+
   defp format_datetime(%DateTime{} = datetime) do
     Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
   end
+
+  defp format_datetime(_datetime), do: ""
 
   @impl true
   def render(assigns) do
@@ -1018,6 +1042,84 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               </p>
             </div>
           </div>
+
+          <section
+            :if={@active_input_tab == :evidence and is_nil(@citation_step)}
+            id="suggested-evidence-panel"
+            class="suggested-evidence-panel"
+            aria-label="Sugerencias de evidencia"
+          >
+            <header class="suggested-evidence-panel__header">
+              <div>
+                <span class="pt-eyebrow">Sugerencias</span>
+                <h3 class="t-title-sm">Evidencia potencialmente relevante</h3>
+              </div>
+            </header>
+
+            <.async_result :let={candidates} assign={@suggested_candidates}>
+              <:loading>
+                <div id="suggested-candidates-loading" class="pt-muted">
+                  Buscando fragmentos relevantes…
+                </div>
+              </:loading>
+              <:failed :let={_reason}>
+                <div id="suggested-candidates-error" class="field__error">
+                  No se pudieron cargar las sugerencias de evidencia.
+                </div>
+              </:failed>
+
+              <div
+                :if={candidates == []}
+                id="suggested-candidates-empty"
+                class="empty-state empty-state--compact suggested-candidates-empty"
+              >
+                <.icon name="hero-magnifying-glass" class="empty-state__icon" />
+                <p class="empty-state__title">No hay sugerencias disponibles</p>
+                <p class="empty-state__text">
+                  No se encontraron fragmentos relevantes para esta conducta objetivo.
+                </p>
+              </div>
+
+              <div
+                :if={candidates != []}
+                id="suggested-candidates-list"
+                class="suggested-candidates-list"
+              >
+                <article
+                  :for={candidate <- candidates}
+                  id={"suggested-candidate-#{candidate.chunk_id}"}
+                  class={[
+                    "suggested-candidate-card",
+                    "suggested-candidate-card--#{candidate.affinity_tier}"
+                  ]}
+                >
+                  <header class="suggested-candidate-card__meta">
+                    <span class={[
+                      "badge",
+                      "badge--affinity",
+                      "badge--affinity-#{candidate.affinity_tier}"
+                    ]}>
+                      {candidate.affinity_badge.label}
+                    </span>
+                    <span class={[
+                      "badge",
+                      "badge--source-kind",
+                      "badge--source-#{candidate.source_resource_type}"
+                    ]}>
+                      {source_kind_label(candidate.source_resource_type)}
+                    </span>
+                    <time
+                      datetime={format_iso_datetime(candidate.source_occurred_at)}
+                      class="suggested-candidate-card__time"
+                    >
+                      {format_datetime(candidate.source_occurred_at)}
+                    </time>
+                  </header>
+                  <p class="suggested-candidate-card__content">{candidate.content}</p>
+                </article>
+              </div>
+            </.async_result>
+          </section>
 
           <ol
             id="review-timeline"

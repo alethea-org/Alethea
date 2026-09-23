@@ -2685,6 +2685,101 @@ select.text-input {
 .proposal-inbox strong { color: var(--colors-ink); }
 .proposal-inbox p { margin: 2px 0 0; }
 
+.suggested-evidence-panel {
+  max-width: 68ch;
+  margin: 0 auto var(--spacing-lg);
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-surface-soft);
+}
+
+.suggested-evidence-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+.suggested-evidence-panel__header h3 { margin: 2px 0 0; }
+
+.suggested-candidates-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.suggested-candidate-card {
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-left: 4px solid var(--colors-border-strong);
+  border-radius: var(--rounded-md);
+  background: var(--colors-canvas);
+}
+
+.suggested-candidate-card--high { border-left-color: var(--colors-success); }
+.suggested-candidate-card--medium { border-left-color: var(--colors-warn); }
+.suggested-candidate-card--low { border-left-color: var(--colors-hairline); }
+
+.suggested-candidate-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xxs) var(--spacing-xs);
+  margin-bottom: var(--spacing-xs);
+}
+
+.suggested-candidate-card__time {
+  margin-left: auto;
+  color: var(--colors-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.suggested-candidate-card__content {
+  margin: 0;
+  color: var(--colors-body);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.badge--affinity,
+.badge--source-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-pill);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.badge--affinity-high {
+  border-color: var(--colors-success-border);
+  background: var(--colors-success-soft);
+  color: var(--colors-success);
+}
+
+.badge--affinity-medium {
+  border-color: var(--colors-pill-border-warn);
+  background: var(--colors-warn-soft);
+  color: var(--colors-warn);
+}
+
+.badge--affinity-low {
+  border-color: var(--colors-hairline);
+  background: var(--colors-surface-soft);
+  color: var(--colors-muted);
+}
+
+.badge--source-kind {
+  background: var(--colors-canvas);
+  color: var(--colors-body);
+}
+
 .review-timeline {
   width: 100%;
   max-width: 68ch;
