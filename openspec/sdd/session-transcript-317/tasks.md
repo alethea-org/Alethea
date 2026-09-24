@@ -30,32 +30,32 @@ Chain strategy: feature-branch-chain
 
 ### Phase 1 — Migration
 
-- [ ] 1.1 `mix ecto.gen.migration create_session_transcripts` (never hand-author the file).
-- [ ] 1.2 Write the body verbatim per design "Migration": `primary_key: false` + `add :id, :binary_id, primary_key: true`; `encrypted_spans :binary null: false`; `encryption_version :integer null: false, default: 2` (AD3); `audio_duration_seconds :integer` nullable (AD4); `recorded_at :utc_datetime_usec null: false` (D3); `patient_id` FK `on_delete: :delete_all`; `professional_id` FK `on_delete: :restrict` (L6); `timestamps(type: :utc_datetime)`. Keep the four design comments.
-- [ ] 1.3 Create ONLY `index(:session_transcripts, [:patient_id, :recorded_at])` — no standalone `[:patient_id]` (AD7). No `create constraint(...)`, no immutability trigger, use `change`.
-- [ ] 1.4 Run `mix ecto.migrate` → `mix ecto.rollback` → `mix ecto.migrate` to prove reversibility.
+- [x] 1.1 `mix ecto.gen.migration create_session_transcripts` (never hand-author the file).
+- [x] 1.2 Write the body verbatim per design "Migration": `primary_key: false` + `add :id, :binary_id, primary_key: true`; `encrypted_spans :binary null: false`; `encryption_version :integer null: false, default: 2` (AD3); `audio_duration_seconds :integer` nullable (AD4); `recorded_at :utc_datetime_usec null: false` (D3); `patient_id` FK `on_delete: :delete_all`; `professional_id` FK `on_delete: :restrict` (L6); `timestamps(type: :utc_datetime)`. Keep the four design comments.
+- [x] 1.3 Create ONLY `index(:session_transcripts, [:patient_id, :recorded_at])` — no standalone `[:patient_id]` (AD7). No `create constraint(...)`, no immutability trigger, use `change`.
+- [x] 1.4 Run `mix ecto.migrate` → `mix ecto.rollback` → `mix ecto.migrate` to prove reversibility.
 
 ### Phase 2 — `SessionTranscriptContent` (strict TDD)
 
-- [ ] 2.1 RED `test/alethea/clinical_record/session_transcript_content_test.exs`: `new/1` accepts spans mixing `"patient"` and `"therapist"`; `speakers/0 == ~w(patient therapist)`.
-- [ ] 2.2 RED **table-driven rejection** (trim lever: one module attribute + `for` comprehension, ~−25 lines): `"psychologist"` / `"Patient"` / `:patient` atom / `nil` → `:invalid_speaker`; `[]` → `:empty_transcript`; non-number `start`, `start > end`, non-binary `text`, missing key, extra key → `:invalid_span`.
-- [ ] 2.3 RED: one bad span at position 40 of 41 rejects the WHOLE list (AD1, no partial write).
-- [ ] 2.4 RED: `serialize/1` emits `"ALETHEA_SESSION_TRANSCRIPT_SPANS\n"` then exactly `["alethea.session-transcript-spans", 1, [[s, e, spk, txt], …]]`.
-- [ ] 2.5 RED: `serialize |> parse` round-trips order (never re-sorted), float timestamps, speakers, Unicode/emoji/newline text byte-for-byte; overlapping spans accepted.
-- [ ] 2.6 RED **table-driven `parse/1` malformed** (trim lever: collapse "wrong format" + "wrong version" into ONE row, ~−10 lines): missing sentinel, wrong format/version, non-JSON, object-instead-of-array, 3-element span, bad speaker → `{:error, :malformed}`, never raises.
-- [ ] 2.7 GREEN `lib/alethea/clinical_record/session_transcript_content.ex`: `@sentinel`/`@format`/`@version`/`@speakers`, `@enforce_keys [:spans]`, `defstruct spans: []`, `@type speaker/span/t/error`, and `new/1` (`{:ok, t} | {:error, error}`), total `serialize/1`, total `parse/1` (`{:ok, t} | {:error, :malformed}`, no `{:legacy, _}` branch), `speakers/0`. Spans are plain maps (AD8).
+- [x] 2.1 RED `test/alethea/clinical_record/session_transcript_content_test.exs`: `new/1` accepts spans mixing `"patient"` and `"therapist"`; `speakers/0 == ~w(patient therapist)`.
+- [x] 2.2 RED **table-driven rejection** (trim lever: one module attribute + `for` comprehension, ~−25 lines): `"psychologist"` / `"Patient"` / `:patient` atom / `nil` → `:invalid_speaker`; `[]` → `:empty_transcript`; non-number `start`, `start > end`, non-binary `text`, missing key, extra key → `:invalid_span`.
+- [x] 2.3 RED: one bad span at position 40 of 41 rejects the WHOLE list (AD1, no partial write).
+- [x] 2.4 RED: `serialize/1` emits `"ALETHEA_SESSION_TRANSCRIPT_SPANS\n"` then exactly `["alethea.session-transcript-spans", 1, [[s, e, spk, txt], …]]`.
+- [x] 2.5 RED: `serialize |> parse` round-trips order (never re-sorted), float timestamps, speakers, Unicode/emoji/newline text byte-for-byte; overlapping spans accepted.
+- [x] 2.6 RED **table-driven `parse/1` malformed** (trim lever: collapse "wrong format" + "wrong version" into ONE row, ~−10 lines): missing sentinel, wrong format/version, non-JSON, object-instead-of-array, 3-element span, bad speaker → `{:error, :malformed}`, never raises.
+- [x] 2.7 GREEN `lib/alethea/clinical_record/session_transcript_content.ex`: `@sentinel`/`@format`/`@version`/`@speakers`, `@enforce_keys [:spans]`, `defstruct spans: []`, `@type speaker/span/t/error`, and `new/1` (`{:ok, t} | {:error, error}`), total `serialize/1`, total `parse/1` (`{:ok, t} | {:error, :malformed}`, no `{:legacy, _}` branch), `speakers/0`. Spans are plain maps (AD8).
 
 ### Phase 3 — `SessionTranscript` schema (strict TDD)
 
-- [ ] 3.1 RED `test/alethea/clinical_record/session_transcript_test.exs`: `changeset/2` requires `encrypted_spans`, `recorded_at`, `patient_id`, `professional_id`; `audio_duration_seconds` optional and castable.
-- [ ] 3.2 RED: passing `spans:` leaves `:spans` absent from `changes` (plaintext not castable); `encryption_version` defaults to `2` without being passed (AD3); `inspect/1` on a struct with populated `:spans` contains no span text.
-- [ ] 3.3 GREEN `lib/alethea/clinical_record/session_transcript.ex` per the design contract: moduledoc with the `Alethea.Clinical.Session` boundary note + the D1 plaintext-duration deviation; `@primary_key {:id, :binary_id, autogenerate: true}`, `@foreign_key_type :binary_id`, `@derive {Inspect, except: [:spans]}`, `field :spans, {:array, :map}, virtual: true, redact: true` (AD5), `belongs_to` patient/professional, `timestamps(type: :utc_datetime)`. No `unique_constraint`, no `update_changeset`.
+- [x] 3.1 RED `test/alethea/clinical_record/session_transcript_test.exs`: `changeset/2` requires `encrypted_spans`, `recorded_at`, `patient_id`, `professional_id`; `audio_duration_seconds` optional and castable.
+- [x] 3.2 RED: passing `spans:` leaves `:spans` absent from `changes` (plaintext not castable); `encryption_version` defaults to `2` without being passed (AD3); `inspect/1` on a struct with populated `:spans` contains no span text.
+- [x] 3.3 GREEN `lib/alethea/clinical_record/session_transcript.ex` per the design contract: moduledoc with the `Alethea.Clinical.Session` boundary note + the D1 plaintext-duration deviation; `@primary_key {:id, :binary_id, autogenerate: true}`, `@foreign_key_type :binary_id`, `@derive {Inspect, except: [:spans]}`, `field :spans, {:array, :map}, virtual: true, redact: true` (AD5), `belongs_to` patient/professional, `timestamps(type: :utc_datetime)`. No `unique_constraint`, no `update_changeset`.
 
 ### Phase 4 — PR1 verification
 
-- [ ] 4.1 Run the Unit 1 focused test command; `mix compile --warnings-as-errors --force`; `mix format --check-formatted`.
-- [ ] 4.2 **Budget check**: `git diff --stat main` authored lines. If > 400, confirm the 2.2/2.6 trim levers are applied; only then flag `size:exception` to the orchestrator.
-- [ ] 4.3 Confirm the diff touches ONLY the 5 PR1 files — no `clinical_record.ex`, no registry file, no `rag/indexer.ex` (F2), no `lib/alethea_web/**`.
+- [x] 4.1 Run the Unit 1 focused test command; `mix compile --warnings-as-errors --force`; `mix format --check-formatted`.
+- [x] 4.2 **Budget check**: `git diff --stat main` authored lines. If > 400, confirm the 2.2/2.6 trim levers are applied; only then flag `size:exception` to the orchestrator. RESULT: 449 lines (both levers applied + extra non-coverage trims); still ~12% over 400 — flagged to orchestrator, no unilateral exception taken.
+- [x] 4.3 Confirm the diff touches ONLY the 5 PR1 files — no `clinical_record.ex`, no registry file, no `rag/indexer.ex` (F2), no `lib/alethea_web/**`. Confirmed via `git status --short`.
 
 ---
 
