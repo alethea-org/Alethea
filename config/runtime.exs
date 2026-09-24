@@ -3,6 +3,19 @@ import Config
 Alethea.RuntimeEnv.load_dotenv(".env")
 
 if config_env() == :dev do
+  # Development environment only: pick the database after .env is loaded
+  # (dev.exs runs before it). Uses the shared Neon database when its port is
+  # reachable, otherwise the local Docker Postgres. See Alethea.DevDatabase.
+  {dev_db_source, dev_db_url} = Alethea.DevDatabase.select(System.get_env())
+
+  IO.puts(
+    :stderr,
+    "[dev] Database: #{dev_db_source} (#{Alethea.DevDatabase.redact(dev_db_url)})"
+  )
+
+  config :alethea, Alethea.Repo, url: dev_db_url
+  config :alethea, :dev_database_source, dev_db_source
+
   telegram_client =
     case System.get_env("TELEGRAM_CLIENT_ADAPTER") do
       "req" -> Alethea.Telegram.Client.Req

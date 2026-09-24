@@ -144,6 +144,37 @@ npm install --prefix assets
 mix assets.deploy
 ```
 
+### Base de datos de desarrollo: Neon compartida con fallback local
+
+Solo aplica al ambiente de desarrollo. Al arrancar, la app elige la base automáticamente (`Alethea.DevDatabase`, llamado desde `config/runtime.exs`):
+
+1. `DATABASE_URL` definida → se usa esa, sin chequeos (forzar una base a mano).
+2. `NEON_DATABASE_URL` definida y su puerto accesible → base compartida en [Neon](https://neon.tech) (Postgres 16 + pgvector).
+3. Si no → Postgres local de Docker. Es el caso del wifi de la universidad, que bloquea el puerto 5432 saliente.
+
+El log de arranque indica cuál se usó: `[dev] Database: neon (...)` o `[dev] Database: local (...)`.
+
+**Son dos bases distintas:** lo que se carga en Neon no aparece en la local y viceversa. Solo datos ficticios: nunca cargar datos clínicos reales.
+
+Configuración en `.env` (ignorado por git):
+
+```bash
+NEON_DATABASE_URL=postgresql://<user>:<password>@<endpoint>.neon.tech/alethea_dev?ssl=true
+```
+
+- Usar la connection string **directa** (sin `-pooler` en el host): Oban usa `LISTEN/NOTIFY`, que no funciona detrás de PgBouncer en modo transacción.
+- Reemplazar los parámetros de query por `?ssl=true`: Ecto no interpreta `sslmode` y se conectaría sin TLS.
+- Todos deben usar la `CLOAK_AES_KEY` por defecto de `config/dev.exs`; con otra clave no se pueden desencriptar los datos de los demás.
+
+Cómo levantar:
+
+- **Docker:** `docker compose up`. El entrypoint aplica migraciones y crea la configuración del bot y las cuentas del equipo (`priv/repo/seeds_team.exs`) en la base elegida.
+- **Sin Docker:** `mix alethea.dev`. Si Neon no es accesible, levanta el contenedor `db` local, migra y arranca el server. La primera vez contra una base local nueva: `mix ecto.setup && mix run priv/repo/seeds_team.exs`.
+
+Cuentas del equipo (solo desarrollo): `<usuario-github>@alethea.dev` / `aletheaorg123`.
+
+La primera query después de un rato de inactividad tarda más: Neon suspende el compute cuando no se usa.
+
 ### Configuración opcional de IA
 
 En desarrollo **no** se requieren credenciales externas: el cliente de Telegram (`Alethea.Telegram.Client.Fake`) y todos los servicios de IA (LLM, Whisper, RoBERTa, embeddings) usan implementaciones `Fake`. Solo se activan proveedores reales si se configuran:
