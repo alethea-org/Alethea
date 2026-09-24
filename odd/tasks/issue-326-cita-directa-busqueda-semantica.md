@@ -66,9 +66,9 @@ Allow clinicians to cite any eligible search result directly from the semantic s
 - [x] **TASK-3 — Styling: Editorial CSS for cited search cards and badges**
   - Add `.badge--cited` and `.suggested-candidate-card--cited` rules in `priv/static/assets/css/editorial.css`.
 
-- [ ] **TASK-4 — Full validation and work-unit commit**
+- [x] **TASK-4 — Full validation and work-unit commit**
   - Run focused suite and `mix precommit`.
-  - Create work-unit commit following Conventional Commits.
+  - Create work-unit commit following Conventional Commits (`7f84554`).
 
 ## Acceptance criteria
 
@@ -84,3 +84,4 @@ Allow clinicians to cite any eligible search result directly from the semantic s
 - STYLING: Added `.badge--cited`, `.suggested-candidate-card--cited`, and `.evidence-search-result__cited-confirmation` in `priv/static/assets/css/editorial.css`.
 - VALIDATION: `mix precommit` passed cleanly with 1,563 passed (6 doctests, 1557 tests), 5 skipped, 0 failures. `mix format --check-formatted` passed with no diff.
 - REVIEW: Native RDD compact review completed and acknowledged under lineage `review-474957456d437b7d` (`approved`).
+- COMMIT: `7f84554` (`feat(clinical): cite evidence directly from semantic search results (#326)`).
