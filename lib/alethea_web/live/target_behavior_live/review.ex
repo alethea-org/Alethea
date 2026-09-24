@@ -31,6 +31,8 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   """
   use AletheaWeb, :live_view
 
+  alias Alethea.AI.Chains.FunctionalAnalysisDraftChain
+  alias Alethea.AI.Sanitizer
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
   alias Phoenix.LiveView.AsyncResult
@@ -87,6 +89,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:has_sufficient_evidence, has_sufficient_evidence)
           |> assign(:draft_status, draft_status)
           |> assign(:generation_pending, false)
+          |> assign(:draft_generation_pending, false)
           |> assign(:editing_proposal_id, nil)
           |> assign(:active_input_tab, :evidence)
           |> assign(:observation_form_open, false)
@@ -576,6 +579,54 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
+  def handle_event("change_functional_analysis", %{"functional_analysis" => params}, socket) do
+    values = Map.merge(functional_analysis_form_values(socket), params)
+
+    {:noreply,
+     assign(
+       socket,
+       :functional_analysis_form,
+       to_form(values, as: "functional_analysis")
+     )}
+  end
+
+  @impl true
+  def handle_event("generate_functional_analysis_draft", _params, socket) do
+    cond do
+      socket.assigns.draft_tombstoned_at ->
+        {:noreply, socket}
+
+      socket.assigns.draft_generation_pending ->
+        {:noreply, socket}
+
+      not socket.assigns.has_sufficient_evidence ->
+        {:noreply, put_flash(socket, :error, "No hay evidencia citada para generar el borrador.")}
+
+      true ->
+        professional = socket.assigns.current_professional
+        patient_id = socket.assigns.patient_id
+        target_behavior_id = socket.assigns.target_behavior_id
+
+        {:noreply,
+         socket
+         |> assign(:draft_generation_pending, true)
+         |> start_async(:functional_analysis_draft, fn ->
+           with {:ok, items} <-
+                  ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id),
+                %{texts: evidence} = selected when evidence != [] <-
+                  cited_sanitized_evidence(items),
+                {:ok, generated} <-
+                  functional_analysis_draft_chain().run(%{sanitized_evidence: evidence}) do
+             {:ok, %{generated: generated, evidence_ids: selected.ids}}
+           else
+             %{texts: []} -> {:error, :no_cited_evidence}
+             error -> error
+           end
+         end)}
+    end
+  end
+
+  @impl true
   def handle_event("save_functional_analysis", %{"functional_analysis" => params}, socket) do
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
@@ -602,6 +653,76 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo guardar el análisis funcional.")}
     end
+  end
+
+  @impl true
+  def handle_async(
+        :functional_analysis_draft,
+        {:ok, {:ok, %{generated: generated, evidence_ids: evidence_ids}}},
+        socket
+      ) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    with {:ok, items} <-
+           ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id),
+         :ok <- cited_evidence_still_live(evidence_ids, items),
+         {:ok, current_content} <-
+           ClinicalRecord.get_functional_analysis_content(
+             professional,
+             patient_id,
+             target_behavior_id
+           ) do
+      case current_content do
+        {:legally_deleted, deleted_at} ->
+          {:noreply,
+           socket
+           |> assign(:draft_generation_pending, false)
+           |> assign(:draft_tombstoned_at, deleted_at)
+           |> assign(:draft_status, :tombstoned)
+           |> put_flash(:error, "El borrador fue eliminado y no se restauró.")}
+
+        _content ->
+          values = merge_generated_draft(functional_analysis_form_values(socket), generated)
+
+          {:noreply,
+           socket
+           |> assign(:draft_generation_pending, false)
+           |> assign(
+             :functional_analysis_form,
+             to_form(values, as: "functional_analysis")
+           )
+           |> put_flash(:info, "Borrador E-O-R-C generado. Revisalo antes de guardar.")}
+      end
+    else
+      {:error, :unauthorized} ->
+        {:noreply, redirect_to_patients(socket, :unauthorized)}
+
+      {:error, :not_found} ->
+        {:noreply, redirect_to_patients(socket, :not_found)}
+
+      {:error, :stale_cited_evidence} ->
+        {:noreply,
+         socket
+         |> assign(:draft_generation_pending, false)
+         |> put_flash(:error, "La evidencia citada cambió durante la generación.")}
+
+      {:error, _reason} ->
+        {:noreply, draft_generation_error(socket)}
+    end
+  end
+
+  def handle_async(:functional_analysis_draft, {:ok, {:error, :unauthorized}}, socket) do
+    {:noreply, redirect_to_patients(socket, :unauthorized)}
+  end
+
+  def handle_async(:functional_analysis_draft, {:ok, {:error, :not_found}}, socket) do
+    {:noreply, redirect_to_patients(socket, :not_found)}
+  end
+
+  def handle_async(:functional_analysis_draft, _result, socket) do
+    {:noreply, draft_generation_error(socket)}
   end
 
   @impl true
@@ -784,6 +905,72 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   defp timeline_index(items), do: Map.new(items, &{&1.id, &1})
+
+  defp cited_sanitized_evidence(items) do
+    items
+    |> Enum.filter(&(&1.kind == :consultation_evidence))
+    |> Enum.reduce(%{ids: MapSet.new(), texts: []}, fn item, selected ->
+      case Sanitizer.sanitize(item.text) do
+        "" ->
+          selected
+
+        text ->
+          %{
+            ids: MapSet.put(selected.ids, item.id),
+            texts: [text | selected.texts]
+          }
+      end
+    end)
+    |> Map.update!(:texts, &Enum.reverse/1)
+  end
+
+  defp cited_evidence_still_live(evidence_ids, items) do
+    live_ids =
+      items
+      |> Enum.filter(&(&1.kind == :consultation_evidence))
+      |> MapSet.new(& &1.id)
+
+    if MapSet.subset?(evidence_ids, live_ids),
+      do: :ok,
+      else: {:error, :stale_cited_evidence}
+  end
+
+  defp functional_analysis_draft_chain do
+    Application.get_env(
+      :alethea,
+      :functional_analysis_draft_chain,
+      FunctionalAnalysisDraftChain
+    )
+  end
+
+  defp functional_analysis_form_values(socket) do
+    fields = ["previous_notes" | FunctionalAnalysisDraftChain.eorc_fields()]
+
+    Map.new(fields, fn field ->
+      atom_field = String.to_existing_atom(field)
+      {field, socket.assigns.functional_analysis_form[atom_field].value || ""}
+    end)
+  end
+
+  defp merge_generated_draft(current, generated) do
+    Enum.reduce(FunctionalAnalysisDraftChain.eorc_fields(), current, fn field, values ->
+      current_value = Map.get(values, field, "")
+      generated_value = Map.get(generated, field, "")
+
+      if String.trim(current_value) == "" and
+           is_binary(generated_value) and String.trim(generated_value) != "" do
+        Map.put(values, field, generated_value)
+      else
+        values
+      end
+    end)
+  end
+
+  defp draft_generation_error(socket) do
+    socket
+    |> assign(:draft_generation_pending, false)
+    |> put_flash(:error, "No se pudo generar el borrador E-O-R-C.")
+  end
 
   defp compute_draft_status(tombstoned_at, %FunctionalAnalysisContent{} = content) do
     cond do
@@ -1687,9 +1874,23 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <span class="pt-eyebrow">Formulación clínica</span>
                 <h2 class="t-title-sm">Análisis funcional E-O-R-C</h2>
               </div>
-              <span id="editor-draft-status" class="review-status-chip">
-                {draft_status_label(@draft_status)}
-              </span>
+              <div class="form-actions">
+                <button
+                  :if={!@draft_tombstoned_at}
+                  type="button"
+                  id="generate-functional-analysis-draft"
+                  phx-click="generate_functional_analysis_draft"
+                  disabled={@draft_generation_pending or !@has_sufficient_evidence}
+                  class="button-primary button-primary--sm"
+                >
+                  {if @draft_generation_pending,
+                    do: "Generando borrador…",
+                    else: "✨ Generar borrador E-O-R-C con IA"}
+                </button>
+                <span id="editor-draft-status" class="review-status-chip">
+                  {draft_status_label(@draft_status)}
+                </span>
+              </div>
             </div>
 
             <div :if={@draft_tombstoned_at} id="draft-tombstone" class="tombstone-note">
@@ -1713,6 +1914,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               :if={!@draft_tombstoned_at}
               for={@functional_analysis_form}
               id="functional-analysis-form"
+              phx-change="change_functional_analysis"
               phx-submit="save_functional_analysis"
               class="functional-analysis-form"
             >
