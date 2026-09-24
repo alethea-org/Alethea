@@ -33,6 +33,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
+  alias Phoenix.LiveView.AsyncResult
 
   @impl true
   def mount(%{"patient_id" => patient_id, "id" => target_behavior_id}, _session, socket) do
@@ -343,6 +344,45 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
+  def handle_event("cite_suggested_candidate", %{"id" => chunk_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    candidate = find_citable_candidate(socket.assigns.suggested_candidates, chunk_id)
+
+    result =
+      with %{source_resource_type: resource_type} = candidate when not is_nil(candidate) <-
+             candidate,
+           {:ok, source_kind} <- citation_source_kind(resource_type) do
+        ClinicalRecord.cite_evidence_source(
+          professional,
+          patient_id,
+          target_behavior_id,
+          %{
+            source_kind: source_kind,
+            source_id: candidate.source_resource_id,
+            excerpt: candidate.content
+          }
+        )
+      else
+        _reason -> {:error, :invalid_suggestion}
+      end
+
+    case result do
+      {:ok, _evidence} ->
+        {:noreply,
+         socket
+         |> remove_suggested_candidate(chunk_id)
+         |> load_timeline()
+         |> put_flash(:info, "Evidencia citada correctamente.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo citar la sugerencia de evidencia.")}
+    end
+  end
+
+  @impl true
   def handle_event("suggest_patterns", _params, socket) do
     if not socket.assigns.has_sufficient_evidence do
       {:noreply,
@@ -555,6 +595,28 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         socket
     end
   end
+
+  defp find_citable_candidate(%AsyncResult{ok?: true, result: candidates}, chunk_id) do
+    Enum.find(candidates, fn candidate ->
+      candidate.chunk_id == chunk_id and citable_candidate?(candidate)
+    end)
+  end
+
+  defp find_citable_candidate(_async_result, _chunk_id), do: nil
+
+  defp remove_suggested_candidate(socket, chunk_id) do
+    async_result = socket.assigns.suggested_candidates
+    candidates = Enum.reject(async_result.result, &(&1.chunk_id == chunk_id))
+    assign(socket, :suggested_candidates, AsyncResult.ok(async_result, candidates))
+  end
+
+  defp citable_candidate?(%{source_resource_type: resource_type}) do
+    match?({:ok, _source_kind}, citation_source_kind(resource_type))
+  end
+
+  defp citation_source_kind("clinical_note"), do: {:ok, "clinical_note"}
+  defp citation_source_kind("patient_message"), do: {:ok, "message"}
+  defp citation_source_kind(_resource_type), do: {:error, :unsupported_source}
 
   defp reset_evidence_search(socket) do
     socket
@@ -1207,6 +1269,17 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     </time>
                   </header>
                   <p class="suggested-candidate-card__content">{candidate.content}</p>
+                  <div :if={citable_candidate?(candidate)} class="suggested-candidate-card__actions">
+                    <button
+                      type="button"
+                      id={"cite-suggested-candidate-#{candidate.chunk_id}"}
+                      phx-click="cite_suggested_candidate"
+                      phx-value-id={candidate.chunk_id}
+                      class="button-primary button-primary--sm"
+                    >
+                      + Citar todo
+                    </button>
+                  </div>
                 </article>
               </div>
             </.async_result>
