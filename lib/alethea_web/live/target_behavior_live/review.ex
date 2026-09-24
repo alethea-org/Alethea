@@ -383,6 +383,41 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
+  def handle_event("dismiss_suggested_candidate", %{"id" => chunk_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    candidate = find_dismissable_candidate(socket.assigns.suggested_candidates, chunk_id)
+
+    result =
+      if candidate do
+        ClinicalRecord.dismiss_evidence_suggestion(
+          professional,
+          patient_id,
+          target_behavior_id,
+          %{
+            chunk_id: candidate.chunk_id,
+            resource_type: to_string(candidate.source_resource_type)
+          }
+        )
+      else
+        {:error, :candidate_not_found}
+      end
+
+    case result do
+      {:ok, _dismissal} ->
+        {:noreply,
+         socket
+         |> remove_suggested_candidate(chunk_id)
+         |> put_flash(:info, "Sugerencia descartada.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo descartar la sugerencia de evidencia.")}
+    end
+  end
+
+  @impl true
   def handle_event("suggest_patterns", _params, socket) do
     if not socket.assigns.has_sufficient_evidence do
       {:noreply,
@@ -603,6 +638,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   defp find_citable_candidate(_async_result, _chunk_id), do: nil
+
+  defp find_dismissable_candidate(%AsyncResult{ok?: true, result: candidates}, chunk_id) do
+    Enum.find(candidates, &(&1.chunk_id == chunk_id))
+  end
+
+  defp find_dismissable_candidate(_async_result, _chunk_id), do: nil
 
   defp remove_suggested_candidate(socket, chunk_id) do
     async_result = socket.assigns.suggested_candidates
@@ -1269,8 +1310,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     </time>
                   </header>
                   <p class="suggested-candidate-card__content">{candidate.content}</p>
-                  <div :if={citable_candidate?(candidate)} class="suggested-candidate-card__actions">
+                  <div class="suggested-candidate-card__actions">
                     <button
+                      :if={citable_candidate?(candidate)}
                       type="button"
                       id={"cite-suggested-candidate-#{candidate.chunk_id}"}
                       phx-click="cite_suggested_candidate"
@@ -1278,6 +1320,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                       class="button-primary button-primary--sm"
                     >
                       + Citar todo
+                    </button>
+                    <button
+                      type="button"
+                      id={"dismiss-suggested-candidate-#{candidate.chunk_id}"}
+                      phx-click="dismiss_suggested_candidate"
+                      phx-value-id={candidate.chunk_id}
+                      class="button-secondary button-secondary--sm"
+                    >
+                      Descartar ✕
                     </button>
                   </div>
                 </article>
