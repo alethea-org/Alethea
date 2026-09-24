@@ -26,6 +26,7 @@ services:
       - EMOTION_SIDECAR_URL=http://emotion-sidecar:8080
       - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-phi-4-mini}
+      - LOCAL_LLM_BASE_URL=http://host.docker.internal:11434
     depends_on:
       db:
         condition: service_healthy
@@ -34,6 +35,8 @@ services:
     volumes:
       - .:/app
     command: mix phx.server
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [
@@ -42,7 +45,7 @@ services:
           "--no-verbose",
           "--tries=1",
           "--spider",
-          "http://localhost:4000/health",
+          "http://127.0.0.1:4000/health",
         ]
       interval: 30s
       timeout: 5s

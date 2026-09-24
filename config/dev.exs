@@ -85,8 +85,16 @@ config :phoenix, :plug_init_mode, :runtime
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   provider: :local,
   local: [
-    endpoint_url: "http://localhost:11434"
+    endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434")
   ]
+
+# Global default endpoint for every :local-provider chain (ClinicalConsultationChain,
+# ClinicalHypothesisChain, PatternProposalChain, SessionSummaryChain, WeeklySummaryChain).
+# Override via LOCAL_LLM_BASE_URL when Ollama isn't reachable at localhost — e.g. running
+# the app in Docker while Ollama runs on the host (docker-compose.yml sets this to
+# http://host.docker.internal:11434).
+config :alethea, Alethea.AI.LLMConfig,
+  local: [endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434")]
 
 config :phoenix_live_view,
   # Include debug annotations and locations in rendered markup.
@@ -110,10 +118,10 @@ config :alethea, Alethea.Encryption.Vault,
 config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
 # Embeddings — Ollama-backed BGE-M3 local adapter (ADR-002, issue #254).
-# Requires `ollama pull bge-m3` and Ollama running on localhost:11434.
+# Requires `ollama pull bge-m3` and Ollama running (see LOCAL_LLM_BASE_URL above).
 config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Ollama
 
 config :alethea, Alethea.AI.Embeddings.Ollama,
   model: "bge-m3",
-  endpoint_url: "http://localhost:11434",
+  endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434"),
   receive_timeout: 120_000
