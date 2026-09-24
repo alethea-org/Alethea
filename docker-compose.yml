@@ -21,7 +21,12 @@ services:
     environment:
       - MIX_ENV=dev
       - PORT=4000
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/alethea_dev
+      # Development only: DATABASE_URL forces a database; otherwise the app
+      # probes NEON_DATABASE_URL and falls back to LOCAL_DATABASE_URL (see
+      # Alethea.DevDatabase). Values come from .env.
+      - DATABASE_URL=${DATABASE_URL:-}
+      - NEON_DATABASE_URL=${NEON_DATABASE_URL:-}
+      - LOCAL_DATABASE_URL=postgresql://postgres:postgres@db:5432/alethea_dev
       - SECRET_KEY_BASE=dev_secret_key_base_that_is_at_least_64_chars_long_for_production_safety
       - EMOTION_SIDECAR_URL=http://emotion-sidecar:8080
       - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}

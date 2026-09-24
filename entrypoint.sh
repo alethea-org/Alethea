@@ -7,5 +7,8 @@ set -e
 
 mix ecto.migrate
 mix run --no-start priv/repo/seed_dev_bot_config.exs
+# Development only: team accounts (idempotent) so the same logins work on
+# both the shared Neon database and the local fallback.
+mix run --no-start priv/repo/seeds_team.exs
 
 exec "$@"
