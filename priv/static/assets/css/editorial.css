@@ -2708,6 +2708,47 @@ select.text-input {
   margin-bottom: var(--spacing-md);
 }
 
+.evidence-search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-sm);
+}
+
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: var(--rounded-pill);
+  border: 1px solid var(--colors-hairline);
+  background: var(--colors-canvas);
+  color: var(--colors-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.filter-pill:hover {
+  border-color: var(--colors-border);
+  color: var(--colors-body);
+}
+
+.filter-pill--active {
+  border-color: var(--colors-primary);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+}
+
+.filter-pill--active:hover {
+  border-color: var(--colors-primary);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+}
+
 .evidence-search-bar form {
   margin: 0;
 }

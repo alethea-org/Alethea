@@ -2658,6 +2658,39 @@ defmodule Alethea.ClinicalRecordTest do
                  []
                )
     end
+
+    test "constrains results by source_kind", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      note_id = insert_rag_chunk!(professional, patient, "Nota de sesión", "clinical_note")
+      tg_id = insert_rag_chunk!(professional, patient, "Mensaje de telegram", "patient_message")
+
+      stub_rag_query_embedding()
+
+      assert {:ok, tg_candidates} =
+               ClinicalRecord.search_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "consulta",
+                 source_kind: :telegram
+               )
+
+      assert Enum.map(tg_candidates, & &1.source_resource_id) == [tg_id]
+
+      assert {:ok, note_candidates} =
+               ClinicalRecord.search_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "consulta",
+                 source_kind: :notes
+               )
+
+      assert Enum.map(note_candidates, & &1.source_resource_id) == [note_id]
+    end
   end
 
   defp deny_rag_query_embedding do
@@ -2679,6 +2712,10 @@ defmodule Alethea.ClinicalRecordTest do
   end
 
   defp insert_rag_chunk!(professional, patient, text) do
+    insert_rag_chunk!(professional, patient, text, "clinical_note")
+  end
+
+  defp insert_rag_chunk!(professional, patient, text, resource_type) do
     resource_id = Ecto.UUID.generate()
 
     {:ok, ciphertext} =
@@ -2686,7 +2723,7 @@ defmodule Alethea.ClinicalRecordTest do
 
     attrs = [
       %{
-        source_resource_type: "clinical_note",
+        source_resource_type: resource_type,
         source_resource_id: resource_id,
         chunk_index: 0,
         encrypted_content: ciphertext,
@@ -2700,7 +2737,7 @@ defmodule Alethea.ClinicalRecordTest do
       }
     ]
 
-    {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
+    {:ok, _rows} = Indexer.replace_chunks({resource_type, resource_id}, attrs)
     resource_id
   end
 
