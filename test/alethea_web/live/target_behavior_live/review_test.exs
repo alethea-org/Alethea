@@ -3086,6 +3086,470 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "trim and cite exact text from suggestions (#327)" do
+    test "each citable suggestion card features a secondary [Recortar] action alongside [+ Citar todo]",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content = "Crisis de angustia y taquicardia en lugares concurridos"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#cite-suggested-candidate-#{candidate.id}", "+ Citar todo")
+      assert has_element?(view, "#trim-suggested-candidate-#{candidate.id}", "Recortar")
+      assert has_element?(view, "#dismiss-suggested-candidate-#{candidate.id}", "Descartar ✕")
+    end
+
+    test "does not show [Recortar] action for uncitable suggestion source kinds", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      content = "Observación clínica no citable directamente"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinician_observation",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidate-#{candidate.id}")
+      refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
+      refute has_element?(view, "#trim-suggested-candidate-#{candidate.id}")
+      assert has_element?(view, "#dismiss-suggested-candidate-#{candidate.id}")
+    end
+
+    test "clicking [Recortar] opens an inline excerpt editor populated with the chunk text", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      content = "Paciente manifiesta ataques de pánico recurrentes con mareos"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      refute has_element?(view, "#trim-candidate-form-#{candidate.id}")
+
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      assert has_element?(view, "#trim-candidate-form-#{candidate.id}")
+      assert has_element?(view, "#confirm-trim-candidate-#{candidate.id}", "Confirmar cita")
+      assert has_element?(view, "#cancel-trim-candidate-#{candidate.id}", "Cancelar")
+
+      input_element = element(view, "#trim-candidate-form-#{candidate.id} textarea")
+      assert render(input_element) =~ content
+
+      # Standard card actions are replaced while editing
+      refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
+      refute has_element?(view, "#trim-suggested-candidate-#{candidate.id}")
+    end
+
+    test "canceling returns to the standard suggestion card view without side effects", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      content = "Paciente manifiesta ataques de pánico recurrentes con mareos"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      assert has_element?(view, "#trim-candidate-form-#{candidate.id}")
+
+      view
+      |> element("#cancel-trim-candidate-#{candidate.id}")
+      |> render_click()
+
+      refute has_element?(view, "#trim-candidate-form-#{candidate.id}")
+      assert has_element?(view, "#cite-suggested-candidate-#{candidate.id}", "+ Citar todo")
+      assert has_element?(view, "#trim-suggested-candidate-#{candidate.id}", "Recortar")
+
+      assert has_element?(
+               view,
+               "#suggested-candidate-#{candidate.id} .suggested-candidate-card__content",
+               content
+             )
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+    end
+
+    test "confirming the trimmed excerpt creates a ConsultationEvidence with the selected excerpt only",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      full_content =
+        "Paciente relata crisis de angustia y taquicardia al viajar en transporte público"
+
+      trimmed_excerpt = "crisis de angustia y taquicardia"
+
+      {:ok, real_note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, full_content)
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(full_content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          full_content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now(),
+          source_resource_id: real_note.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      # Open trim editor
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      # Submit form with trimmed excerpt
+      view
+      |> form("#trim-candidate-form-#{candidate.id}", %{
+        "trim" => %{"excerpt" => trimmed_excerpt}
+      })
+      |> render_submit()
+
+      evidence = Repo.one!(ConsultationEvidence)
+      assert evidence.source_kind == "clinical_note"
+      assert evidence.source_id == real_note.id
+      assert evidence.encryption_version == 2
+      refute evidence.encrypted_excerpt == full_content
+      refute evidence.encrypted_excerpt == trimmed_excerpt
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, ^trimmed_excerpt} =
+               PatientVault.decrypt(evidence.encrypted_excerpt, clinical_record_dek)
+
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+      assert has_element?(view, "#stat-evidence .stat-tile__value", "1")
+      assert has_element?(view, ".review-item--evidence", trimmed_excerpt)
+      refute has_element?(view, ".review-item--evidence", full_content)
+    end
+
+    test "validates that trimmed excerpt is not empty and shows inline error", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      content = "Texto original de la sugerencia clínica"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      view
+      |> form("#trim-candidate-form-#{candidate.id}", %{
+        "trim" => %{"excerpt" => "   "}
+      })
+      |> render_submit()
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+      assert has_element?(view, "#trim-candidate-form-#{candidate.id}")
+      assert render(view) =~ "Ingresá el fragmento exacto que querés citar."
+    end
+
+    test "validates that trimmed excerpt must match the source content and displays error", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      full_content = "Texto original presente en la nota clínica"
+      mismatched_excerpt = "Texto alterado que no existe en la nota"
+
+      {:ok, real_note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, full_content)
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(full_content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          full_content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now(),
+          source_resource_id: real_note.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      view
+      |> form("#trim-candidate-form-#{candidate.id}", %{
+        "trim" => %{"excerpt" => mismatched_excerpt}
+      })
+      |> render_submit()
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+      assert has_element?(view, "#trim-candidate-form-#{candidate.id}")
+      assert render(view) =~ "El fragmento debe coincidir exactamente con la fuente."
+    end
+
+    test "cites a trimmed patient message suggestion with message provenance", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      full_content =
+        "Mensaje del paciente: siento mucha ansiedad y falta de aire al salir de casa"
+
+      trimmed_excerpt = "ansiedad y falta de aire"
+
+      source =
+        insert_message_source!(
+          patient,
+          load_dek!(professional, patient),
+          "inbound",
+          full_content,
+          DateTime.utc_now(),
+          "spontaneous"
+        )
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(full_content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          full_content,
+          query_vector,
+          "patient_message",
+          DateTime.utc_now(),
+          source_resource_id: source.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      view
+      |> form("#trim-candidate-form-#{candidate.id}", %{
+        "trim" => %{"excerpt" => trimmed_excerpt}
+      })
+      |> render_submit()
+
+      evidence = Repo.one!(ConsultationEvidence)
+      assert evidence.source_kind == "message"
+      assert evidence.source_id == source.id
+      refute evidence.encrypted_excerpt == full_content
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, ^trimmed_excerpt} =
+               PatientVault.decrypt(evidence.encrypted_excerpt, clinical_record_dek)
+
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+      assert has_element?(view, ".review-item--evidence", trimmed_excerpt)
+    end
+
+    test "dismissing a candidate while trimming it resets trimming state and removes candidate",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content = "Paciente reporta opresión en el pecho"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      view
+      |> element("#trim-suggested-candidate-#{candidate.id}")
+      |> render_click()
+
+      assert has_element?(view, "#trim-candidate-form-#{candidate.id}")
+
+      render_click(view, "dismiss_suggested_candidate", %{"id" => candidate.id})
+
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+      refute has_element?(view, "#trim-candidate-form-#{candidate.id}")
+    end
+
+    test "opening trim editor on another candidate switches the active trimming card and pre-populates its content",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content1 = "Primer fragmento clínico relevante"
+      content2 = "Segundo fragmento clínico diferente"
+
+      {:ok, query_vector1} = Alethea.AI.Embeddings.Fake.embed(content1, [])
+      {:ok, query_vector2} = Alethea.AI.Embeddings.Fake.embed(content2, [])
+
+      candidate1 =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content1,
+          query_vector1,
+          "clinical_note",
+          ~U[2026-03-01 10:00:00.000000Z]
+        )
+
+      candidate2 =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content2,
+          query_vector2,
+          "clinical_note",
+          ~U[2026-03-01 11:00:00.000000Z]
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      # Open trim on candidate 1
+      view
+      |> element("#trim-suggested-candidate-#{candidate1.id}")
+      |> render_click()
+
+      assert has_element?(view, "#trim-candidate-form-#{candidate1.id}")
+      assert render(element(view, "#trim-candidate-form-#{candidate1.id} textarea")) =~ content1
+
+      # Candidate 2 is still in normal view
+      refute has_element?(view, "#trim-candidate-form-#{candidate2.id}")
+      assert has_element?(view, "#trim-suggested-candidate-#{candidate2.id}")
+
+      # Now click trim on candidate 2
+      view
+      |> element("#trim-suggested-candidate-#{candidate2.id}")
+      |> render_click()
+
+      # Candidate 1 is back to normal view
+      refute has_element?(view, "#trim-candidate-form-#{candidate1.id}")
+      assert has_element?(view, "#trim-suggested-candidate-#{candidate1.id}")
+
+      # Candidate 2 is now being trimmed with its own content
+      assert has_element?(view, "#trim-candidate-form-#{candidate2.id}")
+      assert render(element(view, "#trim-candidate-form-#{candidate2.id} textarea")) =~ content2
+    end
+  end
+
   defp load_dek!(professional, patient) do
     {:ok, kek} = Accounts.load_professional_kek(professional)
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)
