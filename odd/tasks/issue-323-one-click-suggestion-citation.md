@@ -71,5 +71,7 @@ Let an authorized clinician cite an entire eligible evidence suggestion from the
 - Independent verification initially found one low-severity patient-message coverage gap; the added regression test closed it without production changes.
 - Final `mix precommit` passed with 1,480 tests and 5 skipped; `git diff --check` passed; changed-file LSP diagnostics were clean.
 - Work-unit commit created: `b171d59` (`feat(clinical): cite suggested evidence`).
+- Pull request opened: #337 (`feat(clinical): cite suggested evidence`) with `type:feature` and approved issue #323.
+- Conflict with `main` after #322 (#335) landed: resolved merge commit `70d4ff4` preserving both intents (one-click citation helpers and `reset_evidence_search`); focused suite 70/70, one isolated flaky `render_async` timeout passes on rerun and isolation; `mix precommit` passed 1,492 tests with 5 skipped; no conflict markers remain.
 - Native risk assessment was unavailable because the package-local Gentle AI binary is missing, so the change followed the high-risk verification path.
 - Engram mirror is unavailable because the local Engram provider reported an ownership mismatch; this repository task file is authoritative for the session.
