@@ -38,11 +38,70 @@ defmodule Alethea.AI.EmotionAnalyzerTest do
     assert score(scores, "neutral") == 0.8
   end
 
-  test "analyze_batch/1 rejects unrepresentable or unknown dominant labels" do
-    for label <- ~w(surprise disgust unknown) do
-      expect_results([result(label, %{label => 0.9, "joy" => 0.1})])
-      assert EmotionAnalyzer.analyze_batch(["Synthetic"]) == {:error, :unavailable}
-    end
+  test "analyze_batch/1 rejects unknown dominant labels" do
+    expect_results([result("unknown", %{"unknown" => 0.9, "joy" => 0.1})])
+    assert EmotionAnalyzer.analyze_batch(["Synthetic"]) == {:error, :unavailable}
+  end
+
+  # Issue #334 — surprise/disgust are valid provider labels (both are in
+  # @official_labels) with no canonical counterpart. Option A: project
+  # onto the 5 canonical labels by keeping their scores AS-IS and
+  # dropping the surprise/disgust mass — NO renormalization to sum 1,
+  # NO reassignment of the dropped mass to other labels.
+  test "analyze_batch/1 keeps canonical scores unchanged (no renormalization) when the dominant label is surprise" do
+    expect_results([
+      result("surprise", %{
+        "surprise" => 0.6,
+        "joy" => 0.1,
+        "sadness" => 0.1,
+        "anger" => 0.05,
+        "fear" => 0.05,
+        "others" => 0.1
+      })
+    ])
+
+    assert {:ok, scores} = EmotionAnalyzer.analyze_batch(["Synthetic surprise"])
+    assert score(scores, "joy") == 0.1
+    assert score(scores, "sadness") == 0.1
+    assert score(scores, "anger") == 0.05
+    assert score(scores, "fear") == 0.05
+    assert score(scores, "neutral") == 0.1
+  end
+
+  test "analyze_batch/1 keeps canonical scores unchanged (no renormalization) when the dominant label is disgust" do
+    expect_results([
+      result("disgust", %{
+        "disgust" => 0.7,
+        "joy" => 0.05,
+        "sadness" => 0.1,
+        "anger" => 0.05,
+        "fear" => 0.05,
+        "others" => 0.05
+      })
+    ])
+
+    assert {:ok, scores} = EmotionAnalyzer.analyze_batch(["Synthetic disgust"])
+    assert score(scores, "joy") == 0.05
+    assert score(scores, "sadness") == 0.1
+    assert score(scores, "anger") == 0.05
+    assert score(scores, "fear") == 0.05
+    assert score(scores, "neutral") == 0.05
+  end
+
+  test "analyze_batch/1 averages a surprise-dominant result into a mixed batch without renormalizing it first" do
+    expect_results([
+      result("joy", %{"joy" => 0.9, "sadness" => 0.05, "others" => 0.05}),
+      result("surprise", %{"surprise" => 0.7, "fear" => 0.2, "others" => 0.1})
+    ])
+
+    assert {:ok, scores} =
+             EmotionAnalyzer.analyze_batch(["Synthetic joy", "Synthetic surprise"])
+
+    assert score(scores, "joy") == 0.45
+    assert score(scores, "sadness") == 0.025
+    assert score(scores, "anger") == 0.0
+    assert score(scores, "fear") == 0.1
+    assert_in_delta score(scores, "neutral"), 0.075, 0.0001
   end
 
   test "analyze_batch/1 fails closed on transport and HTTP errors" do

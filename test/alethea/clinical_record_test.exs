@@ -2616,6 +2616,50 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "search_evidence_candidates/5" do
+    test "natural-language query returns matching candidates", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      resource_id =
+        insert_rag_chunk!(professional, patient, "Angustia intensa en el supermercado")
+
+      stub_rag_query_embedding()
+
+      assert {:ok, [candidate]} =
+               ClinicalRecord.search_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "angustia en el supermercado",
+                 limit: 1
+               )
+
+      assert candidate.source_resource_id == resource_id
+      assert candidate.content == "Angustia intensa en el supermercado"
+      assert is_integer(candidate.match_percentage)
+    end
+
+    test "blank query returns an empty list without invoking embedding", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+      deny_rag_query_embedding()
+
+      assert {:ok, []} =
+               ClinicalRecord.search_evidence_candidates(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "   ",
+                 []
+               )
+    end
+  end
+
   defp deny_rag_query_embedding do
     Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
 

@@ -4,13 +4,21 @@ defmodule Alethea.AI.EmotionAnalyzer do
 
   It hides the sidecar transport and provider labels behind five canonical
   scores. Any result that cannot be represented safely is unavailable.
+
+  ## Surprise/disgust projection (issue #334)
+
+  The sidecar's provider labels include `surprise` and `disgust`, which have
+  no canonical counterpart. When either is the dominant label, the result is
+  still accepted: the five canonical scores (`joy`, `sadness`, `anger`,
+  `fear`, `neutral`) are kept AS-IS from the sidecar response, and the
+  `surprise`/`disgust` mass is simply dropped. Scores are NOT renormalized
+  to sum to 1, and the dropped mass is NOT reassigned to any other label.
   """
 
   @behaviour Alethea.AI.EmotionAnalyzerBehaviour
 
   @canonical_labels ~w(joy sadness anger fear neutral)
   @official_labels MapSet.new(~w(others joy sadness anger surprise disgust fear))
-  @unrepresentable_labels ~w(surprise disgust)
 
   @impl true
   def analyze_batch(texts) when is_list(texts) do
@@ -82,7 +90,6 @@ defmodule Alethea.AI.EmotionAnalyzer do
        when is_binary(dominant) and is_map(scores) do
     with true <- MapSet.equal?(MapSet.new(Map.keys(scores)), @official_labels),
          true <- dominant in @official_labels,
-         false <- dominant in @unrepresentable_labels,
          true <- Enum.all?(scores, &valid_score?/1) do
       {:ok,
        %{
