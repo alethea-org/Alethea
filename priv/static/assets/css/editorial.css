@@ -2808,6 +2808,14 @@ select.text-input {
   white-space: pre-wrap;
 }
 
+.suggested-candidate-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-sm);
+}
+
 .badge--affinity,
 .badge--source-kind {
   display: inline-flex;

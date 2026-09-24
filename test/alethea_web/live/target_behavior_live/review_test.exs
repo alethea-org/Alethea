@@ -12,6 +12,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
   """
   use AletheaWeb.ConnCase
   use Oban.Testing, repo: Alethea.Repo
+  import Ecto.Query
   import Mox
   import Phoenix.LiveViewTest
 
@@ -21,9 +22,11 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
   alias Alethea.ClinicalRecord.{
     AIProposal,
+    Audit,
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
+    DismissedEvidenceSuggestion,
     Retention,
     Tombstone
   }
@@ -2177,6 +2180,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
       assert has_element?(view, "#suggested-candidate-#{candidate.id}")
       refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
+      assert has_element?(view, "#dismiss-suggested-candidate-#{candidate.id}", "Descartar ✕")
     end
 
     test "renders clean empty state when no eligible candidates are available", %{
@@ -2212,6 +2216,202 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
       assert has_element?(view, "#suggested-candidates-empty")
       refute has_element?(view, "#suggested-candidates-list")
+    end
+  end
+
+  describe "interactive dismissal of evidence suggestions (#324)" do
+    test "each suggestion card displays a [Descartar ✕] action", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      content = "Crisis de angustia con taquicardia en lugares cerrados"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      dismiss_action = "#dismiss-suggested-candidate-#{candidate.id}"
+      assert has_element?(view, dismiss_action, "Descartar ✕")
+    end
+
+    test "dismissing a suggestion records dismissal in database, displays flash, and removes the card",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content = "Crisis de angustia con taquicardia en lugares cerrados"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      dismiss_action = "#dismiss-suggested-candidate-#{candidate.id}"
+      assert has_element?(view, dismiss_action)
+
+      render_click(view, "dismiss_suggested_candidate", %{"id" => candidate.id})
+
+      dismissal = Repo.one!(DismissedEvidenceSuggestion)
+      assert dismissal.target_behavior_id == target_behavior.id
+      assert dismissal.patient_id == patient.id
+      assert dismissal.professional_id == professional.id
+      assert dismissal.chunk_id == candidate.id
+
+      audit =
+        Repo.one!(
+          from(a in Audit,
+            where: a.action == "evidence_suggestion_dismissed" and a.resource_id == ^dismissal.id
+          )
+        )
+
+      assert audit.resource_type == "dismissed_evidence_suggestion"
+      assert audit.professional_id == professional.id
+      assert audit.details["outcome"] == "success"
+
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+      assert has_element?(view, "#suggested-candidates-empty")
+      assert render(view) =~ "Sugerencia descartada."
+    end
+
+    test "reloading the page or revisiting the target behavior does not display the dismissed chunk again",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content1 = "Crisis de angustia con taquicardia en lugares cerrados"
+      content2 = "Otra conducta de agorafobia en transporte público"
+      {:ok, query_vector1} = Alethea.AI.Embeddings.Fake.embed(content1, [])
+      {:ok, query_vector2} = Alethea.AI.Embeddings.Fake.embed(content2, [])
+
+      candidate1 =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content1,
+          query_vector1,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      candidate2 =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content2,
+          query_vector2,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidate-#{candidate1.id}")
+      assert has_element?(view, "#suggested-candidate-#{candidate2.id}")
+
+      render_click(view, "dismiss_suggested_candidate", %{"id" => candidate1.id})
+
+      refute has_element?(view, "#suggested-candidate-#{candidate1.id}")
+      assert has_element?(view, "#suggested-candidate-#{candidate2.id}")
+
+      # Reload the page
+      {:ok, view_reloaded, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view_reloaded)
+
+      refute has_element?(view_reloaded, "#suggested-candidate-#{candidate1.id}")
+      assert has_element?(view_reloaded, "#suggested-candidate-#{candidate2.id}")
+    end
+
+    test "dismisses a non-citable suggestion card via interactive button click", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      description = "Crisis de angustia y taquicardia en lugares cerrados"
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, description)
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(description, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Observación clínica sobre angustia y taquicardia",
+          query_vector,
+          "clinician_observation",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidate-#{candidate.id}")
+      refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
+
+      dismiss_btn = element(view, "#dismiss-suggested-candidate-#{candidate.id}")
+      assert render(dismiss_btn) =~ "Descartar ✕"
+
+      render_click(dismiss_btn)
+
+      assert Repo.aggregate(DismissedEvidenceSuggestion, :count) == 1
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+      assert has_element?(view, "#suggested-candidates-empty")
+      assert render(view) =~ "Sugerencia descartada."
+    end
+
+    test "rejects untrusted or unmatched chunk ids with an error flash", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      forged_id = Ecto.UUID.generate()
+
+      render_click(view, "dismiss_suggested_candidate", %{"id" => forged_id})
+
+      assert Repo.aggregate(DismissedEvidenceSuggestion, :count) == 0
+      assert render(view) =~ "No se pudo descartar la sugerencia de evidencia."
     end
   end
 
