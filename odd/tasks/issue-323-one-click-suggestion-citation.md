@@ -46,13 +46,13 @@ Let an authorized clinician cite an entire eligible evidence suggestion from the
     - `test/alethea_web/live/target_behavior_live/review_test.exs`
   - TDD evidence: RED — focused suite reported 62/63 passing because the one-click action did not exist; GREEN — 64/64 passed; triangulation added patient-message provenance coverage and finished at 65/65 passing.
   - Verification: focused LiveView suite passed 65 tests; `git diff --check` passed.
-  - Commit evidence: shared issue work-unit commit authorized; identity recorded after creation.
+  - Commit evidence: `b171d59` (`feat(clinical): cite suggested evidence`).
 
 - [x] **CITE-SUGGESTION-2 — Verify the complete issue behavior**
   - Status: completed; shared work-unit commit authorized.
   - Route: delegated verifier according to native assessment.
   - Checks: `mix precommit` passed with 1,480 tests and 5 skipped; `git diff --check` passed; LSP diagnostics found no warnings or errors in either changed source file; independent verification found no remaining findings.
-  - Commit evidence: shared issue work-unit commit authorized; identity recorded after creation.
+  - Commit evidence: `b171d59` (`feat(clinical): cite suggested evidence`).
 
 ## Acceptance criteria
 
@@ -70,5 +70,6 @@ Let an authorized clinician cite an entire eligible evidence suggestion from the
 - Focused tests prove encrypted persistence, authoritative server plaintext despite forged client input, immediate card removal, timeline insertion, counter increment, and both supported provenance kinds.
 - Independent verification initially found one low-severity patient-message coverage gap; the added regression test closed it without production changes.
 - Final `mix precommit` passed with 1,480 tests and 5 skipped; `git diff --check` passed; changed-file LSP diagnostics were clean.
+- Work-unit commit created: `b171d59` (`feat(clinical): cite suggested evidence`).
 - Native risk assessment was unavailable because the package-local Gentle AI binary is missing, so the change followed the high-risk verification path.
 - Engram mirror is unavailable because the local Engram provider reported an ownership mismatch; this repository task file is authoritative for the session.
