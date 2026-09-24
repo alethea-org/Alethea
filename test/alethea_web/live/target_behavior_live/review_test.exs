@@ -2827,6 +2827,265 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "direct citation from semantic search results (#326)" do
+    test "each citable search result displays a [+ Citar] action", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      query = "angustia en el supermercado"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+      occurred_at = ~U[2026-03-01 10:00:00.000000Z]
+
+      chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Refirió angustia intensa en el supermercado",
+          query_vector,
+          "clinical_note",
+          occurred_at
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+      |> render_change()
+
+      render_async(view)
+
+      action_selector = "#cite-search-result-#{chunk.id}"
+      assert has_element?(view, action_selector, "+ Citar")
+    end
+
+    test "cites search result directly into ConsultationEvidence, streams into timeline, and shows visual confirmation",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content = "Crisis de angustia al entrar al supermercado con taquicardia"
+      query = "angustia supermercado"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+      occurred_at = ~U[2026-03-01 11:00:00.000000Z]
+
+      {:ok, note} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, content)
+
+      chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          occurred_at,
+          source_resource_id: note.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+      |> render_change()
+
+      render_async(view)
+
+      action_selector = "#cite-search-result-#{chunk.id}"
+      assert has_element?(view, action_selector, "+ Citar")
+
+      render_click(view, "cite_search_result", %{
+        "id" => chunk.id,
+        "content" => "forged client plaintext"
+      })
+
+      # Creates ConsultationEvidence row with exact source reference
+      evidence = Repo.one!(ConsultationEvidence)
+      assert evidence.source_kind == "clinical_note"
+      assert evidence.source_id == note.id
+      assert evidence.encryption_version == 2
+      refute evidence.encrypted_excerpt == content
+
+      # Excerpt is encrypted under patient DEK with authoritative content
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, ^content} =
+               PatientVault.decrypt(evidence.encrypted_excerpt, clinical_record_dek)
+
+      # Timeline updates immediately
+      assert has_element?(view, "#stat-evidence .stat-tile__value", "1")
+      assert has_element?(view, ".review-item--evidence", content)
+
+      # Search result card displays visual confirmation of being cited
+      card_selector = "#evidence-search-result-#{chunk.id}"
+      assert has_element?(view, "#{card_selector}.suggested-candidate-card--cited")
+      assert has_element?(view, "#cited-confirmation-#{chunk.id}", "✓ Citado")
+      refute has_element?(view, action_selector)
+    end
+
+    test "cites a patient message search result with message provenance and encrypted server content",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      content = "Mensaje de paciente: no pude quedarme en la reunión"
+      query = "reunión"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+      occurred_at = ~U[2026-03-01 12:00:00.000000Z]
+
+      source =
+        insert_message_source!(
+          patient,
+          load_dek!(professional, patient),
+          "inbound",
+          content,
+          occurred_at,
+          "spontaneous"
+        )
+
+      chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "patient_message",
+          occurred_at,
+          source_resource_id: source.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+      |> render_change()
+
+      render_async(view)
+
+      action_selector = "#cite-search-result-#{chunk.id}"
+      assert has_element?(view, action_selector, "+ Citar")
+
+      render_click(view, "cite_search_result", %{
+        "id" => chunk.id,
+        "content" => "forged client plaintext"
+      })
+
+      evidence = Repo.one!(ConsultationEvidence)
+      assert evidence.source_kind == "message"
+      assert evidence.source_id == source.id
+      refute evidence.encrypted_excerpt == content
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, ^content} =
+               PatientVault.decrypt(evidence.encrypted_excerpt, clinical_record_dek)
+
+      card_selector = "#evidence-search-result-#{chunk.id}"
+      assert has_element?(view, "#{card_selector}.suggested-candidate-card--cited")
+      assert has_element?(view, "#cited-confirmation-#{chunk.id}", "✓ Citado")
+      refute has_element?(view, action_selector)
+    end
+
+    test "cited visual confirmation persists across subsequent searches within session", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      content1 = "Episodio 1: taquicardia severa"
+      content2 = "Episodio 2: mareo repentino"
+      query1 = "taquicardia"
+      query2 = "episodio"
+
+      {:ok, vector1} = Alethea.AI.Embeddings.Fake.embed(content1, [])
+      {:ok, vector2} = Alethea.AI.Embeddings.Fake.embed(content2, [])
+
+      {:ok, real_note1} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, content1)
+
+      {:ok, real_note2} =
+        ClinicalRecord.create_clinical_note(professional, patient.id, content2)
+
+      note1 =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content1,
+          vector1,
+          "clinical_note",
+          ~U[2026-03-01 10:00:00.000000Z],
+          source_resource_id: real_note1.id
+        )
+
+      note2 =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content2,
+          vector2,
+          "clinical_note",
+          ~U[2026-03-01 11:00:00.000000Z],
+          source_resource_id: real_note2.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      # Search 1
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query1}})
+      |> render_change()
+
+      render_async(view)
+
+      assert has_element?(view, "#cite-search-result-#{note1.id}", "+ Citar")
+
+      render_click(view, "cite_search_result", %{"id" => note1.id})
+
+      assert has_element?(view, "#cited-confirmation-#{note1.id}", "✓ Citado")
+      refute has_element?(view, "#cite-search-result-#{note1.id}")
+
+      # Search 2
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query2}})
+      |> render_change()
+
+      render_async(view)
+
+      # Note 1 remains marked as cited
+      assert has_element?(view, "#cited-confirmation-#{note1.id}", "✓ Citado")
+      refute has_element?(view, "#cite-search-result-#{note1.id}")
+
+      # Note 2 is un-cited and shows action
+      assert has_element?(view, "#cite-search-result-#{note2.id}", "+ Citar")
+      refute has_element?(view, "#cited-confirmation-#{note2.id}")
+    end
+
+    test "rejects citation of forged or non-existent chunk id", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_click(view, "cite_search_result", %{"id" => Ecto.UUID.generate()})
+
+      assert Repo.aggregate(ConsultationEvidence, :count) == 0
+      assert render(view) =~ "No se pudo citar el resultado de búsqueda."
+    end
+  end
+
   defp load_dek!(professional, patient) do
     {:ok, kek} = Accounts.load_professional_kek(professional)
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)
