@@ -35,6 +35,13 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
   alias Phoenix.LiveView.AsyncResult
 
+  @search_source_filters [
+    %{id: "all", label: "Todos"},
+    %{id: "telegram", label: "Telegram"},
+    %{id: "notes", label: "Notas"},
+    %{id: "sessions", label: "Sesiones"}
+  ]
+
   @impl true
   def mount(%{"patient_id" => patient_id, "id" => target_behavior_id}, _session, socket) do
     professional = socket.assigns.current_professional
@@ -91,6 +98,8 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
           |> assign(:search_query, "")
           |> assign(:search_form, to_form(%{"query" => ""}, as: "search"))
+          |> assign(:search_source_filter, "all")
+          |> assign(:search_source_filters, @search_source_filters)
           |> assign(
             :search_results,
             Phoenix.LiveView.AsyncResult.ok(%Phoenix.LiveView.AsyncResult{}, [])
@@ -132,27 +141,23 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     if query == "" do
       {:noreply, reset_evidence_search(socket)}
     else
-      professional = socket.assigns.current_professional
-      patient_id = socket.assigns.patient_id
-      target_behavior_id = socket.assigns.target_behavior_id
-
       {:noreply,
        socket
        |> assign(:search_query, query)
        |> assign(:search_form, to_form(%{"query" => query}, as: "search"))
-       |> assign(:search_results, %Phoenix.LiveView.AsyncResult{})
-       |> assign_async(:search_results, fn ->
-         case ClinicalRecord.search_evidence_candidates(
-                professional,
-                patient_id,
-                target_behavior_id,
-                query,
-                limit: 10
-              ) do
-           {:ok, results} -> {:ok, %{search_results: results}}
-           {:error, reason} -> {:error, reason}
-         end
-       end)}
+       |> trigger_evidence_search(query, socket.assigns.search_source_filter)}
+    end
+  end
+
+  @impl true
+  def handle_event("filter_search_source", %{"source" => source}, socket) do
+    source = normalize_search_source_filter(source)
+    socket = assign(socket, :search_source_filter, source)
+
+    if socket.assigns.search_query == "" do
+      {:noreply, socket}
+    else
+      {:noreply, trigger_evidence_search(socket, socket.assigns.search_query, source)}
     end
   end
 
@@ -651,6 +656,34 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     assign(socket, :suggested_candidates, AsyncResult.ok(async_result, candidates))
   end
 
+  defp trigger_evidence_search(socket, query, source) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    socket
+    |> cancel_async(:search_results)
+    |> assign(:search_results, %Phoenix.LiveView.AsyncResult{})
+    |> assign_async(:search_results, fn ->
+      case ClinicalRecord.search_evidence_candidates(
+             professional,
+             patient_id,
+             target_behavior_id,
+             query,
+             source_kind: source,
+             limit: 10
+           ) do
+        {:ok, results} -> {:ok, %{search_results: results}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  defp normalize_search_source_filter(source) when source in ["telegram", "notes", "sessions"],
+    do: source
+
+  defp normalize_search_source_filter(_other), do: "all"
+
   defp citable_candidate?(%{source_resource_type: resource_type}) do
     match?({:ok, _source_kind}, citation_source_kind(resource_type))
   end
@@ -815,6 +848,8 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp source_kind_label("clinical_note"), do: "Nota clínica"
   defp source_kind_label("patient_message"), do: "Mensaje del paciente"
+  defp source_kind_label("session_transcript"), do: "Transcripción de sesión"
+  defp source_kind_label("session_transcripts"), do: "Transcripción de sesión"
   defp source_kind_label("consultation_evidence"), do: "Evidencia citada"
   defp source_kind_label("clinician_observation"), do: "Observación del clínico"
   defp source_kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
@@ -1219,6 +1254,28 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </header>
 
             <div id="evidence-search-bar" class="evidence-search-bar">
+              <div
+                id="evidence-search-filters"
+                class="evidence-search-filters"
+                role="group"
+                aria-label="Filtrar por tipo de fuente"
+              >
+                <button
+                  :for={filter <- @search_source_filters}
+                  type="button"
+                  id={"evidence-search-filter-#{filter.id}"}
+                  phx-click="filter_search_source"
+                  phx-value-source={filter.id}
+                  class={[
+                    "filter-pill",
+                    @search_source_filter == filter.id && "filter-pill--active"
+                  ]}
+                  aria-pressed={to_string(@search_source_filter == filter.id)}
+                >
+                  {filter.label}
+                </button>
+              </div>
+
               <.form
                 for={@search_form}
                 id="evidence-search-form"

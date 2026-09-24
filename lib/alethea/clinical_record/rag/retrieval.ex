@@ -282,11 +282,17 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   # rows already inside this window. See the moduledoc's "Security
   # boundary" section.
   defp fetch_candidates(patient_id, query_vector, candidate_limit, opts) do
+    source_filter =
+      Keyword.get(opts, :source_kind) ||
+        Keyword.get(opts, :source_types) ||
+        Keyword.get(opts, :source_type)
+
     Chunk
     |> where([c], c.patient_id == ^patient_id)
     |> exclude_dismissed(Keyword.get(opts, :target_behavior_id))
     |> exclude_ids(:id, Keyword.get(opts, :exclude_chunk_ids, []))
     |> exclude_ids(:source_resource_id, Keyword.get(opts, :exclude_resource_ids, []))
+    |> filter_by_source(source_filter)
     |> select([c], %{
       chunk: c,
       dense_distance: selected_as(cosine_distance(c.embedding, ^query_vector), :dense_distance)
@@ -294,6 +300,38 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     |> order_by([c], selected_as(:dense_distance))
     |> limit(^candidate_limit)
     |> Repo.all()
+  end
+
+  defp filter_by_source(query, filter) when filter in [nil, :all, "all", []], do: query
+
+  defp filter_by_source(query, kind) when kind in [:telegram, "telegram"] do
+    where(query, [c], c.source_resource_type in ^["patient_message", "message", "telegram"])
+  end
+
+  defp filter_by_source(query, kind) when kind in [:notes, "notes", "notas"] do
+    where(query, [c], c.source_resource_type in ^["clinical_note", "note", "notes"])
+  end
+
+  defp filter_by_source(query, kind) when kind in [:sessions, "sessions", "sesiones"] do
+    where(
+      query,
+      [c],
+      c.source_resource_type in ^[
+        "session_transcript",
+        "session_transcripts",
+        "session",
+        "clinical_session"
+      ]
+    )
+  end
+
+  defp filter_by_source(query, types) when is_list(types) do
+    types = Enum.map(types, &to_string/1)
+    where(query, [c], c.source_resource_type in ^types)
+  end
+
+  defp filter_by_source(query, type) when is_binary(type) or is_atom(type) do
+    filter_by_source(query, [type])
   end
 
   defp exclude_dismissed(query, nil), do: query

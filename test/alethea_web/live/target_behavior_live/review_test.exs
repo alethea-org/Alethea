@@ -2597,6 +2597,236 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "evidence search source filter pills (#325)" do
+    test "renders source filter pills with Todos active by default", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#evidence-search-bar #evidence-search-filters")
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-all.filter-pill.filter-pill--active[aria-pressed='true']",
+               "Todos"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-telegram.filter-pill[aria-pressed='false']",
+               "Telegram"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-notes.filter-pill[aria-pressed='false']",
+               "Notas"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-sessions.filter-pill[aria-pressed='false']",
+               "Sesiones"
+             )
+    end
+
+    test "selecting a pill immediately filters search results to matching source kind and restoring Todos restores all",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      query = "ansiedad matutina"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(query, [])
+      occurred_at = ~U[2026-03-01 10:00:00.000000Z]
+
+      set_mox_global()
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> stub(:embed, fn _query, [] -> {:ok, query_vector} end)
+      |> stub(:dimensions, fn -> 1024 end)
+      |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+
+      note_chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Nota clínica sobre ansiedad matutina severa.",
+          query_vector,
+          "clinical_note",
+          occurred_at
+        )
+
+      telegram_chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Mensaje de telegram reportando ansiedad al despertar.",
+          query_vector,
+          "patient_message",
+          occurred_at
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => query}})
+      |> render_change()
+
+      render_async(view)
+
+      assert has_element?(view, "#evidence-search-result-#{note_chunk.id}")
+      assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
+
+      # Select Telegram pill -> immediately filters to telegram chunks
+      view
+      |> element("#evidence-search-filter-telegram")
+      |> render_click()
+
+      render_async(view)
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-telegram.filter-pill--active[aria-pressed='true']"
+             )
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-all[aria-pressed='false']"
+             )
+
+      assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
+      refute has_element?(view, "#evidence-search-result-#{note_chunk.id}")
+
+      # Select Notas pill -> immediately filters to note chunks
+      view
+      |> element("#evidence-search-filter-notes")
+      |> render_click()
+
+      render_async(view)
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-notes.filter-pill--active[aria-pressed='true']"
+             )
+
+      assert has_element?(view, "#evidence-search-result-#{note_chunk.id}")
+      refute has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
+
+      # Select Todos pill -> restores unconstrained results
+      view
+      |> element("#evidence-search-filter-all")
+      |> render_click()
+
+      render_async(view)
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-all.filter-pill--active[aria-pressed='true']"
+             )
+
+      assert has_element?(view, "#evidence-search-result-#{note_chunk.id}")
+      assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
+    end
+
+    test "filter state persists across keystrokes within the search session", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      initial_query = "ansiedad"
+      next_query = "ansiedad matutina"
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(initial_query, [])
+      occurred_at = ~U[2026-03-01 10:00:00.000000Z]
+
+      set_mox_global()
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> stub(:embed, fn _query, [] -> {:ok, query_vector} end)
+      |> stub(:dimensions, fn -> 1024 end)
+      |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+
+      note_chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Nota clínica sobre ansiedad",
+          query_vector,
+          "clinical_note",
+          occurred_at
+        )
+
+      telegram_chunk =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Mensaje de telegram sobre ansiedad",
+          query_vector,
+          "patient_message",
+          occurred_at
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      # Select Telegram filter first
+      view
+      |> element("#evidence-search-filter-telegram")
+      |> render_click()
+
+      assert has_element?(
+               view,
+               "#evidence-search-filter-telegram.filter-pill--active[aria-pressed='true']"
+             )
+
+      # Type initial query
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => initial_query}})
+      |> render_change()
+
+      render_async(view)
+
+      assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
+      refute has_element?(view, "#evidence-search-result-#{note_chunk.id}")
+
+      # Type additional keystroke
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => next_query}})
+      |> render_change()
+
+      render_async(view)
+
+      # Filter remains active and persists across keystrokes
+      assert has_element?(
+               view,
+               "#evidence-search-filter-telegram.filter-pill--active[aria-pressed='true']"
+             )
+
+      assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
+      refute has_element?(view, "#evidence-search-result-#{note_chunk.id}")
+    end
+  end
+
   defp load_dek!(professional, patient) do
     {:ok, kek} = Accounts.load_professional_kek(professional)
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)

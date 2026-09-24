@@ -431,6 +431,63 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
       assert own_resource in result_ids
       refute foreign_resource in result_ids
     end
+
+    test "constrains candidates to specific source channel via source_kind option", %{
+      professional: professional,
+      patient: patient
+    } do
+      note_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Nota de sesión presencial",
+          near_vector(),
+          "clinical_note"
+        )
+
+      telegram_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Mensaje de telegram del paciente",
+          near_vector(),
+          "patient_message"
+        )
+
+      session_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Transcripción de sesión grabada",
+          near_vector(),
+          "session_transcript"
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: tg_results}} =
+               Retrieval.suggest(professional, patient.id, "paciente", source_kind: :telegram)
+
+      assert Enum.map(tg_results, & &1.source_resource_id) == [telegram_id]
+
+      assert {:ok, %{results: notes_results}} =
+               Retrieval.suggest(professional, patient.id, "paciente", source_kind: :notes)
+
+      assert Enum.map(notes_results, & &1.source_resource_id) == [note_id]
+
+      assert {:ok, %{results: session_results}} =
+               Retrieval.suggest(professional, patient.id, "paciente", source_kind: :sessions)
+
+      assert Enum.map(session_results, & &1.source_resource_id) == [session_id]
+
+      assert {:ok, %{results: all_results}} =
+               Retrieval.suggest(professional, patient.id, "paciente", source_kind: :all)
+
+      all_ids = Enum.map(all_results, & &1.source_resource_id)
+      assert note_id in all_ids
+      assert telegram_id in all_ids
+      assert session_id in all_ids
+    end
   end
 
   # --- 5.5/5.6 freshness -------------------------------------------------
@@ -604,6 +661,10 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
   end
 
   defp insert_chunk!(professional, patient, text, vector) do
+    insert_chunk!(professional, patient, text, vector, "clinical_note")
+  end
+
+  defp insert_chunk!(professional, patient, text, vector, resource_type) do
     resource_id = Ecto.UUID.generate()
     {:ok, kek} = Accounts.load_professional_kek(professional)
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)
@@ -611,7 +672,7 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
 
     attrs = [
       %{
-        source_resource_type: "clinical_note",
+        source_resource_type: resource_type,
         source_resource_id: resource_id,
         chunk_index: 0,
         encrypted_content: ciphertext,
@@ -625,7 +686,7 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
       }
     ]
 
-    {:ok, _rows} = Indexer.replace_chunks({"clinical_note", resource_id}, attrs)
+    {:ok, _rows} = Indexer.replace_chunks({resource_type, resource_id}, attrs)
     resource_id
   end
 
