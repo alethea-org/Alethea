@@ -85,3 +85,4 @@ Allow clinicians to cite any eligible search result directly from the semantic s
 - VALIDATION: `mix precommit` passed cleanly with 1,563 passed (6 doctests, 1557 tests), 5 skipped, 0 failures. `mix format --check-formatted` passed with no diff.
 - REVIEW: Native RDD compact review completed and acknowledged under lineage `review-474957456d437b7d` (`approved`).
 - COMMIT: `7f84554` (`feat(clinical): cite evidence directly from semantic search results (#326)`).
+- PULL REQUEST: #347 (`feat(clinical): cite evidence directly from semantic search results (#326)`).
