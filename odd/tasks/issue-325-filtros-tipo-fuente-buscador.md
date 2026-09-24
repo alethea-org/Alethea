@@ -84,5 +84,6 @@ Implement source-kind scope filter pills (All, Telegram, Notes, Sessions) within
 - VALIDATION: `mix precommit` passed: 1523 passed (6 doctests, 1517 tests), 5 skipped, 0 failures. `mix format --check-formatted` passed cleanly.
 - COMMIT: `a828152` (`feat(clinical): filter semantic search by source type (#325)`).
 - REVIEW: Native RDD compact review completed and acknowledged under lineage `review-917da96742b6ad84` (`approved`).
+- PULL REQUEST: #346 (`feat(clinical): filter semantic search by source type (#325)`).
 
 
