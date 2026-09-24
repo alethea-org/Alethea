@@ -30,11 +30,12 @@ defmodule Alethea.AI.StructuredOutput do
   """
   @spec parse_json_response(String.t()) :: {:ok, map()} | {:error, :invalid_json}
   def parse_json_response(response) when is_binary(response) do
-    # Limpiar markdown code blocks si existen
+    # Limpiar markdown code blocks si existen (leading y trailing)
     cleaned =
       response
-      |> String.replace(~r/^```json\s*/i, "")
-      |> String.replace(~r/^```\s*/i, "")
+      |> String.trim()
+      |> String.replace(~r/^```(?:json)?\s*/i, "")
+      |> String.replace(~r/\s*```$/, "")
       |> String.trim()
 
     case Jason.decode(cleaned) do
@@ -45,6 +46,19 @@ defmodule Alethea.AI.StructuredOutput do
   rescue
     _ -> {:error, :invalid_json}
   end
+
+  @doc """
+  Generic, opt-in unwrapper for a model that echoes the JSON schema shape
+  (`%{"properties" => inner}`) instead of the requested data. Given a map
+  without a `"properties"` key, returns it unchanged. Recursive: handles a
+  double-echoed wrapper. Never invoked implicitly inside
+  `parse_json_response/1` — callers opt in explicitly (#316 D1).
+  """
+  @spec unwrap_schema_echo(map()) :: map()
+  def unwrap_schema_echo(%{"properties" => inner}) when is_map(inner),
+    do: unwrap_schema_echo(inner)
+
+  def unwrap_schema_echo(other), do: other
 
   @doc """
   Schema para emociones.
