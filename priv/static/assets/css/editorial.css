@@ -2825,6 +2825,10 @@ select.text-input {
 .suggested-candidate-card--high { border-left-color: var(--colors-success); }
 .suggested-candidate-card--medium { border-left-color: var(--colors-warn); }
 .suggested-candidate-card--low { border-left-color: var(--colors-hairline); }
+.suggested-candidate-card--cited {
+  border-color: var(--colors-success-border);
+  background: var(--colors-surface-soft);
+}
 
 .suggested-candidate-card__meta {
   display: flex;
@@ -2858,7 +2862,8 @@ select.text-input {
 }
 
 .badge--affinity,
-.badge--source-kind {
+.badge--source-kind,
+.badge--cited {
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
@@ -2890,6 +2895,18 @@ select.text-input {
 .badge--source-kind {
   background: var(--colors-canvas);
   color: var(--colors-body);
+}
+
+.badge--cited {
+  border-color: var(--colors-success-border);
+  background: var(--colors-success-soft);
+  color: var(--colors-success);
+}
+
+.evidence-search-result__cited-confirmation {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--typography-body-sm-size);
+  border-radius: var(--rounded-md);
 }
 
 .review-timeline {

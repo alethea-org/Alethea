@@ -100,6 +100,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:search_form, to_form(%{"query" => ""}, as: "search"))
           |> assign(:search_source_filter, "all")
           |> assign(:search_source_filters, @search_source_filters)
+          |> assign(:cited_chunk_ids, MapSet.new())
           |> assign(
             :search_results,
             Phoenix.LiveView.AsyncResult.ok(%Phoenix.LiveView.AsyncResult{}, [])
@@ -378,12 +379,53 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:ok, _evidence} ->
         {:noreply,
          socket
+         |> mark_search_result_cited(chunk_id)
          |> remove_suggested_candidate(chunk_id)
          |> load_timeline()
          |> put_flash(:info, "Evidencia citada correctamente.")}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo citar la sugerencia de evidencia.")}
+    end
+  end
+
+  @impl true
+  def handle_event("cite_search_result", %{"id" => chunk_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    candidate = find_citable_candidate(socket.assigns.search_results, chunk_id)
+
+    result =
+      with %{source_resource_type: resource_type} = candidate when not is_nil(candidate) <-
+             candidate,
+           {:ok, source_kind} <- citation_source_kind(resource_type) do
+        ClinicalRecord.cite_evidence_source(
+          professional,
+          patient_id,
+          target_behavior_id,
+          %{
+            source_kind: source_kind,
+            source_id: candidate.source_resource_id,
+            excerpt: candidate.content
+          }
+        )
+      else
+        _reason -> {:error, :invalid_search_result}
+      end
+
+    case result do
+      {:ok, _evidence} ->
+        {:noreply,
+         socket
+         |> mark_search_result_cited(chunk_id)
+         |> remove_suggested_candidate(chunk_id)
+         |> load_timeline()
+         |> put_flash(:info, "Evidencia citada correctamente.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo citar el resultado de búsqueda.")}
     end
   end
 
@@ -650,10 +692,26 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp find_dismissable_candidate(_async_result, _chunk_id), do: nil
 
+  defp mark_search_result_cited(socket, chunk_id) do
+    cited_chunk_ids = MapSet.put(socket.assigns.cited_chunk_ids, chunk_id)
+    assign(socket, :cited_chunk_ids, cited_chunk_ids)
+  end
+
+  defp cited_chunk?(cited_chunk_ids, chunk_id) do
+    MapSet.member?(cited_chunk_ids, chunk_id)
+  end
+
   defp remove_suggested_candidate(socket, chunk_id) do
     async_result = socket.assigns.suggested_candidates
-    candidates = Enum.reject(async_result.result, &(&1.chunk_id == chunk_id))
-    assign(socket, :suggested_candidates, AsyncResult.ok(async_result, candidates))
+
+    case async_result do
+      %AsyncResult{ok?: true, result: candidates} when is_list(candidates) ->
+        candidates = Enum.reject(candidates, &(&1.chunk_id == chunk_id))
+        assign(socket, :suggested_candidates, AsyncResult.ok(async_result, candidates))
+
+      _other ->
+        socket
+    end
   end
 
   defp trigger_evidence_search(socket, query, source) do
@@ -1426,7 +1484,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   id={"evidence-search-result-#{result.chunk_id}"}
                   class={[
                     "suggested-candidate-card",
-                    "suggested-candidate-card--#{result.affinity_tier}"
+                    "suggested-candidate-card--#{result.affinity_tier}",
+                    cited_chunk?(@cited_chunk_ids, result.chunk_id) &&
+                      "suggested-candidate-card--cited"
                   ]}
                 >
                   <header class="suggested-candidate-card__meta">
@@ -1452,6 +1512,28 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     </time>
                   </header>
                   <p class="suggested-candidate-card__content">{result.content}</p>
+                  <div class="suggested-candidate-card__actions">
+                    <button
+                      :if={
+                        citable_candidate?(result) and
+                          not cited_chunk?(@cited_chunk_ids, result.chunk_id)
+                      }
+                      type="button"
+                      id={"cite-search-result-#{result.chunk_id}"}
+                      phx-click="cite_search_result"
+                      phx-value-id={result.chunk_id}
+                      class="button-primary button-primary--sm"
+                    >
+                      + Citar
+                    </button>
+                    <span
+                      :if={cited_chunk?(@cited_chunk_ids, result.chunk_id)}
+                      id={"cited-confirmation-#{result.chunk_id}"}
+                      class="evidence-search-result__cited-confirmation badge badge--cited"
+                    >
+                      ✓ Citado
+                    </span>
+                  </div>
                 </article>
               </div>
             </.async_result>
