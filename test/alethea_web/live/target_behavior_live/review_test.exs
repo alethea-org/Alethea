@@ -1958,6 +1958,122 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
   end
 
   describe "suggested evidence candidates — asynchronous top 5 background loading (#321)" do
+    test "cites an eligible suggestion through the encrypted boundary and refreshes the workbench",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      content = "Crisis de angustia con taquicardia en lugares cerrados"
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, content)
+
+      {:ok, note} = ClinicalRecord.create_clinical_note(professional, patient.id, content)
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "clinical_note",
+          DateTime.utc_now(),
+          source_resource_id: note.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      action = "#cite-suggested-candidate-#{candidate.id}"
+      assert has_element?(view, action, "+ Citar todo")
+
+      render_click(view, "cite_suggested_candidate", %{
+        "id" => candidate.id,
+        "content" => "plaintext supplied by an untrusted client"
+      })
+
+      evidence = Repo.one!(ConsultationEvidence)
+      assert evidence.source_kind == "clinical_note"
+      assert evidence.source_id == note.id
+      assert evidence.encryption_version == 2
+      refute evidence.encrypted_excerpt == content
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, ^content} =
+               PatientVault.decrypt(evidence.encrypted_excerpt, clinical_record_dek)
+
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+      assert has_element?(view, "#stat-evidence .stat-tile__value", "1")
+      assert has_element?(view, ".review-item--evidence", content)
+    end
+
+    test "cites a patient message suggestion with message provenance and encrypted server content",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      content = "La paciente reporta angustia y taquicardia en lugares cerrados"
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, content)
+
+      source =
+        insert_message_source!(
+          patient,
+          load_dek!(professional, patient),
+          "inbound",
+          content,
+          DateTime.utc_now(),
+          "spontaneous"
+        )
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          content,
+          query_vector,
+          "patient_message",
+          DateTime.utc_now(),
+          source_resource_id: source.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      action = "#cite-suggested-candidate-#{candidate.id}"
+      assert has_element?(view, action, "+ Citar todo")
+
+      render_click(view, "cite_suggested_candidate", %{
+        "id" => candidate.id,
+        "content" => "forged client plaintext"
+      })
+
+      evidence = Repo.one!(ConsultationEvidence)
+      assert evidence.source_kind == "message"
+      assert evidence.source_id == source.id
+      refute evidence.encrypted_excerpt == content
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, clinical_record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+
+      assert {:ok, ^content} =
+               PatientVault.decrypt(evidence.encrypted_excerpt, clinical_record_dek)
+
+      refute has_element?(view, "#suggested-candidate-#{candidate.id}")
+    end
+
     test "mounts immediately without blocking and shows loading state", %{
       conn: conn,
       patient: patient,
@@ -2021,7 +2137,45 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
         assert element(view, "#{card_selector} .suggested-candidate-card__content") |> render() =~
                  "Fragmento clinico"
+
+        assert has_element?(
+                 view,
+                 "#{card_selector} button[phx-click='cite_suggested_candidate']",
+                 "+ Citar todo"
+               )
       end
+    end
+
+    test "does not offer citation for suggestion source kinds unsupported by the domain boundary",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient
+         } do
+      description = "Crisis de angustia y taquicardia en lugares cerrados"
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, description)
+
+      {:ok, query_vector} = Alethea.AI.Embeddings.Fake.embed(description, [])
+
+      candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Observación clínica sobre angustia y taquicardia",
+          query_vector,
+          "clinician_observation",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidate-#{candidate.id}")
+      refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
     end
 
     test "renders clean empty state when no eligible candidates are available", %{
@@ -2155,9 +2309,10 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
          text,
          vector,
          resource_type,
-         occurred_at
+         occurred_at,
+         opts \\ []
        ) do
-    resource_id = Ecto.UUID.generate()
+    resource_id = Keyword.get(opts, :source_resource_id, Ecto.UUID.generate())
     {:ok, kek} = Accounts.load_professional_kek(professional)
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)
     {:ok, ciphertext} = PatientVault.encrypt(text, dek)
