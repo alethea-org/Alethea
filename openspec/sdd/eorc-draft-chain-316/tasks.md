@@ -44,26 +44,26 @@ Chain strategy: feature-branch-chain
 ## PR2: The Chain (base: PR1 branch)
 
 ### Phase 1 — Skeleton + registration
-- [ ] 1.1 Create `lib/alethea/ai/chains/functional_analysis_draft_chain.ex`: `@behaviour ChainBehaviour`, alias `ClinicalSafetyPatterns`/`LLMConfig`/`StructuredOutput`; `eorc_fields/0` (11 literals per exploration.md:17-27); `functional_analysis_schema/0`.
-- [ ] 1.2 Edit `lib/alethea/ai/llm_config.ex`: add `:functional_analysis_draft` to `chain_name` type; add `chain_module(:functional_analysis_draft)` clause.
-- [ ] 1.3 AD5 wiring: `test/test_helper.exs` add `Mox.defmock(Alethea.AI.FunctionalAnalysisDraftChainMock, for: ChainBehaviour)`; `config/test.exs` add `config :alethea, :functional_analysis_draft_chain, ...Mock`.
+- [x] 1.1 Create `lib/alethea/ai/chains/functional_analysis_draft_chain.ex`: `@behaviour ChainBehaviour`, alias `ClinicalSafetyPatterns`/`LLMConfig`/`StructuredOutput`; `eorc_fields/0` (11 literals per exploration.md:17-27); `functional_analysis_schema/0`.
+- [x] 1.2 Edit `lib/alethea/ai/llm_config.ex`: add `:functional_analysis_draft` to `chain_name` type; add `chain_module(:functional_analysis_draft)` clause.
+- [x] 1.3 AD5 wiring: `test/test_helper.exs` add `Mox.defmock(Alethea.AI.FunctionalAnalysisDraftChainMock, for: ChainBehaviour)`; `config/test.exs` add `config :alethea, :functional_analysis_draft_chain, ...Mock`.
 
 ### Phase 2 — build_prompt/1 + suggested_system_prompt/0
-- [ ] 2.1 RED chain test: numbers each evidence line, embeds text, refutes `chunk_id`/`resource_id`/`target_behavior_id` (spec: prompt scenario).
-- [ ] 2.2 GREEN `build_prompt/1`: header + numbered evidence, no identifiers.
-- [ ] 2.3 RED: `suggested_system_prompt/0` asserts 4 verbatim `NUNCA` rules, names all 11 fields, refutes `previous_notes` (spec: system-prompt scenario).
-- [ ] 2.4 GREEN `suggested_system_prompt/0` via `StructuredOutput.with_schema/2`; moduledoc note: callers prepend target-behavior description to `sanitized_evidence` if anchoring desired (AD4).
+- [x] 2.1 RED chain test: numbers each evidence line, embeds text, refutes `chunk_id`/`resource_id`/`target_behavior_id` (spec: prompt scenario).
+- [x] 2.2 GREEN `build_prompt/1`: header + numbered evidence, no identifiers.
+- [x] 2.3 RED: `suggested_system_prompt/0` asserts 4 verbatim `NUNCA` rules, names all 11 fields, refutes `previous_notes` (spec: system-prompt scenario).
+- [x] 2.4 GREEN `suggested_system_prompt/0` via `StructuredOutput.with_schema/2`; moduledoc note: callers prepend target-behavior description to `sanitized_evidence` if anchoring desired (AD4).
 
 ### Phase 3 — parse/1 (D3 gate + D4 partial)
-- [ ] 3.1 RED: clean-11, fenced-equivalence, leading/trailing fence, `properties`-echo, schema-shape-echo→unparseable, zero-field→unparseable, non-JSON→unparseable.
-- [ ] 3.2 RED: partial 8-of-11 exactly those 8 keys; model-emitted `""` → key absent (D4 scenarios).
-- [ ] 3.3 RED: diagnostic match blanks only that field, prescriptive match blanks only that field, absent-vs-blanked distinguishable, all-11-blanked still `{:ok, 11 keys}` (D3 scenarios).
-- [ ] 3.4 GREEN `parse/1`: `parse_json_response` → `unwrap_schema_echo` → `extract_fields/1` → `flagged?/1` blank → size check, per design's 5-step algorithm.
-- [ ] 3.5 RED+GREEN `do_run/2`: telemetry chain `:functional_analysis_draft`, mirrors `ClinicalHypothesisChain:122-155`.
+- [x] 3.1 RED: clean-11, fenced-equivalence, leading/trailing fence, `properties`-echo, schema-shape-echo→unparseable, zero-field→unparseable, non-JSON→unparseable.
+- [x] 3.2 RED: partial 8-of-11 exactly those 8 keys; model-emitted `""` → key absent (D4 scenarios).
+- [x] 3.3 RED: diagnostic match blanks only that field, prescriptive match blanks only that field, absent-vs-blanked distinguishable, all-11-blanked still `{:ok, 11 keys}` (D3 scenarios).
+- [x] 3.4 GREEN `parse/1`: `parse_json_response` → `unwrap_schema_echo` → `extract_fields/1` → `flagged?/1` blank → size check, per design's 5-step algorithm.
+- [x] 3.5 RED+GREEN `do_run/2`: telemetry chain `:functional_analysis_draft`, mirrors `ClinicalHypothesisChain:122-155`.
 
 ### Phase 4 — Config, structural safety, AD3 parity
-- [ ] 4.1 RED+GREEN: `supported_providers() == [:local]`; refute `:cloud`; static refute source `:cloud`; `LLMConfig.get_and_build(:functional_analysis_draft)` → `provider == :local` (spec: LLMConfig requirement).
-- [ ] 4.2 RED+GREEN: static refute `create_clinical_note`/`accept_ai_proposal`/`edit_ai_proposal`/`discard_ai_proposal`/`upsert_functional_analysis_draft`/`upsert_functional_analysis_content`/`"Alethea.ClinicalRecord"`/`"Repo."` (spec: never-calls-mutation scenario).
-- [ ] 4.3 RED+GREEN: AD3 parity test — `eorc_fields()` == `%FunctionalAnalysisContent{}` struct keys minus `previous_notes`.
-- [ ] 4.4 RED+GREEN: mock wiring test mirroring `clinical_hypothesis_chain_test.exs:162-181`.
-- [ ] 4.5 `mix precommit`; if PR2 exceeds 400 lines, table-drive 11-field fixtures via `for` comprehension before requesting `size:exception`.
+- [x] 4.1 RED+GREEN: `supported_providers() == [:local]`; refute `:cloud`; static refute source `:cloud`; `LLMConfig.get_and_build(:functional_analysis_draft)` → `provider == :local` (spec: LLMConfig requirement).
+- [x] 4.2 RED+GREEN: static refute `create_clinical_note`/`accept_ai_proposal`/`edit_ai_proposal`/`discard_ai_proposal`/`upsert_functional_analysis_draft`/`upsert_functional_analysis_content`/`"Alethea.ClinicalRecord"`/`"Repo."` (spec: never-calls-mutation scenario).
+- [x] 4.3 RED+GREEN: AD3 parity test — `eorc_fields()` == `%FunctionalAnalysisContent{}` struct keys minus `previous_notes`.
+- [x] 4.4 RED+GREEN: mock wiring test mirroring `clinical_hypothesis_chain_test.exs:162-181`.
+- [x] 4.5 `mix precommit` deferred to orchestrator per protocol (focused suites + `mix compile --warnings-as-errors --force` + `mix format --check-formatted` run instead, all clean); table-drove the fence-variant and D3-blanking fixtures via `for` comprehensions per this task's instruction, but PR2 still lands at ~543 authored lines (234 chain + 303 test + 6 config), well over the 400-line budget — **flagged to orchestrator: `size:exception` needed** (see apply-progress for full rationale; design.md pre-authorized this fallback: "splitting `parse/1` away from the module that calls it would break TDD atomicity").
