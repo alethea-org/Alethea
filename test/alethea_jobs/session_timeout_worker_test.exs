@@ -7,6 +7,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   import ExUnit.CaptureLog
 
   alias Alethea.{Accounts, Repo}
+  alias Alethea.AI.EmotionAnalyzer
   alias Alethea.Clinical.{Session, SessionManager, Summary, Trend}
   alias Alethea.Jobs.TelegramOutboundWorker
   alias AletheaJobs.SessionTimeoutWorker
@@ -196,6 +197,116 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       refute_enqueued(worker: TelegramOutboundWorker)
       assert Repo.aggregate(Trend, :count) == 0
       assert Repo.aggregate(Summary, :count) == 0
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Issue #334 — a surprise/disgust-dominant emotion result must not
+  # halt the close flow. `Alethea.AI.EmotionAnalyzer.Fake` (the default
+  # test-env slot) always returns a fixed joy-dominant vector, so it
+  # cannot exercise this path. Instead, this describe block swaps the
+  # :emotion_analyzer slot to the REAL `Alethea.AI.EmotionAnalyzer` and
+  # stubs its HTTP sidecar call with `Req.Test` (the same technique
+  # `emotion_analyzer_test.exs` uses) so the fix is proven through the
+  # real parsing/projection code, not a hand-rolled score list.
+  # ----------------------------------------------------------------
+
+  describe "surprise/disgust dominant emotion (issue #334)" do
+    setup do
+      previous_analyzer = Application.get_env(:alethea, :emotion_analyzer)
+      previous_config = Application.get_env(:alethea, EmotionAnalyzer)
+
+      Application.put_env(:alethea, :emotion_analyzer, EmotionAnalyzer)
+
+      Application.put_env(:alethea, EmotionAnalyzer,
+        base_url: "http://emotion-sidecar.test",
+        connect_timeout: 100,
+        receive_timeout: 100,
+        max_batch_size: 32,
+        max_text_bytes: 4096,
+        req_options: [plug: {Req.Test, __MODULE__}]
+      )
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :emotion_analyzer, previous_analyzer)
+        Application.put_env(:alethea, EmotionAnalyzer, previous_config)
+      end)
+
+      :ok
+    end
+
+    defp stub_sidecar_result(dominant, overrides) do
+      official_labels = ~w(others joy sadness anger surprise disgust fear)
+      scores = Map.merge(Map.new(official_labels, &{&1, 0.0}), overrides)
+
+      Req.Test.expect(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "version" => "v1",
+          "results" => [%{"label" => dominant, "scores" => scores}]
+        })
+      end)
+    end
+
+    test "surprise-dominant message: close flow completes (trends saved, summary saved, goodbye sent)",
+         %{session: session, patient: patient} do
+      stub_sidecar_result("surprise", %{
+        "surprise" => 0.6,
+        "joy" => 0.1,
+        "sadness" => 0.1,
+        "anger" => 0.05,
+        "fear" => 0.05,
+        "others" => 0.1
+      })
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        {:ok, "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"}
+      end)
+
+      assert :ok =
+               perform_job(SessionTimeoutWorker, %{
+                 session_id: session.id,
+                 patient_id: patient.id,
+                 channel: "telegram",
+                 chat_id: 987_654_321,
+                 chat_id_hash: "test_chat_id_hash_abcdef"
+               })
+
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert length(Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))) == 5
+      assert length(Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))) == 1
+      assert_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "disgust-dominant message: close flow completes (trends saved, summary saved, goodbye sent)",
+         %{session: session, patient: patient} do
+      stub_sidecar_result("disgust", %{
+        "disgust" => 0.7,
+        "joy" => 0.05,
+        "sadness" => 0.1,
+        "anger" => 0.05,
+        "fear" => 0.05,
+        "others" => 0.05
+      })
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        {:ok, "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"}
+      end)
+
+      assert :ok =
+               perform_job(SessionTimeoutWorker, %{
+                 session_id: session.id,
+                 patient_id: patient.id,
+                 channel: "telegram",
+                 chat_id: 987_654_321,
+                 chat_id_hash: "test_chat_id_hash_abcdef"
+               })
+
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert length(Repo.all(from(t in Trend, where: t.patient_id == ^patient.id))) == 5
+      assert length(Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))) == 1
+      assert_enqueued(worker: TelegramOutboundWorker)
     end
   end
 
