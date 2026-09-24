@@ -30,6 +30,8 @@ Allow clinicians to open an inline trimming editor on any citable suggestion car
 ## Delivery and review
 
 - Branch: `feat/327-trim-suggestion-excerpt` from `origin/main`.
+- Work-unit commit: `e29f8cf` (`feat(clinical): trim and cite exact excerpt from suggestions (#327)`).
+- Pull request: #348 (`https://github.com/alethea-org/Alethea/pull/348`).
 - Conventional Commits format.
 
 ## Tasks
