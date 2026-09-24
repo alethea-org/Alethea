@@ -82,4 +82,7 @@ Implement source-kind scope filter pills (All, Telegram, Notes, Sessions) within
 - RED: Focused unit test initially failed in `retrieval_test.exs` and `clinical_record_test.exs` asserting candidate filtering by `source_kind`. Focused LiveView test in `review_test.exs` failed asserting presence of `#evidence-search-bar #evidence-search-filters`.
 - GREEN: Implemented channel filtering in `Retrieval.fetch_candidates/4` and filter pills with `filter_search_source` event in `Review` LiveView. All focused tests passed (208 passed).
 - VALIDATION: `mix precommit` passed: 1523 passed (6 doctests, 1517 tests), 5 skipped, 0 failures. `mix format --check-formatted` passed cleanly.
+- COMMIT: `a828152` (`feat(clinical): filter semantic search by source type (#325)`).
+- REVIEW: Native RDD compact review completed and acknowledged under lineage `review-917da96742b6ad84` (`approved`).
+
 
