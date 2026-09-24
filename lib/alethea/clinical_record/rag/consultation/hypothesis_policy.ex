@@ -7,6 +7,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy do
   LLM, `Repo`, or any clinical mutation function.
   """
 
+  alias Alethea.AI.ClinicalSafetyPatterns
   alias Alethea.ClinicalRecord.Rag.Consultation.{Hypothesis, Source}
 
   @type reject_reason ::
@@ -57,34 +58,6 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy do
     "ultima vez"
   ]
 
-  @diagnostic_patterns [
-    # diagnóstico, diagnóstica, diagnosticar, diagnosticado
-    ~r/\bdiagnostic\w*\b/,
-    ~r/\btrastorno\w*\b/,
-    ~r/\bpatolog\w*\b/,
-    # padece, padecería
-    ~r/\bpadec\w*\b/,
-    ~r/\bsufre de\b/,
-    ~r/\bcumple criterios\b/,
-    ~r/\bcuadro clinico\b/,
-    ~r/\bdsm-?\s?(iv|v|5)\b/,
-    ~r/\bcie-?\s?1[01]\b/
-  ]
-
-  @prescriptive_patterns [
-    # recomiendo, recomendación, recomendamos
-    ~r/\brecom(iend|end)\w*\b/,
-    ~r/\btratamiento\b/,
-    ~r/\biniciar terapia\b/,
-    # prescribir, prescripción
-    ~r/\bprescri\w*\b/,
-    ~r/\bmedica(r|cion|mento)\w*\b/,
-    ~r/\bderivar\s+(a|al)\b/,
-    ~r/\bdeberia\w*\s+(iniciar|comenzar|empezar|tomar|suspender|derivar|indicar)\b/,
-    ~r/\bhay que\s+(iniciar|indicar|derivar|medicar)\b/,
-    ~r/\bse sugiere\s+(iniciar|indicar|tratamiento)\b/
-  ]
-
   @doc """
   Pure, deterministic classification of Spanish interrogative/relational
   markers on a normalized query. Never calls an LLM or external service.
@@ -104,11 +77,11 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy do
 
   @doc false
   @spec diagnostic_patterns() :: [Regex.t()]
-  def diagnostic_patterns, do: @diagnostic_patterns
+  defdelegate diagnostic_patterns(), to: ClinicalSafetyPatterns
 
   @doc false
   @spec prescriptive_patterns() :: [Regex.t()]
-  def prescriptive_patterns, do: @prescriptive_patterns
+  defdelegate prescriptive_patterns(), to: ClinicalSafetyPatterns
 
   @doc """
   The sole constructor of `Hypothesis`. Fixed gate precedence:
@@ -137,10 +110,10 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy do
       trimmed == "" ->
         {:reject, :empty_statement}
 
-      Enum.any?(@diagnostic_patterns, &Regex.match?(&1, normalized)) ->
+      Enum.any?(ClinicalSafetyPatterns.diagnostic_patterns(), &Regex.match?(&1, normalized)) ->
         {:reject, :diagnostic_language}
 
-      Enum.any?(@prescriptive_patterns, &Regex.match?(&1, normalized)) ->
+      Enum.any?(ClinicalSafetyPatterns.prescriptive_patterns(), &Regex.match?(&1, normalized)) ->
         {:reject, :prescriptive_language}
 
       true ->
@@ -154,28 +127,8 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.HypothesisPolicy do
   end
 
   # Shared normalization for both gates: downcase, accent-fold (keep ñ),
-  # collapse whitespace.
+  # collapse whitespace. Delegates to the AD1 catalog (#316) — kept as a
+  # private wrapper so this module's existing call sites are unchanged.
   @spec normalize(String.t()) :: String.t()
-  defp normalize(text) do
-    text
-    |> String.downcase()
-    |> fold_accents()
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
-  end
-
-  @accent_map %{
-    "á" => "a",
-    "é" => "e",
-    "í" => "i",
-    "ó" => "o",
-    "ú" => "u",
-    "ü" => "u"
-  }
-
-  defp fold_accents(text) do
-    Enum.reduce(@accent_map, text, fn {accented, plain}, acc ->
-      String.replace(acc, accented, plain)
-    end)
-  end
+  defp normalize(text), do: ClinicalSafetyPatterns.normalize(text)
 end
