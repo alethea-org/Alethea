@@ -38,6 +38,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
   @password "supersecret12"
 
   setup [:register_and_log_in_professional]
+  setup :set_mox_from_context
+  setup :verify_on_exit!
 
   setup %{professional: professional} do
     patient = create_patient!(professional)
@@ -974,6 +976,312 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
                "#functional-analysis-consequences-long-term",
                "Refuerzo de evitación"
              )
+    end
+  end
+
+  describe "AI-assisted E-O-R-C draft generation" do
+    test "shows a prominent editor action and rejects generation without cited evidence", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               view,
+               "#generate-functional-analysis-draft.button-primary[disabled]",
+               "✨ Generar borrador E-O-R-C con IA"
+             )
+
+      render_click(view, "generate_functional_analysis_draft")
+
+      assert render(view) =~ "No hay evidencia citada para generar el borrador."
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "")
+    end
+
+    test "sends only sanitized cited evidence, fills all blank fields, preserves edits, and saves only on request",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Contacto ana@example.com observó la conducta"
+      )
+
+      insert_observation!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "Observación clínica no citada"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   "antecedents_distal" => "Texto clínico guardado",
+                   "previous_notes" => "Notas previas intactas"
+                 }
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn params ->
+        send(test_pid, {:draft_chain_called, self(), params})
+        receive do: (:finish_draft_generation -> generated_eorc_fields())
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{
+          antecedents_distal: "Texto clínico guardado",
+          response_motor: "Edición sin guardar",
+          previous_notes: "Notas previas intactas"
+        }
+      )
+      |> render_change()
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+
+      assert_receive {:draft_chain_called, chain_pid,
+                      %{sanitized_evidence: ["Contacto [REDACTED_EMAIL] observó la conducta"]}}
+
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{
+          antecedents_distal: "Texto clínico guardado",
+          antecedents_immediate: "Edición realizada durante la solicitud",
+          response_motor: "Edición sin guardar",
+          previous_notes: "Notas previas intactas"
+        }
+      )
+      |> render_change()
+
+      send(chain_pid, :finish_draft_generation)
+      render_async(view)
+
+      assert render(view) =~ "Borrador E-O-R-C generado. Revisalo antes de guardar."
+
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Texto clínico guardado"
+             )
+
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-immediate",
+               "Edición realizada durante la solicitud"
+             )
+
+      assert has_element?(view, "#functional-analysis-response-motor", "Edición sin guardar")
+      assert has_element?(view, "#previous-notes", "Notas previas intactas")
+
+      for field <-
+            eorc_fields() -- ["antecedents_distal", "antecedents_immediate", "response_motor"] do
+        assert has_element?(
+                 view,
+                 "#functional-analysis-#{String.replace(field, "_", "-")}",
+                 "IA: #{field}"
+               )
+      end
+
+      assert {:ok, saved_before} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert saved_before.antecedents_distal == "Texto clínico guardado"
+      assert saved_before.organism_sleep == ""
+
+      view |> form("#functional-analysis-form") |> render_submit()
+
+      assert {:ok, saved_after} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert saved_after.antecedents_immediate == "Edición realizada durante la solicitud"
+      assert saved_after.organism_sleep == "IA: organism_sleep"
+      assert saved_after.response_motor == "Edición sin guardar"
+      assert saved_after.previous_notes == "Notas previas intactas"
+    end
+
+    test "chain errors leave every unsaved editor value intact", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia citada"
+      )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:error, :unavailable}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{
+          response_cognitive: "Hipótesis todavía sin guardar",
+          previous_notes: ""
+        }
+      )
+      |> render_change()
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view)
+
+      assert render(view) =~ "No se pudo generar el borrador E-O-R-C."
+
+      assert has_element?(
+               view,
+               "#functional-analysis-response-cognitive",
+               "Hipótesis todavía sin guardar"
+             )
+    end
+
+    test "a citation deleted while generation runs invalidates the generated draft", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Evidencia citada que será eliminada"
+        )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:draft_chain_waiting, self()})
+        receive do: (:finish_draft_generation -> generated_eorc_fields())
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{response_cognitive: "Edición sin guardar", previous_notes: ""}
+      )
+      |> render_change()
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:draft_chain_waiting, chain_pid}
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"consultation_evidence", evidence.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      send(chain_pid, :finish_draft_generation)
+      render_async(view)
+
+      assert render(view) =~ "La evidencia citada cambió durante la generación."
+      assert has_element?(view, "#functional-analysis-response-cognitive", "Edición sin guardar")
+      refute render(view) =~ "IA: organism_sleep"
+    end
+
+    test "a draft deleted while generation runs is not restored in the editor", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia citada"
+      )
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Borrador antes del borrado"
+        )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:draft_chain_waiting, self()})
+        receive do: (:finish_draft_generation -> generated_eorc_fields())
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:draft_chain_waiting, chain_pid}
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      send(chain_pid, :finish_draft_generation)
+      render_async(view)
+
+      assert has_element?(view, "#draft-tombstone")
+      refute has_element?(view, "#functional-analysis-form")
+      refute render(view) =~ "IA: organism_sleep"
     end
   end
 
@@ -3548,6 +3856,26 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert has_element?(view, "#trim-candidate-form-#{candidate2.id}")
       assert render(element(view, "#trim-candidate-form-#{candidate2.id} textarea")) =~ content2
     end
+  end
+
+  defp generated_eorc_fields do
+    {:ok, Map.new(eorc_fields(), &{&1, "IA: #{&1}"})}
+  end
+
+  defp eorc_fields do
+    [
+      "antecedents_distal",
+      "antecedents_immediate",
+      "organism_sleep",
+      "organism_pain_or_discomfort",
+      "organism_hunger_or_nutrition",
+      "organism_learning_history",
+      "response_physiological",
+      "response_cognitive",
+      "response_motor",
+      "consequences_short_term",
+      "consequences_long_term"
+    ]
   end
 
   defp load_dek!(professional, patient) do
