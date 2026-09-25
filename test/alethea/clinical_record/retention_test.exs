@@ -24,6 +24,7 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
     ClinicianObservation,
     Lifecycle,
     Retention,
+    SessionTranscript,
     TargetBehavior,
     Tombstone
   }
@@ -300,6 +301,97 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
     end
   end
 
+  describe "session_transcript registration (#317, F1, tasks 7.1-7.3)" do
+    test "is a known resource type; eligible_records/2 returns identifiers only, never encrypted_spans",
+         %{professional: professional, patient: patient} do
+      assert "session_transcript" in Retention.resource_types()
+
+      transcript =
+        insert_session_transcript!(patient, professional,
+          inserted_at: days_ago(@baseline_days + 1)
+        )
+
+      [result] =
+        Retention.eligible_records(SessionTranscript)
+        |> Enum.filter(&(&1.resource_id == transcript.id))
+
+      assert Map.keys(result) |> Enum.sort() ==
+               [:patient_id, :professional_id, :resource_id, :resource_type, :retention_at]
+
+      assert result.resource_type == "session_transcript"
+      refute Map.has_key?(result, :encrypted_spans)
+    end
+
+    test "legally_delete_record/2 for a session_transcript inserts a tombstone, an audit row, and a RAG purge job (proves the F1 identifiers_for/2 clause and Tombstone vocabulary)",
+         %{professional: professional, patient: patient} do
+      transcript = insert_session_transcript!(patient, professional)
+
+      assert {:ok, tombstone} =
+               Retention.legally_delete_record({"session_transcript", transcript.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      refute Repo.get(SessionTranscript, transcript.id)
+
+      assert tombstone.resource_type == "session_transcript"
+      assert tombstone.resource_id == transcript.id
+      assert tombstone.patient_id == patient.id
+
+      audit_rows = audit_rows("clinical_record_legally_deleted", transcript.id)
+      assert length(audit_rows) == 1
+      assert hd(audit_rows).resource_type == "session_transcript"
+
+      assert_enqueued(
+        worker: ClinicalRecordOutboxWorker,
+        args: %{
+          "event" => "clinical_record_legally_deleted",
+          "resource_type" => "session_transcript",
+          "resource_id" => transcript.id,
+          "patient_id" => patient.id,
+          "professional_id" => professional.id
+        }
+      )
+    end
+
+    test "the CR key survives while a session_transcript is the patient's only remaining record, and is destroyed exactly once when it is deleted",
+         %{professional: professional, patient: patient} do
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek_before} = Accounts.load_patient_dek(patient, kek)
+      {:ok, _cr_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+      assert Repo.get_by(EncryptionKey, patient_id: patient.id, type: "patient_clinical_record")
+
+      target_behavior = insert_target_behavior!(patient, professional)
+      transcript = insert_session_transcript!(patient, professional)
+
+      # A sibling (`session_transcript`) still exists after this deletion —
+      # the CR key must survive.
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"target_behavior", target_behavior.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      assert Repo.get_by(EncryptionKey, patient_id: patient.id, type: "patient_clinical_record")
+      assert audit_rows("clinical_record_key_destroyed", patient.id) == []
+
+      # This is now the patient's last remaining record across all seven
+      # tables — this deletion must destroy the CR key.
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"session_transcript", transcript.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      refute Repo.get_by(EncryptionKey, patient_id: patient.id, type: "patient_clinical_record")
+
+      destroy_rows = audit_rows("clinical_record_key_destroyed", patient.id)
+      assert length(destroy_rows) == 1
+
+      assert {:ok, ^patient_dek_before} = Accounts.load_patient_dek(patient, kek)
+    end
+  end
+
   describe "legally_delete_patient_record/3 — BR11 bounded iteration (AD4, not one transaction)" do
     test "every one of the patient's records across the tables is legally deleted, gated once by the hold check",
          %{professional: professional, patient: patient} do
@@ -442,6 +534,24 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
     }
 
     {1, [row]} = Repo.insert_all(ClinicianObservation, [attrs], returning: true)
+    row
+  end
+
+  defp insert_session_transcript!(patient, professional, opts \\ []) do
+    inserted_at = Keyword.get(opts, :inserted_at, now())
+
+    attrs = %{
+      id: Ecto.UUID.generate(),
+      encrypted_spans: <<1, 2, 3>>,
+      encryption_version: 2,
+      recorded_at: DateTime.utc_now(),
+      patient_id: patient.id,
+      professional_id: professional.id,
+      inserted_at: inserted_at,
+      updated_at: inserted_at
+    }
+
+    {1, [row]} = Repo.insert_all(SessionTranscript, [attrs], returning: true)
     row
   end
 
