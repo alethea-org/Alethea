@@ -28,46 +28,46 @@ Chain strategy: feature-branch-chain
 
 ## Phase 0 — Branch setup
 
-- [ ] 0.1 From `main` (fa6e836): `git checkout -b feat/320-land-to-main`.
-- [ ] 0.2 Commit the untracked `openspec/sdd/transcript-rag-ingestion-320/` SDD artifacts (proposal.md, spec.md, design.md, tasks.md) on `feat/320-land-to-main` — keeps them out of PR1's diff against this base.
-- [ ] 0.3 From `feat/320-land-to-main`: `git checkout -b feat/320-transcript-rag-ingestion` (PR1 branch).
+- [x] 0.1 From `main` (fa6e836): `git checkout -b feat/320-land-to-main`.
+- [x] 0.2 Commit the untracked `openspec/sdd/transcript-rag-ingestion-320/` SDD artifacts (proposal.md, spec.md, design.md, tasks.md) on `feat/320-land-to-main` — keeps them out of PR1's diff against this base.
+- [x] 0.3 From `feat/320-land-to-main`: `git checkout -b feat/320-transcript-rag-ingestion` (PR1 branch).
 
 ## PR1 — Storage and pure chunking (base: `feat/320-land-to-main`, branch `feat/320-transcript-rag-ingestion`)
 
 ### Phase 1 — Migration
 
-- [ ] 1.1 Run `mix ecto.gen.migration add_transcript_metadata_to_rag_chunks` (never hand-author).
-- [ ] 1.2 Write body per design "Migration": add `:speaker :string`, `:audio_start_seconds :float`, `:audio_end_seconds :float` to `clinical_record_rag_chunks`; create constraints `speaker_must_be_valid`, `transcript_metadata_consistent`, `audio_bounds_ordered` verbatim (AD8, D1, D3).
-- [ ] 1.3 `mix ecto.migrate` → `mix ecto.rollback` → `mix ecto.migrate` to prove reversibility.
+- [x] 1.1 Run `mix ecto.gen.migration add_transcript_metadata_to_rag_chunks` (never hand-author).
+- [x] 1.2 Write body per design "Migration": add `:speaker :string`, `:audio_start_seconds :float`, `:audio_end_seconds :float` to `clinical_record_rag_chunks`; create constraints `speaker_must_be_valid`, `transcript_metadata_consistent`, `audio_bounds_ordered` verbatim (AD8, D1, D3).
+- [x] 1.3 `mix ecto.migrate` → `mix ecto.rollback` → `mix ecto.migrate` to prove reversibility.
 
 ### Phase 2 — `Chunk` schema (TDD)
 
-- [ ] 2.1 RED `test/alethea/clinical_record/rag/chunk_test.exs`: changeset casts `speaker`/`audio_start_seconds`/`audio_end_seconds`; `validate_inclusion(:speaker, SessionTranscriptContent.speakers())` rejects an invalid speaker (D1, D3).
-- [ ] 2.2 RED same file: `insert_all`-level constraint checks each raise `Postgrex.Error` on the named constraint — invalid speaker string, speaker set on a non-transcript `source_resource_type` row, `audio_start_seconds > audio_end_seconds` (AD8).
-- [ ] 2.3 GREEN `lib/alethea/clinical_record/rag/chunk.ex`: add 3 nullable fields (`chunk.ex:45-66`), 3 cast entries (`chunk.ex:75-105`), `validate_inclusion(:speaker, SessionTranscriptContent.speakers())`.
+- [x] 2.1 RED `test/alethea/clinical_record/rag/chunk_test.exs`: changeset casts `speaker`/`audio_start_seconds`/`audio_end_seconds`; `validate_inclusion(:speaker, SessionTranscriptContent.speakers())` rejects an invalid speaker (D1, D3).
+- [x] 2.2 RED same file: `insert_all`-level constraint checks each raise `Postgrex.Error` on the named constraint — invalid speaker string, speaker set on a non-transcript `source_resource_type` row, `audio_start_seconds > audio_end_seconds` (AD8).
+- [x] 2.3 GREEN `lib/alethea/clinical_record/rag/chunk.ex`: add 3 nullable fields (`chunk.ex:45-66`), 3 cast entries (`chunk.ex:75-105`), `validate_inclusion(:speaker, SessionTranscriptContent.speakers())`.
 
 ### Phase 3 — Fixtures + F1 retrieval fix
 
-- [ ] 3.1 Modify `test/support/fixtures/rag_fixtures.ex` `insert_chunk!/5`: add `:speaker`/`:audio_start_seconds`/`:audio_end_seconds` opts, default `nil`.
-- [ ] 3.2 Modify `test/alethea/clinical_record/rag/retrieval_test.exs:667-691` local `insert_chunk!/5` helper: when `resource_type == "session_transcript"`, populate speaker/start/end so the chunk seeded at `:457-464` satisfies `transcript_metadata_consistent` (F1, test-only, does not violate D-B).
-- [ ] 3.3 Run `retrieval_test.exs` to confirm the F1 fix is green against the new constraint.
+- [x] 3.1 Modify `test/support/fixtures/rag_fixtures.ex` `insert_chunk!/5`: add `:speaker`/`:audio_start_seconds`/`:audio_end_seconds` opts, default `nil`.
+- [x] 3.2 Modify `test/alethea/clinical_record/rag/retrieval_test.exs:667-691` local `insert_chunk!/5` helper: when `resource_type == "session_transcript"`, populate speaker/start/end so the chunk seeded at `:457-464` satisfies `transcript_metadata_consistent` (F1, test-only, does not violate D-B).
+- [x] 3.3 Run `retrieval_test.exs` to confirm the F1 fix is green against the new constraint.
 
 ### Phase 4 — `chunk_spans/1` (TDD, pure, uncalled)
 
-- [ ] 4.1 RED `test/alethea/clinical_record/rag/indexer_session_transcript_test.exs` (new): 3 alternating-speaker non-blank spans → 3 pieces, each `full_event: true` with matching speaker/start/end (D-A, AC2).
-- [ ] 4.2 RED same file: 1 oversized span (~700 tokens, `"patient"`, `10.0`-`340.0`) sub-splits into N≥2 pieces, ALL sharing speaker/start/end verbatim, `full_event: false` (R-X2).
-- [ ] 4.3 RED same file: integer `start: 12, end: 48` → piece's `audio_start_seconds`/`audio_end_seconds` are floats (`is_float`, `== 12.0`/`48.0`) (AD1).
-- [ ] 4.4 RED same file: `chunk_index` runs globally `0..n-1` across all spans in order (AD5).
-- [ ] 4.5 RED same file: blank/whitespace-only spans excluded before chunking; all-blank input → `[]` (D2, pure-function slice).
-- [ ] 4.6 GREEN `lib/alethea/clinical_record/rag/indexer.ex`: add public `@doc`'d `chunk_spans/1` + `span_chunk_piece` type exactly per design "Interfaces". Stays uncalled — `indexer.ex:84` catch-all still owns `session_transcript_created`.
+- [x] 4.1 RED `test/alethea/clinical_record/rag/indexer_session_transcript_test.exs` (new): 3 alternating-speaker non-blank spans → 3 pieces, each `full_event: true` with matching speaker/start/end (D-A, AC2).
+- [x] 4.2 RED same file: 1 oversized span (~700 tokens, `"patient"`, `10.0`-`340.0`) sub-splits into N≥2 pieces, ALL sharing speaker/start/end verbatim, `full_event: false` (R-X2).
+- [x] 4.3 RED same file: integer `start: 12, end: 48` → piece's `audio_start_seconds`/`audio_end_seconds` are floats (`is_float`, `== 12.0`/`48.0`) (AD1).
+- [x] 4.4 RED same file: `chunk_index` runs globally `0..n-1` across all spans in order (AD5).
+- [x] 4.5 RED same file: blank/whitespace-only spans excluded before chunking; all-blank input → `[]` (D2, pure-function slice).
+- [x] 4.6 GREEN `lib/alethea/clinical_record/rag/indexer.ex`: add public `@doc`'d `chunk_spans/1` + `span_chunk_piece` type exactly per design "Interfaces". Stays uncalled — `indexer.ex:84` catch-all still owns `session_transcript_created`.
 
 ### Phase 5 — PR1 verification
 
-- [ ] 5.1 `mix test test/alethea/clinical_record/rag/chunk_test.exs test/alethea/clinical_record/rag/indexer_session_transcript_test.exs test/alethea/clinical_record/rag/retrieval_test.exs`.
-- [ ] 5.2 `mix compile --warnings-as-errors --force`.
-- [ ] 5.3 `mix format` on ONLY the 7 touched files (migration, `chunk.ex`, `indexer.ex`, `chunk_test.exs`, `indexer_session_transcript_test.exs`, `retrieval_test.exs`, `rag_fixtures.ex`) — never repo-wide (Windows CRLF/HEEx risk).
-- [ ] 5.4 `git diff --stat feat/320-land-to-main` — confirm ~258 authored lines; if >400 flag `size:exception` to orchestrator, do not self-authorize.
-- [ ] 5.5 Boundary check: diff touches ONLY the 7 PR1 files — no eligibility/fetch clause in `indexer.ex`, no `lib/alethea_web/**`, no `Retrieval`/`Citation`/`Consultation.Source`, no RoBERTa/emotion file (D-B, D4).
+- [x] 5.1 `mix test test/alethea/clinical_record/rag/chunk_test.exs test/alethea/clinical_record/rag/indexer_session_transcript_test.exs test/alethea/clinical_record/rag/retrieval_test.exs`.
+- [x] 5.2 `mix compile --warnings-as-errors --force`.
+- [x] 5.3 `mix format` on ONLY the 7 touched files (migration, `chunk.ex`, `indexer.ex`, `chunk_test.exs`, `indexer_session_transcript_test.exs`, `retrieval_test.exs`, `rag_fixtures.ex`) — never repo-wide (Windows CRLF/HEEx risk).
+- [x] 5.4 `git diff --stat feat/320-land-to-main` — confirm ~258 authored lines; if >400 flag `size:exception` to orchestrator, do not self-authorize. **Actual: 385+/15- = 400 changed lines (exactly at budget ceiling, not exceeding it — see risks).**
+- [x] 5.5 Boundary check: diff touches ONLY the 7 PR1 files — no eligibility/fetch clause in `indexer.ex`, no `lib/alethea_web/**`, no `Retrieval`/`Citation`/`Consultation.Source`, no RoBERTa/emotion file (D-B, D4). Confirmed via `git status --short` and `git diff --cached indexer.ex`.
 
 ---
 
