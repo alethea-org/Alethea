@@ -33,6 +33,8 @@ defmodule Alethea.ClinicalRecord do
     FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
     Outbox,
+    SessionTranscript,
+    SessionTranscriptContent,
     TargetBehavior
   }
 
@@ -348,6 +350,118 @@ defmodule Alethea.ClinicalRecord do
   @spec dek_for(%{encryption_version: 1 | 2}, keyring()) :: binary()
   defp dek_for(%{encryption_version: 1}, keyring), do: keyring.patient_dek
   defp dek_for(%{encryption_version: 2}, keyring), do: keyring.clinical_record_dek
+
+  @doc """
+  Authorizes via `with_patient/3`, validates and serializes the spans, encrypts
+  them under the patient's clinical-record DEK, and commits the transcript row,
+  a content-free audit row, and one identifier-only outbox job in a single
+  `Ecto.Multi` — all-or-nothing (sdd/session-transcript-317, GitHub #317).
+
+  An invalid speaker (or malformed span) rejects the WHOLE transcript before the
+  transaction opens: no row, no audit-success row, no outbox job.
+  """
+  @spec create_session_transcript(Professional.t(), Ecto.UUID.t(), %{
+          required(:spans) => [map()],
+          required(:recorded_at) => DateTime.t(),
+          optional(:audio_duration_seconds) => non_neg_integer() | nil
+        }) ::
+          {:ok, SessionTranscript.t()}
+          | {:error,
+             :unauthorized
+             | SessionTranscriptContent.error()
+             | :empty_plaintext
+             | :invalid_key_size
+             | :encryption_failed
+             | Ecto.Changeset.t()
+             | term()}
+  def create_session_transcript(%Professional{} = professional, patient_id, attrs)
+      when is_map(attrs) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, content} <- SessionTranscriptContent.new(Map.fetch!(attrs, :spans)) do
+        persist_session_transcript(professional, patient, content, attrs, keyring)
+      end
+    end)
+  end
+
+  @doc """
+  Loads one transcript authorized by `(professional, patient_id, transcript_id)`,
+  with `:spans` decrypted and parsed. The row is fetched scoped by the
+  authorized patient's id, so a transcript belonging to another patient — or a
+  malformed id — yields `{:error, :not_found}` and never reveals whether that
+  id exists elsewhere. A cross-patient attempt writes a content-free denial
+  audit row (sdd/session-transcript-317, GitHub #317).
+  """
+  @spec get_session_transcript(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, SessionTranscript.t()}
+          | {:error, :unauthorized | :not_found | :undecryptable | term()}
+  def get_session_transcript(%Professional{} = professional, patient_id, transcript_id) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, transcript} <-
+             fetch_owned_session_transcript(professional, patient, transcript_id),
+           {:ok, plaintext} <-
+             PatientVault.decrypt(transcript.encrypted_spans, dek_for(transcript, keyring)),
+           {:ok, content} <- SessionTranscriptContent.parse(plaintext) do
+        {:ok, %{transcript | spans: content.spans}}
+      else
+        {:error, :not_found} -> {:error, :not_found}
+        {:error, _reason} -> {:error, :undecryptable}
+      end
+    end)
+  end
+
+  # `with_patient/3` plus the patient↔transcript ownership check, mirroring
+  # `fetch_owned_target_behavior/3` exactly — including the malformed-UUID
+  # normalization to `nil` before auditing (#317).
+  defp fetch_owned_session_transcript(professional, patient, transcript_id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(transcript_id),
+         %SessionTranscript{} = transcript <-
+           Repo.get_by(SessionTranscript, id: uuid, patient_id: patient.id) do
+      {:ok, transcript}
+    else
+      _ ->
+        audited_id =
+          case Ecto.UUID.cast(transcript_id) do
+            {:ok, uuid} -> uuid
+            :error -> nil
+          end
+
+        log_denied_audit(professional.id, audited_id, "session_transcript")
+        {:error, :not_found}
+    end
+  end
+
+  defp persist_session_transcript(professional, patient, content, attrs, keyring) do
+    body = SessionTranscriptContent.serialize(content)
+
+    with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
+      changeset =
+        SessionTranscript.changeset(%SessionTranscript{}, %{
+          encrypted_spans: ciphertext,
+          encryption_version: 2,
+          audio_duration_seconds: Map.get(attrs, :audio_duration_seconds),
+          recorded_at: Map.fetch!(attrs, :recorded_at),
+          patient_id: patient.id,
+          professional_id: professional.id
+        })
+
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(:record, changeset)
+      |> Ecto.Multi.insert(:audit, fn %{record: record} ->
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "session_transcript_created",
+          resource_type: "session_transcript",
+          resource_id: record.id,
+          outcome: "success"
+        })
+      end)
+      |> Oban.insert(:outbox_event, fn %{record: record} ->
+        Outbox.event("session_transcript_created", record)
+      end)
+      |> Repo.transaction()
+      |> finalize_record_multi()
+    end
+  end
 
   @doc """
   Lists the complete, decrypted clinical notes and journaling messages that an

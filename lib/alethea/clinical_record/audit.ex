@@ -24,10 +24,11 @@ defmodule Alethea.ClinicalRecord.Audit do
               ai_proposal_accepted_into_draft
               ai_proposal_edited ai_proposal_discarded functional_analysis_draft_saved
               legal_hold_applied legal_hold_released clinical_record_legally_deleted
-              clinical_record_key_destroyed evidence_suggestion_dismissed)
+              clinical_record_key_destroyed evidence_suggestion_dismissed
+              session_transcript_created)
   @resource_types ~w(target_behavior clinical_note patient consultation_evidence
                      clinician_observation ai_proposal functional_analysis_draft
-                     dismissed_evidence_suggestion)
+                     dismissed_evidence_suggestion session_transcript)
   @outcomes ~w(success denied)
 
   @primary_key {:id, :binary_id, autogenerate: true}

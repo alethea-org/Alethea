@@ -2861,6 +2861,21 @@ select.text-input {
   margin-top: var(--spacing-sm);
 }
 
+.suggested-candidate-card__trim-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+}
+
+.suggested-candidate-card__trim-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+}
+
 .badge--affinity,
 .badge--source-kind,
 .badge--cited {

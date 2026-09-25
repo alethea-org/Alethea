@@ -99,6 +99,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:citation_excerpt, nil)
           |> assign(:citation_error, nil)
           |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
+          |> assign(:trimming_candidate_id, nil)
+          |> assign(:trim_form, nil)
+          |> assign(:trim_error, nil)
           |> assign(:search_query, "")
           |> assign(:search_form, to_form(%{"query" => ""}, as: "search"))
           |> assign(:search_source_filter, "all")
@@ -389,6 +392,107 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo citar la sugerencia de evidencia.")}
+    end
+  end
+
+  @impl true
+  def handle_event("open_trim_candidate", %{"id" => chunk_id}, socket) do
+    candidate = find_citable_candidate(socket.assigns.suggested_candidates, chunk_id)
+
+    if candidate do
+      {:noreply,
+       socket
+       |> assign(:trimming_candidate_id, chunk_id)
+       |> assign(:trim_form, to_form(%{"excerpt" => candidate.content}, as: "trim"))
+       |> assign(:trim_error, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("cancel_trim_candidate", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:trimming_candidate_id, nil)
+     |> assign(:trim_form, nil)
+     |> assign(:trim_error, nil)}
+  end
+
+  @impl true
+  def handle_event("confirm_trimmed_candidate", %{"trim" => trim_params}, socket) do
+    raw_excerpt = Map.get(trim_params, "excerpt", "")
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+    chunk_id = socket.assigns.trimming_candidate_id
+
+    candidate = find_citable_candidate(socket.assigns.suggested_candidates, chunk_id)
+    trimmed_excerpt = String.trim(raw_excerpt || "")
+
+    cond do
+      is_nil(candidate) ->
+        {:noreply,
+         socket
+         |> assign(:trimming_candidate_id, nil)
+         |> assign(:trim_form, nil)
+         |> assign(:trim_error, nil)
+         |> put_flash(:error, "No se encontró la sugerencia a recortar.")}
+
+      trimmed_excerpt == "" ->
+        {:noreply,
+         socket
+         |> assign(:trim_form, to_form(%{"excerpt" => raw_excerpt}, as: "trim"))
+         |> assign(:trim_error, "Ingresá el fragmento exacto que querés citar.")}
+
+      not String.contains?(candidate.content, trimmed_excerpt) ->
+        {:noreply,
+         socket
+         |> assign(:trim_form, to_form(%{"excerpt" => raw_excerpt}, as: "trim"))
+         |> assign(:trim_error, "El fragmento debe coincidir exactamente con la fuente.")}
+
+      true ->
+        result =
+          with %{source_resource_type: resource_type} <- candidate,
+               {:ok, source_kind} <- citation_source_kind(resource_type) do
+            ClinicalRecord.cite_evidence_source(
+              professional,
+              patient_id,
+              target_behavior_id,
+              %{
+                source_kind: source_kind,
+                source_id: candidate.source_resource_id,
+                excerpt: trimmed_excerpt
+              }
+            )
+          else
+            _reason -> {:error, :invalid_suggestion}
+          end
+
+        case result do
+          {:ok, _evidence} ->
+            {:noreply,
+             socket
+             |> mark_search_result_cited(chunk_id)
+             |> remove_suggested_candidate(chunk_id)
+             |> assign(:trimming_candidate_id, nil)
+             |> assign(:trim_form, nil)
+             |> assign(:trim_error, nil)
+             |> load_timeline()
+             |> put_flash(:info, "Evidencia citada correctamente.")}
+
+          {:error, :excerpt_not_found} ->
+            {:noreply,
+             socket
+             |> assign(:trim_form, to_form(%{"excerpt" => raw_excerpt}, as: "trim"))
+             |> assign(:trim_error, "El fragmento debe coincidir exactamente con la fuente.")}
+
+          {:error, _reason} ->
+            {:noreply,
+             socket
+             |> assign(:trim_form, to_form(%{"excerpt" => raw_excerpt}, as: "trim"))
+             |> assign(:trim_error, "No se pudo citar la sugerencia de evidencia.")}
+        end
     end
   end
 
@@ -824,6 +928,13 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp remove_suggested_candidate(socket, chunk_id) do
     async_result = socket.assigns.suggested_candidates
+
+    socket =
+      if socket.assigns[:trimming_candidate_id] == chunk_id do
+        assign(socket, trimming_candidate_id: nil, trim_form: nil, trim_error: nil)
+      else
+        socket
+      end
 
     case async_result do
       %AsyncResult{ok?: true, result: candidates} when is_list(candidates) ->
@@ -1611,28 +1722,81 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                       {format_datetime(candidate.source_occurred_at)}
                     </time>
                   </header>
-                  <p class="suggested-candidate-card__content">{candidate.content}</p>
-                  <div class="suggested-candidate-card__actions">
-                    <button
-                      :if={citable_candidate?(candidate)}
-                      type="button"
-                      id={"cite-suggested-candidate-#{candidate.chunk_id}"}
-                      phx-click="cite_suggested_candidate"
-                      phx-value-id={candidate.chunk_id}
-                      class="button-primary button-primary--sm"
+
+                  <%= if @trimming_candidate_id == candidate.chunk_id do %>
+                    <.form
+                      for={@trim_form}
+                      id={"trim-candidate-form-#{candidate.chunk_id}"}
+                      phx-submit="confirm_trimmed_candidate"
+                      class="suggested-candidate-card__trim-form"
                     >
-                      + Citar todo
-                    </button>
-                    <button
-                      type="button"
-                      id={"dismiss-suggested-candidate-#{candidate.chunk_id}"}
-                      phx-click="dismiss_suggested_candidate"
-                      phx-value-id={candidate.chunk_id}
-                      class="button-secondary button-secondary--sm"
-                    >
-                      Descartar ✕
-                    </button>
-                  </div>
+                      <.input
+                        field={@trim_form[:excerpt]}
+                        type="textarea"
+                        label="Recortar fragmento exacto"
+                        rows={3}
+                        id={"trim-candidate-excerpt-#{candidate.chunk_id}"}
+                        placeholder="Editá o recortá el fragmento exacto a citar…"
+                      />
+                      <p
+                        :if={@trim_error}
+                        id={"trim-candidate-error-#{candidate.chunk_id}"}
+                        class="field__error"
+                      >
+                        {@trim_error}
+                      </p>
+                      <div class="suggested-candidate-card__trim-actions form-actions">
+                        <button
+                          type="submit"
+                          id={"confirm-trim-candidate-#{candidate.chunk_id}"}
+                          class="button-primary button-primary--sm"
+                        >
+                          Confirmar cita
+                        </button>
+                        <button
+                          type="button"
+                          id={"cancel-trim-candidate-#{candidate.chunk_id}"}
+                          phx-click="cancel_trim_candidate"
+                          class="button-secondary button-secondary--sm"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </.form>
+                  <% else %>
+                    <p class="suggested-candidate-card__content">{candidate.content}</p>
+                    <div class="suggested-candidate-card__actions">
+                      <button
+                        :if={citable_candidate?(candidate)}
+                        type="button"
+                        id={"cite-suggested-candidate-#{candidate.chunk_id}"}
+                        phx-click="cite_suggested_candidate"
+                        phx-value-id={candidate.chunk_id}
+                        class="button-primary button-primary--sm"
+                      >
+                        + Citar todo
+                      </button>
+                      <button
+                        :if={citable_candidate?(candidate)}
+                        type="button"
+                        id={"trim-suggested-candidate-#{candidate.chunk_id}"}
+                        phx-click="open_trim_candidate"
+                        phx-value-id={candidate.chunk_id}
+                        class="button-secondary button-secondary--sm"
+                      >
+                        Recortar
+                      </button>
+                      <button
+                        type="button"
+                        id={"dismiss-suggested-candidate-#{candidate.chunk_id}"}
+                        phx-click="dismiss_suggested_candidate"
+                        phx-value-id={candidate.chunk_id}
+                        class="button-secondary button-secondary--sm"
+                      >
+                        Descartar ✕
+                      </button>
+                    </div>
+                  <% end %>
                 </article>
               </div>
             </.async_result>
