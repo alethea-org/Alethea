@@ -42,6 +42,7 @@ defmodule Alethea.ClinicalRecord.Retention do
     FunctionalAnalysisDraft,
     Lifecycle,
     Outbox,
+    SessionTranscript,
     TargetBehavior,
     Tombstone
   }
@@ -58,6 +59,7 @@ defmodule Alethea.ClinicalRecord.Retention do
     {AIProposal, "ai_proposal", :updated_at},
     {FunctionalAnalysisDraft, "functional_analysis_draft", :updated_at},
     {ClinicalNote, "clinical_note", :inserted_at},
+    {SessionTranscript, "session_transcript", :inserted_at},
     {TargetBehavior, "target_behavior", :inserted_at}
   ]
 
@@ -65,7 +67,7 @@ defmodule Alethea.ClinicalRecord.Retention do
 
   @doc """
   Every eligible `resource_type` literal this module knows about — the
-  same six `Alethea.ClinicalRecord.Audit`/`Tombstone` resource types.
+  same seven `Alethea.ClinicalRecord.Audit`/`Tombstone` resource types.
   """
   @spec resource_types() :: [String.t()]
   def resource_types, do: @resource_types
@@ -129,7 +131,7 @@ defmodule Alethea.ClinicalRecord.Retention do
   end
 
   @doc """
-  `eligible_records/2` across all six tables, flattened. Used by
+  `eligible_records/2` across all seven tables, flattened. Used by
   `AletheaJobs.RetentionSweepWorker` for both its dry-run report and its
   real sweep.
   """
@@ -148,7 +150,7 @@ defmodule Alethea.ClinicalRecord.Retention do
   acting professional), `:rag_purge` (`Oban.insert/3` of
   `Outbox.tombstone_event/4`), `:crypto_erasure` (`Multi.run/3`, fires
   the terminal `Accounts.destroy_clinical_record_dek/1` only when the
-  patient's remaining rows across all six tables reach zero — D1
+  patient's remaining rows across all seven tables reach zero — D1
   verbatim).
 
   `opts`: `actor: %Professional{} | :system` (default `:system`),
@@ -288,7 +290,7 @@ defmodule Alethea.ClinicalRecord.Retention do
   end
 
   # Fires the terminal crypto-erasure ONLY at zero remaining rows across
-  # all six tables for the patient (D1 verbatim). Runs inside the same
+  # all seven tables for the patient (D1 verbatim). Runs inside the same
   # transaction as the just-committed `delete_all` (this `Multi.run` is
   # sequenced after it), and the retention queue's concurrency `1` (AD4)
   # is what makes this read-then-act safe against a concurrent sibling
@@ -351,9 +353,9 @@ defmodule Alethea.ClinicalRecord.Retention do
 
   # Loads a record's identifiers ONLY — no `encrypted_*` column, ever.
   # `target_behavior_id` is normalized to `nil` for tables that carry no
-  # such column (`ClinicalNote`) and to the row's own `id` for
-  # `TargetBehavior` itself (a `TargetBehavior`'s own tombstone must
-  # carry its own id so `review_timeline/3` finds it via
+  # such column (`ClinicalNote`, `SessionTranscript`) and to the row's
+  # own `id` for `TargetBehavior` itself (a `TargetBehavior`'s own
+  # tombstone must carry its own id so `review_timeline/3` finds it via
   # `target_behavior_id`, mirroring every child schema).
   defp identifiers_for(TargetBehavior, resource_id) do
     case base_identifiers(TargetBehavior, resource_id) do
@@ -364,6 +366,13 @@ defmodule Alethea.ClinicalRecord.Retention do
 
   defp identifiers_for(ClinicalNote, resource_id) do
     base_identifiers(ClinicalNote, resource_id)
+  end
+
+  # SessionTranscript carries no `target_behavior_id` FK (#317, F1) — this
+  # mirrors the ClinicalNote clause above, not the four-schema clause
+  # below.
+  defp identifiers_for(SessionTranscript, resource_id) do
+    base_identifiers(SessionTranscript, resource_id)
   end
 
   defp identifiers_for(schema, resource_id)
