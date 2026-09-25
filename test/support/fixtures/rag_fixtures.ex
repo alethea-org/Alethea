@@ -69,12 +69,21 @@ defmodule Alethea.RagFixtures do
     * `:source_resource_type` - defaults to `"clinical_note"`
     * `:target_behavior_id` - defaults to `nil` (no review link)
     * `:occurred_at` - defaults to `DateTime.utc_now/0`
+    * `:speaker` - defaults to `nil` (sdd/transcript-rag-ingestion-320, D1/D3)
+    * `:audio_start_seconds` - defaults to `nil`
+    * `:audio_end_seconds` - defaults to `nil`
 
+  A `"session_transcript"` `:source_resource_type` requires non-`nil`
+  `:speaker`/`:audio_start_seconds`/`:audio_end_seconds` — the
+  `transcript_metadata_consistent` DB constraint rejects the row otherwise.
   """
   def insert_chunk!(professional, patient, text, vector, opts \\ []) do
     resource_type = Keyword.get(opts, :source_resource_type, "clinical_note")
     target_behavior_id = Keyword.get(opts, :target_behavior_id)
     occurred_at = Keyword.get(opts, :occurred_at, DateTime.utc_now())
+    speaker = Keyword.get(opts, :speaker)
+    audio_start_seconds = Keyword.get(opts, :audio_start_seconds)
+    audio_end_seconds = Keyword.get(opts, :audio_end_seconds)
 
     resource_id = Ecto.UUID.generate()
     {:ok, kek} = Accounts.load_professional_kek(professional)
@@ -94,7 +103,10 @@ defmodule Alethea.RagFixtures do
         source_occurred_at: occurred_at,
         target_behavior_id: target_behavior_id,
         patient_id: patient.id,
-        professional_id: professional.id
+        professional_id: professional.id,
+        speaker: speaker,
+        audio_start_seconds: audio_start_seconds,
+        audio_end_seconds: audio_end_seconds
       }
     ]
 

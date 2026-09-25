@@ -34,7 +34,8 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
-    FunctionalAnalysisDraft
+    FunctionalAnalysisDraft,
+    SessionTranscriptContent
   }
 
   alias Alethea.ClinicalRecord.Rag.Chunk
@@ -59,6 +60,16 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
           text: String.t(),
           full_event: boolean(),
           token_count: pos_integer()
+        }
+
+  @type span_chunk_piece :: %{
+          chunk_index: non_neg_integer(),
+          text: String.t(),
+          full_event: boolean(),
+          token_count: pos_integer(),
+          speaker: String.t(),
+          audio_start_seconds: float(),
+          audio_end_seconds: float()
         }
 
   # --- 3.1/3.2 eligibility/1 -------------------------------------------
@@ -195,6 +206,39 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     words
     |> Enum.take(-overlap_count)
     |> Enum.join(" ")
+  end
+
+  @doc """
+  Splits `spans` (`Alethea.ClinicalRecord.SessionTranscriptContent.span/0`)
+  into one or more chunk pieces per speaker turn (design AD2/AD4/AD5,
+  spec "Chunking is per speaker turn"). Blank/whitespace-only spans are
+  dropped first (D2). Each remaining span is chunked through `chunk/1`,
+  and every resulting piece inherits that span's `speaker` and
+  `start`/`end` bounds verbatim — no interpolation by character or word
+  offset, even when a span sub-splits (R-X2). Integer bounds are
+  normalized to floats here (AD1), because `replace_chunks/2` writes
+  through `Repo.insert_all/3`, which bypasses `Chunk.changeset/2`.
+  `chunk_index` is renumbered globally, `0..n-1`, across the full output
+  (AD5) — the unique key is `(type, id, chunk_index)`, not per-span.
+
+  Currently uncalled: `eligibility/1` has no `"session_transcript_created"`
+  clause yet (PR2 wires it), so nothing in the live pipeline reaches this.
+  """
+  @spec chunk_spans([SessionTranscriptContent.span()]) :: [span_chunk_piece()]
+  def chunk_spans(spans) when is_list(spans) do
+    spans
+    |> Enum.reject(&(String.trim(&1.text) == ""))
+    |> Enum.flat_map(fn span ->
+      Enum.map(chunk(span.text), fn piece ->
+        Map.merge(piece, %{
+          speaker: span.speaker,
+          audio_start_seconds: span.start * 1.0,
+          audio_end_seconds: span.end * 1.0
+        })
+      end)
+    end)
+    |> Enum.with_index()
+    |> Enum.map(fn {piece, index} -> %{piece | chunk_index: index} end)
   end
 
   # --- 3.5/3.6 embed ------------------------------------------------------

@@ -82,6 +82,42 @@ defmodule Alethea.ClinicalRecord.Rag.ChunkTest do
     end
   end
 
+  describe "changeset/2 — transcript metadata (D1, D3, sdd/transcript-rag-ingestion-320)" do
+    test "casts speaker, audio_start_seconds, and audio_end_seconds" do
+      attrs =
+        Map.merge(@valid_attrs, %{
+          speaker: "therapist",
+          audio_start_seconds: 12.5,
+          audio_end_seconds: 48.75
+        })
+
+      changeset = Chunk.changeset(%Chunk{}, attrs)
+
+      assert changeset.valid?
+      assert get_change(changeset, :speaker) == "therapist"
+      assert get_change(changeset, :audio_start_seconds) == 12.5
+      assert get_change(changeset, :audio_end_seconds) == 48.75
+    end
+
+    test "is valid without any transcript metadata (nullable, not required)" do
+      changeset = Chunk.changeset(%Chunk{}, @valid_attrs)
+
+      assert changeset.valid?
+      refute Map.has_key?(changeset.changes, :speaker)
+      refute Map.has_key?(changeset.changes, :audio_start_seconds)
+      refute Map.has_key?(changeset.changes, :audio_end_seconds)
+    end
+
+    test "rejects a speaker outside SessionTranscriptContent.speakers/0" do
+      attrs = Map.put(@valid_attrs, :speaker, "narrator")
+
+      changeset = Chunk.changeset(%Chunk{}, attrs)
+
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).speaker
+    end
+  end
+
   describe "changeset/2 — plaintext is never cast" do
     test "casting a :content key does not populate the virtual field" do
       attrs = Map.put(@valid_attrs, :content, "texto en claro nunca debe persistirse")
@@ -153,6 +189,78 @@ defmodule Alethea.ClinicalRecord.Rag.ChunkTest do
       refute changeset.valid?
       assert "has already been taken" in errors_on(changeset).chunk_index
     end
+  end
+
+  # `insert_all` bypasses `changeset/2` entirely
+  # (`Indexer.replace_chunks/2`), so these three CHECK constraints (AD8) are the only
+  # guard against a malformed transcript-metadata row. Same pgvector
+  # extension caveat as "database-level uniqueness (D3 key)" above.
+  describe "database-level transcript metadata constraints (AD8)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+
+      %{professional: professional, patient: patient}
+    end
+
+    test "an invalid speaker string violates speaker_must_be_valid", %{
+      professional: professional,
+      patient: patient
+    } do
+      attrs =
+        insert_all_attrs(patient, professional, %{
+          source_resource_type: "session_transcript",
+          speaker: "narrator",
+          audio_start_seconds: 1.0,
+          audio_end_seconds: 2.0
+        })
+
+      error = assert_raise(Postgrex.Error, fn -> Repo.insert_all(Chunk, [attrs]) end)
+      assert error.postgres.constraint == "speaker_must_be_valid"
+    end
+
+    test "a speaker set on a non-transcript source_resource_type violates transcript_metadata_consistent",
+         %{professional: professional, patient: patient} do
+      attrs =
+        insert_all_attrs(patient, professional, %{
+          source_resource_type: "clinical_note",
+          speaker: "patient",
+          audio_start_seconds: 1.0,
+          audio_end_seconds: 2.0
+        })
+
+      error = assert_raise(Postgrex.Error, fn -> Repo.insert_all(Chunk, [attrs]) end)
+      assert error.postgres.constraint == "transcript_metadata_consistent"
+    end
+
+    test "audio_start_seconds greater than audio_end_seconds violates audio_bounds_ordered", %{
+      professional: professional,
+      patient: patient
+    } do
+      attrs =
+        insert_all_attrs(patient, professional, %{
+          source_resource_type: "session_transcript",
+          speaker: "patient",
+          audio_start_seconds: 48.0,
+          audio_end_seconds: 12.0
+        })
+
+      error = assert_raise(Postgrex.Error, fn -> Repo.insert_all(Chunk, [attrs]) end)
+      assert error.postgres.constraint == "audio_bounds_ordered"
+    end
+  end
+
+  defp insert_all_attrs(patient, professional, overrides) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    @valid_attrs
+    |> Map.merge(overrides)
+    |> Map.merge(%{
+      patient_id: patient.id,
+      professional_id: professional.id,
+      inserted_at: now,
+      updated_at: now
+    })
   end
 
   defp create_professional! do
