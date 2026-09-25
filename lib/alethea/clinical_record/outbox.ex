@@ -12,6 +12,7 @@ defmodule Alethea.ClinicalRecord.Outbox do
     ClinicianObservation,
     ConsultationEvidence,
     FunctionalAnalysisDraft,
+    SessionTranscript,
     TargetBehavior
   }
 
@@ -22,8 +23,9 @@ defmodule Alethea.ClinicalRecord.Outbox do
   @doc """
   Builds the outbox job insert changeset for `event_type` from a
   persisted `TargetBehavior`, `ClinicalNote`, `ConsultationEvidence`,
-  `ClinicianObservation`, `AIProposal`, or `FunctionalAnalysisDraft`.
-  `args` is restricted to identifier fields only — see `@allowed_args`.
+  `ClinicianObservation`, `AIProposal`, `FunctionalAnalysisDraft`, or
+  `SessionTranscript`. `args` is restricted to identifier fields only —
+  see `@allowed_args`.
   """
   @spec event(
           String.t(),
@@ -33,6 +35,7 @@ defmodule Alethea.ClinicalRecord.Outbox do
           | ClinicianObservation.t()
           | AIProposal.t()
           | FunctionalAnalysisDraft.t()
+          | SessionTranscript.t()
         ) :: Ecto.Changeset.t()
   def event(event_type, record) when is_binary(event_type) do
     %{
@@ -52,6 +55,7 @@ defmodule Alethea.ClinicalRecord.Outbox do
   defp resource_type(%ClinicianObservation{}), do: "clinician_observation"
   defp resource_type(%AIProposal{}), do: "ai_proposal"
   defp resource_type(%FunctionalAnalysisDraft{}), do: "functional_analysis_draft"
+  defp resource_type(%SessionTranscript{}), do: "session_transcript"
 
   @doc """
   Builds the outbox job insert changeset for a legal deletion

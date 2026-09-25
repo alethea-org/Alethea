@@ -31,6 +31,7 @@ defmodule Alethea.ClinicalRecordTest do
     DismissedEvidenceSuggestion,
     FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
+    SessionTranscript,
     TargetBehavior,
     Tombstone
   }
@@ -2912,5 +2913,159 @@ defmodule Alethea.ClinicalRecordTest do
       )
 
     patient
+  end
+
+  describe "create_session_transcript/3 + get_session_transcript/3 (#317, AC1/AC2/AC5)" do
+    test "authorized round-trip, no plaintext leak, encryption_version 2, one outbox job",
+         %{professional: professional, patient: patient} do
+      attrs = %{
+        spans: [
+          %{start: 0.0, end: 3.2, speaker: "patient", text: "Primero informacion sensible"},
+          %{start: 3.2, end: 6.75, speaker: "therapist", text: "Segundo"},
+          %{start: 6.75, end: 9.1, speaker: "patient", text: "Tercero"}
+        ],
+        recorded_at: DateTime.utc_now()
+      }
+
+      assert {:ok, %SessionTranscript{} = transcript} =
+               ClinicalRecord.create_session_transcript(professional, patient.id, attrs)
+
+      assert transcript.patient_id == patient.id
+      assert transcript.professional_id == professional.id
+      assert transcript.encryption_version == 2
+      assert transcript.audio_duration_seconds == nil
+
+      assert {:ok, fetched} =
+               ClinicalRecord.get_session_transcript(professional, patient.id, transcript.id)
+
+      assert fetched.spans == attrs.spans
+
+      %{rows: [[ciphertext]]} =
+        Repo.query!("SELECT encrypted_spans FROM session_transcripts WHERE id = $1::text::uuid", [
+          transcript.id
+        ])
+
+      assert is_binary(ciphertext)
+      refute String.contains?(ciphertext, "Primero informacion sensible")
+      refute String.contains?(ciphertext, "therapist")
+
+      jobs =
+        all_enqueued(
+          worker: ClinicalRecordOutboxWorker,
+          args: %{"event" => "session_transcript_created"}
+        )
+
+      assert length(jobs) == 1
+      assert hd(jobs).args["resource_id"] == transcript.id
+
+      assert Enum.sort(Map.keys(hd(jobs).args)) ==
+               Enum.sort([
+                 "event",
+                 "resource_type",
+                 "resource_id",
+                 "patient_id",
+                 "professional_id"
+               ])
+
+      assert {:ok, %SessionTranscript{audio_duration_seconds: 42}} =
+               ClinicalRecord.create_session_transcript(
+                 professional,
+                 patient.id,
+                 Map.put(attrs, :audio_duration_seconds, 42)
+               )
+    end
+  end
+
+  describe "create_session_transcript/3 & get_session_transcript/3 — authorization (AC3)" do
+    test "denies both create and get for a professional not responsible for the patient, auditing each denial",
+         %{professional: professional, patient: patient} do
+      attrs = %{
+        spans: [%{start: 0.0, end: 1.0, speaker: "patient", text: "no deberia persistir"}],
+        recorded_at: DateTime.utc_now()
+      }
+
+      {:ok, transcript} =
+        ClinicalRecord.create_session_transcript(professional, patient.id, attrs)
+
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.create_session_transcript(other_professional, patient.id, attrs)
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.get_session_transcript(
+                 other_professional,
+                 patient.id,
+                 transcript.id
+               )
+
+      assert Repo.aggregate(SessionTranscript, :count) == 1
+
+      rows =
+        AuditLog
+        |> where([a], a.professional_id == ^other_professional.id)
+        |> Repo.all()
+
+      assert length(rows) == 2
+      assert Enum.all?(rows, &(&1.action == "clinical_record_access_denied"))
+      assert Enum.all?(rows, &(&1.details == %{"outcome" => "denied"}))
+    end
+
+    test "a cross-patient transcript id and a malformed id both return not_found, each audited correctly",
+         %{professional: professional, patient: patient} do
+      other_patient = create_patient!(professional)
+
+      attrs = %{
+        spans: [%{start: 0.0, end: 1.0, speaker: "patient", text: "contenido de otro paciente"}],
+        recorded_at: DateTime.utc_now()
+      }
+
+      {:ok, transcript} =
+        ClinicalRecord.create_session_transcript(professional, other_patient.id, attrs)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.get_session_transcript(professional, patient.id, transcript.id)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.get_session_transcript(professional, patient.id, "not-a-uuid")
+
+      rows =
+        AuditLog
+        |> where([a], a.action == "clinical_record_access_denied")
+        |> where([a], a.resource_type == "session_transcript")
+        |> order_by([a], asc: a.inserted_at)
+        |> Repo.all()
+
+      assert length(rows) == 2
+      assert Enum.at(rows, 0).resource_id == transcript.id
+      assert Enum.at(rows, 1).resource_id == nil
+    end
+  end
+
+  describe "create_session_transcript/3 — invalid payload rejects the whole write (AC4)" do
+    test "a bad speaker returns :invalid_speaker with zero rows, zero success audit rows, zero jobs",
+         %{professional: professional, patient: patient} do
+      attrs = %{
+        spans: [
+          %{start: 0.0, end: 1.0, speaker: "patient", text: "ok"},
+          %{start: 1.0, end: 2.0, speaker: "psychologist", text: "invalido"}
+        ],
+        recorded_at: DateTime.utc_now()
+      }
+
+      assert {:error, :invalid_speaker} =
+               ClinicalRecord.create_session_transcript(professional, patient.id, attrs)
+
+      assert Repo.aggregate(SessionTranscript, :count) == 0
+
+      refute_enqueued(
+        worker: ClinicalRecordOutboxWorker,
+        args: %{"event" => "session_transcript_created"}
+      )
+
+      assert AuditLog
+             |> where([a], a.action == "session_transcript_created")
+             |> Repo.all() == []
+    end
   end
 end
