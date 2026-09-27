@@ -104,13 +104,13 @@ Chain strategy: feature-branch-chain
 
 ### Phase 10 — PR2 verification
 
-- [x] 10.1 `mix test test/alethea/clinical_record/rag/indexer_session_transcript_test.exs test/alethea_jobs/clinical_record_outbox_worker_test.exs` → 17 + 10 = 27 tests, 0 failures.
-- [x] 10.2 `mix test` (full suite) → 6 doctests, 1638 tests, 0 failures, 5 skipped.
+- [x] 10.1 `mix test test/alethea/clinical_record/rag/indexer_session_transcript_test.exs test/alethea_jobs/clinical_record_outbox_worker_test.exs` → 13 + 10 = 23 tests, 0 failures (final, after the test split).
+- [x] 10.2 `mix test` (full suite) → 6 doctests, 1634 tests, 0 failures, 5 skipped (final, on 7fad7b7).
 - [x] 10.3 `mix compile --warnings-as-errors --force` → clean, exit 0.
 - [x] 10.4 `mix format` on ONLY `indexer.ex` + the 2 touched test files → no additional diff (already formatted).
-- [ ] **10.5 BLOCKED — `git diff --stat feat/320-transcript-rag-ingestion` = 3 files changed, 541 insertions(+), 5 deletions(-) = 546 changed lines.** Forecast was ~290; actual is 546 (+88% over forecast, +36% over the hard 400-line ceiling). Per hard rule, NOT self-authorizing `size:exception` — stopped before committing. Orchestrator/maintainer decision required (see apply-progress and return summary for the full breakdown and options).
+- [x] 10.5 Budget: first pass was 546 changed lines (over the 400 ceiling). User chose to compact the tests (shared setup + `create_transcript!`/`chunks_for` helpers), then split the resulting mega-test back into independent cases and drop a duplicated Oban-args assertion (already covered in `clinical_record_test.exs:2961`). Final: `git diff --stat feat/320-transcript-rag-ingestion` = 3 files, 374+/15- = 389 changed lines. No `size:exception`.
 - [x] 10.6 Boundary check: diff touches ONLY `indexer.ex` + the 2 test files (`git diff --name-status feat/320-transcript-rag-ingestion` confirms exactly 3 paths) — no `lib/alethea_web/**`, no `Retrieval`/`Citation`/`Consultation.Source`, no RoBERTa/emotion file (D-B, D4).
-- [ ] 10.7 Base check: not yet applicable — nothing has been committed or pushed pending the 10.5 decision.
+- [x] 10.7 Base check: PR2 is the single commit 7fad7b7 on top of the PR1 tip ebc0561 (`git merge-base` equals the PR1 branch head). Verified pass (verify-report-pr2.md) and Judgment Day APPROVED with zero findings.
 
 ## Threat Matrix
 
