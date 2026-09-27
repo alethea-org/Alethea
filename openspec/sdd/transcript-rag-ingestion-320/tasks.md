@@ -75,42 +75,42 @@ Chain strategy: feature-branch-chain
 
 ### Phase 6 — Branch setup
 
-- [ ] 6.1 After PR1 verified, from `feat/320-transcript-rag-ingestion`: `git checkout -b feat/320-transcript-rag-ingestion-pr2`.
+- [x] 6.1 After PR1 verified, from `feat/320-transcript-rag-ingestion`: `git checkout -b feat/320-transcript-rag-ingestion-pr2`.
 
 ### Phase 7 — Eligibility + fetch clause (must land together, TDD)
 
-- [ ] 7.1 RED `indexer_session_transcript_test.exs`: `eligibility("session_transcript_created") == {:index, :session_transcript}` (AC1).
-- [ ] 7.2 RED same file: `fetch_and_decrypt(:session_transcript, ...)` for a persisted transcript (`encryption_version: 2`) returns spans in order, `occurred_at == recorded_at`, `target_behavior_id == nil` (L3, L4).
-- [ ] 7.3 RED same file: tampered `encrypted_spans` (valid ciphertext, bad sentinel) → `{:cancel, :malformed_transcript}` (AD6).
-- [ ] 7.4 GREEN `indexer.ex`: add `eligibility("session_transcript_created")` clause returning `{:index, :session_transcript}` before the `:84` catch-all, AND the `fetch_and_decrypt(:session_transcript, ...)` clause (`Repo.get` → `resolve_dek(2, ...)` → `PatientVault.decrypt` → `SessionTranscriptContent.parse/1`; parse failure → `{:cancel, :malformed_transcript}`). Land both in one commit — eligibility alone raises `FunctionClauseError`.
+- [x] 7.1 RED `indexer_session_transcript_test.exs`: `eligibility("session_transcript_created") == {:index, :session_transcript}` (AC1).
+- [x] 7.2 RED same file: `fetch_and_decrypt(:session_transcript, ...)` for a persisted transcript (`encryption_version: 2`) returns spans in order, `occurred_at == recorded_at`, `target_behavior_id == nil` (L3, L4).
+- [x] 7.3 RED same file: tampered `encrypted_spans` (valid ciphertext, bad sentinel) → `{:cancel, :malformed_transcript}` (AD6).
+- [x] 7.4 GREEN `indexer.ex`: add `eligibility("session_transcript_created")` clause returning `{:index, :session_transcript}` before the `:84` catch-all, AND the `fetch_and_decrypt(:session_transcript, ...)` clause (`Repo.get` → `resolve_dek(2, ...)` → `PatientVault.decrypt` → `SessionTranscriptContent.parse/1`; parse failure → `{:cancel, :malformed_transcript}`). Land both in one commit — eligibility alone raises `FunctionClauseError`.
 
 ### Phase 8 — `pieces_for/2`, warning, embed guard, attrs (TDD)
 
-- [ ] 8.1 RED same file: `index_event/1` for 1 blank + 2 non-blank spans writes exactly 2 chunks (D2).
-- [ ] 8.2 RED same file: all-blank transcript → 0 chunks, `index_event/1` returns `:ok`, embed mock expects 0 calls (D2, AD7).
-- [ ] 8.3 RED same file: all-blank indexing captures exactly one `Logger.warning` with the `resource_id`, refuting span text, `"patient"`/`"therapist"`, and `patient_id` (R-X1).
-- [ ] 8.4 RED same file: therapist-only transcript → rows persist with `speaker == "therapist"` (D5).
-- [ ] 8.5 RED same file: therapist turn 12.5s-48.75s round-trips (`speaker`, `audio_start_seconds`, `audio_end_seconds`); a `clinical_note` row has all three `nil`.
-- [ ] 8.6 RED same file: `encryption_version == 2`, decrypts under the CR DEK, embedding/model set, `source_occurred_at == recorded_at`, `target_behavior_id == nil` (AC3, L5).
-- [ ] 8.7 RED same file: integer span `start: 12, end: 48` through `index_event/1` persists as `12.0`/`48.0` — the real AD1 RED (`insert_all` bypasses the changeset).
-- [ ] 8.8 RED same file: raw `SELECT *::text` on the row has no span text in any column; `oban_jobs.args` has exactly the 5 identifier keys (no-leak).
-- [ ] 8.9 RED same file: indexing the same transcript twice converges to the same chunk count and texts (idempotency, L2).
-- [ ] 8.10 GREEN `indexer.ex`: add `require Logger` (F2); `pieces_for/2` dispatch (`:session_transcript` → `chunk_spans(spans)`, others → `chunk/1`, byte-identical passthrough); `warn_if_empty/3` wired into `index_resource/5`; embed guard short-circuits `[]` to `{:ok, []}` (AD7); `encrypt_chunk_attrs/10` threads `speaker`/`audio_start_seconds`/`audio_end_seconds` via `Map.get(piece, ...)`.
+- [x] 8.1 RED same file: `index_event/1` for 1 blank + 2 non-blank spans writes exactly 2 chunks (D2).
+- [x] 8.2 RED same file: all-blank transcript → 0 chunks, `index_event/1` returns `:ok`, embed mock expects 0 calls (D2, AD7).
+- [x] 8.3 RED same file: all-blank indexing captures exactly one `Logger.warning` with the `resource_id`, refuting span text, `"patient"`/`"therapist"`, and `patient_id` (R-X1).
+- [x] 8.4 RED same file: therapist-only transcript → rows persist with `speaker == "therapist"` (D5).
+- [x] 8.5 RED same file: therapist turn 12.5s-48.75s round-trips (`speaker`, `audio_start_seconds`, `audio_end_seconds`); a `clinical_note` row has all three `nil`.
+- [x] 8.6 RED same file: `encryption_version == 2`, decrypts under the CR DEK, embedding/model set, `source_occurred_at == recorded_at`, `target_behavior_id == nil` (AC3, L5).
+- [x] 8.7 RED same file: integer span `start: 12, end: 48` through `index_event/1` persists as `12.0`/`48.0` — the real AD1 RED (`insert_all` bypasses the changeset).
+- [x] 8.8 RED same file: raw `SELECT *::text` on the row has no span text in any column; `oban_jobs.args` has exactly the 5 identifier keys (no-leak).
+- [x] 8.9 RED same file: indexing the same transcript twice converges to the same chunk count and texts (idempotency, L2).
+- [x] 8.10 GREEN `indexer.ex`: add `require Logger` (F2); `pieces_for/2` dispatch (`:session_transcript` → `chunk_spans(spans)`, others → `chunk/1`, byte-identical passthrough); `warn_if_empty/3` wired into `index_resource/5`; embed guard short-circuits `[]` to `{:ok, []}` (AD7); `encrypt_chunk_attrs/10` threads `speaker`/`audio_start_seconds`/`audio_end_seconds` via `Map.get(piece, ...)`. **Deviation (found during GREEN, not in design):** `encrypt_chunk_attrs/10` unconditionally called `AI.embeddings().model()` even for `[]` pieces — with a mocked adapter (no `model/0` expectation) this raised `Mox.UnexpectedCallError` on the all-blank path. Added an explicit `encrypt_chunk_attrs([], [], ...)` clause returning `{:ok, []}` before ever touching the adapter, so AD7's "adapter never called" guarantee holds for `.model()` too, not just `.embed/2`.
 
 ### Phase 9 — AC4 legal-deletion purge
 
-- [ ] 9.1 RED `test/alethea_jobs/clinical_record_outbox_worker_test.exs`: index a transcript, `Retention.legally_delete_record(..., actor:, trigger: "manual")`, `perform_job` with tombstone args → zero `clinical_record_rag_chunks` rows remain (AC4; production purge path at `indexer.ex:291-295` already exists — proof-only, F3).
-- [ ] 9.2 Confirm 9.1 passes with no production code beyond Phase 8.
+- [x] 9.1 RED `test/alethea_jobs/clinical_record_outbox_worker_test.exs`: index a transcript, `Retention.legally_delete_record(..., actor:, trigger: "manual")`, `perform_job` with tombstone args → zero `clinical_record_rag_chunks` rows remain (AC4; production purge path at `indexer.ex:291-295` already exists — proof-only, F3).
+- [x] 9.2 Confirmed 9.1 passes with no production code beyond Phase 8 (10/10 tests green on first run of the worker test file after Phase 8 GREEN).
 
 ### Phase 10 — PR2 verification
 
-- [ ] 10.1 `mix test test/alethea/clinical_record/rag/indexer_session_transcript_test.exs test/alethea_jobs/clinical_record_outbox_worker_test.exs`.
-- [ ] 10.2 `mix test` (full suite).
-- [ ] 10.3 `mix compile --warnings-as-errors --force`.
-- [ ] 10.4 `mix format` on ONLY `indexer.ex` + the 2 touched test files.
-- [ ] 10.5 `git diff --stat --cached feat/320-transcript-rag-ingestion` (staged, against PR1 base) — confirm ~290 authored lines; flag `size:exception` if over, do not self-authorize.
-- [ ] 10.6 Boundary check: diff touches ONLY `indexer.ex` + the 2 test files — no `lib/alethea_web/**`, no `Retrieval`/`Citation`/`Consultation.Source`, no RoBERTa/emotion file (D-B, D4).
-- [ ] 10.7 Base check: PR2's GitHub diff must NOT show PR1's files (`chunk.ex`, migration, fixtures, `retrieval_test.exs`) — retarget/rebase if it does.
+- [x] 10.1 `mix test test/alethea/clinical_record/rag/indexer_session_transcript_test.exs test/alethea_jobs/clinical_record_outbox_worker_test.exs` → 17 + 10 = 27 tests, 0 failures.
+- [x] 10.2 `mix test` (full suite) → 6 doctests, 1638 tests, 0 failures, 5 skipped.
+- [x] 10.3 `mix compile --warnings-as-errors --force` → clean, exit 0.
+- [x] 10.4 `mix format` on ONLY `indexer.ex` + the 2 touched test files → no additional diff (already formatted).
+- [ ] **10.5 BLOCKED — `git diff --stat feat/320-transcript-rag-ingestion` = 3 files changed, 541 insertions(+), 5 deletions(-) = 546 changed lines.** Forecast was ~290; actual is 546 (+88% over forecast, +36% over the hard 400-line ceiling). Per hard rule, NOT self-authorizing `size:exception` — stopped before committing. Orchestrator/maintainer decision required (see apply-progress and return summary for the full breakdown and options).
+- [x] 10.6 Boundary check: diff touches ONLY `indexer.ex` + the 2 test files (`git diff --name-status feat/320-transcript-rag-ingestion` confirms exactly 3 paths) — no `lib/alethea_web/**`, no `Retrieval`/`Citation`/`Consultation.Source`, no RoBERTa/emotion file (D-B, D4).
+- [ ] 10.7 Base check: not yet applicable — nothing has been committed or pushed pending the 10.5 decision.
 
 ## Threat Matrix
 
