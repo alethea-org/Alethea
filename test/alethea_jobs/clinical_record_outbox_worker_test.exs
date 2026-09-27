@@ -228,6 +228,54 @@ defmodule AletheaJobs.ClinicalRecordOutboxWorkerTest do
     end
   end
 
+  describe "perform/1 — AC4 legal-deletion purges transcript chunks (sdd/transcript-rag-ingestion-320, #320)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "indexing a transcript then legally deleting it purges every chunk", %{
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, transcript} =
+        Alethea.ClinicalRecord.create_session_transcript(professional, patient.id, %{
+          spans: [%{start: 0.0, end: 5.0, speaker: "therapist", text: "Turno a purgar."}],
+          recorded_at: DateTime.utc_now()
+        })
+
+      index_args = %{
+        "event" => "session_transcript_created",
+        "resource_type" => "session_transcript",
+        "resource_id" => transcript.id,
+        "patient_id" => patient.id,
+        "professional_id" => professional.id
+      }
+
+      assert :ok = perform_job(ClinicalRecordOutboxWorker, index_args)
+      assert Alethea.Repo.aggregate(Chunk, :count) == 1
+
+      assert {:ok, _tombstone} =
+               Alethea.ClinicalRecord.Retention.legally_delete_record(
+                 {"session_transcript", transcript.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      tombstone_args = %{
+        "event" => "clinical_record_legally_deleted",
+        "resource_type" => "session_transcript",
+        "resource_id" => transcript.id,
+        "patient_id" => patient.id,
+        "professional_id" => professional.id
+      }
+
+      assert :ok = perform_job(ClinicalRecordOutboxWorker, tombstone_args)
+      assert Alethea.Repo.aggregate(Chunk, :count) == 0
+    end
+  end
+
   defp create_professional! do
     {:ok, professional} =
       Accounts.create_professional(%{

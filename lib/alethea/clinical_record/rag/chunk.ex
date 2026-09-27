@@ -39,6 +39,8 @@ defmodule Alethea.ClinicalRecord.Rag.Chunk do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias Alethea.ClinicalRecord.SessionTranscriptContent
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   @derive {Inspect, except: [:content]}
@@ -57,6 +59,14 @@ defmodule Alethea.ClinicalRecord.Rag.Chunk do
     field :full_event, :boolean, default: true
 
     field :source_occurred_at, :utc_datetime_usec
+
+    # Nullable transcript metadata (design AD8, D1, D3,
+    # sdd/transcript-rag-ingestion-320, GitHub #320): only
+    # `:session_transcript` chunks carry all three; every other resource
+    # kind leaves them `nil`. `speaker` is plaintext by design (D3).
+    field :speaker, :string
+    field :audio_start_seconds, :float
+    field :audio_end_seconds, :float
 
     belongs_to :patient, Alethea.Accounts.Patient
     belongs_to :professional, Alethea.Accounts.Professional
@@ -85,10 +95,14 @@ defmodule Alethea.ClinicalRecord.Rag.Chunk do
       :token_count,
       :full_event,
       :source_occurred_at,
+      :speaker,
+      :audio_start_seconds,
+      :audio_end_seconds,
       :patient_id,
       :professional_id,
       :target_behavior_id
     ])
+    |> validate_inclusion(:speaker, SessionTranscriptContent.speakers())
     |> validate_required([
       :source_resource_type,
       :source_resource_id,

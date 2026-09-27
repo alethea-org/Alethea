@@ -34,7 +34,9 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
-    FunctionalAnalysisDraft
+    FunctionalAnalysisDraft,
+    SessionTranscript,
+    SessionTranscriptContent
   }
 
   alias Alethea.ClinicalRecord.Rag.Chunk
@@ -42,6 +44,8 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   alias Alethea.Repo
 
   import Ecto.Query
+
+  require Logger
 
   @max_tokens 500
   @overlap_ratio 0.15
@@ -61,6 +65,16 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
           token_count: pos_integer()
         }
 
+  @type span_chunk_piece :: %{
+          chunk_index: non_neg_integer(),
+          text: String.t(),
+          full_event: boolean(),
+          token_count: pos_integer(),
+          speaker: String.t(),
+          audio_start_seconds: float(),
+          audio_end_seconds: float()
+        }
+
   # --- 3.1/3.2 eligibility/1 -------------------------------------------
 
   @doc """
@@ -78,6 +92,9 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   def eligibility("ai_proposal_accepted"), do: {:index, :ai_proposal}
   def eligibility("functional_analysis_draft_saved"), do: {:index, :functional_analysis_draft}
   def eligibility("patient_message_received"), do: {:index, :patient_message}
+
+  def eligibility("session_transcript_created"), do: {:index, :session_transcript}
+
   def eligibility("ai_proposal_edited"), do: {:ignore, :not_accepted}
   def eligibility("ai_proposal_discarded"), do: {:ignore, :not_accepted}
   def eligibility("target_behavior_created"), do: {:ignore, :structural_metadata}
@@ -197,6 +214,68 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     |> Enum.join(" ")
   end
 
+  @doc """
+  Splits `spans` (`Alethea.ClinicalRecord.SessionTranscriptContent.span/0`)
+  into one or more chunk pieces per speaker turn (design AD2/AD4/AD5,
+  spec "Chunking is per speaker turn"). Blank/whitespace-only spans are
+  dropped first (D2). Each remaining span is chunked through `chunk/1`,
+  and every resulting piece inherits that span's `speaker` and
+  `start`/`end` bounds verbatim — no interpolation by character or word
+  offset, even when a span sub-splits (R-X2). Integer bounds are
+  normalized to floats here (AD1), because `replace_chunks/2` writes
+  through `Repo.insert_all/3`, which bypasses `Chunk.changeset/2`.
+  `chunk_index` is renumbered globally, `0..n-1`, across the full output
+  (AD5) — the unique key is `(type, id, chunk_index)`, not per-span.
+
+  Currently uncalled: `eligibility/1` has no `"session_transcript_created"`
+  clause yet (PR2 wires it), so nothing in the live pipeline reaches this.
+  """
+  @spec chunk_spans([SessionTranscriptContent.span()]) :: [span_chunk_piece()]
+  def chunk_spans(spans) when is_list(spans) do
+    spans
+    |> Enum.reject(&(String.trim(&1.text) == ""))
+    |> Enum.flat_map(fn span ->
+      Enum.map(chunk(span.text), fn piece ->
+        Map.merge(piece, %{
+          speaker: span.speaker,
+          audio_start_seconds: span.start * 1.0,
+          audio_end_seconds: span.end * 1.0
+        })
+      end)
+    end)
+    |> Enum.with_index()
+    |> Enum.map(fn {piece, index} -> %{piece | chunk_index: index} end)
+  end
+
+  # Dispatches on `resource_kind` (design AD3): `:session_transcript` chunks
+  # spans per speaker turn; every other kind keeps chunking its plaintext
+  # verbatim through the unchanged `chunk/1`.
+  @spec pieces_for(atom(), [SessionTranscriptContent.span()] | String.t()) ::
+          [chunk_piece()] | [span_chunk_piece()]
+  defp pieces_for(:session_transcript, spans), do: chunk_spans(spans)
+  defp pieces_for(_resource_kind, text), do: chunk(text)
+
+  # R-X1: a `:session_transcript` resource that yields zero chunks emits
+  # exactly one `Logger.warning` naming only the `resource_id` — never span
+  # text, speaker, or `patient_id`. Every other kind/piece-count combination
+  # is silently `:ok`.
+  defp warn_if_empty(:session_transcript, resource_id, []) do
+    Logger.warning("rag indexer: session_transcript #{resource_id} produced zero chunks")
+  end
+
+  defp warn_if_empty(_resource_kind, _resource_id, _pieces), do: :ok
+
+  # AD7: zero pieces skip the embedding adapter entirely (an empty batch is
+  # undefined behavior for the real Ollama adapter) but still flow through
+  # `replace_chunks/2` with `[]`, which purges any stale chunk set.
+  @spec embed_pieces([chunk_piece()] | [span_chunk_piece()]) ::
+          {:ok, [[float()]]}
+          | {:cancel, {:embedding_batch_size_mismatch, non_neg_integer(), non_neg_integer()}}
+          | {:cancel, {:embedding_dimension_mismatch, non_neg_integer(), pos_integer()}}
+          | {:error, term()}
+  defp embed_pieces([]), do: {:ok, []}
+  defp embed_pieces(pieces), do: embed_chunks(Enum.map(pieces, & &1.text))
+
   # --- 3.5/3.6 embed ------------------------------------------------------
 
   @doc """
@@ -312,8 +391,9 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
              {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek),
              {:ok, plaintext, occurred_at, target_behavior_id, encryption_version, dek} <-
                fetch_and_decrypt(resource_kind, resource_id, patient, kek, patient_dek),
-             pieces <- chunk(plaintext),
-             {:ok, vectors} <- embed_chunks(Enum.map(pieces, & &1.text)),
+             pieces <- pieces_for(resource_kind, plaintext),
+             :ok <- warn_if_empty(resource_kind, resource_id, pieces),
+             {:ok, vectors} <- embed_pieces(pieces),
              {:ok, chunk_attrs} <-
                encrypt_chunk_attrs(
                  pieces,
@@ -348,6 +428,24 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   defp resolve_dek(2, patient, kek, _patient_dek),
     do: Accounts.load_clinical_record_dek(patient, kek)
 
+  # AD7 companion: zero pieces means `embed_pieces/1` never touched the
+  # adapter, so this must not call it either (`AI.embeddings().model()`
+  # would be the only remaining live call, and a mocked adapter with no
+  # `model/0` expectation set would raise `Mox.UnexpectedCallError`).
+  defp encrypt_chunk_attrs(
+         [],
+         [],
+         _dek,
+         _encryption_version,
+         _resource_type,
+         _resource_id,
+         _patient_id,
+         _professional_id,
+         _occurred_at,
+         _target_behavior_id
+       ),
+       do: {:ok, []}
+
   defp encrypt_chunk_attrs(
          pieces,
          vectors,
@@ -380,7 +478,10 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
             source_occurred_at: occurred_at,
             patient_id: patient_id,
             professional_id: professional_id,
-            target_behavior_id: target_behavior_id
+            target_behavior_id: target_behavior_id,
+            speaker: Map.get(piece, :speaker),
+            audio_start_seconds: Map.get(piece, :audio_start_seconds),
+            audio_end_seconds: Map.get(piece, :audio_end_seconds)
           }
 
           {:cont, {:ok, [attrs | acc]}}
@@ -501,6 +602,32 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
         with {:ok, dek} <- resolve_dek(message.encryption_version, patient, kek, patient_dek),
              {:ok, text} <- PatientVault.decrypt(message.encrypted_content, dek) do
           {:ok, text, to_usec(message.timestamp), nil, message.encryption_version, dek}
+        end
+    end
+  end
+
+  # `SessionTranscript` returns SPANS in the "plaintext" slot, not text
+  # (design AD3) — `pieces_for/2` dispatches on `resource_kind` to route
+  # them through `chunk_spans/1`. `recorded_at` is already
+  # `utc_datetime_usec` (L3), so no `to_usec` widening. `target_behavior_id`
+  # is always `nil` — the schema has no such field (L4). A parse failure
+  # (tampered/corrupt `encrypted_spans`) is permanent — `{:cancel,
+  # :malformed_transcript}` (AD6) — never retried by the worker.
+  defp fetch_and_decrypt(:session_transcript, resource_id, patient, kek, patient_dek) do
+    case Repo.get(SessionTranscript, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      transcript ->
+        with {:ok, dek} <-
+               resolve_dek(transcript.encryption_version, patient, kek, patient_dek),
+             {:ok, plaintext} <- PatientVault.decrypt(transcript.encrypted_spans, dek),
+             {:ok, %SessionTranscriptContent{spans: spans}} <-
+               SessionTranscriptContent.parse(plaintext) do
+          {:ok, spans, transcript.recorded_at, nil, transcript.encryption_version, dek}
+        else
+          {:error, :malformed} -> {:cancel, :malformed_transcript}
+          {:error, reason} -> {:error, reason}
         end
     end
   end
