@@ -670,20 +670,33 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
     {:ok, dek} = Accounts.load_patient_dek(patient, kek)
     {:ok, ciphertext} = PatientVault.encrypt(text, dek)
 
+    # F1 (sdd/transcript-rag-ingestion-320): `transcript_metadata_consistent`
+    # requires every `session_transcript` chunk to carry speaker/start/end.
+    # Test-only — does not violate D-B, which scopes out production code.
+    transcript_metadata =
+      if resource_type == "session_transcript" do
+        %{speaker: "patient", audio_start_seconds: 0.0, audio_end_seconds: 1.0}
+      else
+        %{}
+      end
+
     attrs = [
-      %{
-        source_resource_type: resource_type,
-        source_resource_id: resource_id,
-        chunk_index: 0,
-        encrypted_content: ciphertext,
-        embedding: vector,
-        embedding_model: "fake-embeddings-bge-m3",
-        token_count: 10,
-        full_event: true,
-        source_occurred_at: DateTime.utc_now(),
-        patient_id: patient.id,
-        professional_id: professional.id
-      }
+      Map.merge(
+        %{
+          source_resource_type: resource_type,
+          source_resource_id: resource_id,
+          chunk_index: 0,
+          encrypted_content: ciphertext,
+          embedding: vector,
+          embedding_model: "fake-embeddings-bge-m3",
+          token_count: 10,
+          full_event: true,
+          source_occurred_at: DateTime.utc_now(),
+          patient_id: patient.id,
+          professional_id: professional.id
+        },
+        transcript_metadata
+      )
     ]
 
     {:ok, _rows} = Indexer.replace_chunks({resource_type, resource_id}, attrs)
