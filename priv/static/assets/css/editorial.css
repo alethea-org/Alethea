@@ -2878,6 +2878,7 @@ select.text-input {
 
 .badge--affinity,
 .badge--source-kind,
+.badge--speaker,
 .badge--cited {
   display: inline-flex;
   align-items: center;
@@ -2910,6 +2911,25 @@ select.text-input {
 .badge--source-kind {
   background: var(--colors-canvas);
   color: var(--colors-body);
+}
+
+.badge--speaker-patient {
+  border-color: var(--colors-success-border);
+  background: var(--colors-success-soft);
+  color: var(--colors-success);
+}
+
+.badge--speaker-therapist {
+  background: var(--colors-canvas);
+  color: var(--colors-body);
+}
+
+.suggested-candidate-card__audio {
+  margin-left: var(--spacing-xxs);
+  color: var(--colors-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .badge--cited {

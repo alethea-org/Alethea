@@ -90,6 +90,10 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert observation_pos < proposal_pos
 
       assert has_element?(view, "#functional-analysis-form")
+
+      # Non-transcript evidence never renders a speaker badge or time marker (R2/R3).
+      refute has_element?(view, ".review-item--evidence .badge--speaker")
+      refute has_element?(view, ".review-item--evidence .suggested-candidate-card__audio")
     end
   end
 
@@ -3858,6 +3862,192 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "audio evidence citation (#328)" do
+    test "shows a speaker badge and time marker on transcript cards and search results, but not on other kinds",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      transcript_content = "El paciente relata angustia al viajar en subterraneo"
+      note_content = "Nota clinica sin marcadores de audio"
+
+      transcript_candidate =
+        insert_session_transcript_chunk!(
+          professional,
+          patient,
+          transcript_content,
+          "patient",
+          860.0,
+          910.0
+        )
+
+      {:ok, note} = ClinicalRecord.create_clinical_note(professional, patient.id, note_content)
+      {:ok, note_vector} = Alethea.AI.Embeddings.Fake.embed(note_content, [])
+
+      note_candidate =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          note_content,
+          note_vector,
+          "clinical_note",
+          DateTime.utc_now(),
+          source_resource_id: note.id
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      transcript_card = "#suggested-candidate-#{transcript_candidate.id}"
+      note_card = "#suggested-candidate-#{note_candidate.id}"
+
+      assert has_element?(view, "#{transcript_card} .badge--speaker-patient", "Paciente")
+
+      assert has_element?(
+               view,
+               "#{transcript_card} .suggested-candidate-card__audio",
+               "min 14:20 – 15:10"
+             )
+
+      refute has_element?(view, "#{note_card} .badge--speaker")
+      refute has_element?(view, "#{note_card} .suggested-candidate-card__audio")
+
+      view
+      |> form("#evidence-search-form", %{"search" => %{"query" => "angustia subterraneo"}})
+      |> render_change()
+
+      render_async(view)
+
+      result_card = "#evidence-search-result-#{transcript_candidate.id}"
+      assert has_element?(view, "#{result_card} .badge--speaker-patient", "Paciente")
+
+      assert has_element?(
+               view,
+               "#{result_card} .suggested-candidate-card__audio",
+               "min 14:20 – 15:10"
+             )
+    end
+
+    test "citing a transcript chunk via any of the three citation paths persists the chunk's own markers, ignores forged client values, and shows them on the timeline (table-driven, R2-R5/R9)" do
+      for cite_path <- [:cite_all, :trim, :search] do
+        professional = create_professional!()
+        patient = create_patient!(professional)
+        target_behavior = create_target_behavior!(professional, patient)
+        conn = log_in_professional(build_conn(), professional)
+
+        content = "El terapeuta pregunta por la ultima crisis de panico"
+
+        candidate =
+          insert_session_transcript_chunk!(
+            professional,
+            patient,
+            content,
+            "therapist",
+            860.0,
+            910.0
+          )
+
+        {:ok, view, _html} =
+          live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+        render_async(view)
+
+        case cite_path do
+          :cite_all ->
+            assert has_element?(
+                     view,
+                     "#suggested-candidate-#{candidate.id} .badge--speaker-therapist"
+                   )
+
+            render_click(view, "cite_suggested_candidate", %{
+              "id" => candidate.id,
+              "speaker" => "patient",
+              "audio_start_seconds" => "1.0",
+              "audio_end_seconds" => "2.0"
+            })
+
+          :trim ->
+            trimmed_excerpt = "ultima crisis de panico"
+
+            view
+            |> element("#trim-suggested-candidate-#{candidate.id}")
+            |> render_click()
+
+            view
+            |> form("#trim-candidate-form-#{candidate.id}", %{
+              "trim" => %{"excerpt" => trimmed_excerpt}
+            })
+            |> render_submit()
+
+          :search ->
+            view
+            |> form("#evidence-search-form", %{"search" => %{"query" => "crisis de panico"}})
+            |> render_change()
+
+            render_async(view)
+
+            assert has_element?(
+                     view,
+                     "#evidence-search-result-#{candidate.id} .badge--speaker-therapist"
+                   )
+
+            render_click(view, "cite_search_result", %{
+              "id" => candidate.id,
+              "speaker" => "patient",
+              "audio_start_seconds" => "1.0",
+              "audio_end_seconds" => "2.0"
+            })
+        end
+
+        evidence =
+          Repo.one!(
+            from e in ConsultationEvidence, where: e.target_behavior_id == ^target_behavior.id
+          )
+
+        assert evidence.speaker == "therapist"
+        assert evidence.audio_start_seconds == 860.0
+        assert evidence.audio_end_seconds == 910.0
+
+        assert has_element?(view, ".review-item--evidence .badge--speaker-therapist", "Terapeuta")
+
+        assert has_element?(
+                 view,
+                 ".review-item--evidence .suggested-candidate-card__audio",
+                 "min 14:20 – 15:10"
+               )
+
+        refute has_element?(view, ".review-item--evidence", "Fuente no disponible")
+      end
+    end
+  end
+
+  defp insert_session_transcript_chunk!(professional, patient, content, speaker, start, stop) do
+    {:ok, transcript} =
+      ClinicalRecord.create_session_transcript(professional, patient.id, %{
+        spans: [%{start: start, end: stop, speaker: speaker, text: content}],
+        recorded_at: DateTime.utc_now()
+      })
+
+    {:ok, vector} = Alethea.AI.Embeddings.Fake.embed(content, [])
+
+    insert_rag_chunk!(
+      professional,
+      patient,
+      content,
+      vector,
+      "session_transcript",
+      DateTime.utc_now(),
+      source_resource_id: transcript.id,
+      speaker: speaker,
+      audio_start_seconds: start,
+      audio_end_seconds: stop
+    )
+  end
+
   defp generated_eorc_fields do
     {:ok, Map.new(eorc_fields(), &{&1, "IA: #{&1}"})}
   end
@@ -3993,7 +4183,10 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         full_event: true,
         source_occurred_at: occurred_at,
         patient_id: patient.id,
-        professional_id: professional.id
+        professional_id: professional.id,
+        speaker: Keyword.get(opts, :speaker),
+        audio_start_seconds: Keyword.get(opts, :audio_start_seconds),
+        audio_end_seconds: Keyword.get(opts, :audio_end_seconds)
       }
     ]
 
