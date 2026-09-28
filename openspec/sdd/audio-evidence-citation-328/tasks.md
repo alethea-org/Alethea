@@ -113,46 +113,46 @@ PR1 is inert on its own: the UI still rejects transcripts until PR2 adds the `ci
 
 ## PR2 — UI (base: `feat/328-audio-evidence-citation`, branch `feat/328-audio-evidence-citation-pr2`)
 
-- [ ] 7.0 `git switch -c feat/328-audio-evidence-citation-pr2 feat/328-audio-evidence-citation`. PR1 must itself be based on a fresh `origin/main`.
+- [x] 7.0 `git switch -c feat/328-audio-evidence-citation-pr2 feat/328-audio-evidence-citation`. PR1 must itself be based on a fresh `origin/main`. (Orchestrator had already checked out `feat/328-audio-evidence-citation-pr2` fresh off `feat/328-audio-evidence-citation` before this batch started; no new branch/switch performed per explicit orchestrator instruction. Confirmed via `git branch --show-current` and `git log --oneline` that PR1's domain commit `da804f0` is an ancestor.)
 
 ### Phase 7 — AudioMarker (R3, AD6, AD7)
 
-- [ ] 7.1 RED `test/alethea_web/live/target_behavior_live/audio_marker_test.exs`, table-driven:
+- [x] 7.1 RED `test/alethea_web/live/target_behavior_live/audio_marker_test.exs`, table-driven:
   - `format_range(0, 59.9)` → `"min 00:00 – 00:59"`.
   - `format_range(860, 910)` → `"min 14:20 – 15:10"`.
   - `format_range(4472, 4500)` → `"min 74:32 – 75:00"`.
-  - The separator is an en dash.
-- [ ] 7.2 GREEN `lib/alethea_web/live/target_behavior_live/audio_marker.ex`: pure `format_range/2`. `mmss` = `trunc` → `div`/`rem` 60, zero-padded to 2 digits, minutes unbounded.
+  - The separator is an en dash. (Table-driven with a 3-case list plus a dedicated en-dash-vs-hyphen assertion. Confirmed RED: `UndefinedFunctionError` for `AudioMarker.format_range/2`, module did not exist.)
+- [x] 7.2 GREEN `lib/alethea_web/live/target_behavior_live/audio_marker.ex`: pure `format_range/2`. `mmss` = `trunc` → `div`/`rem` 60, zero-padded to 2 digits, minutes unbounded. (2/2 passed after implementation. Triangulated by construction — the table already covers <60min, exact-minute-boundary, and >60min cases.)
 
 ### Phase 8 — review.ex wiring (R2, R4, R9, R10)
 
-- [ ] 8.1 Extend `insert_rag_chunk!` (`review_test.exs:3970`) with an opts keyword for `speaker`, `audio_start_seconds`, `audio_end_seconds`.
-- [ ] 8.2 RED LiveView tests:
+- [x] 8.1 Extend `insert_rag_chunk!` (`review_test.exs:3970`) with an opts keyword for `speaker`, `audio_start_seconds`, `audio_end_seconds`. (Added 3 `Keyword.get(opts, ...)` entries to the chunk attrs map; `Rag.Chunk.changeset/2` already casts these keys per PR1/#320.)
+- [x] 8.2 RED LiveView tests:
   - Card and search result show the "Paciente"/"Terapeuta" badge and "min 14:20 – 15:10".
   - A non-transcript item shows no badge or marker.
   - `[+ Citar todo]`, `[Recortar]`, and `[+ Citar]` each persist the markers.
   - The timeline shows the badge and marker, and the source label is not "Fuente no disponible".
   - Forged `speaker`/time `phx-value-*` params are ignored, and the persisted markers equal the chunk's values.
-  - Table-drive the three cite paths (trim lever).
-- [ ] 8.3 GREEN in `lib/alethea_web/live/target_behavior_live/review.ex`: add `citation_source_kind("session_transcript"), do: {:ok, "session_transcript"}` at `:981-983`.
-- [ ] 8.4 GREEN: add a private `citation_attrs(candidate, kind, excerpt)` that builds `span_hint` from the server-side assigns candidate. Use it in the handlers at `:359`, `:423`, and `:500`. Never read markers from client params.
-- [ ] 8.5 GREEN: add the `source_label` clause for `%{kind: :session_transcript, occurred_at: t}` at `:1158-1168`. It renders `"Transcripción de sesión · #{format_datetime(t)}"`.
-- [ ] 8.6 GREEN: add a `speaker_label/1` helper: `"patient"` → "Paciente", `"therapist"` → "Terapeuta".
-- [ ] 8.7 GREEN: add the badge and marker spans after the `<time>` in both card headers (`:1720`, `:1860`). Add the same markup in the timeline `review-item__source` (`:1929`) when `item.kind == :consultation_evidence and item.speaker`.
-- [ ] 8.8 VERIFY ONLY: `source_kind_label("session_transcript")` already exists at `:1207`. Add NO duplicate clause.
-- [ ] 8.9 VERIFY ONLY (L4): the unsupported-kind test at `review_test.exs:2461` already uses `"clinician_observation"` (`:2480`). Make NO edit, and confirm it stays green.
+  - Table-drive the three cite paths (trim lever). (Wrote 2 new tests in a new `describe "audio evidence citation (#328)"` block: one covering card/search-result badge+marker rendering vs. a non-transcript control candidate; one table-driven `for cite_path <- [:cite_all, :trim, :search]` covering all 3 cite paths, each with forged `speaker`/`audio_start_seconds`/`audio_end_seconds` params in the click/submit call, asserting the persisted `ConsultationEvidence` row keeps the chunk's real markers and the timeline renders the badge/marker/non-placeholder source label. Also added 2 refute lines to the existing mount test for the non-transcript timeline case — cheaper than a third new test (trim lever). Confirmed RED: both new tests failed on missing `.badge--speaker-*`/`.suggested-candidate-card__audio` selectors — cards rendered (proving setup was correct), only the new markup was absent.)
+- [x] 8.3 GREEN in `lib/alethea_web/live/target_behavior_live/review.ex`: add `citation_source_kind("session_transcript"), do: {:ok, "session_transcript"}` at `:981-983`. (Real anchor was `:983` before this edit — re-grepped, not hardcoded.)
+- [x] 8.4 GREEN: add a private `citation_attrs(candidate, kind, excerpt)` that builds `span_hint` from the server-side assigns candidate. Use it in the handlers at `:359`, `:423`, and `:500`. Never read markers from client params. (`span_hint` added only `if candidate.speaker` truthy, so non-transcript cites are unaffected — matches PR1's `cite_evidence_source/4`, which ignores `:span_hint` for non-`session_transcript` kinds anyway.)
+- [x] 8.5 GREEN: add the `source_label` clause for `%{kind: :session_transcript, occurred_at: t}` at `:1158-1168`. It renders `"Transcripción de sesión · #{format_datetime(t)}"`.
+- [x] 8.6 GREEN: add a `speaker_label/1` helper: `"patient"` → "Paciente", `"therapist"` → "Terapeuta".
+- [x] 8.7 GREEN: add the badge and marker spans after the `<time>` in both card headers (real anchors, re-grepped post-edit: `:1735` suggestion card, `:1887` search result). Add the same markup in the timeline `review-item__source` (real anchor `:1968`) when `item.kind == :consultation_evidence and item.speaker`. (Timeline reuses `.suggested-candidate-card__audio` for the marker span rather than inventing a separate class — same visual treatment, one CSS rule, per design's "render the same badge and marker".)
+- [x] 8.8 VERIFY ONLY: `source_kind_label("session_transcript")` already exists at `:1207`. Add NO duplicate clause. (Confirmed via grep before editing; no clause added.)
+- [x] 8.9 VERIFY ONLY (L4): the unsupported-kind test at `review_test.exs:2461` already uses `"clinician_observation"` (`:2480`). Make NO edit, and confirm it stays green. (Confirmed via grep; zero edits to that test; it passed in the full focused run — 102/102.)
 
 ### Phase 9 — CSS
 
-- [ ] 9.1 In `priv/static/assets/css/editorial.css`:
-  - Append `.badge--speaker` to the shared pill selector at `:2879-2880`.
+- [x] 9.1 In `priv/static/assets/css/editorial.css`:
+  - Append `.badge--speaker` to the shared pill selector at `:2879-2880` (real anchor unchanged, confirmed via grep).
   - Add `.badge--speaker-patient`, using the success tokens like `:2892`.
   - Add `.badge--speaker-therapist`, using canvas/body like `:2910`.
   - Add `.suggested-candidate-card__audio` with `font-variant-numeric: tabular-nums`.
 
 ### Phase 10 — PR2 verification
 
-- [ ] 10.1 Run the Unit 2 focused command, then `mix compile --warnings-as-errors --force` and `mix format --check-formatted`.
-- [ ] 10.2 **Budget check**: count lines with `git diff --stat feat/328-audio-evidence-citation`. The same trim-lever-first protocol applies (see 6.2).
-- [ ] 10.3 Base check: the PR2 diff must not show PR1's files.
-- [ ] 10.4 Resolve the design's open question with the orchestrator: a deleted transcript still renders "Fuente no disponible" while its snapshot badge and marker still show.
+- [x] 10.1 Run the Unit 2 focused command, then `mix compile --warnings-as-errors --force` and `mix format --check-formatted`. **Result**: `mix test test/alethea_web/live/target_behavior_live/audio_marker_test.exs test/alethea_web/live/target_behavior_live/review_test.exs` → 102 passed, 0 failed (2 AudioMarker + 100 review_test.exs, including the 2 new tests and the L4 regression). Compile clean with `--warnings-as-errors`. `mix format --check-formatted` clean after one `mix format` pass (fixed 3 long-line wraps in the new table-driven test).
+- [x] 10.2 **Budget check**: count lines with `git diff --stat feat/328-audio-evidence-citation`. The same trim-lever-first protocol applies (see 6.2). **Result**: staged the 5 changed/new PR2 files (`audio_marker.ex`, `audio_marker_test.exs`, `review.ex`, `editorial.css`, `review_test.exs`) and ran `git diff --stat --cached feat/328-audio-evidence-citation`: **342 insertions + 16 deletions = 358 total**. Under the 400-line budget — no `size:exception` needed for PR2. Unstaged immediately after measuring (per orchestrator instruction not to commit).
+- [x] 10.3 Base check: the PR2 diff must not show PR1's files. **Confirmed**: the `--stat` output above lists exactly the 5 PR2 files; no PR1 domain files (`consultation_evidence.ex`, `evidence_source.ex`, `source_ref.ex`, `rag/retrieval.ex`, `clinical_record.ex`, the migration) appear, because they're already committed on the `feat/328-audio-evidence-citation` base branch this diff is measured against.
+- [x] 10.4 Resolve the design's open question with the orchestrator: a deleted transcript still renders "Fuente no disponible" while its snapshot badge and marker still show. **Confirmed as already correctly implemented, not a code gap**: the badge/marker span reads `item.speaker`/`item.audio_start_seconds`/`item.audio_end_seconds` directly off the persisted `ConsultationEvidence` row (via `evidence_item/3`, PR1), which is fully independent of `source_label(item.source)`'s `SourceRef` resolution. So a later-deleted transcript still shows its snapshot badge/marker (AC3, provenance is snapshotted at cite time) while `source_label` falls back to "Fuente no disponible" for the now-unresolvable live source (AC4, no placeholder while the source is live — a deleted source is definitionally no longer live). No code change needed. Flagging to the orchestrator only to formally close the open question in design.md.
