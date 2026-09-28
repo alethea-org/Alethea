@@ -892,6 +892,167 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "cite_evidence_source/4 — session_transcript span hint (R4/R5, AD2/AD3, GitHub #328)" do
+    test "a full span persists the span's own speaker/start/end", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      transcript =
+        create_session_transcript_source!(professional, patient, [
+          %{start: 860.0, end: 910.0, speaker: "patient", text: "Duermo mal desde hace semanas."}
+        ])
+
+      assert {:ok, %ConsultationEvidence{} = evidence} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "session_transcript",
+                   source_id: transcript.id,
+                   excerpt: "Duermo mal desde hace semanas."
+                 }
+               )
+
+      assert evidence.source_kind == "session_transcript"
+      assert evidence.speaker == "patient"
+      assert evidence.audio_start_seconds == 860.0
+      assert evidence.audio_end_seconds == 910.0
+    end
+
+    test "a trimmed excerpt inherits its full span's markers", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      transcript =
+        create_session_transcript_source!(professional, patient, [
+          %{start: 100.0, end: 120.0, speaker: "therapist", text: "Como se siente con su avance?"}
+        ])
+
+      assert {:ok, %ConsultationEvidence{} = evidence} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "session_transcript",
+                   source_id: transcript.id,
+                   excerpt: "se siente con su avance"
+                 }
+               )
+
+      assert evidence.speaker == "therapist"
+      assert evidence.audio_start_seconds == 100.0
+      assert evidence.audio_end_seconds == 120.0
+    end
+
+    test "the span hint selects between duplicate excerpt texts", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      transcript =
+        create_session_transcript_source!(professional, patient, [
+          %{start: 0.0, end: 2.0, speaker: "patient", text: "Estoy bien"},
+          %{start: 400.0, end: 402.0, speaker: "therapist", text: "Estoy bien"}
+        ])
+
+      hint = %{speaker: "therapist", audio_start_seconds: 400.0, audio_end_seconds: 402.0}
+
+      assert {:ok, %ConsultationEvidence{} = evidence} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "session_transcript",
+                   source_id: transcript.id,
+                   excerpt: "Estoy bien",
+                   span_hint: hint
+                 }
+               )
+
+      assert evidence.speaker == "therapist"
+      assert evidence.audio_start_seconds == 400.0
+      assert evidence.audio_end_seconds == 402.0
+    end
+
+    test "an excerpt outside the hinted span, or a hint matching no span, is rejected with no row inserted (table-driven)",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      transcript =
+        create_session_transcript_source!(professional, patient, [
+          %{start: 0.0, end: 2.0, speaker: "patient", text: "Un texto"},
+          %{start: 400.0, end: 402.0, speaker: "therapist", text: "Otro texto distinto"}
+        ])
+
+      cases = [
+        # Hint points at the first span, but the excerpt only exists in the second.
+        {"Otro texto distinto",
+         %{speaker: "patient", audio_start_seconds: 0.0, audio_end_seconds: 2.0}},
+        # Hint matches no span at all.
+        {"Un texto", %{speaker: "therapist", audio_start_seconds: 99.0, audio_end_seconds: 100.0}}
+      ]
+
+      for {excerpt, hint} <- cases do
+        assert {:error, :excerpt_not_found} =
+                 ClinicalRecord.cite_evidence_source(
+                   professional,
+                   patient.id,
+                   target_behavior.id,
+                   %{
+                     source_kind: "session_transcript",
+                     source_id: transcript.id,
+                     excerpt: excerpt,
+                     span_hint: hint
+                   }
+                 )
+      end
+
+      assert_no_citation_side_effects()
+    end
+
+    test "a long span that yields overlap chunks still cites successfully from a substring excerpt",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      long_text =
+        "El paciente reporta un episodio de ansiedad intensa durante la noche del martes, " <>
+          "con dificultad para respirar y pensamientos acelerados sobre el trabajo."
+
+      transcript =
+        create_session_transcript_source!(professional, patient, [
+          %{start: 0.0, end: 45.0, speaker: "patient", text: long_text}
+        ])
+
+      # A substring drawn from the middle of the long span, as a chunk/overlap
+      # split would produce — never the full span text.
+      excerpt = "dificultad para respirar y pensamientos acelerados"
+
+      assert {:ok, %ConsultationEvidence{} = evidence} =
+               ClinicalRecord.cite_evidence_source(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   source_kind: "session_transcript",
+                   source_id: transcript.id,
+                   excerpt: excerpt
+                 }
+               )
+
+      assert evidence.speaker == "patient"
+      assert evidence.audio_start_seconds == 0.0
+      assert evidence.audio_end_seconds == 45.0
+    end
+  end
+
   describe "add_consultation_evidence/4 — authorized" do
     test "persists the row scoped to the target behavior and enqueues the outbox job", %{
       professional: professional,
@@ -1938,6 +2099,37 @@ defmodule Alethea.ClinicalRecordTest do
       assert item.text == "Excerpt copiado al citar"
       assert item.source == :unavailable
     end
+
+    test "a cited session_transcript evidence item carries speaker and audio markers (task 4.4, GitHub #328)",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      transcript =
+        create_session_transcript_source!(professional, patient, [
+          %{start: 860.0, end: 910.0, speaker: "patient", text: "Marcador de audio citado"}
+        ])
+
+      {:ok, evidence} =
+        ClinicalRecord.cite_evidence_source(
+          professional,
+          patient.id,
+          target_behavior.id,
+          %{
+            source_kind: "session_transcript",
+            source_id: transcript.id,
+            excerpt: "Marcador de audio citado"
+          }
+        )
+
+      assert {:ok, timeline} =
+               ClinicalRecord.review_timeline(professional, patient.id, target_behavior.id)
+
+      assert [item] = timeline
+      assert item.id == evidence.id
+      assert item.speaker == "patient"
+      assert item.audio_start_seconds == 860.0
+      assert item.audio_end_seconds == 910.0
+    end
   end
 
   describe "get_functional_analysis_draft/3" do
@@ -2788,6 +2980,21 @@ defmodule Alethea.ClinicalRecordTest do
       patient_id: patient.id
     })
     |> Repo.insert!()
+  end
+
+  defp create_session_transcript_source!(
+         professional,
+         patient,
+         spans,
+         recorded_at \\ DateTime.utc_now()
+       ) do
+    {:ok, transcript} =
+      ClinicalRecord.create_session_transcript(professional, patient.id, %{
+        spans: spans,
+        recorded_at: recorded_at
+      })
+
+    transcript
   end
 
   defp patient_dek_for!(professional, patient) do

@@ -634,6 +634,50 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
     end
   end
 
+  # --- audio markers forwarding (R1, sdd/audio-evidence-citation-328, GitHub #328) ---
+
+  describe "score_candidate/5 — audio markers forwarding (R1)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "a transcript chunk result carries speaker and audio start/end seconds", %{
+      professional: professional,
+      patient: patient
+    } do
+      transcript_id =
+        insert_transcript_chunk!(professional, patient, "Nota de sesion", near_vector(),
+          speaker: "patient",
+          audio_start_seconds: 860.0,
+          audio_end_seconds: 910.0
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: [result]}} = Retrieval.search(professional, patient.id, "nota")
+      assert result.source_resource_id == transcript_id
+      assert result.speaker == "patient"
+      assert result.audio_start_seconds == 860.0
+      assert result.audio_end_seconds == 910.0
+    end
+
+    test "a clinical_note chunk carries nil markers (triangulation)", %{
+      professional: professional,
+      patient: patient
+    } do
+      note_id = insert_chunk!(professional, patient, "Nota clinica", near_vector())
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: [result]}} = Retrieval.search(professional, patient.id, "nota")
+      assert result.source_resource_id == note_id
+      assert result.speaker == nil
+      assert result.audio_start_seconds == nil
+      assert result.audio_end_seconds == nil
+    end
+  end
+
   # --- fixtures -----------------------------------------------------------
 
   defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]
@@ -700,6 +744,35 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
     ]
 
     {:ok, _rows} = Indexer.replace_chunks({resource_type, resource_id}, attrs)
+    resource_id
+  end
+
+  defp insert_transcript_chunk!(professional, patient, text, vector, markers) do
+    resource_id = Ecto.UUID.generate()
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+    {:ok, ciphertext} = PatientVault.encrypt(text, dek)
+
+    attrs = [
+      Map.merge(
+        %{
+          source_resource_type: "session_transcript",
+          source_resource_id: resource_id,
+          chunk_index: 0,
+          encrypted_content: ciphertext,
+          embedding: vector,
+          embedding_model: "fake-embeddings-bge-m3",
+          token_count: 10,
+          full_event: true,
+          source_occurred_at: DateTime.utc_now(),
+          patient_id: patient.id,
+          professional_id: professional.id
+        },
+        Map.new(markers)
+      )
+    ]
+
+    {:ok, _rows} = Indexer.replace_chunks({"session_transcript", resource_id}, attrs)
     resource_id
   end
 

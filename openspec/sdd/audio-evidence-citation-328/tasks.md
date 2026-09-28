@@ -30,8 +30,8 @@ PR1 is inert on its own: the UI still rejects transcripts until PR2 adds the `ci
 
 ## Phase 0 — Branch setup (mandatory; the local checkout is stale and predates #319/#320)
 
-- [ ] 0.1 `git fetch origin`, then `git switch -c feat/328-audio-evidence-citation origin/main`. NEVER branch from the currently checked-out local branch.
-- [ ] 0.2 Before editing, re-read every anchor in design.md's corrected line-number table on the new branch. Line numbers drift with each merge.
+- [x] 0.1 `git fetch origin`, then `git switch -c feat/328-audio-evidence-citation origin/main`. NEVER branch from the currently checked-out local branch. (Orchestrator had already checked out this branch fresh off `origin/main`, verified via `git merge-base --is-ancestor origin/main HEAD` before any edits; no new branch/switch was performed per explicit orchestrator instruction.)
+- [x] 0.2 Before editing, re-read every anchor in design.md's corrected line-number table on the new branch. Line numbers drift with each merge. (Re-read all domain-side anchors directly from the branch; all matched the design's corrected table — no drift since #320 merged.)
 
 ---
 
@@ -39,40 +39,40 @@ PR1 is inert on its own: the UI still rejects transcripts until PR2 adds the `ci
 
 ### Phase 1 — Migration + schema (R6, AD1, AD9)
 
-- [ ] 1.1 RED `consultation_evidence_test.exs` changeset tests:
+- [x] 1.1 RED `consultation_evidence_test.exs` changeset tests:
   - `session_transcript` is accepted when all three markers are present.
   - Any marker missing → invalid.
   - Speaker not in `SessionTranscriptContent.speakers()` → invalid.
   - Legacy kinds accept nil markers.
-  - Write these table-driven (trim lever).
-- [ ] 1.2 RED: inserting `source_kind = "clinician_observation"` raises on the CHECK. Also cover a legacy `clinical_note` row with NULL markers.
-- [ ] 1.3 Run `mix ecto.gen.migration add_audio_markers_to_consultation_evidences`. Never hand-author the file.
-- [ ] 1.4 GREEN migration body (`up`/`down`, AD1):
+  - Write these table-driven (trim lever). (Missing-marker and legacy-kinds cases use `Enum.each` loops inside one test each.)
+- [x] 1.2 RED: inserting `source_kind = "clinician_observation"` raises on the CHECK. Also cover a legacy `clinical_note` row with NULL markers.
+- [x] 1.3 Run `mix ecto.gen.migration add_audio_markers_to_consultation_evidences`. Never hand-author the file.
+- [x] 1.4 GREEN migration body (`up`/`down`, AD1):
   - Drop and recreate `source_kind_must_be_valid` with `('clinical_note','message','session_transcript')`.
   - Add nullable `speaker :string`, `audio_start_seconds :float`, `audio_end_seconds :float`.
   - Add the `audio_markers_shape` CHECK.
   - `down` drops the columns and restores the two-kind CHECK.
   - Do NOT touch the `20260831213217` migration or its BEFORE UPDATE trigger.
-- [ ] 1.5 GREEN `lib/alethea/clinical_record/consultation_evidence.ex`:
+- [x] 1.5 GREEN `lib/alethea/clinical_record/consultation_evidence.ex`:
   - `@source_kinds` += `"session_transcript"`.
   - Add the 3 fields and cast them.
   - AD9 validation: all three are required when the kind is `session_transcript`, and the speaker must be in `SessionTranscriptContent.speakers()`.
-- [ ] 1.6 Run `mix ecto.migrate` → `mix ecto.rollback` → `mix ecto.migrate` to prove reversibility.
+- [x] 1.6 Run `mix ecto.migrate` → `mix ecto.rollback` → `mix ecto.migrate` to prove reversibility. (Verified clean in both directions against the docker `alethea-db-1` test DB.)
 
 ### Phase 2 — Retrieval (R1)
 
-- [ ] 2.1 RED `rag/retrieval_test.exs`:
+- [x] 2.1 RED `rag/retrieval_test.exs`:
   - A transcript chunk (`patient`, 860.0–910.0) → the result carries `speaker`, `audio_start_seconds`, `audio_end_seconds`.
   - A `clinical_note` chunk → all three are nil.
-- [ ] 2.2 GREEN `lib/alethea/clinical_record/rag/retrieval.ex`:
+- [x] 2.2 GREEN `lib/alethea/clinical_record/rag/retrieval.ex`:
   - Add the 3 fields to `@type result` (`:108-123`).
   - Read them from `chunk.*` in the result map (`:405-420`).
   - No branch on source kind (G1).
 
 ### Phase 3 — EvidenceSource (R7, AD4)
 
-- [ ] 3.1 RED: fetching a `session_transcript` returns `kind: :session_transcript`, `occurred_at: recorded_at`, the parsed `:spans`, and `content` equal to the span texts joined with `"\n"`. A foreign-patient or missing id → `{:error, :not_found}`.
-- [ ] 3.2 GREEN `lib/alethea/clinical_record/evidence_source.ex`:
+- [x] 3.1 RED: fetching a `session_transcript` returns `kind: :session_transcript`, `occurred_at: recorded_at`, the parsed `:spans`, and `content` equal to the span texts joined with `"\n"`. A foreign-patient or missing id → `{:error, :not_found}`. (Foreign-patient and missing-id cases merged into one table-driven test — trim lever.)
+- [x] 3.2 GREEN `lib/alethea/clinical_record/evidence_source.ex`:
   - Add `@type kind` `:session_transcript` and the `:spans` struct field (default nil).
   - Widen the guard (`:71-72`).
   - Add `fetch_owned("session_transcript", …)` via `Repo.get_by(SessionTranscript, id:, patient_id:)`.
@@ -80,34 +80,34 @@ PR1 is inert on its own: the UI still rejects transcripts until PR2 adds the `ci
 
 ### Phase 4 — Cite with span hint (R4, R5, AD2, AD3, AD8)
 
-- [ ] 4.1 RED `clinical_record_test.exs` `cite_evidence_source/4`, table-driven where possible:
+- [x] 4.1 RED `clinical_record_test.exs` `cite_evidence_source/4`, table-driven where possible:
   - A full span persists the span's speaker/start/end.
   - A trimmed excerpt inherits its span.
   - The hint selects between duplicate texts.
-  - An excerpt outside the hinted span, or a hint that matches no span → `{:error, :excerpt_not_found}` and no row inserted. Markers are always taken from the matched span, never from the hint.
+  - An excerpt outside the hinted span, or a hint that matches no span → `{:error, :excerpt_not_found}` and no row inserted. Markers are always taken from the matched span, never from the hint. (Both sub-cases merged into one table-driven test — trim lever.)
   - A long span that yields overlap chunks cites successfully (proposal risk).
-- [ ] 4.2 GREEN `lib/alethea/clinical_record.ex`:
+- [x] 4.2 GREEN `lib/alethea/clinical_record.ex`:
   - `cite_evidence_source/4` (`:761-782`) reads `Map.get(attrs, :span_hint)`.
   - Add `with … locate_excerpt(source, excerpt, hint)`.
   - Private `locate_excerpt/3` per AD2: filter the spans with `exact_excerpt(span.text, excerpt) == :ok`. If a hint is present, match `speaker` and `start*1.0`/`end*1.0`. Otherwise take the first span. Other kinds → `{:ok, %{}}`.
-- [ ] 4.3 GREEN: `insert_consultation_evidence` (`:829-869`) takes a trailing `markers` map that it `Map.merge`s into the attrs. `add_consultation_evidence` passes `%{}`.
-- [ ] 4.4 RED → GREEN: `evidence_item/3` (`:1428-1436`) adds `speaker`, `audio_start_seconds`, `audio_end_seconds`. Assert this via `review_timeline`.
+- [x] 4.3 GREEN: `insert_consultation_evidence` (`:829-869`) takes a trailing `markers` map that it `Map.merge`s into the attrs. `add_consultation_evidence` passes `%{}`.
+- [x] 4.4 RED → GREEN: `evidence_item/3` (`:1428-1436`) adds `speaker`, `audio_start_seconds`, `audio_end_seconds`. Assert this via `review_timeline`.
 
 ### Phase 5 — SourceRef (R8, AD5)
 
-- [ ] 5.1 RED `source_ref_test.exs`:
+- [x] 5.1 RED `source_ref_test.exs`:
   - An existing transcript resolves to `%{kind: :session_transcript, occurred_at: recorded_at, reference: %{}}` without decrypting.
   - A deleted transcript → `:unavailable`.
-- [ ] 5.2 GREEN `lib/alethea/clinical_record/source_ref.ex`:
+- [x] 5.2 GREEN `lib/alethea/clinical_record/source_ref.ex`:
   - `@known_kinds` += `session_transcript`.
   - Add `resolve_batch("session_transcript", refs)` → `resolve_batch_for(refs, SessionTranscript, &session_transcript_result/1)`.
   - `list/2` stays UNCHANGED (Q2).
 
 ### Phase 6 — PR1 verification
 
-- [ ] 6.1 Run the Unit 1 focused command, then `mix compile --warnings-as-errors --force` and `mix format --check-formatted`.
-- [ ] 6.2 **Budget check**: count authored lines with `git diff --stat origin/main`. If over 400, apply the trim levers first: table-drive 1.1/4.1, and merge the 3.1 fetch and not-found cases. Only then flag `size:exception` to the orchestrator. Never self-authorize it.
-- [ ] 6.3 Confirm the diff has no `lib/alethea_web/**`, no CSS, and no `list/2` change.
+- [x] 6.1 Run the Unit 1 focused command, then `mix compile --warnings-as-errors --force` and `mix format --check-formatted`. All green; compile clean; format clean.
+- [x] 6.2 **Budget check**: count authored lines with `git diff --stat origin/main`. If over 400, apply the trim levers first: table-drive 1.1/4.1, and merge the 3.1 fetch and not-found cases. Only then flag `size:exception` to the orchestrator. Never self-authorize it. **Result**: all 3 named trim levers applied. Code-only diff (`lib/` + `test/` + migration, excluding the pre-existing SDD docs commit) against `origin/main`: **559 insertions + 28 deletions = 587 total**, still over the 400 budget. Flagging `size:exception` to the orchestrator per protocol — not self-authorized.
+- [x] 6.3 Confirm the diff has no `lib/alethea_web/**`, no CSS, and no `list/2` change. Confirmed: `git diff --stat origin/main -- lib/alethea_web priv/static/assets/css` is empty, and `EvidenceSource.list/2` is untouched.
 
 ---
 

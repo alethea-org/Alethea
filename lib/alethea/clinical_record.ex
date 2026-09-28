@@ -748,7 +748,8 @@ defmodule Alethea.ClinicalRecord do
   @spec cite_evidence_source(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t(), %{
           required(:source_kind) => String.t(),
           required(:source_id) => Ecto.UUID.t(),
-          required(:excerpt) => String.t()
+          required(:excerpt) => String.t(),
+          optional(:span_hint) => map()
         }) ::
           {:ok, ConsultationEvidence.t()}
           | {:error,
@@ -758,15 +759,16 @@ defmodule Alethea.ClinicalRecord do
              | :excerpt_not_found
              | Ecto.Changeset.t()
              | term()}
-  def cite_evidence_source(%Professional{} = professional, patient_id, target_behavior_id, %{
-        source_kind: source_kind,
-        source_id: source_id,
-        excerpt: excerpt
-      }) do
+  def cite_evidence_source(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        %{source_kind: source_kind, source_id: source_id, excerpt: excerpt} = attrs
+      ) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
       with {:ok, source} <-
              EvidenceSource.fetch(source_kind, source_id, patient.id, keyring),
-           :ok <- exact_excerpt(source.content, excerpt) do
+           {:ok, markers} <- locate_excerpt(source, excerpt, Map.get(attrs, :span_hint)) do
         insert_consultation_evidence(
           professional,
           patient,
@@ -775,7 +777,8 @@ defmodule Alethea.ClinicalRecord do
           Atom.to_string(source.kind),
           source.id,
           excerpt,
-          source.occurred_at
+          source.occurred_at,
+          markers
         )
       end
     end)
@@ -814,7 +817,8 @@ defmodule Alethea.ClinicalRecord do
         source_kind,
         source_id,
         excerpt,
-        occurred_at
+        occurred_at,
+        %{}
       )
     end)
   end
@@ -826,6 +830,48 @@ defmodule Alethea.ClinicalRecord do
 
   defp exact_excerpt(_plaintext, _excerpt), do: {:error, :excerpt_not_found}
 
+  # AD2: for a `session_transcript` source, markers come from the
+  # AUTHORITATIVE decrypted span, never from the caller-supplied `hint` —
+  # the hint (built server-side from `socket.assigns`, never from client
+  # params) only selects WHICH span among those containing `excerpt`. Every
+  # other source kind keeps the existing whole-content excerpt check and
+  # returns no markers.
+  defp locate_excerpt(%EvidenceSource{kind: :session_transcript, spans: spans}, excerpt, hint) do
+    matches = Enum.filter(spans, &(exact_excerpt(&1.text, excerpt) == :ok))
+
+    matches
+    |> find_hinted_span(hint)
+    |> case do
+      nil ->
+        {:error, :excerpt_not_found}
+
+      span ->
+        {:ok,
+         %{
+           speaker: span.speaker,
+           audio_start_seconds: span.start * 1.0,
+           audio_end_seconds: span.end * 1.0
+         }}
+    end
+  end
+
+  defp locate_excerpt(%EvidenceSource{content: content}, excerpt, _hint) do
+    case exact_excerpt(content, excerpt) do
+      :ok -> {:ok, %{}}
+      error -> error
+    end
+  end
+
+  defp find_hinted_span(matches, nil), do: List.first(matches)
+
+  defp find_hinted_span(matches, hint) do
+    Enum.find(matches, fn span ->
+      span.speaker == Map.get(hint, :speaker) and
+        span.start * 1.0 == Map.get(hint, :audio_start_seconds) and
+        span.end * 1.0 == Map.get(hint, :audio_end_seconds)
+    end)
+  end
+
   defp insert_consultation_evidence(
          professional,
          patient,
@@ -834,22 +880,29 @@ defmodule Alethea.ClinicalRecord do
          source_kind,
          source_id,
          excerpt,
-         occurred_at
+         occurred_at,
+         markers
        ) do
     with {:ok, ciphertext} <- PatientVault.encrypt(excerpt, keyring.clinical_record_dek) do
       Ecto.Multi.new()
       |> Ecto.Multi.insert(
         :record,
-        ConsultationEvidence.changeset(%ConsultationEvidence{}, %{
-          source_kind: source_kind,
-          source_id: source_id,
-          encrypted_excerpt: ciphertext,
-          encryption_version: 2,
-          occurred_at: occurred_at,
-          patient_id: patient.id,
-          professional_id: professional.id,
-          target_behavior_id: target_behavior_id
-        })
+        ConsultationEvidence.changeset(
+          %ConsultationEvidence{},
+          Map.merge(
+            %{
+              source_kind: source_kind,
+              source_id: source_id,
+              encrypted_excerpt: ciphertext,
+              encryption_version: 2,
+              occurred_at: occurred_at,
+              patient_id: patient.id,
+              professional_id: professional.id,
+              target_behavior_id: target_behavior_id
+            },
+            markers
+          )
+        )
       )
       |> Ecto.Multi.insert(:audit, fn %{record: record} ->
         Audit.changeset(%Audit{
@@ -1431,7 +1484,10 @@ defmodule Alethea.ClinicalRecord do
       kind: :consultation_evidence,
       occurred_at: evidence.occurred_at,
       text: decrypt_or_placeholder(evidence.encrypted_excerpt, dek_for(evidence, keyring)),
-      source: Map.get(source_refs, {evidence.source_kind, evidence.source_id}, :unavailable)
+      source: Map.get(source_refs, {evidence.source_kind, evidence.source_id}, :unavailable),
+      speaker: evidence.speaker,
+      audio_start_seconds: evidence.audio_start_seconds,
+      audio_end_seconds: evidence.audio_end_seconds
     }
   end
 

@@ -12,6 +12,8 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
 
   alias Alethea.Clinical, as: Journaling
   alias Alethea.ClinicalRecord.ClinicalNote
+  alias Alethea.ClinicalRecord.SessionTranscript
+  alias Alethea.ClinicalRecord.SessionTranscriptContent
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
 
@@ -23,10 +25,11 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
     :occurred_at,
     :direction,
     :behavior_type,
-    :professional_id
+    :professional_id,
+    :spans
   ]
 
-  @type kind :: :clinical_note | :message
+  @type kind :: :clinical_note | :message | :session_transcript
   @type t :: %__MODULE__{
           kind: kind(),
           id: Ecto.UUID.t(),
@@ -34,7 +37,8 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
           occurred_at: DateTime.t(),
           direction: String.t() | nil,
           behavior_type: String.t() | nil,
-          professional_id: Ecto.UUID.t() | nil
+          professional_id: Ecto.UUID.t() | nil,
+          spans: [SessionTranscriptContent.span()] | nil
         }
   @type keyring :: %{patient_dek: binary(), clinical_record_dek: binary()}
 
@@ -69,7 +73,7 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
   def fetch(kind, source_id, patient_id, keyring)
 
   def fetch(kind, _source_id, _patient_id, _keyring)
-      when kind not in ["clinical_note", "message"],
+      when kind not in ["clinical_note", "message", "session_transcript"],
       do: {:error, :unsupported_source}
 
   def fetch(kind, source_id, patient_id, keyring) do
@@ -101,8 +105,18 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
     end
   end
 
+  defp fetch_owned("session_transcript", id, patient_id) do
+    case Repo.get_by(SessionTranscript, id: id, patient_id: patient_id) do
+      nil -> {:error, :not_found}
+      transcript -> {:ok, transcript}
+    end
+  end
+
   defp decrypt_source("clinical_note", note, keyring), do: from_note(note, keyring)
   defp decrypt_source("message", message, keyring), do: from_message(message, keyring)
+
+  defp decrypt_source("session_transcript", transcript, keyring),
+    do: from_session_transcript(transcript, keyring)
 
   defp from_note(note, keyring) do
     with {:ok, content} <-
@@ -132,6 +146,25 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
          occurred_at: utc_datetime(message.timestamp),
          direction: message.direction,
          behavior_type: message.behavior_type
+       }}
+    end
+  end
+
+  defp from_session_transcript(transcript, keyring) do
+    with {:ok, plaintext} <-
+           PatientVault.decrypt(
+             transcript.encrypted_spans,
+             dek_for(transcript.encryption_version, keyring)
+           ),
+         {:ok, %SessionTranscriptContent{spans: spans}} <-
+           SessionTranscriptContent.parse(plaintext) do
+      {:ok,
+       %__MODULE__{
+         kind: :session_transcript,
+         id: transcript.id,
+         content: Enum.map_join(spans, "\n", & &1.text),
+         occurred_at: utc_datetime(transcript.recorded_at),
+         spans: spans
        }}
     end
   end

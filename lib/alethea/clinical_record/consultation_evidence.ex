@@ -31,7 +31,9 @@ defmodule Alethea.ClinicalRecord.ConsultationEvidence do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @source_kinds ~w(clinical_note message)
+  alias Alethea.ClinicalRecord.SessionTranscriptContent
+
+  @source_kinds ~w(clinical_note message session_transcript)
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -43,6 +45,14 @@ defmodule Alethea.ClinicalRecord.ConsultationEvidence do
     field :encryption_version, :integer, default: 1
     field :occurred_at, :utc_datetime_usec
     field :excerpt, :string, virtual: true, redact: true
+
+    # Nullable plaintext audio markers (design AD9, sdd/audio-evidence-citation-328,
+    # GitHub #328): only `session_transcript` rows carry all three, snapshotted
+    # from the authoritative decrypted span at citation time. `speaker` is
+    # plaintext by design, mirroring `Rag.Chunk.speaker` (D3, #320).
+    field :speaker, :string
+    field :audio_start_seconds, :float
+    field :audio_end_seconds, :float
 
     belongs_to :patient, Alethea.Accounts.Patient
     belongs_to :professional, Alethea.Accounts.Professional
@@ -63,6 +73,9 @@ defmodule Alethea.ClinicalRecord.ConsultationEvidence do
       :encrypted_excerpt,
       :encryption_version,
       :occurred_at,
+      :speaker,
+      :audio_start_seconds,
+      :audio_end_seconds,
       :patient_id,
       :professional_id,
       :target_behavior_id
@@ -77,5 +90,18 @@ defmodule Alethea.ClinicalRecord.ConsultationEvidence do
       :target_behavior_id
     ])
     |> validate_inclusion(:source_kind, @source_kinds)
+    |> validate_audio_markers()
+  end
+
+  # AD9: all three markers are required together when the kind is
+  # `session_transcript`; every other kind leaves them unset.
+  defp validate_audio_markers(changeset) do
+    if get_field(changeset, :source_kind) == "session_transcript" do
+      changeset
+      |> validate_required([:speaker, :audio_start_seconds, :audio_end_seconds])
+      |> validate_inclusion(:speaker, SessionTranscriptContent.speakers())
+    else
+      changeset
+    end
   end
 end
