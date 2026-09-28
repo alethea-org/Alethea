@@ -35,6 +35,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   alias Alethea.AI.Sanitizer
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
+  alias AletheaWeb.TargetBehaviorLive.AudioMarker
   alias Phoenix.LiveView.AsyncResult
 
   @search_source_filters [
@@ -371,11 +372,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           professional,
           patient_id,
           target_behavior_id,
-          %{
-            source_kind: source_kind,
-            source_id: candidate.source_resource_id,
-            excerpt: candidate.content
-          }
+          citation_attrs(candidate, source_kind, candidate.content)
         )
       else
         _reason -> {:error, :invalid_suggestion}
@@ -459,11 +456,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               professional,
               patient_id,
               target_behavior_id,
-              %{
-                source_kind: source_kind,
-                source_id: candidate.source_resource_id,
-                excerpt: trimmed_excerpt
-              }
+              citation_attrs(candidate, source_kind, trimmed_excerpt)
             )
           else
             _reason -> {:error, :invalid_suggestion}
@@ -512,11 +505,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           professional,
           patient_id,
           target_behavior_id,
-          %{
-            source_kind: source_kind,
-            source_id: candidate.source_resource_id,
-            excerpt: candidate.content
-          }
+          citation_attrs(candidate, source_kind, candidate.content)
         )
       else
         _reason -> {:error, :invalid_search_result}
@@ -980,7 +969,26 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp citation_source_kind("clinical_note"), do: {:ok, "clinical_note"}
   defp citation_source_kind("patient_message"), do: {:ok, "message"}
+  defp citation_source_kind("session_transcript"), do: {:ok, "session_transcript"}
   defp citation_source_kind(_resource_type), do: {:error, :unsupported_source}
+
+  # Builds the trusted attrs for `cite_evidence_source/4`. The span hint
+  # (AD2/AD3) comes only from the server-side candidate/result assign — never
+  # from client `phx-value-*`/form params, so a forged client speaker or time
+  # value can never influence which span is matched or what gets persisted.
+  defp citation_attrs(candidate, source_kind, excerpt) do
+    base = %{source_kind: source_kind, source_id: candidate.source_resource_id, excerpt: excerpt}
+
+    if candidate.speaker do
+      Map.put(base, :span_hint, %{
+        speaker: candidate.speaker,
+        audio_start_seconds: candidate.audio_start_seconds,
+        audio_end_seconds: candidate.audio_end_seconds
+      })
+    else
+      base
+    end
+  end
 
   defp reset_evidence_search(socket) do
     socket
@@ -1165,7 +1173,14 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     "Mensaje (#{reference[:behavior_type]}/#{reference[:direction]})"
   end
 
+  defp source_label({:ok, %{kind: :session_transcript, occurred_at: occurred_at}}) do
+    "Transcripción de sesión · #{format_datetime(occurred_at)}"
+  end
+
   defp source_label(_), do: "Fuente no disponible"
+
+  defp speaker_label("patient"), do: "Paciente"
+  defp speaker_label("therapist"), do: "Terapeuta"
 
   defp evidence_source_type_label(%{kind: :clinical_note}), do: "Nota clínica"
 
@@ -1721,6 +1736,18 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     >
                       {format_datetime(candidate.source_occurred_at)}
                     </time>
+                    <span
+                      :if={candidate.speaker}
+                      class={["badge", "badge--speaker", "badge--speaker-#{candidate.speaker}"]}
+                    >
+                      {speaker_label(candidate.speaker)}
+                    </span>
+                    <span :if={candidate.speaker} class="suggested-candidate-card__audio">
+                      {AudioMarker.format_range(
+                        candidate.audio_start_seconds,
+                        candidate.audio_end_seconds
+                      )}
+                    </span>
                   </header>
 
                   <%= if @trimming_candidate_id == candidate.chunk_id do %>
@@ -1861,6 +1888,18 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     >
                       {format_datetime(result.source_occurred_at)}
                     </time>
+                    <span
+                      :if={result.speaker}
+                      class={["badge", "badge--speaker", "badge--speaker-#{result.speaker}"]}
+                    >
+                      {speaker_label(result.speaker)}
+                    </span>
+                    <span :if={result.speaker} class="suggested-candidate-card__audio">
+                      {AudioMarker.format_range(
+                        result.audio_start_seconds,
+                        result.audio_end_seconds
+                      )}
+                    </span>
                   </header>
                   <p class="suggested-candidate-card__content">{result.content}</p>
                   <div class="suggested-candidate-card__actions">
@@ -1928,6 +1967,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <div :if={item.kind == :consultation_evidence} class="review-item__source">
                 <.icon name="hero-magnifying-glass" class="size-3" /> {source_label(item.source)}
+                <span
+                  :if={item.speaker}
+                  class={["badge", "badge--speaker", "badge--speaker-#{item.speaker}"]}
+                >
+                  {speaker_label(item.speaker)}
+                </span>
+                <span :if={item.speaker} class="suggested-candidate-card__audio">
+                  {AudioMarker.format_range(item.audio_start_seconds, item.audio_end_seconds)}
+                </span>
               </div>
 
               <div
