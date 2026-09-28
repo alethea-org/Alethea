@@ -63,6 +63,26 @@ defmodule Alethea.ClinicalRecord.SourceRefTest do
     end
   end
 
+  describe "resolve/2 — session_transcript source (AD5/R8, GitHub #328)" do
+    test "found: returns kind, occurred_at (recorded_at), empty reference map, without decrypting",
+         %{professional: professional, patient: patient} do
+      recorded_at = ~U[2026-09-20 15:00:00.000000Z]
+
+      {:ok, transcript} =
+        ClinicalRecord.create_session_transcript(professional, patient.id, %{
+          spans: [%{start: 0.0, end: 1.0, speaker: "patient", text: "Contenido nunca leido aqui"}],
+          recorded_at: recorded_at
+        })
+
+      assert {:ok, %{kind: :session_transcript, occurred_at: ^recorded_at, reference: %{}}} =
+               SourceRef.resolve("session_transcript", transcript.id)
+    end
+
+    test "deleted transcript: returns :unavailable" do
+      assert SourceRef.resolve("session_transcript", Ecto.UUID.generate()) == :unavailable
+    end
+  end
+
   describe "resolve/2 — degradation (design A3: excerpt already stored, source metadata is best-effort)" do
     test "unknown source_kind: returns :unavailable" do
       assert SourceRef.resolve("diagnosis", Ecto.UUID.generate()) == :unavailable

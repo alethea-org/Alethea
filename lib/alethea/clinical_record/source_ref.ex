@@ -31,13 +31,19 @@ defmodule Alethea.ClinicalRecord.SourceRef do
 
   alias Alethea.Clinical, as: Journaling
   alias Alethea.ClinicalRecord.ClinicalNote
+  alias Alethea.ClinicalRecord.SessionTranscript
   alias Alethea.Repo
 
-  @known_kinds ~w(clinical_note message)
+  @known_kinds ~w(clinical_note message session_transcript)
 
   @type ref :: {String.t(), Ecto.UUID.t()}
   @type result ::
-          {:ok, %{kind: :clinical_note | :message, occurred_at: DateTime.t(), reference: map()}}
+          {:ok,
+           %{
+             kind: :clinical_note | :message | :session_transcript,
+             occurred_at: DateTime.t(),
+             reference: map()
+           }}
           | :unavailable
 
   @doc """
@@ -76,6 +82,10 @@ defmodule Alethea.ClinicalRecord.SourceRef do
     resolve_batch_for(refs, Journaling.Message, &message_result/1)
   end
 
+  defp resolve_batch("session_transcript", refs) do
+    resolve_batch_for(refs, SessionTranscript, &session_transcript_result/1)
+  end
+
   defp resolve_batch_for(refs, schema, result_fn) do
     {valid_refs, invalid_refs} =
       Enum.split_with(refs, fn {_kind, id} -> match?({:ok, _}, Ecto.UUID.cast(id)) end)
@@ -101,6 +111,10 @@ defmodule Alethea.ClinicalRecord.SourceRef do
 
   defp clinical_note_result(note) do
     %{kind: :clinical_note, occurred_at: note.inserted_at, reference: %{}}
+  end
+
+  defp session_transcript_result(transcript) do
+    %{kind: :session_transcript, occurred_at: transcript.recorded_at, reference: %{}}
   end
 
   defp message_result(message) do

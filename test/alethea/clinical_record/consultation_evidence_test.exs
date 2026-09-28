@@ -151,6 +151,102 @@ defmodule Alethea.ClinicalRecord.ConsultationEvidenceTest do
     end
   end
 
+  describe "changeset/2 — session_transcript audio markers (AD9, GitHub #328)" do
+    @transcript_attrs %{
+      source_kind: "session_transcript",
+      source_id: Ecto.UUID.generate(),
+      encrypted_excerpt: <<1, 2, 3>>,
+      occurred_at: DateTime.utc_now(),
+      patient_id: Ecto.UUID.generate(),
+      professional_id: Ecto.UUID.generate(),
+      target_behavior_id: Ecto.UUID.generate(),
+      speaker: "patient",
+      audio_start_seconds: 860.0,
+      audio_end_seconds: 910.0
+    }
+
+    test "is accepted when all three markers are present" do
+      changeset = ConsultationEvidence.changeset(%ConsultationEvidence{}, @transcript_attrs)
+
+      assert changeset.valid?
+      assert get_change(changeset, :speaker) == "patient"
+      assert get_change(changeset, :audio_start_seconds) == 860.0
+      assert get_change(changeset, :audio_end_seconds) == 910.0
+    end
+
+    test "rejects a session_transcript row missing any one marker (table-driven)" do
+      for missing_key <- [:speaker, :audio_start_seconds, :audio_end_seconds] do
+        attrs = Map.put(@transcript_attrs, missing_key, nil)
+        changeset = ConsultationEvidence.changeset(%ConsultationEvidence{}, attrs)
+
+        refute changeset.valid?, "expected invalid when #{missing_key} is nil"
+        assert "can't be blank" in errors_on(changeset)[missing_key]
+      end
+    end
+
+    test "rejects a speaker outside SessionTranscriptContent.speakers()" do
+      attrs = %{@transcript_attrs | speaker: "psychologist"}
+      changeset = ConsultationEvidence.changeset(%ConsultationEvidence{}, attrs)
+
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).speaker
+    end
+
+    test "legacy kinds (clinical_note, message) accept nil markers (table-driven)" do
+      for source_kind <- ["clinical_note", "message"] do
+        attrs = %{@valid_attrs | source_kind: source_kind}
+        changeset = ConsultationEvidence.changeset(%ConsultationEvidence{}, attrs)
+
+        assert changeset.valid?, "expected #{source_kind} valid with nil markers"
+      end
+    end
+  end
+
+  describe "database-level source_kind CHECK constraint (task 1.2, AD1)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(professional, patient.id, "Salir a caminar")
+
+      %{professional: professional, patient: patient, target_behavior: target_behavior}
+    end
+
+    test "an unknown source_kind raises the CHECK, a legacy clinical_note row with NULL markers is accepted",
+         %{professional: professional, patient: patient, target_behavior: target_behavior} do
+      insert = fn source_kind ->
+        Repo.query(
+          """
+          INSERT INTO consultation_evidences
+            (id, source_kind, source_id, encrypted_excerpt, encryption_version, occurred_at,
+             speaker, audio_start_seconds, audio_end_seconds,
+             patient_id, professional_id, target_behavior_id, inserted_at)
+          VALUES
+            ($1::text::uuid, $2, $3::text::uuid, $4, 1, $5, NULL, NULL, NULL,
+             $6::text::uuid, $7::text::uuid, $8::text::uuid, $9)
+          """,
+          [
+            Ecto.UUID.generate(),
+            source_kind,
+            Ecto.UUID.generate(),
+            <<9, 9, 9>>,
+            DateTime.utc_now(),
+            patient.id,
+            professional.id,
+            target_behavior.id,
+            DateTime.utc_now()
+          ]
+        )
+      end
+
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
+               insert.("clinician_observation")
+
+      assert {:ok, _result} = insert.("clinical_note")
+    end
+  end
+
   describe "database-level immutability (task 1.3)" do
     setup do
       professional = create_professional!()
