@@ -34,6 +34,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisDraft do
     # 1 = shared patient DEK, 2 = "patient_clinical_record" CR-scoped DEK
     # (D1/AD1, sdd/clinical-record-retention, GitHub #197 — dual-read seam)
     field :encryption_version, :integer, default: 1
+    field :lock_version, :integer, default: 1
     field :body, :string, virtual: true, redact: true
 
     belongs_to :patient, Alethea.Accounts.Patient
@@ -51,6 +52,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisDraft do
     |> cast(attrs, [
       :encrypted_body,
       :encryption_version,
+      :lock_version,
       :patient_id,
       :professional_id,
       :target_behavior_id

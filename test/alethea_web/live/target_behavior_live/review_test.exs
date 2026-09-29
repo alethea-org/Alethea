@@ -1289,6 +1289,290 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "autosaved E-O-R-C working draft (GitHub #362)" do
+    test "autosaves clinician changes without explicit Save and survives reload", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#editor-draft-status", "Borrador vacío")
+      assert has_element?(view, "#draft-status-label", "Borrador vacío")
+
+      saving_html =
+        render_change(view, "change_functional_analysis", %{
+          "functional_analysis" => %{"antecedents_distal" => "Autosaved distal content"}
+        })
+
+      assert saving_html =~ "Guardando…"
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#editor-draft-status", "Guardado")
+      assert has_element?(view, "#draft-status-label", "Guardado")
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.antecedents_distal == "Autosaved distal content"
+
+      {:ok, remounted_view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               remounted_view,
+               "#functional-analysis-antecedents-distal",
+               "Autosaved distal content"
+             )
+
+      assert has_element?(remounted_view, "#editor-draft-status", "Guardado")
+      assert has_element?(remounted_view, "#draft-status-label", "Guardado")
+
+      other_patient = create_patient!(professional)
+      other_target = create_target_behavior!(professional, other_patient)
+
+      {:ok, other_view, _html} =
+        live(
+          conn,
+          ~p"/patients/#{other_patient.id}/target_behaviors/#{other_target.id}/review"
+        )
+
+      assert has_element?(other_view, "#editor-draft-status", "Borrador vacío")
+      assert has_element?(other_view, "#draft-status-label", "Borrador vacío")
+
+      refute has_element?(
+               other_view,
+               "#functional-analysis-antecedents-distal",
+               "Autosaved distal content"
+             )
+
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 other_patient.id,
+                 other_target.id
+               )
+    end
+
+    test "displays saving, saved, and save failure feedback while keeping visible text intact on error",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      saving_html =
+        render_change(view, "change_functional_analysis", %{
+          "functional_analysis" => %{"antecedents_distal" => "Valid initial text"}
+        })
+
+      assert saving_html =~ "Guardando…"
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#editor-draft-status", "Guardado")
+      assert has_element?(view, "#draft-status-label", "Guardado")
+
+      assert {:ok, draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      # Simulate a write error by tombstoning the draft record in the DB
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      change_html =
+        render_change(view, "change_functional_analysis", %{
+          "functional_analysis" => %{"antecedents_distal" => "Failed text"}
+        })
+
+      assert change_html =~ "Guardando…"
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#editor-draft-status", "Error al guardar")
+      assert has_element?(view, "#draft-status-label", "Error al guardar")
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Failed text")
+    end
+
+    test "concurrent tab editing detects conflict and does not silently overwrite newer edits", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      assert {:ok, _initial_draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"response_motor" => "Initial motor response"}
+               )
+
+      {:ok, view1, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      {:ok, view2, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_change(view2, "change_functional_analysis", %{
+        "functional_analysis" => %{"response_motor" => "Tab 2 edit"}
+      })
+
+      _ = :sys.get_state(view2.pid)
+
+      assert has_element?(view2, "#editor-draft-status", "Guardado")
+
+      assert {:ok, draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert draft.lock_version == 2
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.response_motor == "Tab 2 edit"
+
+      render_change(view1, "change_functional_analysis", %{
+        "functional_analysis" => %{"response_motor" => "Tab 1 stale edit"}
+      })
+
+      _ = :sys.get_state(view1.pid)
+
+      assert has_element?(view1, "#editor-draft-status", "Conflicto al guardar")
+      assert has_element?(view1, "#draft-status-label", "Conflicto al guardar")
+
+      assert {:ok, db_content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert db_content.response_motor == "Tab 2 edit"
+      assert has_element?(view1, "#functional-analysis-response-motor", "Tab 1 stale edit")
+    end
+
+    test "older out-of-order autosave sequence message does not overwrite newer clinician edits",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{"antecedents_distal" => "Change 1"}
+      })
+
+      _ = :sys.get_state(view.pid)
+
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{"antecedents_distal" => "Change 2"}
+      })
+
+      _ = :sys.get_state(view.pid)
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.antecedents_distal == "Change 2"
+
+      send(view.pid, {:perform_autosave, %{"antecedents_distal" => "Stale sequence 0 edit"}, 0})
+      _ = :sys.get_state(view.pid)
+
+      assert {:ok, content_after_0} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content_after_0.antecedents_distal == "Change 2"
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Change 2")
+
+      send(view.pid, {:perform_autosave, %{"antecedents_distal" => "Stale sequence 1 edit"}, 1})
+      _ = :sys.get_state(view.pid)
+
+      assert {:ok, current_content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert current_content.antecedents_distal == "Change 2"
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Change 2")
+
+      refute has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Stale sequence 1 edit"
+             )
+    end
+
+    test "explicit manual Save button continues to work alongside autosave", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      html =
+        view
+        |> form("#functional-analysis-form",
+          functional_analysis: %{
+            antecedents_distal: "Explicit manual distal content",
+            response_cognitive: "Explicit manual cognitive content"
+          }
+        )
+        |> render_submit()
+
+      assert html =~ "Análisis funcional guardado."
+      assert has_element?(view, "#editor-draft-status", "Guardado")
+      assert has_element?(view, "#draft-status-label", "Guardado")
+
+      assert {:ok, content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert content.antecedents_distal == "Explicit manual distal content"
+      assert content.response_cognitive == "Explicit manual cognitive content"
+    end
+  end
+
   describe "structured functional-analysis draft and explicit note creation" do
     test "saving structured analysis persists it without creating a clinical note", %{
       conn: conn,
