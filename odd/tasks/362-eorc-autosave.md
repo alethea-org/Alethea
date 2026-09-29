@@ -21,7 +21,7 @@
   - Update `#editor-draft-status` and `#draft-status-label` with visible "Guardando…", "Guardado", "Error al guardar", and conflict state without altering existing layout.
   - Preserve visible editable text intact on save failures and conflict for clinician retry.
   - Maintain explicit manual Save button functionality.
-- [ ] Task 4: Focused Workbench and domain integration tests
+- [x] Task 4: Focused Workbench and domain integration tests
   - Test autosave persists edits without explicit save and survives reload.
   - Test UI shows saving, saved, and error states, retaining text on error.
   - Test multi-tab / out-of-order race: stale lock_version returns conflict signal and does not overwrite newer edits.
