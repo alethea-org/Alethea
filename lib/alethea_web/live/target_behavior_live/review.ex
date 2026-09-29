@@ -1451,6 +1451,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               <span class="pt-eyebrow">Insumos clínicos</span>
               <h2 class="t-title-sm">Evidencia y observaciones</h2>
             </div>
+
             <button
               type="button"
               id="toggle-observation-form"
@@ -1534,9 +1535,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             <%= if @evidence_count == 0 do %>
               <.icon name="hero-magnifying-glass" class="empty-state__icon" />
               <p class="empty-state__title">Fundamentá el análisis con evidencia clínica</p>
+
               <p class="empty-state__text">
                 Citá un fragmento exacto de una nota o mensaje del paciente. Después podrás solicitar sugerencias de patrones sin ocultar ni reemplazar tu borrador clínico.
               </p>
+
               <button
                 type="button"
                 id="cite-evidence-guide"
@@ -1548,9 +1551,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             <% else %>
               <.icon name="hero-presentation-chart-line" class="empty-state__icon" />
               <p class="empty-state__title">Convertí la evidencia en hipótesis de trabajo</p>
+
               <p class="empty-state__text">
                 Ya hay evidencia citada. Solicitá sugerencias de patrones para revisarlas antes de incorporarlas al borrador clínico.
               </p>
+
               <button
                 type="button"
                 id="suggest-patterns-guide"
@@ -1568,6 +1573,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           <section :if={@citation_step} id="evidence-citation-flow" class="review-observation">
             <div class="review-item__meta">
               <h2 class="pt-h2">Citar evidencia</h2>
+
               <span class="badge badge--uncited">
                 Paso {if @citation_step == :select,
                   do: "1",
@@ -1581,9 +1587,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
             <div :if={@citation_step == :select} id="evidence-source-list">
               <h3 id="evidence-source-feed-label" class="t-title-sm">Fuentes disponibles</h3>
+
               <p id="evidence-source-feed-description" class="pt-muted">
                 Seleccioná una fuente para citar. Cada tarjeta muestra el contenido completo y su procedencia.
               </p>
+
               <div
                 id="evidence-source-feed"
                 aria-labelledby="evidence-source-feed-label"
@@ -1592,6 +1600,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <p :if={@evidence_sources == []} class="pt-muted">
                   No hay notas ni mensajes disponibles para citar.
                 </p>
+
                 <button
                   :for={source <- @evidence_sources}
                   type="button"
@@ -1623,9 +1632,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <span>{format_datetime(@selected_evidence_source.occurred_at)}</span>
                 <span>{evidence_source_provenance(@selected_evidence_source)}</span>
               </div>
+
               <p id="evidence-source-content" class="review-item__text">
                 {@selected_evidence_source.content}
               </p>
+
               <.form
                 for={@citation_form}
                 id="evidence-excerpt-form"
@@ -1650,24 +1661,33 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               id="evidence-citation-confirmation"
             >
               <p><strong>Verificá la cita antes de guardarla.</strong></p>
+
               <dl>
                 <dt>Fuente</dt>
+
                 <dd id="citation-confirm-source">
                   {evidence_source_type_label(@selected_evidence_source)} · {evidence_source_provenance(
                     @selected_evidence_source
                   )}
                 </dd>
+
                 <dt>Fecha</dt>
+
                 <dd id="citation-confirm-date">
                   {format_datetime(@selected_evidence_source.occurred_at)}
                 </dd>
+
                 <dt>Fragmento exacto</dt>
+
                 <dd id="citation-confirm-excerpt">{@citation_excerpt}</dd>
+
                 <dt>Destino</dt>
+
                 <dd id="citation-confirm-destination">
                   Conducta objetivo: {@target_behavior_description}
                 </dd>
               </dl>
+
               <button
                 type="button"
                 id="confirm-evidence-citation"
@@ -1783,6 +1803,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   Buscando fragmentos relevantes…
                 </div>
               </:loading>
+
               <:failed :let={_reason}>
                 <div id="suggested-candidates-error" class="field__error">
                   No se pudieron cargar las sugerencias de evidencia.
@@ -1796,6 +1817,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               >
                 <.icon name="hero-magnifying-glass" class="empty-state__icon" />
                 <p class="empty-state__title">No hay sugerencias disponibles</p>
+
                 <p class="empty-state__text">
                   No se encontraron fragmentos relevantes para esta conducta objetivo.
                 </p>
@@ -1871,6 +1893,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                       >
                         {@trim_error}
                       </p>
+
                       <div class="suggested-candidate-card__trim-actions form-actions">
                         <button
                           type="submit"
@@ -1891,6 +1914,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     </.form>
                   <% else %>
                     <p class="suggested-candidate-card__content">{candidate.content}</p>
+
                     <div class="suggested-candidate-card__actions">
                       <button
                         :if={citable_candidate?(candidate)}
@@ -1933,6 +1957,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   Buscando en el historial clínico…
                 </div>
               </:loading>
+
               <:failed :let={_reason}>
                 <div id="evidence-search-error" class="field__error">
                   No se pudieron cargar los resultados de búsqueda.
@@ -1946,6 +1971,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               >
                 <.icon name="hero-magnifying-glass" class="empty-state__icon" />
                 <p class="empty-state__title">No se encontraron coincidencias</p>
+
                 <p class="empty-state__text">
                   Probá con otras palabras o una descripción más amplia.
                 </p>
@@ -2000,7 +2026,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                       )}
                     </span>
                   </header>
+
                   <p class="suggested-candidate-card__content">{result.content}</p>
+
                   <div class="suggested-candidate-card__actions">
                     <button
                       :if={
@@ -2145,6 +2173,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
           <div :if={@observation_form_open} class="review-observation" id="observation-entry">
             <h3 class="t-title-sm">Agregar observación clínica</h3>
+
             <.form for={@observation_form} id="observation-form" phx-submit="add_observation">
               <.input
                 field={@observation_form[:body]}
@@ -2174,6 +2203,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           >
             <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
             <p class="empty-state__title">Sin observaciones del clínico</p>
+
             <p class="empty-state__text">Todavía no registraste observaciones directas.</p>
           </div>
         </section>
@@ -2185,6 +2215,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <span class="pt-eyebrow">Formulación clínica</span>
                 <h2 class="t-title-sm">Análisis funcional E-O-R-C</h2>
               </div>
+
               <div class="form-actions">
                 <button
                   :if={!@draft_tombstoned_at}
@@ -2216,6 +2247,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             >
               <.icon name="hero-information-circle" class="empty-state__icon" />
               <p class="empty-state__title">Sin análisis funcional guardado</p>
+
               <p class="empty-state__text">
                 Completá únicamente los campos respaldados por la revisión clínica.
               </p>
@@ -2230,7 +2262,6 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               class="functional-analysis-form"
             >
               <.input field={@functional_analysis_form[:previous_notes]} type="hidden" />
-
               <section
                 :if={@functional_analysis_form[:previous_notes].value not in [nil, ""]}
                 id="previous-notes"
@@ -2241,6 +2272,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   <.icon name="hero-information-circle" class="size-4" />
                   <h3 id="previous-notes-title">Notas anteriores</h3>
                 </div>
+
                 <p class="previous-notes__explanation">
                   Este texto se preservó del borrador anterior de texto libre y no se clasificó automáticamente. Usalo como referencia para ubicar manualmente su contenido en E/O/R/C.
                 </p>
@@ -2249,6 +2281,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <fieldset class="functional-analysis-section" id="functional-analysis-antecedents">
                 <legend><span>E</span> Antecedentes</legend>
+
                 <.input
                   field={@functional_analysis_form[:antecedents_distal]}
                   id="functional-analysis-antecedents-distal"
@@ -2267,6 +2300,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <fieldset class="functional-analysis-section" id="functional-analysis-organism">
                 <legend><span>O</span> Organismo</legend>
+
                 <div class="functional-analysis-grid">
                   <.input
                     field={@functional_analysis_form[:organism_sleep]}
@@ -2301,6 +2335,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <fieldset class="functional-analysis-section" id="functional-analysis-response">
                 <legend><span>R</span> Respuesta</legend>
+
                 <div class="functional-analysis-grid">
                   <.input
                     field={@functional_analysis_form[:response_physiological]}
@@ -2328,6 +2363,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <fieldset class="functional-analysis-section" id="functional-analysis-consequences">
                 <legend><span>C</span> Consecuencias</legend>
+
                 <.input
                   field={@functional_analysis_form[:consequences_short_term]}
                   id="functional-analysis-consequences-short-term"
