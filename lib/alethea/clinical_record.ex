@@ -1264,7 +1264,7 @@ defmodule Alethea.ClinicalRecord do
           String.t()
         ) ::
           {:ok, FunctionalAnalysisDraft.t()}
-          | {:error, :unauthorized | Ecto.Changeset.t() | term()}
+          | {:error, :unauthorized | :not_found | Ecto.Changeset.t() | term()}
   def upsert_functional_analysis_draft(
         %Professional{} = professional,
         patient_id,
@@ -1272,12 +1272,21 @@ defmodule Alethea.ClinicalRecord do
         body
       ) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+      existing_draft =
+        Repo.get_by(FunctionalAnalysisDraft,
+          target_behavior_id: target_behavior_id,
+          patient_id: patient.id
+        )
+
+      next_lock_version = if existing_draft, do: (existing_draft.lock_version || 0) + 1, else: 1
+
       persist_functional_analysis_draft(
         professional,
         patient,
         target_behavior_id,
         body,
-        keyring
+        keyring,
+        next_lock_version
       )
     end)
   end
@@ -1289,41 +1298,66 @@ defmodule Alethea.ClinicalRecord do
   `FunctionalAnalysisDraft.encrypted_body`, so existing decrypted-body RAG
   indexing continues to receive that same complete representation.
 
+  Supports optimistic concurrency: `opts` can provide `:expected_lock_version`
+  (or `"lock_version"` in `params`). If provided, rejects stale updates with
+  `{:error, :conflict}`. On success, increments `lock_version`.
+
   A legal-deletion tombstone is never replaced with a new draft.
   """
   @spec upsert_functional_analysis_content(
           Professional.t(),
           Ecto.UUID.t(),
           Ecto.UUID.t(),
-          map()
+          map(),
+          keyword()
         ) ::
           {:ok, FunctionalAnalysisDraft.t()}
-          | {:error, :unauthorized | :not_found | :legally_deleted | Ecto.Changeset.t() | term()}
+          | {:error,
+             :unauthorized
+             | :not_found
+             | :legally_deleted
+             | :conflict
+             | Ecto.Changeset.t()
+             | term()}
   def upsert_functional_analysis_content(
         %Professional{} = professional,
         patient_id,
         target_behavior_id,
-        params
+        params,
+        opts \\ []
       )
-      when is_map(params) do
+      when is_map(params) and is_list(opts) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
       case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
         %Tombstone{resource_id: resource_id} ->
           deny_access(professional.id, resource_id, "functional_analysis_draft")
 
         nil ->
-          body =
-            params
-            |> FunctionalAnalysisContent.new()
-            |> FunctionalAnalysisContent.serialize()
+          existing_draft =
+            Repo.get_by(FunctionalAnalysisDraft,
+              target_behavior_id: target_behavior_id,
+              patient_id: patient.id
+            )
 
-          persist_functional_analysis_draft(
-            professional,
-            patient,
-            target_behavior_id,
-            body,
-            keyring
-          )
+          case check_draft_lock_version(existing_draft, params, opts) do
+            {:ok, next_lock_version} ->
+              body =
+                params
+                |> FunctionalAnalysisContent.new()
+                |> FunctionalAnalysisContent.serialize()
+
+              persist_functional_analysis_draft(
+                professional,
+                patient,
+                target_behavior_id,
+                body,
+                keyring,
+                next_lock_version
+              )
+
+            {:error, :conflict} = error ->
+              error
+          end
       end
     end)
   end
@@ -1591,13 +1625,15 @@ defmodule Alethea.ClinicalRecord do
          patient,
          target_behavior_id,
          body,
-         keyring
+         keyring,
+         lock_version
        ) do
     with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
       changeset =
         FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
           encrypted_body: ciphertext,
           encryption_version: 2,
+          lock_version: lock_version,
           patient_id: patient.id,
           professional_id: professional.id,
           target_behavior_id: target_behavior_id
@@ -1606,7 +1642,8 @@ defmodule Alethea.ClinicalRecord do
       Ecto.Multi.new()
       |> Ecto.Multi.insert(:record, changeset,
         on_conflict:
-          {:replace, [:encrypted_body, :encryption_version, :professional_id, :updated_at]},
+          {:replace,
+           [:encrypted_body, :encryption_version, :lock_version, :professional_id, :updated_at]},
         conflict_target: :target_behavior_id,
         returning: true
       )
@@ -1626,6 +1663,58 @@ defmodule Alethea.ClinicalRecord do
       |> finalize_record_multi()
     end
   end
+
+  defp check_draft_lock_version(existing_draft, params, opts) do
+    case extract_expected_lock_version(params, opts) do
+      {:provided, expected} ->
+        cond do
+          not is_nil(existing_draft) and existing_draft.lock_version != expected ->
+            {:error, :conflict}
+
+          is_nil(existing_draft) and expected not in [nil, 0, 1] ->
+            {:error, :conflict}
+
+          true ->
+            next_version = if existing_draft, do: (existing_draft.lock_version || 0) + 1, else: 1
+            {:ok, next_version}
+        end
+
+      :not_provided ->
+        next_version = if existing_draft, do: (existing_draft.lock_version || 0) + 1, else: 1
+        {:ok, next_version}
+    end
+  end
+
+  defp extract_expected_lock_version(params, opts) do
+    cond do
+      Keyword.has_key?(opts, :expected_lock_version) ->
+        {:provided, parse_lock_version(Keyword.get(opts, :expected_lock_version))}
+
+      Keyword.has_key?(opts, :lock_version) ->
+        {:provided, parse_lock_version(Keyword.get(opts, :lock_version))}
+
+      is_map(params) and Map.has_key?(params, "lock_version") ->
+        {:provided, parse_lock_version(Map.get(params, "lock_version"))}
+
+      is_map(params) and Map.has_key?(params, :lock_version) ->
+        {:provided, parse_lock_version(Map.get(params, :lock_version))}
+
+      true ->
+        :not_provided
+    end
+  end
+
+  defp parse_lock_version(nil), do: nil
+  defp parse_lock_version(version) when is_integer(version), do: version
+
+  defp parse_lock_version(version) when is_binary(version) do
+    case Integer.parse(version) do
+      {int, ""} -> int
+      _ -> :invalid
+    end
+  end
+
+  defp parse_lock_version(_), do: :invalid
 
   defp finalize_record_multi(transaction_result) do
     case transaction_result do

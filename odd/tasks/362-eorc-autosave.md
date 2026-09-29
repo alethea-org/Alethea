@@ -9,7 +9,7 @@
 - [x] Task 1: Add `lock_version` to `functional_analysis_drafts` schema and migration
   - Generate migration to add `lock_version :integer, default: 1, null: false` to `functional_analysis_drafts`.
   - Update `Alethea.ClinicalRecord.FunctionalAnalysisDraft` schema with `:lock_version`.
-- [ ] Task 2: Domain concurrency support in `Alethea.ClinicalRecord`
+- [x] Task 2: Domain concurrency support in `Alethea.ClinicalRecord`
   - Update `upsert_functional_analysis_content/4` and `persist_functional_analysis_draft` to accept expected `lock_version`.
   - Enforce optimistic lock check against stored draft: return `{:error, :conflict}` on version mismatch, increment `lock_version` on successful update.
   - Return updated draft with new `lock_version`.

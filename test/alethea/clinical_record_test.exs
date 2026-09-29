@@ -1882,6 +1882,156 @@ defmodule Alethea.ClinicalRecordTest do
 
       assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
     end
+
+    test "sets lock_version = 1 on initial insert and increments on subsequent updates", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 1} = draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Initial content"}
+               )
+
+      assert draft.lock_version == 1
+
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 1} = fetched_draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert fetched_draft.lock_version == 1
+
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 2} = updated_draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Updated with expected lock version"},
+                 expected_lock_version: 1
+               )
+
+      assert updated_draft.lock_version == 2
+
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 2}} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+
+    test "returns {:error, :conflict} when expected_lock_version mismatches existing draft", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 1}} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Initial content"}
+               )
+
+      assert {:error, :conflict} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Stale update"},
+                 expected_lock_version: 2
+               )
+
+      assert {:error, :conflict} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Stale update with 999"},
+                 expected_lock_version: 999
+               )
+    end
+
+    test "handles lock_version in params: increments on match and returns {:error, :conflict} on mismatch",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 1}} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Initial content"}
+               )
+
+      # Match: increments to 2
+      assert {:ok, %FunctionalAnalysisDraft{lock_version: 2}} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   "antecedents_distal" => "Updated via params lock_version",
+                   "lock_version" => 1
+                 }
+               )
+
+      # Mismatch: lock_version 999 returns conflict
+      assert {:error, :conflict} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   "antecedents_distal" => "Conflict via params",
+                   "lock_version" => 999
+                 }
+               )
+
+      # Also handles string integer "999"
+      assert {:error, :conflict} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{
+                   "antecedents_distal" => "Conflict via params string",
+                   "lock_version" => "999"
+                 }
+               )
+    end
+
+    test "returns {:error, :conflict} when expected_lock_version is stale on initial insert", %{
+      professional: professional,
+      patient: patient
+    } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      assert {:error, :conflict} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Initial content", "lock_version" => 999}
+               )
+
+      assert {:error, :conflict} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Initial content"},
+                 expected_lock_version: 2
+               )
+    end
   end
 
   describe "upsert_functional_analysis_draft/4" do
@@ -1899,6 +2049,7 @@ defmodule Alethea.ClinicalRecordTest do
                  "Borrador inicial"
                )
 
+      assert draft.lock_version == 1
       assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 1
 
       assert {:ok, %FunctionalAnalysisDraft{} = updated_draft} =
@@ -1910,6 +2061,7 @@ defmodule Alethea.ClinicalRecordTest do
                )
 
       assert updated_draft.id == draft.id
+      assert updated_draft.lock_version == 2
       assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 1
       refute updated_draft.encrypted_body == draft.encrypted_body
 
