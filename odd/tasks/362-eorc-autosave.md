@@ -14,7 +14,7 @@
   - Enforce optimistic lock check against stored draft: return `{:error, :conflict}` on version mismatch, increment `lock_version` on successful update.
   - Return updated draft with new `lock_version`.
   - Expose draft `lock_version` in draft lookups for LiveView consumption.
-- [ ] Task 3: Autosave and feedback in `TargetBehaviorLive.Review`
+- [x] Task 3: Autosave and feedback in `TargetBehaviorLive.Review`
   - Add `phx-debounce="1000"` to E-O-R-C textarea inputs.
   - Handle `change_functional_analysis` by persisting changes automatically under current authorized professional.
   - Track `@draft_save_status` (`:empty`, `:saving`, `:saved`, `:save_failed`, `:conflict`, `:tombstoned`).

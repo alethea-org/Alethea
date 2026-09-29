@@ -35,6 +35,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   alias Alethea.AI.Sanitizer
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
+  alias Alethea.ClinicalRecord.FunctionalAnalysisDraft
   alias AletheaWeb.TargetBehaviorLive.AudioMarker
   alias Phoenix.LiveView.AsyncResult
 
@@ -59,19 +60,28 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         proposal_count = Enum.count(items, &(&1.kind == :ai_proposal))
         has_sufficient_evidence = evidence_count > 0
 
-        {functional_analysis_content, draft_tombstoned_at} =
-          case ClinicalRecord.get_functional_analysis_content(
+        {functional_analysis_content, draft_tombstoned_at, draft_lock_version} =
+          case ClinicalRecord.get_functional_analysis_draft(
                  professional,
                  patient_id,
                  target_behavior_id
                ) do
-            {:ok, nil} -> {%FunctionalAnalysisContent{}, nil}
-            {:ok, {:legally_deleted, deleted_at}} -> {%FunctionalAnalysisContent{}, deleted_at}
-            {:ok, content} -> {content, nil}
-            {:error, _reason} -> {%FunctionalAnalysisContent{}, nil}
+            {:ok, nil} ->
+              {%FunctionalAnalysisContent{}, nil, 0}
+
+            {:ok, {:legally_deleted, deleted_at}} ->
+              {%FunctionalAnalysisContent{}, deleted_at, nil}
+
+            {:ok, %FunctionalAnalysisDraft{body: body, lock_version: lv}} ->
+              {_format, content} = FunctionalAnalysisContent.parse(body)
+              {content, nil, lv}
+
+            {:error, _reason} ->
+              {%FunctionalAnalysisContent{}, nil, 0}
           end
 
         draft_status = compute_draft_status(draft_tombstoned_at, functional_analysis_content)
+        initial_content_params = content_params(functional_analysis_content)
 
         if connected?(socket) do
           Phoenix.PubSub.subscribe(Alethea.PubSub, "target_behavior:#{target_behavior_id}")
@@ -89,6 +99,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:proposal_count, proposal_count)
           |> assign(:has_sufficient_evidence, has_sufficient_evidence)
           |> assign(:draft_status, draft_status)
+          |> assign(:functional_analysis_lock_version, draft_lock_version)
+          |> assign(:last_saved_functional_analysis_params, initial_content_params)
+          |> assign(:autosave_seq, 0)
           |> assign(:generation_pending, false)
           |> assign(:draft_generation_pending, false)
           |> assign(:editing_proposal_id, nil)
@@ -116,7 +129,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:observation_form, to_form(%{"body" => ""}, as: "observation"))
           |> assign(
             :functional_analysis_form,
-            to_form(content_params(functional_analysis_content), as: "functional_analysis")
+            to_form(initial_content_params, as: "functional_analysis")
           )
           |> assign(:draft_tombstoned_at, draft_tombstoned_at)
           |> assign_async(:suggested_candidates, fn ->
@@ -673,14 +686,32 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   @impl true
   def handle_event("change_functional_analysis", %{"functional_analysis" => params}, socket) do
-    values = Map.merge(functional_analysis_form_values(socket), params)
+    current_values = functional_analysis_form_values(socket)
+    merged_values = Map.merge(current_values, params)
 
-    {:noreply,
-     assign(
-       socket,
-       :functional_analysis_form,
-       to_form(values, as: "functional_analysis")
-     )}
+    socket =
+      assign(
+        socket,
+        :functional_analysis_form,
+        to_form(merged_values, as: "functional_analysis")
+      )
+
+    cond do
+      socket.assigns.draft_tombstoned_at != nil ->
+        {:noreply, socket}
+
+      params_equal?(merged_values, socket.assigns.last_saved_functional_analysis_params) ->
+        {:noreply, socket}
+
+      true ->
+        seq = socket.assigns.autosave_seq + 1
+        send(self(), {:perform_autosave, merged_values, seq})
+
+        {:noreply,
+         socket
+         |> assign(:autosave_seq, seq)
+         |> assign(:draft_status, :saving)}
+    end
   end
 
   @impl true
@@ -724,27 +755,42 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
     target_behavior_id = socket.assigns.target_behavior_id
+    expected_lock_version = socket.assigns.functional_analysis_lock_version
 
     case ClinicalRecord.upsert_functional_analysis_content(
            professional,
            patient_id,
            target_behavior_id,
-           params
+           params,
+           expected_lock_version: expected_lock_version
          ) do
-      {:ok, _draft} ->
+      {:ok, draft} ->
         content = FunctionalAnalysisContent.new(params)
+        content_map = content_params(content)
 
         {:noreply,
          socket
+         |> assign(:autosave_seq, socket.assigns.autosave_seq + 1)
          |> assign(
            :functional_analysis_form,
-           to_form(content_params(content), as: "functional_analysis")
+           to_form(content_map, as: "functional_analysis")
          )
+         |> assign(:functional_analysis_lock_version, draft.lock_version)
+         |> assign(:last_saved_functional_analysis_params, content_map)
          |> assign(:draft_status, compute_draft_status(nil, content))
          |> put_flash(:info, "Análisis funcional guardado.")}
 
+      {:error, :conflict} ->
+        {:noreply,
+         socket
+         |> assign(:draft_status, :conflict)
+         |> put_flash(:error, "Conflicto: otra sesión modificó el borrador.")}
+
       {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "No se pudo guardar el análisis funcional.")}
+        {:noreply,
+         socket
+         |> assign(:draft_status, :save_failed)
+         |> put_flash(:error, "No se pudo guardar el análisis funcional.")}
     end
   end
 
@@ -843,6 +889,46 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
      socket
      |> assign(:generation_pending, false)
      |> put_flash(:error, "La generación de patrones de IA falló.")}
+  end
+
+  @impl true
+  def handle_info({:perform_autosave, params, seq}, socket) do
+    if seq == socket.assigns.autosave_seq and is_nil(socket.assigns.draft_tombstoned_at) do
+      professional = socket.assigns.current_professional
+      patient_id = socket.assigns.patient_id
+      target_behavior_id = socket.assigns.target_behavior_id
+      expected_lock_version = socket.assigns.functional_analysis_lock_version
+
+      case ClinicalRecord.upsert_functional_analysis_content(
+             professional,
+             patient_id,
+             target_behavior_id,
+             params,
+             expected_lock_version: expected_lock_version
+           ) do
+        {:ok, draft} ->
+          content = FunctionalAnalysisContent.new(params)
+          content_map = content_params(content)
+
+          {:noreply,
+           socket
+           |> assign(:functional_analysis_lock_version, draft.lock_version)
+           |> assign(:last_saved_functional_analysis_params, content_map)
+           |> assign(:draft_status, compute_draft_status(nil, content))}
+
+        {:error, :conflict} ->
+          {:noreply,
+           socket
+           |> assign(:draft_status, :conflict)}
+
+        {:error, _reason} ->
+          {:noreply,
+           socket
+           |> assign(:draft_status, :save_failed)}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1071,6 +1157,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     end)
   end
 
+  defp params_equal?(params1, params2) when is_map(params1) and is_map(params2) do
+    fields = ["previous_notes" | FunctionalAnalysisDraftChain.eorc_fields()]
+
+    Enum.all?(fields, fn field ->
+      (Map.get(params1, field) || "") == (Map.get(params2, field) || "")
+    end)
+  end
+
+  defp params_equal?(_, _), do: false
+
   defp merge_generated_draft(current, generated) do
     Enum.reduce(FunctionalAnalysisDraftChain.eorc_fields(), current, fn field, values ->
       current_value = Map.get(values, field, "")
@@ -1128,6 +1224,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp draft_status_label(:empty), do: "Borrador vacío"
   defp draft_status_label(:saved), do: "Guardado"
+  defp draft_status_label(:saving), do: "Guardando…"
+  defp draft_status_label(:save_failed), do: "Error al guardar"
+  defp draft_status_label(:conflict), do: "Conflicto al guardar"
   defp draft_status_label(:tombstoned), do: "Eliminado legalmente"
 
   # Content inside a `phx-update="stream"` container only re-renders on an
@@ -2155,12 +2254,14 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   id="functional-analysis-antecedents-distal"
                   type="textarea"
                   label="Antecedentes distales"
+                  phx-debounce="1000"
                 />
                 <.input
                   field={@functional_analysis_form[:antecedents_immediate]}
                   id="functional-analysis-antecedents-immediate"
                   type="textarea"
                   label="Antecedentes inmediatos"
+                  phx-debounce="1000"
                 />
               </fieldset>
 
@@ -2172,24 +2273,28 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     id="functional-analysis-organism-sleep"
                     type="textarea"
                     label="Sueño"
+                    phx-debounce="1000"
                   />
                   <.input
                     field={@functional_analysis_form[:organism_pain_or_discomfort]}
                     id="functional-analysis-organism-pain-or-discomfort"
                     type="textarea"
                     label="Dolor o malestar"
+                    phx-debounce="1000"
                   />
                   <.input
                     field={@functional_analysis_form[:organism_hunger_or_nutrition]}
                     id="functional-analysis-organism-hunger-or-nutrition"
                     type="textarea"
                     label="Hambre o nutrición"
+                    phx-debounce="1000"
                   />
                   <.input
                     field={@functional_analysis_form[:organism_learning_history]}
                     id="functional-analysis-organism-learning-history"
                     type="textarea"
                     label="Historia de aprendizaje"
+                    phx-debounce="1000"
                   />
                 </div>
               </fieldset>
@@ -2202,18 +2307,21 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                     id="functional-analysis-response-physiological"
                     type="textarea"
                     label="Fisiológica"
+                    phx-debounce="1000"
                   />
                   <.input
                     field={@functional_analysis_form[:response_cognitive]}
                     id="functional-analysis-response-cognitive"
                     type="textarea"
                     label="Cognitiva"
+                    phx-debounce="1000"
                   />
                   <.input
                     field={@functional_analysis_form[:response_motor]}
                     id="functional-analysis-response-motor"
                     type="textarea"
                     label="Motora o conductual"
+                    phx-debounce="1000"
                   />
                 </div>
               </fieldset>
@@ -2225,12 +2333,14 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   id="functional-analysis-consequences-short-term"
                   type="textarea"
                   label="A corto plazo"
+                  phx-debounce="1000"
                 />
                 <.input
                   field={@functional_analysis_form[:consequences_long_term]}
                   id="functional-analysis-consequences-long-term"
                   type="textarea"
                   label="A largo plazo"
+                  phx-debounce="1000"
                 />
               </fieldset>
 
