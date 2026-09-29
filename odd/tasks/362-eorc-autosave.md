@@ -26,6 +26,6 @@
   - Test UI shows saving, saved, and error states, retaining text on error.
   - Test multi-tab / out-of-order race: stale lock_version returns conflict signal and does not overwrite newer edits.
   - Test existing legacy content, previous notes, citations, and authorization remain intact.
-- [ ] Task 5: Verification and precommit
+- [x] Task 5: Verification and precommit
   - Run `mix test test/alethea_web/live/target_behavior_live/review_test.exs` and `test/alethea/clinical_record_test.exs`.
   - Run `mix precommit` and fix any issues.
