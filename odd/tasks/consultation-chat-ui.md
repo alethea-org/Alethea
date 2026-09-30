@@ -72,31 +72,52 @@ contract stays untouched.
 
 ## Tasks
 
-- [ ] **TASK-1 — Conversational turn structure in `ConsultationLive`**
-  - Status: pending.
-  - Immediate pending echo, in-thread typing indicator (`#consultation-retrieving`),
-    outcome replacement per turn, in-thread error bubbles, per-turn hypothesis,
-    `#consultation-thread` wrapper, header/action row, idle hero with
-    suggestion chips, bottom composer.
-- [ ] **TASK-2 — Chat styles in `editorial.css`**
-  - Status: pending.
-  - Full-height flush layout, scrollable thread, bubble system, typing
-    animation, compact citation chips, composer, mobile. All pre-existing
-    consultation classes keep rules.
-- [ ] **TASK-3 — JS hooks: autoscroll + composer behavior**
-  - Status: pending.
-  - `ConsultationScroll` + `ConsultationComposer` external hooks registered in
-    `app.js`.
-- [ ] **TASK-4 — Test suite updates + new conversational assertions**
-  - Status: pending.
-  - Update `#consultation-synthesis` → `#consultation-thread` in followup
-    tests; rewrite R12 sibling assertions per-turn; new tests: immediate echo,
-    in-thread errors, per-turn hypothesis persistence, suggestion chips,
-    composer, scroll hook.
-- [ ] **TASK-5 — Verification**
-  - Status: pending.
-  - Focused tests green, then `mix precommit` green.
+- [x] **TASK-1 — Conversational turn structure in `ConsultationLive`**
+  - Status: completed (commit 7c82dc8).
+  - `start_consultation_turn/2` shared by `"ask"` and `"suggest"`; pending stream
+    echo under the same DOM id the async resolution replaces; per-turn synthesis/
+    sources/hypothesis; in-thread error notices; header + hero + composer.
+- [x] **TASK-2 — Chat styles in `editorial.css`**
+  - Status: completed (commit 7c82dc8).
+  - Full-height flush column (100dvh-64px, negative margins), scrollable thread,
+    right-aligned user bubbles on `--colors-primary`, typing-dots keyframes,
+    citation pills, composer with safe-area mobile. All pre-existing classes
+    keep rules; 10 new classes locked by the CSS test.
+- [x] **TASK-3 — JS hooks: autoscroll + composer behavior**
+  - Status: completed (commit 7c82dc8).
+  - `ConsultationScroll` (near-bottom stick, 120px) + `ConsultationComposer`
+    (Enter submits, Shift+Enter newline, auto-grow ≤160px) registered in
+    `app.js` LiveSocket hooks.
+- [x] **TASK-4 — Test suite updates + new conversational assertions**
+  - Status: completed (commit 7c82dc8).
+  - RED 20 failures → GREEN 68/68 on the focused suite. Followup
+    `#consultation-synthesis` → `#consultation-thread` (5 sites); blocked-turn
+    refutes migrated to the in-thread contract (refute `#turn-N-synthesis` +
+    notice assert) with orchestrator approval; R12 rewritten per-turn; new
+    describe covering immediate echo, in-thread errors, per-turn hypothesis,
+    suggestion chips, hooks, send-disabled.
+- [x] **TASK-5 — Verification**
+  - Status: completed (doc close commit).
+  - First `mix precommit`: 1690/1691, single failure AletheaWeb.IconsTest
+    (hero-arrow-up/hero-sparkles missing from the icon whitelist) → fixed in
+    commit 9d2cbcd (official Heroicons v2 outline paths added to
+    `lib/alethea_web/components/icons.ex`); focused icons test 3/3.
+  - Full `mix precommit` re-run (gentle-ai-verify, background): **exit 0** —
+    compile --warnings-as-errors, deps.unlock --unused, format, test:
+    1691 passed (6 doctests + 1685 tests), 5 skipped, 0 failures (185.2s).
 
 ## Evidence
 
-- (filled per task: commits, test results)
+- Commit 7c82dc8 `feat(web): conversational chat UI for clinical consultation`
+  (implementation + tests + this doc; 7 files, +798/−143).
+- Commit 9d2cbcd `fix(web): add hero-arrow-up and hero-sparkles to icon set`.
+- Focused suite: 68/68 green (`editorial_css_consultation`, `consultation_live`,
+  `consultation_live_followup`).
+- Worker TDD evidence: RED 20 → GREEN 65/68 → 68/68 after approved
+  blocked-turn assertion migration.
+- Full gate: first run 1690/1691 (icons coverage, fixed in 9d2cbcd); re-run
+  **exit 0, 1691 passed / 0 failed / 5 skipped** (gentle-ai-verify).
+- Native review (RDD): the doc-only workspace candidate
+  (sha256:e13daab…) started ordinary, closed approved (low risk,
+  non_executable_only, no lenses), acknowledged and burned
+  (gentle-ai.review-acknowledged/v1) — lineage review-14cb8536a4de0e76.
