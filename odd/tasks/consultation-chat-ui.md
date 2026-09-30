@@ -135,9 +135,17 @@ contract stays untouched.
   non-blocking finding remains, pre-existing on the #360 branch:
   R3-weekly-summary-schema-echo-clause (weekly_summary_chain.ex:169-172,
   informational).
+- Second native review cycle (lineage review-6a25585938f417cc, lens review-reliability):
+  CRITICAL finding R3-stale-async-guard-order — the general handle_async/3
+  clause preceded the stale-result and unauthorized guards, shadowing them.
+  Correction plan declared (30 lines) and applied in commit bb09b6a (reordered
+  clauses: unauthorized redirect first, nil pending_turn discard second, general
+  result third; unreachable apply_answer clause removed). Targeted provider
+  validation approved the correction; review closed approved and burned
+  (gentle-ai.review-acknowledged/v1). One advisory warning remains on #360 branch
+  (R3-schema-echo-clause-missing-fallback in weekly_summary_chain.ex).
 - Post-review ASSESS (rddLine on, nativeReviewOutcome closed, explicit):
   plan = writer self-verification is the record, no separate verifier.
-  Writer record: focused suite 69/69 after the correction, lens
-  diagnostics clean, mix format applied; full gate green at e2ae0e3
-  (pre-correction), correction delta covered by focused suite + native
-  targeted validation.
+  Writer record: focused suite 69/69 after both corrections, lens
+  diagnostics clean, mix format applied; full gate green at e2ae0e3,
+  both correction deltas covered by focused suite + native targeted validation.
