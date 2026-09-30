@@ -32,6 +32,7 @@ defmodule Alethea.ClinicalRecord do
     EvidenceSource,
     FunctionalAnalysisContent,
     FunctionalAnalysisDraft,
+    FunctionalAnalysisVersion,
     Outbox,
     SessionTranscript,
     SessionTranscriptContent,
@@ -1500,6 +1501,238 @@ defmodule Alethea.ClinicalRecord do
           {:error, reason}
       end
     end)
+  end
+
+  @doc """
+  Registers the current persisted functional-analysis draft as an immutable
+  version. The caller must present its exact lock version and a nonblank
+  change note (at most 500 graphemes). The TargetBehavior row is locked in
+  the same transaction used by draft writes, serializing revision checks and
+  per-target numbering. The already-encrypted draft body is copied verbatim;
+  only the trimmed note is encrypted here.
+  """
+  @spec register_functional_analysis_version(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          pos_integer(),
+          String.t()
+        ) :: {:ok, FunctionalAnalysisVersion.t()} | {:error, term()}
+  def register_functional_analysis_version(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        expected_lock_version,
+        change_note
+      ) do
+    with {:ok, trimmed_note} <- validate_version_change_note(change_note) do
+      with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+        Repo.transaction(fn ->
+          case lock_and_validate_target_behavior(professional, patient, target_behavior_id) do
+            {:ok, _target} ->
+              case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
+                %Tombstone{resource_id: resource_id} ->
+                  {:denied_tombstone, resource_id}
+
+                nil ->
+                  register_locked_functional_analysis_version(
+                    professional,
+                    patient,
+                    target_behavior_id,
+                    expected_lock_version,
+                    trimmed_note,
+                    keyring
+                  )
+              end
+
+            {:error, {:denied_target, audited_id}} ->
+              {:denied_target, audited_id}
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+        end)
+        |> case do
+          {:ok, {:denied_tombstone, resource_id}} ->
+            log_denied_audit(professional.id, resource_id, "functional_analysis_draft")
+            {:error, :legally_deleted}
+
+          {:ok, {:denied_target, audited_id}} ->
+            log_denied_audit(professional.id, audited_id, "target_behavior")
+            {:error, :not_found}
+
+          {:ok, {:error, reason}} ->
+            {:error, reason}
+
+          {:ok, version} ->
+            {:ok, version}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+    end
+  end
+
+  defp validate_version_change_note(note) when is_binary(note) do
+    trimmed = String.trim(note)
+
+    cond do
+      trimmed == "" -> {:error, :invalid_change_note}
+      String.length(trimmed) > 500 -> {:error, :invalid_change_note}
+      true -> {:ok, trimmed}
+    end
+  end
+
+  defp validate_version_change_note(_), do: {:error, :invalid_change_note}
+
+  defp register_locked_functional_analysis_version(
+         professional,
+         patient,
+         target_behavior_id,
+         expected_lock_version,
+         change_note,
+         keyring
+       ) do
+    case Repo.get_by(FunctionalAnalysisDraft,
+           patient_id: patient.id,
+           target_behavior_id: target_behavior_id
+         ) do
+      nil ->
+        {:error, :draft_not_found}
+
+      %FunctionalAnalysisDraft{} = draft
+      when is_integer(expected_lock_version) and expected_lock_version > 0 ->
+        if draft.lock_version != expected_lock_version do
+          {:error, :conflict}
+        else
+          with {:ok, encrypted_note} <-
+                 PatientVault.encrypt(change_note, keyring.clinical_record_dek),
+               {:ok, version_number} <-
+                 increment_functional_analysis_version_sequence(target_behavior_id) do
+            changeset =
+              FunctionalAnalysisVersion.changeset(%FunctionalAnalysisVersion{}, %{
+                encrypted_body: draft.encrypted_body,
+                encrypted_change_note: encrypted_note,
+                encryption_version: 2,
+                version_number: version_number,
+                draft_id: draft.id,
+                patient_id: patient.id,
+                professional_id: professional.id,
+                target_behavior_id: target_behavior_id
+              })
+
+            Ecto.Multi.new()
+            |> Ecto.Multi.insert(:record, changeset)
+            |> Ecto.Multi.insert(:audit, fn %{record: record} ->
+              Audit.changeset(%Audit{
+                professional_id: professional.id,
+                action: "functional_analysis_version_registered",
+                resource_type: "functional_analysis_version",
+                resource_id: record.id,
+                outcome: "success"
+              })
+            end)
+            |> Oban.insert(:outbox_event, fn %{record: record} ->
+              Outbox.event("functional_analysis_version_registered", record)
+            end)
+            |> Repo.transaction()
+            |> case do
+              {:ok, %{record: record}} -> record
+              {:error, _step, reason, _changes} -> Repo.rollback(reason)
+            end
+          end
+        end
+
+      %FunctionalAnalysisDraft{} ->
+        {:error, :conflict}
+    end
+  end
+
+  defp increment_functional_analysis_version_sequence(target_behavior_id) do
+    case Repo.update_all(
+           from(target in TargetBehavior, where: target.id == ^target_behavior_id),
+           inc: [functional_analysis_version_sequence: 1]
+         ) do
+      {1, _} ->
+        target = Repo.get!(TargetBehavior, target_behavior_id)
+        {:ok, target.functional_analysis_version_sequence}
+
+      {0, _} ->
+        {:error, :target_not_found}
+    end
+  end
+
+  @doc "Lists authorized immutable functional-analysis versions in registration order, decrypting body and change note."
+  @spec list_functional_analysis_versions(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, [FunctionalAnalysisVersion.t()]} | {:error, term()}
+  def list_functional_analysis_versions(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id
+      ) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+      versions =
+        FunctionalAnalysisVersion
+        |> where([version], version.patient_id == ^patient.id)
+        |> where([version], version.target_behavior_id == ^target_behavior_id)
+        |> order_by([version], asc: version.version_number)
+        |> preload(:professional)
+        |> Repo.all()
+
+      {:ok, Enum.map(versions, &decrypt_functional_analysis_version(&1, keyring))}
+    end)
+  end
+
+  @doc "Loads and decrypts one historical version scoped to its authorized patient and target behavior."
+  @spec get_functional_analysis_version(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t()
+        ) :: {:ok, FunctionalAnalysisVersion.t()} | {:error, term()}
+  def get_functional_analysis_version(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        version_id
+      ) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+      with {:ok, uuid} <- Ecto.UUID.cast(version_id),
+           %FunctionalAnalysisVersion{} = version <-
+             Repo.get_by(FunctionalAnalysisVersion,
+               id: uuid,
+               patient_id: patient.id,
+               target_behavior_id: target_behavior_id
+             ) do
+        {:ok,
+         version |> Repo.preload(:professional) |> decrypt_functional_analysis_version(keyring)}
+      else
+        _ ->
+          log_denied_audit(
+            professional.id,
+            cast_audit_id(version_id),
+            "functional_analysis_version"
+          )
+
+          {:error, :not_found}
+      end
+    end)
+  end
+
+  defp decrypt_functional_analysis_version(version, keyring) do
+    dek = dek_for(version, keyring)
+
+    body = decrypt_or_placeholder(version.encrypted_body, dek)
+    change_note = decrypt_or_placeholder(version.encrypted_change_note, dek)
+    %{version | body: body, change_note: change_note}
+  end
+
+  defp cast_audit_id(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
   end
 
   @doc """

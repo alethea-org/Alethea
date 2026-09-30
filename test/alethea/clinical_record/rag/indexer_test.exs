@@ -61,6 +61,11 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
                {:index, :functional_analysis_draft}
     end
 
+    test "functional-analysis version registration is not a recognized RAG event" do
+      assert Indexer.eligibility("functional_analysis_version_registered") ==
+               {:unknown, "functional_analysis_version_registered"}
+    end
+
     test "patient_message_received indexes (sdd/telegram-rag-ingestion-262 #262, Slice 1)" do
       assert Indexer.eligibility("patient_message_received") == {:index, :patient_message}
     end

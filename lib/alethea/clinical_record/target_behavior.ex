@@ -13,6 +13,7 @@ defmodule Alethea.ClinicalRecord.TargetBehavior do
   schema "target_behaviors" do
     field :encrypted_description, :binary
     field :encryption_version, :integer, default: 1
+    field :functional_analysis_version_sequence, :integer, default: 0
     field :description, :string, virtual: true
 
     belongs_to :patient, Alethea.Accounts.Patient
