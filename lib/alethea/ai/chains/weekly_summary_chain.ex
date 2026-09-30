@@ -6,6 +6,8 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
+  @status_levels ["Estable", "Alerta", "Intervención Requerida"]
+
   @impl true
   def run(%{summaries: summaries, trends: trends}) when is_list(summaries) and is_list(trends) do
     session_count = length(summaries)
@@ -50,6 +52,50 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
   @impl true
   def supported_providers, do: [:local, :cloud]
 
+  @typedoc """
+  Reporte semanal estructurado: exactamente las claves que hoy se persisten
+  (`tokens_used` lo agrega `do_run/3`, no el parser).
+  """
+  @type report :: %{
+          summary_text: String.t(),
+          status_level: String.t(),
+          anxiety_score: float() | nil,
+          social_score: float() | nil,
+          emotional_range: map() | nil,
+          crisis_events: non_neg_integer() | nil,
+          session_count: non_neg_integer() | nil
+        }
+
+  @doc """
+  Parser puro de la respuesta del modelo (#360): decode con limpieza de fences
+  → detección de eco del esquema → `unwrap_schema_echo/1` (opt-in) →
+  validación estricta de `summary_text` (binario no vacío) y `status_level`
+  (exactamente el enum clínico). Las métricas mantienen el parsing leniente de
+  antes y `session_count` conserva el conteo local como fallback.
+
+  Un eco del esquema que no desenvuelve datos clínicos válidos se rechaza con
+  `{:error, :schema_echo}`; todo lo demás que falla la validación es
+  `{:error, :unparseable}`. Nunca se deduce el estado clínico escaneando el
+  texto crudo: solo una respuesta clínica válida produce un reporte.
+  """
+  @spec parse(String.t(), non_neg_integer()) ::
+          {:ok, report()} | {:error, :schema_echo | :unparseable}
+  def parse(raw, session_count) when is_binary(raw) do
+    with {:ok, decoded} <- StructuredOutput.parse_json_response(raw) do
+      unwrapped = StructuredOutput.unwrap_schema_echo(decoded)
+
+      case build_report(unwrapped, session_count) do
+        {:ok, report} ->
+          {:ok, report}
+
+        {:error, :unparseable} ->
+          if schema_echo?(decoded), do: {:error, :schema_echo}, else: {:error, :unparseable}
+      end
+    else
+      _error -> {:error, :unparseable}
+    end
+  end
+
   defp do_run(llm, content, session_count) do
     start_time = System.monotonic_time(:millisecond)
     :telemetry.execute([:alethea, :ai, :chain, :start], %{chain: :weekly_summary}, %{})
@@ -67,15 +113,27 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
       case result do
         {:ok, chain} ->
           raw = chain.last_message.content
-          structured = parse_structured_response(raw, session_count)
 
-          meta = %{
-            chain: :weekly_summary,
-            duration_ms: duration,
-            response_length: byte_size(raw)
-          }
+          case parse(raw, session_count) do
+            {:ok, report} ->
+              meta = %{
+                chain: :weekly_summary,
+                duration_ms: duration,
+                response_length: byte_size(raw)
+              }
 
-          {meta, {:ok, Map.put(structured, :tokens_used, estimate_tokens(content))}}
+              {meta, {:ok, Map.put(report, :tokens_used, estimate_tokens(content))}}
+
+            {:error, reason} ->
+              meta = %{
+                chain: :weekly_summary,
+                duration_ms: duration,
+                response_length: byte_size(raw),
+                error: inspect(reason)
+              }
+
+              {meta, {:error, reason}}
+          end
 
         {:error, reason} ->
           meta = %{chain: :weekly_summary, duration_ms: duration, error: inspect(reason)}
@@ -86,30 +144,34 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
     parsed
   end
 
-  defp parse_structured_response(raw, session_count) do
-    case StructuredOutput.parse_json_response(raw) do
-      {:ok, map} ->
-        %{
-          summary_text: Map.get(map, "summary_text") || raw,
-          status_level: Map.get(map, "status_level") || infer_status_level(raw),
-          anxiety_score: parse_float(Map.get(map, "anxiety_score")),
-          social_score: parse_float(Map.get(map, "social_score")),
-          emotional_range: parse_emotional_range(Map.get(map, "emotional_range")),
-          crisis_events: parse_non_neg_integer(Map.get(map, "crisis_events")),
-          session_count: parse_non_neg_integer(Map.get(map, "session_count")) || session_count
-        }
-
-      {:error, _} ->
-        %{
-          summary_text: raw,
-          status_level: infer_status_level(raw),
-          anxiety_score: nil,
-          social_score: nil,
-          emotional_range: nil,
-          crisis_events: nil,
-          session_count: session_count
-        }
+  defp build_report(decoded, session_count) when is_map(decoded) do
+    with summary_text when is_binary(summary_text) <- Map.get(decoded, "summary_text"),
+         true <- String.trim(summary_text) != "",
+         status_level when status_level in @status_levels <- Map.get(decoded, "status_level") do
+      {:ok,
+       %{
+         summary_text: summary_text,
+         status_level: status_level,
+         anxiety_score: parse_float(Map.get(decoded, "anxiety_score")),
+         social_score: parse_float(Map.get(decoded, "social_score")),
+         emotional_range: parse_emotional_range(Map.get(decoded, "emotional_range")),
+         crisis_events: parse_non_neg_integer(Map.get(decoded, "crisis_events")),
+         session_count: parse_non_neg_integer(Map.get(decoded, "session_count")) || session_count
+       }}
+    else
+      _other -> {:error, :unparseable}
     end
+  end
+
+  defp build_report(_other, _session_count), do: {:error, :unparseable}
+
+  # Un eco del esquema se reconoce por un "properties" de nivel superior o por
+  # la forma completa del esquema embebido en el prompt ("type" => "object" +
+  # "required" como lista). Solo clasifica el motivo del error; nunca descarta
+  # una carga cuyos valores sí validan como datos clínicos.
+  defp schema_echo?(decoded) when is_map(decoded) do
+    is_map(Map.get(decoded, "properties")) or
+      (Map.get(decoded, "type") == "object" and is_list(Map.get(decoded, "required")))
   end
 
   defp parse_float(v) when is_float(v), do: v
@@ -131,14 +193,6 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
   end
 
   defp parse_emotional_range(_), do: nil
-
-  defp infer_status_level(text) do
-    cond do
-      String.contains?(text, "Intervención") -> "Intervención Requerida"
-      String.contains?(text, "Alerta") -> "Alerta"
-      true -> "Estable"
-    end
-  end
 
   defp build_prompt(summaries, trends, session_count) do
     summaries_text = Enum.map_join(summaries, "\n---\n", &extract_summary_text/1)

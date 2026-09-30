@@ -40,6 +40,11 @@ alethea-*.tar
 # Node.js dependencies
 node_modules/
 
+# Agent-skill npm tooling artifacts installed at the repo root
+# (e.g. jorge-el-curioso) — local only, not part of the app
+/package.json
+/package-lock.json
+
 # Elixir LS / IDEs
 /.elixir_ls/
 /.lexical/

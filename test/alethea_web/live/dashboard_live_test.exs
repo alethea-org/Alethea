@@ -576,6 +576,42 @@ defmodule AletheaWeb.DashboardLiveTest do
       assert html =~ "No se pudo generar el resumen semanal."
     end
 
+    test "keeps the last valid summary when the chain rejects a schema echo (#360)", %{
+      conn: conn,
+      patient: patient
+    } do
+      # Pre-existing valid weekly summary: the "last valid" state the UI must
+      # preserve when the model echoes the embedded JSON schema.
+      period_start = DateTime.utc_now() |> DateTime.add(-9, :day) |> DateTime.truncate(:second)
+
+      {:ok, _summary} =
+        Alethea.Clinical.save_summary(%{
+          period_start: period_start,
+          period_end: DateTime.add(period_start, 7, :day),
+          summary_text: "Semana estable, sin episodios de crisis.",
+          status_level: "Estable",
+          type: "weekly",
+          patient_id: patient.id
+        })
+
+      Alethea.AI.WeeklySummaryChainMock
+      |> expect(:run, fn _summaries, _trends -> {:error, :schema_echo} end)
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view |> element("#generate-weekly-summary-button") |> render_click()
+      html = render_async(view)
+
+      # The failed generation is signaled...
+      assert html =~ "No se pudo generar el resumen semanal."
+      # ...the previous valid narrative survives...
+      assert html =~ "Semana estable, sin episodios de crisis."
+      # ...and no schema fragment or enum-derived critical status leaks into the DOM.
+      refute html =~ "properties"
+      refute html =~ "Intervención Requerida"
+      refute has_element?(view, "#weekly-pre-session-report[data-status-tone=critical]")
+    end
+
     test "shows a distinct error when the AI provider does not respond", %{
       conn: conn,
       patient: patient
