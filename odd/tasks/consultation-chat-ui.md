@@ -121,3 +121,23 @@ contract stays untouched.
   (sha256:e13daab…) started ordinary, closed approved (low risk,
   non_executable_only, no lenses), acknowledged and burned
   (gentle-ai.review-acknowledged/v1) — lineage review-14cb8536a4de0e76.
+- Native review of the code candidate (base-diff from ef6f8c4, 14 files,
+  1464 lines, lineage review-4106a498593a4eeb, lens review-reliability):
+  CRITICAL finding R3-pending-turn-match-error — `handle_async/3`'s
+  :exit clause matched `pending_turn` unconditionally, so "nueva
+  conversación" mid-flight (reset to nil, task uncancellable) crashed
+  the LiveView on the late exit; the :ok path could also pollute the
+  fresh conversation. Correction plan declared (48 lines) and applied
+  in commit ccfa3e1 (44 lines: stale-result guards on both paths;
+  late :unauthorized still redirects; regression test). Targeted
+  provider validation approved the correction; review closed approved
+  and burned (gentle-ai.review-acknowledged/v1). One advisory
+  non-blocking finding remains, pre-existing on the #360 branch:
+  R3-weekly-summary-schema-echo-clause (weekly_summary_chain.ex:169-172,
+  informational).
+- Post-review ASSESS (rddLine on, nativeReviewOutcome closed, explicit):
+  plan = writer self-verification is the record, no separate verifier.
+  Writer record: focused suite 69/69 after the correction, lens
+  diagnostics clean, mix format applied; full gate green at e2ae0e3
+  (pre-correction), correction delta covered by focused suite + native
+  targeted validation.
