@@ -2149,7 +2149,10 @@ select.text-input {
 }
 
 /* =================================================================
-   Grounded clinical consultation — Citations (#230, #284)
+   Grounded clinical consultation — Citations (#230, #284;
+   consultation-chat-ui: compact chip form — the summary is a pill
+   with kind + date + ref inline, the excerpt stays a framed block
+   that only shows when the <details> opens)
 ================================================================= */
 
 .citation-list {
@@ -2160,29 +2163,26 @@ select.text-input {
 }
 
 .citation {
-  border: 1px solid var(--colors-hairline);
-  border-radius: var(--rounded-md);
-  background: var(--colors-canvas);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  overflow: hidden;
-}
-
-.citation[open] {
-  border-color: var(--colors-border-strong);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .citation__summary {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--spacing-xs) var(--spacing-sm);
-  padding: var(--spacing-xs) var(--spacing-sm);
+  gap: var(--spacing-xxs) var(--spacing-xs);
+  padding: 4px var(--spacing-sm);
   cursor: pointer;
   background: var(--colors-surface-soft);
   color: var(--colors-body);
-  font-size: var(--typography-body-md-size);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-pill);
+  font-size: 12px;
   user-select: none;
   list-style: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .citation__summary::-webkit-details-marker {
@@ -2202,6 +2202,11 @@ select.text-input {
   flex-shrink: 0;
 }
 
+.citation[open] > .citation__summary {
+  border-color: var(--colors-border-strong);
+  background: var(--colors-canvas);
+}
+
 .citation[open] > .citation__summary::before {
   transform: rotate(45deg);
 }
@@ -2212,20 +2217,16 @@ select.text-input {
 }
 
 .citation__kind {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--colors-ink);
-  background: var(--colors-canvas);
-  border: 1px solid var(--colors-hairline);
-  padding: 1px 6px;
-  border-radius: var(--rounded-xs);
   white-space: nowrap;
 }
 
 .citation__date {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--colors-muted);
   white-space: nowrap;
 }
@@ -2263,15 +2264,18 @@ select.text-input {
 }
 
 .citation__excerpt {
+  margin: var(--spacing-xxs) 0 0;
   padding: var(--spacing-sm) var(--spacing-md);
   font-size: 13px;
   line-height: 1.55;
   color: var(--colors-body);
-  border-top: 1px solid var(--colors-hairline);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  border-top-left-radius: 0;
   background: var(--colors-canvas);
   white-space: pre-wrap;
   word-break: break-word;
-  margin: 0;
+  max-width: 100%;
 }
 
 /* =================================================================
@@ -2336,18 +2340,50 @@ select.text-input {
 }
 
 /* =================================================================
-   Grounded clinical consultation — Thread & Surface (#235, #280, #284)
+   Grounded clinical consultation — Thread & Surface (#235, #280,
+   #284; consultation-chat-ui: conversational full-height chat on the
+   same tokens — immediate user echo, per-turn assistant rows, scroll
+   thread, pinned composer, no per-turn card boxes)
 ================================================================= */
 
+/* Full-height chat column flushed against .app-content: negative
+   margins cancel the shell's content padding so the thread and the
+   composer own the whole viewport below the 64px topbar. The
+   width+auto-margin pair keeps the column centered at ~860px while
+   still bleeding into the cancelled gutters. */
 .consultation {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: var(--spacing-md) 0 var(--spacing-xxl);
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 64px);
+  width: calc(100% + 2 * var(--spacing-lg));
+  max-width: calc(860px + 2 * var(--spacing-lg));
+  margin: calc(-1 * var(--spacing-xl)) auto calc(-1 * var(--spacing-xxl));
 }
 
-#consultation-ask-form {
-  margin-top: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
+@media (max-width: 1023px) {
+  .consultation {
+    width: calc(100% + 2 * var(--spacing-md));
+    margin-top: calc(-1 * var(--spacing-lg));
+    margin-bottom: calc(-1 * var(--spacing-xl));
+  }
+}
+
+.consultation__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--colors-hairline);
+  flex-shrink: 0;
+}
+
+.consultation__header h1 {
+  margin: 0;
+  font-size: var(--typography-title-sm-size);
+  font-weight: var(--typography-title-sm-weight);
+  line-height: var(--typography-title-sm-leading);
+  color: var(--colors-ink);
 }
 
 #consultation-new-conversation {
@@ -2361,7 +2397,6 @@ select.text-input {
   border: 1px solid var(--colors-hairline);
   border-radius: var(--rounded-sm);
   cursor: pointer;
-  margin-bottom: var(--spacing-md);
   transition: all 0.15s ease;
 }
 
@@ -2376,9 +2411,69 @@ select.text-input {
   outline-offset: 2px;
 }
 
-.consultation__thread,
-.consultation-synthesis {
-  margin-top: var(--spacing-lg);
+.consultation__hero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--spacing-lg) var(--spacing-md);
+}
+
+.consultation__hero-title {
+  margin: 0;
+  font-size: var(--typography-title-lg-size);
+  font-weight: var(--typography-title-lg-weight);
+  line-height: var(--typography-title-lg-leading);
+  letter-spacing: var(--typography-title-lg-tracking);
+  color: var(--colors-ink);
+}
+
+.consultation__hero > p {
+  margin: var(--spacing-sm) 0 var(--spacing-md);
+  font-size: var(--typography-body-md-size);
+  line-height: 1.6;
+  color: var(--colors-muted);
+  max-width: 46ch;
+}
+
+.consultation__hero-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacing-xs);
+}
+
+.consultation__suggestion {
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-pill);
+  background: var(--colors-canvas);
+  color: var(--colors-body);
+  font-size: var(--typography-body-md-size);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.consultation__suggestion:hover {
+  border-color: var(--colors-border-strong);
+  background: var(--colors-surface-soft);
+  color: var(--colors-ink);
+}
+
+.consultation__suggestion:focus-visible {
+  outline: 2px solid var(--colors-info-border);
+  outline-offset: 2px;
+}
+
+.consultation__thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--spacing-lg) 0;
 }
 
 .consultation__messages {
@@ -2387,45 +2482,113 @@ select.text-input {
   gap: var(--spacing-xl);
 }
 
+/* A turn is a plain chat row, not a card: the user bubble is
+   right-aligned, the assistant content left-aligned below it. */
 .consultation__turn {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
-  padding: var(--spacing-lg);
-  border-radius: var(--rounded-lg);
-  background: var(--colors-canvas);
-  border: 1px solid var(--colors-hairline);
-  box-shadow: 0 1px 3px rgba(24, 29, 38, 0.04);
 }
 
 .consultation__turn-query {
-  align-self: flex-start;
+  align-self: flex-end;
   max-width: 85%;
   padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--colors-surface-soft);
-  border: 1px solid var(--colors-hairline);
-  border-left: 3px solid var(--colors-primary);
-  border-radius: var(--rounded-md);
+  background: var(--colors-primary);
+  border-radius: var(--rounded-lg) var(--rounded-lg) var(--rounded-xs) var(--rounded-lg);
 }
 
 .consultation__turn-query-text {
   font-size: var(--typography-body-md-size);
   font-weight: 500;
-  line-height: 1.45;
-  color: var(--colors-ink);
+  line-height: 1.5;
+  color: var(--colors-on-primary);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.consultation__assistant {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  max-width: 72ch;
+}
+
+.consultation__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--rounded-full);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+  flex-shrink: 0;
+}
+
+.consultation__typing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xxs) 0;
+  color: var(--colors-muted);
+  font-size: var(--typography-body-md-size);
+}
+
+.consultation__typing p {
   margin: 0;
 }
 
-.consultation__synthesis {
-  padding: var(--spacing-md);
-  background: var(--colors-canvas);
+.consultation__typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.consultation__typing-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--rounded-full);
+  background: var(--colors-muted);
+  animation: consultation-typing-dot 1.2s infinite ease-in-out;
+}
+
+.consultation__typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.consultation__typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes consultation-typing-dot {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+.consultation__notice {
+  padding: var(--spacing-sm) var(--spacing-md);
   border: 1px solid var(--colors-hairline);
   border-radius: var(--rounded-md);
+  background: var(--colors-surface-soft);
+  color: var(--colors-body);
+  font-size: var(--typography-body-md-size);
+  line-height: 1.5;
+}
+
+.consultation__notice p {
+  margin: 0;
+}
+
+.consultation__notice--warning {
+  border-color: var(--colors-pill-border-warn);
+  background: var(--colors-warn-soft);
+  color: var(--colors-ink);
+}
+
+.consultation__synthesis,
+.consultation-synthesis {
+  max-width: 72ch;
 }
 
 .consultation__synthesis p {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: var(--typography-body-md-size);
+  line-height: 1.65;
   color: var(--colors-body);
   margin: 0;
 }
@@ -2441,6 +2604,7 @@ select.text-input {
 
 .consultation__sources-panel {
   margin-top: var(--spacing-xs);
+  max-width: 72ch;
 }
 
 .consultation__sources {
@@ -2458,13 +2622,67 @@ select.text-input {
   color: var(--colors-ink);
 }
 
-@media (max-width: 767px) {
-  .consultation__turn {
-    padding: var(--spacing-md);
-  }
+.consultation__composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-md) 0 0;
+  border-top: 1px solid var(--colors-hairline);
+}
 
+.consultation__composer .field {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.consultation__composer textarea {
+  min-height: 44px;
+  max-height: 160px;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--rounded-lg);
+  resize: none;
+  line-height: 1.5;
+}
+
+.consultation__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid transparent;
+  border-radius: var(--rounded-full);
+  background: var(--colors-primary);
+  color: var(--colors-on-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.consultation__send:active { background: var(--colors-primary-active); }
+
+.consultation__send[disabled] { opacity: 0.5; cursor: default; }
+
+.consultation__send:focus-visible {
+  outline: 2px solid var(--colors-info-border);
+  outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
   .consultation__turn-query {
     max-width: 100%;
+  }
+
+  .consultation__assistant,
+  .consultation__synthesis,
+  .consultation__sources-panel {
+    max-width: 100%;
+  }
+
+  .consultation__composer {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   .citation__link {

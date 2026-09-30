@@ -25,7 +25,17 @@ defmodule AletheaWeb.EditorialCssConsultationTest do
     "consultation__messages",
     "consultation__turn",
     "consultation__turn-query",
-    "consultation__turn-query-text"
+    "consultation__turn-query-text",
+    "consultation__header",
+    "consultation__hero",
+    "consultation__suggestion",
+    "consultation__composer",
+    "consultation__send",
+    "consultation__typing",
+    "consultation__typing-dots",
+    "consultation__notice",
+    "consultation__assistant",
+    "consultation__avatar"
   ]
 
   setup_all do

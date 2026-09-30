@@ -7,6 +7,17 @@ defmodule AletheaWeb.ConsultationLive do
   retirada. El contrato resuelve a `Consultation.Live` (#232) en dev y
   prod, y a `Consultation.Fake` sólo en `:test`.
 
+  Presentación conversacional (consultation-chat-ui): cada pregunta se
+  hace eco de inmediato como burbuja del usuario con indicador de tipeo
+  dentro del hilo (`#consultation-retrieving`), y `handle_async/3`
+  reemplaza ese turno pendiente — mismo DOM id `turn-N` — por su
+  resultado: síntesis con fuentes e hipótesis por turno, o un aviso de
+  error dentro del propio turno (`#consultation-no-evidence`,
+  `#consultation-stale`, `#consultation-provider-error`). El hilo
+  (`#consultation-thread`) existe siempre que hay turnos, también en
+  turnos de error; el compositor queda fijado abajo y se deshabilita
+  mientras se espera la respuesta.
+
   Cero persistencia (ADR-010 §6): `followup_state` y el contador de
   turno viven únicamente en `socket.assigns` y mueren con el proceso
   (remount, navegación, logout, "nueva conversación"). Ningún handler
@@ -35,6 +46,7 @@ defmodule AletheaWeb.ConsultationLive do
           |> assign(:state, :idle)
           |> assign(:pending, 0)
           |> assign(:turn, 0)
+          |> assign(:pending_turn, nil)
           |> assign(:followup_state, FollowupState.new(patient_id))
           |> assign(:query_form, to_form(%{"query" => ""}, as: "consultation"))
           |> stream_configure(:messages, dom_id: & &1.id)
@@ -52,24 +64,15 @@ defmodule AletheaWeb.ConsultationLive do
 
   @impl true
   def handle_event("ask", %{"consultation" => %{"query" => query}}, socket) do
-    professional = socket.assigns.current_professional
-    patient_id = socket.assigns.patient_id
-    followup_state = socket.assigns.followup_state
-    next_turn = socket.assigns.turn
+    {:noreply, start_consultation_turn(socket, query)}
+  end
 
-    socket =
-      socket
-      |> assign(:state, :retrieving)
-      |> assign(:query_form, to_form(%{"query" => ""}, as: "consultation"))
-      |> start_async(:answer, fn ->
-        {query,
-         Consultation.answer(professional, patient_id, query,
-           followup_state: followup_state,
-           turn_index: next_turn
-         )}
-      end)
-
-    {:noreply, socket}
+  # Idle-hero suggestion chips: `value-query` lands here and runs the
+  # exact same path as the composer submit — one shared private
+  # function, no duplicated logic.
+  @impl true
+  def handle_event("suggest", %{"query" => query}, socket) do
+    {:noreply, start_consultation_turn(socket, query)}
   end
 
   @impl true
@@ -79,6 +82,7 @@ defmodule AletheaWeb.ConsultationLive do
       |> assign(:state, :idle)
       |> assign(:pending, 0)
       |> assign(:turn, 0)
+      |> assign(:pending_turn, nil)
       |> assign(:followup_state, FollowupState.reset(socket.assigns.followup_state))
       |> stream(:messages, [], reset: true)
 
@@ -92,7 +96,44 @@ defmodule AletheaWeb.ConsultationLive do
 
   @impl true
   def handle_async(:answer, {:exit, _reason}, socket) do
-    {:noreply, assign(socket, :state, :provider_failure)}
+    %{turn: turn, query: query} = socket.assigns.pending_turn
+
+    {:noreply,
+     socket
+     |> assign(:state, :provider_failure)
+     |> replace_turn(turn, query, :provider_failure)}
+  end
+
+  # Shared ask path (composer submit + suggestion chips). The question is
+  # echoed into the message stream as a pending turn — user bubble plus
+  # in-thread typing indicator, under the same DOM id `turn-N` the async
+  # resolution will replace — before `start_async` fires, so it is
+  # visible while the retrieval runs.
+  defp start_consultation_turn(socket, query) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    followup_state = socket.assigns.followup_state
+    next_turn = socket.assigns.turn
+
+    socket
+    |> assign(:state, :retrieving)
+    |> assign(:query_form, to_form(%{"query" => ""}, as: "consultation"))
+    |> assign(:pending_turn, %{turn: next_turn, query: query})
+    |> stream_insert(:messages, %{
+      id: "turn-#{next_turn}",
+      turn: next_turn,
+      query: query,
+      status: :pending,
+      answer: nil,
+      citations: []
+    })
+    |> start_async(:answer, fn ->
+      {query,
+       Consultation.answer(professional, patient_id, query,
+         followup_state: followup_state,
+         turn_index: next_turn
+       )}
+    end)
   end
 
   defp apply_answer(socket, query, {:ok, %Consultation.Answer{outcome: :synthesis} = answer}) do
@@ -119,38 +160,51 @@ defmodule AletheaWeb.ConsultationLive do
     |> assign(:state, :synthesis)
     |> assign(:turn, turn + 1)
     |> assign(:followup_state, next_state)
-    |> assign(:last_answer, answer)
-    |> stream_insert(:messages, %{
-      id: "turn-#{turn}",
-      turn: turn,
-      query: query,
-      answer: answer,
-      citations: citations
-    })
+    |> replace_turn(turn, query, :synthesis, answer, citations)
   end
 
-  defp apply_answer(socket, _query, {:ok, %Consultation.Answer{outcome: :no_evidence}}) do
-    assign(socket, :state, :no_evidence)
+  defp apply_answer(socket, query, {:ok, %Consultation.Answer{outcome: :no_evidence}}) do
+    socket
+    |> assign(:state, :no_evidence)
+    |> replace_turn(socket.assigns.turn, query, :no_evidence)
   end
 
   defp apply_answer(
          socket,
-         _query,
+         query,
          {:ok, %Consultation.Answer{outcome: :stale, pending: pending}}
        ) do
     socket
     |> assign(:state, :stale)
     |> assign(:pending, pending)
+    |> replace_turn(socket.assigns.turn, query, :stale)
   end
 
-  defp apply_answer(socket, _query, {:ok, %Consultation.Answer{outcome: :provider_failure}}) do
-    assign(socket, :state, :provider_failure)
+  defp apply_answer(socket, query, {:ok, %Consultation.Answer{outcome: :provider_failure}}) do
+    socket
+    |> assign(:state, :provider_failure)
+    |> replace_turn(socket.assigns.turn, query, :provider_failure)
   end
 
   defp apply_answer(socket, _query, {:error, :unauthorized}) do
     socket
     |> put_flash(:error, "No estás autorizado para consultar a este paciente.")
     |> push_navigate(to: ~p"/patients")
+  end
+
+  # Resolves a turn by replacing the pending stream item under the same
+  # DOM id (`turn-N`). Error turns reuse the id on retry by design: the
+  # turn counter only advances on synthesis, so a retry replaces the
+  # previous error item instead of stacking a new turn.
+  defp replace_turn(socket, turn, query, status, answer \\ nil, citations \\ []) do
+    stream_insert(socket, :messages, %{
+      id: "turn-#{turn}",
+      turn: turn,
+      query: query,
+      status: status,
+      answer: answer,
+      citations: citations
+    })
   end
 
   # B2 (#233): server-derived `source_ref`. Stable across renders, unique
@@ -178,37 +232,52 @@ defmodule AletheaWeb.ConsultationLive do
   def render(assigns) do
     ~H"""
     <div class="consultation">
-      <.header>Consulta clínica</.header>
+      <header class="consultation__header">
+        <h1>Consulta clínica</h1>
 
-      <.form for={@query_form} id="consultation-ask-form" phx-submit="ask">
-        <.input field={@query_form[:query]} type="text" label="Preguntá sobre la historia clínica" />
-        <div class="form-actions">
+        <button id="consultation-new-conversation" type="button" phx-click="new_conversation">
+          Nueva conversación
+        </button>
+      </header>
+
+      <div :if={@state == :idle and @turn == 0} id="consultation-idle" class="consultation__hero">
+        <h2 class="consultation__hero-title">Consulta clínica fundamentada</h2>
+        <p>Preguntá lo que quieras saber de la historia clínica del paciente.</p>
+
+        <div class="consultation__hero-suggestions">
           <button
-            type="submit"
-            class="button-primary button-primary--sm"
-            disabled={@state == :retrieving}
+            type="button"
+            class="consultation__suggestion"
+            phx-click="suggest"
+            phx-value-query="¿Cómo viene el paciente últimamente?"
           >
-            Preguntar
+            ¿Cómo viene el paciente últimamente?
+          </button>
+          <button
+            type="button"
+            class="consultation__suggestion"
+            phx-click="suggest"
+            phx-value-query="¿Qué evidencia hay sobre el sueño?"
+          >
+            ¿Qué evidencia hay sobre el sueño?
+          </button>
+          <button
+            type="button"
+            class="consultation__suggestion"
+            phx-click="suggest"
+            phx-value-query="¿Qué conductas objetivo se registraron?"
+          >
+            ¿Qué conductas objetivo se registraron?
           </button>
         </div>
-      </.form>
-
-      <button id="consultation-new-conversation" type="button" phx-click="new_conversation">
-        Nueva conversación
-      </button>
-
-      <div :if={@state == :idle and @turn == 0} id="consultation-idle" class="empty-state">
-        <p>Escribí una pregunta sobre la historia clínica del paciente.</p>
-      </div>
-
-      <div :if={@state == :retrieving} id="consultation-retrieving" class="empty-state">
-        <p>Buscando evidencia en el registro…</p>
       </div>
 
       <div
-        :if={@turn > 0}
-        id="consultation-synthesis"
-        class="consultation-synthesis consultation__thread"
+        :if={@turn > 0 or @state != :idle}
+        id="consultation-thread"
+        class="consultation__thread"
+        phx-hook="ConsultationScroll"
+        aria-live="polite"
       >
         <div id="consultation-messages" phx-update="stream" class="consultation__messages">
           <article
@@ -221,7 +290,21 @@ defmodule AletheaWeb.ConsultationLive do
               <p class="consultation__turn-query-text">{message.query}</p>
             </div>
 
+            <div :if={message.status == :pending} class="consultation__assistant">
+              <div class="consultation__avatar" aria-hidden="true">
+                <.icon name="hero-sparkles" class="size-4" />
+              </div>
+
+              <div id="consultation-retrieving" class="consultation__typing">
+                <span class="consultation__typing-dots" aria-hidden="true">
+                  <i></i><i></i><i></i>
+                </span>
+                <p>Consultando el registro clínico…</p>
+              </div>
+            </div>
+
             <section
+              :if={message.status == :synthesis}
               id={"#{dom_id}-synthesis"}
               class="consultation-synthesis consultation__synthesis"
             >
@@ -229,7 +312,11 @@ defmodule AletheaWeb.ConsultationLive do
               <p>{message.answer.synthesis}</p>
             </section>
 
-            <section id={"#{dom_id}-sources"} class="consultation__sources-panel">
+            <section
+              :if={message.status == :synthesis}
+              id={"#{dom_id}-sources"}
+              class="consultation__sources-panel"
+            >
               <h2 class="consultation__section-title">Fuentes</h2>
 
               <.citation
@@ -247,29 +334,67 @@ defmodule AletheaWeb.ConsultationLive do
                 </:link>
               </.citation>
             </section>
+
+            <.hypothesis_panel
+              :if={message.answer && message.answer.hypothesis}
+              id={"turn-#{message.turn}-hypothesis"}
+              hypothesis={message.answer.hypothesis}
+            />
+
+            <div :if={message.status == :no_evidence} class="consultation__assistant">
+              <div class="consultation__avatar" aria-hidden="true">
+                <.icon name="hero-sparkles" class="size-4" />
+              </div>
+
+              <div id="consultation-no-evidence" class="consultation__notice">
+                <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>
+              </div>
+            </div>
+
+            <div :if={message.status == :stale} class="consultation__assistant">
+              <div class="consultation__avatar" aria-hidden="true">
+                <.icon name="hero-sparkles" class="size-4" />
+              </div>
+
+              <div id="consultation-stale" class="consultation__notice consultation__notice--warning">
+                <p>
+                  La indexación del paciente está pendiente ({@pending} elementos). Reintentá cuando finalice.
+                </p>
+              </div>
+            </div>
+
+            <div :if={message.status == :provider_failure} class="consultation__assistant">
+              <div class="consultation__avatar" aria-hidden="true">
+                <.icon name="hero-sparkles" class="size-4" />
+              </div>
+
+              <div id="consultation-provider-error" class="consultation__notice">
+                <p>No se pudo generar una respuesta. Intentá nuevamente.</p>
+              </div>
+            </div>
           </article>
         </div>
       </div>
 
-      <.hypothesis_panel
-        :if={@state == :synthesis}
-        id={"consultation-hypothesis-turn-#{@turn}"}
-        hypothesis={@last_answer.hypothesis}
-      />
-
-      <div :if={@state == :no_evidence} id="consultation-no-evidence" class="empty-state">
-        <p>El registro no cuenta con evidencia suficiente para responder esta consulta.</p>
-      </div>
-
-      <div :if={@state == :stale} id="consultation-stale" class="notice notice--warning">
-        <p>
-          La indexación del paciente está pendiente ({@pending} elementos). Reintentá cuando finalice.
-        </p>
-      </div>
-
-      <div :if={@state == :provider_failure} id="consultation-provider-error" class="empty-state">
-        <p>No se pudo generar una respuesta. Intentá nuevamente.</p>
-      </div>
+      <.form
+        for={@query_form}
+        id="consultation-ask-form"
+        phx-submit="ask"
+        class="consultation__composer"
+        phx-hook="ConsultationComposer"
+      >
+        <.input
+          field={@query_form[:query]}
+          type="textarea"
+          rows="1"
+          placeholder="Preguntá sobre la historia clínica…"
+          aria-label="Preguntá sobre la historia clínica"
+        />
+        <button type="submit" class="consultation__send" disabled={@state == :retrieving}>
+          <.icon name="hero-arrow-up" class="size-5" />
+          <span class="sr-only">Enviar</span>
+        </button>
+      </.form>
     </div>
     """
   end
