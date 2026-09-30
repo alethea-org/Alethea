@@ -1606,13 +1606,16 @@ defmodule Alethea.ClinicalRecord do
         if draft.lock_version != expected_lock_version do
           {:error, :conflict}
         else
-          with {:ok, encrypted_note} <-
+          # Decrypt/re-encrypt before consuming a sequence number so a
+          # failure leaves no version row and no gap.
+          with {:ok, encrypted_body} <- version_body_for(draft, keyring),
+               {:ok, encrypted_note} <-
                  PatientVault.encrypt(change_note, keyring.clinical_record_dek),
                {:ok, version_number} <-
                  increment_functional_analysis_version_sequence(target_behavior_id) do
             changeset =
               FunctionalAnalysisVersion.changeset(%FunctionalAnalysisVersion{}, %{
-                encrypted_body: draft.encrypted_body,
+                encrypted_body: encrypted_body,
                 encrypted_change_note: encrypted_note,
                 encryption_version: 2,
                 version_number: version_number,
@@ -1646,6 +1649,19 @@ defmodule Alethea.ClinicalRecord do
 
       %FunctionalAnalysisDraft{} ->
         {:error, :conflict}
+    end
+  end
+
+  # Every version row is stamped `encryption_version: 2`, so its body must be
+  # under the clinical-record DEK. A v2 draft is copied verbatim; a legacy v1
+  # draft (patient DEK) is decrypted and re-encrypted. Undecryptable drafts
+  # fail registration instead of storing an unreadable version.
+  defp version_body_for(%FunctionalAnalysisDraft{encryption_version: 2} = draft, _keyring),
+    do: {:ok, draft.encrypted_body}
+
+  defp version_body_for(%FunctionalAnalysisDraft{} = draft, keyring) do
+    with {:ok, plaintext} <- PatientVault.decrypt(draft.encrypted_body, dek_for(draft, keyring)) do
+      PatientVault.encrypt(plaintext, keyring.clinical_record_dek)
     end
   end
 

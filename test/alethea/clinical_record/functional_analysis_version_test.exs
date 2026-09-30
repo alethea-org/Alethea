@@ -443,6 +443,79 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
              )
   end
 
+  test "re-encrypts a legacy v1 draft body under the clinical-record key when registering" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(professional, patient.id, target.id, "x")
+
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+    {:ok, legacy_body} = PatientVault.encrypt("Legacy plaintext body", patient_dek)
+
+    legacy =
+      draft
+      |> Ecto.Changeset.change(encrypted_body: legacy_body, encryption_version: 1)
+      |> Repo.update!()
+
+    assert {:ok, version} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               legacy.lock_version,
+               "Legacy note"
+             )
+
+    assert version.encryption_version == 2
+
+    assert {:ok, [listed]} =
+             ClinicalRecord.list_functional_analysis_versions(professional, patient.id, target.id)
+
+    assert listed.body == "Legacy plaintext body"
+    assert listed.change_note == "Legacy note"
+
+    assert {:ok, loaded} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               version.id
+             )
+
+    assert loaded.body == "Legacy plaintext body"
+  end
+
+  test "fails registration without consuming a sequence number when the draft cannot be decrypted" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(professional, patient.id, target.id, "x")
+
+    corrupt =
+      draft
+      |> Ecto.Changeset.change(encrypted_body: "not-a-ciphertext", encryption_version: 1)
+      |> Repo.update!()
+
+    assert {:error, _reason} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               corrupt.lock_version,
+               "Note"
+             )
+
+    assert Repo.aggregate(FunctionalAnalysisVersion, :count) == 0
+
+    assert Repo.get!(Alethea.ClinicalRecord.TargetBehavior, target.id)
+           |> Map.fetch!(:functional_analysis_version_sequence) == 0
+  end
+
   defp create_professional! do
     {:ok, professional} =
       Accounts.create_professional(%{
