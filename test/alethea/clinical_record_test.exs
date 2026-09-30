@@ -1528,14 +1528,14 @@ defmodule Alethea.ClinicalRecordTest do
       assert_enqueued(worker: ClinicalRecordOutboxWorker)
     end
 
-    test "authorized, existing draft: proposal text is appended to current draft body", %{
+    test "authorized, existing draft: proposal text is appended to current draft body and advances lock_version", %{
       professional: professional,
       patient: patient
     } do
       target_behavior = create_target_behavior!(professional, patient)
 
-      # Create an existing draft first
-      {:ok, _draft} =
+      # Create an existing draft first with lock_version = 1
+      {:ok, initial_draft} =
         ClinicalRecord.upsert_functional_analysis_draft(
           professional,
           patient.id,
@@ -1543,9 +1543,11 @@ defmodule Alethea.ClinicalRecordTest do
           "Contenido previo del borrador"
         )
 
+      assert initial_draft.lock_version == 1
+
       proposal = create_ai_proposal!(professional, patient, target_behavior)
 
-      assert {:ok, %{proposal: accepted, draft: _draft}} =
+      assert {:ok, %{proposal: accepted, draft: updated_draft}} =
                ClinicalRecord.accept_ai_proposal_into_draft(
                  professional,
                  patient.id,
@@ -1554,8 +1556,9 @@ defmodule Alethea.ClinicalRecordTest do
                )
 
       assert accepted.status == "accepted"
+      assert updated_draft.lock_version == 2
 
-      assert {:ok, %{body: body}} =
+      assert {:ok, %{body: body, lock_version: 2}} =
                ClinicalRecord.get_functional_analysis_draft(
                  professional,
                  patient.id,
@@ -1641,6 +1644,46 @@ defmodule Alethea.ClinicalRecordTest do
                  Ecto.UUID.generate(),
                  Ecto.UUID.generate()
                )
+    end
+
+    test "target behavior deleted between validation and lock: returns not_found and logs denial",
+         %{
+           professional: professional,
+           patient: patient
+         } do
+      target_behavior = create_target_behavior!(professional, patient)
+
+      # When target behavior is deleted concurrently right before lock acquisition
+      Repo.delete!(target_behavior)
+
+      assert {:error, :not_found} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Content for deleted target"}
+               )
+
+      assert {:error, :not_found} =
+               ClinicalRecord.upsert_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 "Draft for deleted target"
+               )
+
+      denials =
+        AuditLog
+        |> where(
+          [a],
+          a.professional_id == ^professional.id and
+            a.action == "clinical_record_access_denied" and
+            a.resource_type == "target_behavior" and
+            a.resource_id == ^target_behavior.id
+        )
+        |> Repo.all()
+
+      assert length(denials) >= 2
     end
 
     test "transaction rollback: when draft persistence fails, proposal status remains pending", %{
@@ -1881,6 +1924,21 @@ defmodule Alethea.ClinicalRecordTest do
                )
 
       assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
+
+      # Verifies Finding 1: denial audit row is preserved in DB on tombstoned draft write
+      denial_audits =
+        AuditLog
+        |> where(
+          [a],
+          a.professional_id == ^professional.id and
+            a.action == "clinical_record_access_denied" and
+            a.resource_type == "functional_analysis_draft" and
+            a.resource_id == ^draft.id
+        )
+        |> Repo.all()
+
+      assert length(denial_audits) == 1
+      assert hd(denial_audits).details == %{"outcome" => "denied"}
     end
 
     test "sets lock_version = 1 on initial insert and increments on subsequent updates", %{
@@ -2031,6 +2089,360 @@ defmodule Alethea.ClinicalRecordTest do
                  %{"antecedents_distal" => "Initial content"},
                  expected_lock_version: 2
                )
+    end
+
+    @tag :concurrent_concurrency_race
+    test "concurrent updates with same expected_lock_version: exactly one succeeds and one returns conflict" do
+      run_concurrency_race_test(
+        fixture_initial_draft: true,
+        worker1_opts: [expected_lock_version: 1],
+        worker2_opts: [expected_lock_version: 1],
+        lock_mode: :draft
+      )
+    end
+
+    @tag :concurrent_concurrency_race
+    test "concurrent initial inserts on missing-row target: exactly one succeeds and one returns conflict" do
+      run_concurrency_race_test(
+        fixture_initial_draft: false,
+        worker1_opts: [expected_lock_version: nil],
+        worker2_opts: [expected_lock_version: nil],
+        lock_mode: :target
+      )
+    end
+  end
+
+  defp run_concurrency_race_test(opts) do
+    fixture_initial_draft = Keyword.get(opts, :fixture_initial_draft, false)
+    worker1_opts = Keyword.fetch!(opts, :worker1_opts)
+    worker2_opts = Keyword.fetch!(opts, :worker2_opts)
+    lock_mode = Keyword.fetch!(opts, :lock_mode)
+
+    created_ids = %{professional: nil, patient: nil, target: nil}
+
+    try do
+      created_ids =
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          {:ok, prof} =
+            Accounts.create_professional(%{
+              email: "race_test_#{System.unique_integer([:positive])}@example.com",
+              password: "Password12345!",
+              full_name: "Race Test Professional"
+            })
+
+          send(self(), {:race_fixture_created, :professional, prof.id})
+          {:ok, kek} = Accounts.load_professional_kek(prof)
+
+          {:ok, pat} =
+            Accounts.create_patient(
+              %{"alias" => "Race Patient", "professional_id" => prof.id},
+              kek
+            )
+
+          send(self(), {:race_fixture_created, :patient, pat.id})
+
+          {:ok, target} =
+            ClinicalRecord.create_target_behavior(prof, pat.id, "Race Target Behavior")
+
+          send(self(), {:race_fixture_created, :target, target.id})
+
+          if fixture_initial_draft do
+            {:ok, _draft} =
+              ClinicalRecord.upsert_functional_analysis_content(
+                prof,
+                pat.id,
+                target.id,
+                %{"antecedents_distal" => "Initial v1"}
+              )
+          end
+
+          %{prof: prof, patient: pat, target: target}
+        end)
+
+      prof = created_ids.prof
+      pat = created_ids.patient
+      target = created_ids.target
+
+      run_concurrency_race_processes(
+        self(),
+        prof,
+        pat,
+        target,
+        Ecto.UUID.dump!(target.id),
+        lock_mode,
+        worker1_opts,
+        worker2_opts
+      )
+    after
+      race_fixture_ids = collect_race_fixture_ids(created_ids)
+
+      terminate_race_processes!()
+      cleanup_race_fixtures!(race_fixture_ids)
+    end
+  end
+
+  defp run_concurrency_race_processes(
+         parent,
+         prof,
+         pat,
+         target,
+         target_uuid,
+         lock_mode,
+         worker1_opts,
+         worker2_opts
+       ) do
+    holder =
+      spawn_monitor(fn ->
+        Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
+
+        try do
+          send(parent, {:holder_ready, hd(hd(Repo.query!("SELECT pg_backend_pid()").rows))})
+
+          Repo.transaction(fn ->
+            case lock_mode do
+              :draft ->
+                Repo.query!(
+                  "SELECT * FROM functional_analysis_drafts WHERE target_behavior_id = $1 FOR UPDATE",
+                  [target_uuid]
+                )
+
+              :target ->
+                Repo.query!("SELECT * FROM target_behaviors WHERE id = $1 FOR UPDATE", [
+                  target_uuid
+                ])
+            end
+
+            send(parent, :holder_locked)
+
+            receive do
+              :release -> :ok
+            after
+              20_000 -> raise "race lock holder release timed out"
+            end
+          end)
+        after
+          Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+        end
+      end)
+
+    Process.put(:clinical_record_race_holder, holder)
+    Process.put(:clinical_record_race_workers, [])
+    Process.put(:clinical_record_race_exited, [])
+
+    try do
+      holder_backend_pid = receive_race_message!({:holder_ready}, 5_000)
+      receive_race_message!(:holder_locked, 5_000)
+
+      workers =
+        Enum.map([{1, worker1_opts}, {2, worker2_opts}], fn {number, worker_opts} ->
+          spawn_monitor(fn ->
+            Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
+
+            try do
+              backend_pid = hd(hd(Repo.query!("SELECT pg_backend_pid()").rows))
+              send(parent, {{:worker_ready, number}, backend_pid})
+
+              result =
+                ClinicalRecord.upsert_functional_analysis_content(
+                  prof,
+                  pat.id,
+                  target.id,
+                  %{"antecedents_distal" => "W#{number} Update"},
+                  worker_opts
+                )
+
+              send(parent, {{:worker_result, number}, result})
+            after
+              Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+            end
+          end)
+        end)
+
+      Process.put(:clinical_record_race_workers, workers)
+
+      worker_pids =
+        Enum.map(1..2, fn number ->
+          receive_race_message!({:worker_ready, number}, 5_000)
+        end)
+
+      assert await_both_database_waiters(worker_pids, holder_backend_pid) == :ok
+
+      send(elem(holder, 0), :release)
+      await_process_exit!(holder, 5_000)
+
+      results = Enum.map(1..2, &receive_race_message!({:worker_result, &1}, 20_000))
+      Enum.each(workers, &await_process_exit!(&1, 5_000))
+
+      successes = Enum.filter(results, &match?({:ok, %FunctionalAnalysisDraft{}}, &1))
+      conflicts = Enum.filter(results, &match?({:error, :conflict}, &1))
+      assert length(successes) == 1
+      assert length(conflicts) == 1
+    after
+      send(elem(holder, 0), :release)
+
+      [Process.get(:clinical_record_race_holder) | Process.get(:clinical_record_race_workers, [])]
+      |> Enum.reject(&is_nil/1)
+      |> terminate_and_join_processes!()
+
+      Process.delete(:clinical_record_race_holder)
+      Process.delete(:clinical_record_race_workers)
+      Process.delete(:clinical_record_race_exited)
+    end
+  end
+
+  defp collect_race_fixture_ids(ids) do
+    receive do
+      {:race_fixture_created, kind, id} ->
+        collect_race_fixture_ids(Map.put(ids, kind, id))
+    after
+      0 -> ids
+    end
+  end
+
+  defp cleanup_race_fixtures!(ids) do
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+      if ids.professional do
+        Repo.query!("DELETE FROM oban_jobs WHERE args->>'professional_id' = $1", [
+          ids.professional
+        ])
+
+        Repo.delete_all(
+          from a in Accounts.AuditLog, where: a.professional_id == ^ids.professional
+        )
+      end
+
+      if ids.target do
+        Repo.delete_all(
+          from d in FunctionalAnalysisDraft, where: d.target_behavior_id == ^ids.target
+        )
+
+        Repo.delete_all(from t in TargetBehavior, where: t.id == ^ids.target)
+      end
+
+      if ids.patient, do: Repo.delete_all(from p in Accounts.Patient, where: p.id == ^ids.patient)
+
+      if ids.professional,
+        do: Repo.delete_all(from p in Accounts.Professional, where: p.id == ^ids.professional)
+    end)
+  end
+
+  defp terminate_race_processes! do
+    holder = Process.get(:clinical_record_race_holder)
+    if holder, do: send(elem(holder, 0), :release)
+
+    [holder | Process.get(:clinical_record_race_workers, [])]
+    |> Enum.reject(&is_nil/1)
+    |> terminate_and_join_processes!()
+  end
+
+  defp terminate_and_join_processes!(processes) do
+    failures =
+      Enum.flat_map(processes, fn process ->
+        try do
+          terminate_and_join_process!(process)
+          []
+        rescue
+          error -> [{error, __STACKTRACE__}]
+        catch
+          kind, reason -> [{:caught, kind, reason, __STACKTRACE__}]
+        end
+      end)
+
+    case failures do
+      [] -> :ok
+      [{error, stacktrace} | _] when is_exception(error) -> reraise(error, stacktrace)
+      [{:caught, kind, reason, stacktrace} | _] -> :erlang.raise(kind, reason, stacktrace)
+    end
+  end
+
+  defp receive_race_message!({:worker_ready, number}, timeout) do
+    receive do
+      {{:worker_ready, ^number}, pid} -> pid
+    after
+      timeout -> flunk("timed out waiting for worker #{number} to connect")
+    end
+  end
+
+  defp receive_race_message!({:worker_result, number}, timeout) do
+    receive do
+      {{:worker_result, ^number}, result} -> result
+    after
+      timeout -> flunk("timed out waiting for worker #{number} result")
+    end
+  end
+
+  defp receive_race_message!({:holder_ready}, timeout) do
+    receive do
+      {:holder_ready, pid} -> pid
+    after
+      timeout -> flunk("timed out waiting for lock holder to connect")
+    end
+  end
+
+  defp receive_race_message!(message, timeout) do
+    receive do
+      ^message -> :ok
+    after
+      timeout -> flunk("timed out waiting for #{inspect(message)}")
+    end
+  end
+
+  defp await_both_database_waiters([first_pid, second_pid], holder_backend_pid) do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    await_database_waiters(first_pid, second_pid, holder_backend_pid, deadline)
+  end
+
+  defp await_database_waiters(first_pid, second_pid, holder_backend_pid, deadline) do
+    rows =
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        Repo.query!(
+          """
+          WITH RECURSIVE waits(origin, pid) AS (
+            SELECT pid, unnest(pg_blocking_pids(pid))
+            FROM pg_stat_activity WHERE pid IN ($1, $2)
+            UNION
+            SELECT waits.origin, unnest(pg_blocking_pids(waits.pid))
+            FROM waits JOIN pg_stat_activity activity ON activity.pid = waits.pid
+          )
+          SELECT origin, bool_or(pid = $3) FROM waits GROUP BY origin
+          """,
+          [first_pid, second_pid, holder_backend_pid]
+        ).rows
+      end)
+
+    if length(rows) == 2 and Enum.all?(rows, fn [_pid, reaches_holder?] -> reaches_holder? end) do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        {:error, {:wait_graph_does_not_reach_holder, rows}}
+      else
+        receive do
+        after
+          10 -> :ok
+        end
+
+        await_database_waiters(first_pid, second_pid, holder_backend_pid, deadline)
+      end
+    end
+  end
+
+  defp await_process_exit!({pid, ref}, timeout) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        Process.put(:clinical_record_race_exited, [
+          pid | Process.get(:clinical_record_race_exited, [])
+        ])
+
+        :ok
+    after
+      timeout -> flunk("timed out waiting for race process #{inspect(pid)}")
+    end
+  end
+
+  defp terminate_and_join_process!({pid, ref}) do
+    unless pid in Process.get(:clinical_record_race_exited, []) do
+      Process.exit(pid, :kill)
+      await_process_exit!({pid, ref}, 5_000)
     end
   end
 

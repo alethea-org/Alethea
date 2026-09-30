@@ -332,6 +332,29 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
+  # Locks the TargetBehavior row FOR UPDATE inside an already-open transaction
+  # and revalidates that it exists and belongs to the patient. If it was deleted
+  # between authorization and lock acquisition, returns {:error, {:denied_target, audited_id}}.
+  defp lock_and_validate_target_behavior(_professional, patient, target_behavior_id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(target_behavior_id) do
+      query =
+        from t in TargetBehavior,
+          where: t.id == ^uuid and t.patient_id == ^patient.id,
+          lock: "FOR UPDATE"
+
+      case Repo.one(query) do
+        %TargetBehavior{} = tb ->
+          {:ok, tb}
+
+        nil ->
+          {:error, {:denied_target, uuid}}
+      end
+    else
+      _ ->
+        {:error, {:denied_target, nil}}
+    end
+  end
+
   defp decrypt_target_behavior(professional, patient, target_behavior) do
     with {:ok, kek} <- Accounts.load_professional_kek(professional),
          {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
@@ -1117,87 +1140,140 @@ defmodule Alethea.ClinicalRecord do
     with_patient(professional, patient_id, fn patient, keyring ->
       dek = keyring.clinical_record_dek
 
-      with {:behavior, %TargetBehavior{}} <-
-             {:behavior,
-              Repo.get_by(TargetBehavior,
-                id: target_behavior_id,
-                patient_id: patient.id
-              )},
-           {:proposal, %AIProposal{} = proposal} <-
-             {:proposal,
-              Repo.get_by(AIProposal,
-                id: proposal_id,
-                patient_id: patient.id,
-                target_behavior_id: target_behavior_id
-              )},
-           {:ok, proposal_text} <-
-             PatientVault.decrypt(proposal.encrypted_text, dek_for(proposal, keyring)) do
-        current_body = load_current_draft_body(patient.id, target_behavior_id, keyring)
-        new_body = merge_draft_body(current_body, proposal_text)
+      Repo.transaction(fn ->
+        case lock_and_validate_target_behavior(professional, patient, target_behavior_id) do
+          {:ok, _target_behavior} ->
+            case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
+              %Tombstone{resource_id: resource_id} ->
+                {:denied_tombstone, resource_id}
 
-        with {:ok, ciphertext} <- PatientVault.encrypt(new_body, dek) do
-          draft_changeset =
-            FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
-              encrypted_body: ciphertext,
-              encryption_version: 2,
-              patient_id: patient.id,
-              professional_id: professional.id,
-              target_behavior_id: target_behavior_id
-            })
+              nil ->
+                case Repo.get_by(AIProposal,
+                       id: proposal_id,
+                       patient_id: patient.id,
+                       target_behavior_id: target_behavior_id
+                     ) do
+                  nil ->
+                    {:not_found_proposal, proposal_id}
 
-          action = "ai_proposal_accepted_into_draft"
+                  %AIProposal{} = proposal ->
+                    case PatientVault.decrypt(proposal.encrypted_text, dek_for(proposal, keyring)) do
+                      {:ok, proposal_text} ->
+                        current_body =
+                          load_current_draft_body(patient.id, target_behavior_id, keyring)
 
-          Ecto.Multi.new()
-          |> Ecto.Multi.update(
-            :proposal,
-            AIProposal.update_changeset(proposal, %{status: "accepted"})
-          )
-          |> Ecto.Multi.insert(:draft, draft_changeset,
-            on_conflict:
-              {:replace, [:encrypted_body, :encryption_version, :professional_id, :updated_at]},
-            conflict_target: :target_behavior_id,
-            returning: true
-          )
-          |> Ecto.Multi.insert(:audit_proposal, fn %{proposal: record} ->
-            Audit.changeset(%Audit{
-              professional_id: professional.id,
-              action: action,
-              resource_type: "ai_proposal",
-              resource_id: record.id,
-              outcome: "success"
-            })
-          end)
-          |> Ecto.Multi.insert(:audit_draft, fn %{draft: record} ->
-            Audit.changeset(%Audit{
-              professional_id: professional.id,
-              action: action,
-              resource_type: "functional_analysis_draft",
-              resource_id: record.id,
-              outcome: "success"
-            })
-          end)
-          |> Oban.insert(:outbox_proposal, fn %{proposal: record} ->
-            Outbox.event(action, record)
-          end)
-          |> Oban.insert(:outbox_draft, fn %{draft: record} ->
-            Outbox.event(action, record)
-          end)
-          |> Repo.transaction()
-          |> case do
-            {:ok, %{proposal: proposal, draft: draft}} ->
-              {:ok, %{proposal: proposal, draft: draft}}
+                        new_body = merge_draft_body(current_body, proposal_text)
 
-            {:error, step, reason, _changes} ->
-              Logger.warning("clinical_record multi failed at #{step}")
-              {:error, reason}
-          end
+                        with {:ok, ciphertext} <- PatientVault.encrypt(new_body, dek) do
+                          existing_draft =
+                            Repo.get_by(FunctionalAnalysisDraft,
+                              target_behavior_id: target_behavior_id,
+                              patient_id: patient.id
+                            )
+
+                          next_lock_version =
+                            if existing_draft, do: (existing_draft.lock_version || 0) + 1, else: 1
+
+                          draft_changeset =
+                            FunctionalAnalysisDraft.changeset(%FunctionalAnalysisDraft{}, %{
+                              encrypted_body: ciphertext,
+                              encryption_version: 2,
+                              lock_version: next_lock_version,
+                              patient_id: patient.id,
+                              professional_id: professional.id,
+                              target_behavior_id: target_behavior_id
+                            })
+
+                          action = "ai_proposal_accepted_into_draft"
+
+                          multi_result =
+                            Ecto.Multi.new()
+                            |> Ecto.Multi.update(
+                              :proposal,
+                              AIProposal.update_changeset(proposal, %{status: "accepted"})
+                            )
+                            |> Ecto.Multi.insert(:draft, draft_changeset,
+                              on_conflict:
+                                {:replace,
+                                 [
+                                   :encrypted_body,
+                                   :encryption_version,
+                                   :lock_version,
+                                   :professional_id,
+                                   :updated_at
+                                 ]},
+                              conflict_target: :target_behavior_id,
+                              returning: true
+                            )
+                            |> Ecto.Multi.insert(:audit_proposal, fn %{proposal: record} ->
+                              Audit.changeset(%Audit{
+                                professional_id: professional.id,
+                                action: action,
+                                resource_type: "ai_proposal",
+                                resource_id: record.id,
+                                outcome: "success"
+                              })
+                            end)
+                            |> Ecto.Multi.insert(:audit_draft, fn %{draft: record} ->
+                              Audit.changeset(%Audit{
+                                professional_id: professional.id,
+                                action: action,
+                                resource_type: "functional_analysis_draft",
+                                resource_id: record.id,
+                                outcome: "success"
+                              })
+                            end)
+                            |> Oban.insert(:outbox_proposal, fn %{proposal: record} ->
+                              Outbox.event(action, record)
+                            end)
+                            |> Oban.insert(:outbox_draft, fn %{draft: record} ->
+                              Outbox.event(action, record)
+                            end)
+                            |> Repo.transaction()
+
+                          case multi_result do
+                            {:ok, %{proposal: p, draft: d}} ->
+                              %{proposal: p, draft: d}
+
+                            {:error, step, reason, _changes} ->
+                              Logger.warning("clinical_record multi failed at #{step}")
+                              Repo.rollback(reason)
+                          end
+                        else
+                          {:error, reason} -> Repo.rollback(reason)
+                        end
+
+                      {:error, reason} ->
+                        Repo.rollback(reason)
+                    end
+                end
+            end
+
+          {:error, {:denied_target, audited_id}} ->
+            {:denied_target, audited_id}
+
+          {:error, reason} ->
+            Repo.rollback(reason)
         end
-      else
-        {:behavior, nil} ->
-          tombstone_gate(professional.id, target_behavior_id, "target_behavior")
+      end)
+      |> case do
+        {:ok, {:denied_tombstone, resource_id}} ->
+          log_denied_audit(professional.id, resource_id, "functional_analysis_draft")
+          {:error, :legally_deleted}
 
-        {:proposal, nil} ->
-          tombstone_gate(professional.id, proposal_id, "ai_proposal")
+        {:ok, {:not_found_proposal, prop_id}} ->
+          log_denied_audit(professional.id, prop_id, "ai_proposal")
+          {:error, :not_found}
+
+        {:ok, {:denied_target, audited_id}} ->
+          log_denied_audit(professional.id, audited_id, "target_behavior")
+          {:error, :not_found}
+
+        {:error, {:error, reason}} ->
+          {:error, reason}
+
+        {:ok, result} ->
+          {:ok, result}
 
         {:error, reason} ->
           {:error, reason}
@@ -1272,22 +1348,48 @@ defmodule Alethea.ClinicalRecord do
         body
       ) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
-      existing_draft =
-        Repo.get_by(FunctionalAnalysisDraft,
-          target_behavior_id: target_behavior_id,
-          patient_id: patient.id
-        )
+      Repo.transaction(fn ->
+        case lock_and_validate_target_behavior(professional, patient, target_behavior_id) do
+          {:ok, _target_behavior} ->
+            existing_draft =
+              Repo.get_by(FunctionalAnalysisDraft,
+                target_behavior_id: target_behavior_id,
+                patient_id: patient.id
+              )
 
-      next_lock_version = if existing_draft, do: (existing_draft.lock_version || 0) + 1, else: 1
+            next_lock_version =
+              if existing_draft, do: (existing_draft.lock_version || 0) + 1, else: 1
 
-      persist_functional_analysis_draft(
-        professional,
-        patient,
-        target_behavior_id,
-        body,
-        keyring,
-        next_lock_version
-      )
+            case persist_functional_analysis_draft(
+                   professional,
+                   patient,
+                   target_behavior_id,
+                   body,
+                   keyring,
+                   next_lock_version
+                 ) do
+              {:ok, draft} -> draft
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          {:error, {:denied_target, audited_id}} ->
+            {:denied_target, audited_id}
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, {:denied_target, audited_id}} ->
+          log_denied_audit(professional.id, audited_id, "target_behavior")
+          {:error, :not_found}
+
+        {:ok, draft} ->
+          {:ok, draft}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end)
   end
 
@@ -1328,36 +1430,74 @@ defmodule Alethea.ClinicalRecord do
       )
       when is_map(params) and is_list(opts) do
     with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
-      case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
-        %Tombstone{resource_id: resource_id} ->
-          deny_access(professional.id, resource_id, "functional_analysis_draft")
+      Repo.transaction(fn ->
+        case lock_and_validate_target_behavior(professional, patient, target_behavior_id) do
+          {:ok, _target_behavior} ->
+            case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
+              %Tombstone{resource_id: resource_id} ->
+                {:denied_tombstone, resource_id}
 
-        nil ->
-          existing_draft =
-            Repo.get_by(FunctionalAnalysisDraft,
-              target_behavior_id: target_behavior_id,
-              patient_id: patient.id
-            )
+              nil ->
+                existing_draft =
+                  Repo.get_by(FunctionalAnalysisDraft,
+                    target_behavior_id: target_behavior_id,
+                    patient_id: patient.id
+                  )
 
-          case check_draft_lock_version(existing_draft, params, opts) do
-            {:ok, next_lock_version} ->
-              body =
-                params
-                |> FunctionalAnalysisContent.new()
-                |> FunctionalAnalysisContent.serialize()
+                case check_draft_lock_version(existing_draft, params, opts) do
+                  {:ok, next_lock_version} ->
+                    body =
+                      params
+                      |> FunctionalAnalysisContent.new()
+                      |> FunctionalAnalysisContent.serialize()
 
-              persist_functional_analysis_draft(
-                professional,
-                patient,
-                target_behavior_id,
-                body,
-                keyring,
-                next_lock_version
-              )
+                    case persist_functional_analysis_draft(
+                           professional,
+                           patient,
+                           target_behavior_id,
+                           body,
+                           keyring,
+                           next_lock_version
+                         ) do
+                      {:ok, draft} -> draft
+                      {:error, reason} -> Repo.rollback(reason)
+                    end
 
-            {:error, :conflict} = error ->
-              error
-          end
+                  {:error, :conflict} ->
+                    Repo.rollback({:error, :conflict})
+                end
+            end
+
+          {:error, {:denied_target, audited_id}} ->
+            {:denied_target, audited_id}
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, {:denied_tombstone, resource_id}} ->
+          log_denied_audit(professional.id, resource_id, "functional_analysis_draft")
+          {:error, :legally_deleted}
+
+        {:ok, {:denied_target, audited_id}} ->
+          log_denied_audit(professional.id, audited_id, "target_behavior")
+          {:error, :not_found}
+
+        {:ok, draft} ->
+          {:ok, draft}
+
+        {:error, {:error, :conflict}} ->
+          {:error, :conflict}
+
+        {:error, :conflict} ->
+          {:error, :conflict}
+
+        {:error, {:error, reason}} ->
+          {:error, reason}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end)
   end
