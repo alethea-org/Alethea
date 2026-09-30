@@ -654,6 +654,27 @@ defmodule AletheaWeb.ConsultationLiveTest do
       refute html =~ "consultation-synthesis"
     end
 
+    test "'nueva conversación' while retrieving discards the late answer instead of crashing (R3)",
+         %{conn: conn, patient: patient} do
+      set_fake_outcome(:synthesis)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+
+      # Reset while the async answer is still in flight.
+      html = view |> element("#consultation-new-conversation") |> render_click()
+      assert html =~ "consultation-idle"
+
+      # The late answer lands after the reset: it must be discarded, not
+      # resolved against the fresh conversation (and never crash the
+      # LiveView on the exit path's pending_turn match).
+      html = render_async(view)
+
+      assert html =~ "consultation-idle"
+      refute has_element?(view, "#turn-0")
+      refute has_element?(view, "#turn-0-synthesis")
+    end
+
     test "no conversation content is written anywhere", %{conn: conn, patient: patient} do
       before_count = Repo.aggregate(Message, :count)
 

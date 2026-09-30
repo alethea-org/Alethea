@@ -94,8 +94,27 @@ defmodule AletheaWeb.ConsultationLive do
     {:noreply, apply_answer(socket, query, result)}
   end
 
+  # Stale-result guard (R3-pending-turn-match-error): "nueva
+  # conversación" resets `pending_turn` to nil without cancelling the
+  # in-flight task — LiveView cannot cancel `start_async` tasks — so a
+  # late result or exit must resolve against a discarded turn instead
+  # of crashing the LiveView. A late unauthorized result still
+  # redirects (access can be revoked mid-flight).
+  def handle_async(:answer, {:ok, {_query, {:error, :unauthorized}}}, socket) do
+    {:noreply,
+     socket
+     |> put_flash(:error, "No estás autorizado para consultar a este paciente.")
+     |> push_navigate(to: ~p"/patients")}
+  end
+
+  def handle_async(:answer, {:ok, _stale_result}, socket)
+      when is_nil(socket.assigns.pending_turn) do
+    {:noreply, socket}
+  end
+
   @impl true
-  def handle_async(:answer, {:exit, _reason}, socket) do
+  def handle_async(:answer, {:exit, _reason}, socket)
+      when is_map(socket.assigns.pending_turn) do
     %{turn: turn, query: query} = socket.assigns.pending_turn
 
     {:noreply,
@@ -103,6 +122,8 @@ defmodule AletheaWeb.ConsultationLive do
      |> assign(:state, :provider_failure)
      |> replace_turn(turn, query, :provider_failure)}
   end
+
+  def handle_async(:answer, {:exit, _reason}, socket), do: {:noreply, socket}
 
   # Shared ask path (composer submit + suggestion chips). The question is
   # echoed into the message stream as a pending turn — user bubble plus
