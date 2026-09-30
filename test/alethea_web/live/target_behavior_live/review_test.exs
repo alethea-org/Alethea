@@ -27,6 +27,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     ClinicianObservation,
     ConsultationEvidence,
     DismissedEvidenceSuggestion,
+    FunctionalAnalysisContent,
+    FunctionalAnalysisVersion,
     Retention,
     Tombstone
   }
@@ -1571,6 +1573,318 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert content.antecedents_distal == "Explicit manual distal content"
       assert content.response_cognitive == "Explicit manual cognitive content"
     end
+  end
+
+  describe "explicit E-O-R-C version registration (GitHub #363)" do
+    @version_form "#functional-analysis-version-form"
+
+    test "registers exactly the persisted draft with a trimmed note and keeps the editor editable",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      persist_draft!(professional, patient, target_behavior, %{
+        "antecedents_distal" => "Contenido persistido"
+      })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      assert has_element?(view, @version_form)
+      assert has_element?(view, "#{@version_form} button[type=submit]", "Registrar versión")
+
+      html = register_version(view, "  Primera formulación  ")
+
+      assert html =~ "Versión 1 registrada."
+
+      assert {:ok, [version]} =
+               ClinicalRecord.list_functional_analysis_versions(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert version.version_number == 1
+      assert version.change_note == "Primera formulación"
+      {_format, registered} = FunctionalAnalysisContent.parse(version.body)
+      assert registered.antecedents_distal == "Contenido persistido"
+
+      # The note form is reset and the editor keeps autosaving normally.
+      assert has_element?(view, "#functional-analysis-version-note[value='']")
+
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{"antecedents_distal" => "Edición posterior"}
+      })
+
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#editor-draft-status", "Guardado")
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Edición posterior")
+
+      # The registered snapshot is immutable; a new registration captures the new draft.
+      assert register_version(view, "Segunda formulación") =~ "Versión 2 registrada."
+
+      assert {:ok, [first, second]} =
+               ClinicalRecord.list_functional_analysis_versions(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      {_, first_content} = FunctionalAnalysisContent.parse(first.body)
+      {_, second_content} = FunctionalAnalysisContent.parse(second.body)
+      assert first_content.antecedents_distal == "Contenido persistido"
+      assert second_content.antecedents_distal == "Edición posterior"
+    end
+
+    test "rejects a blank note inline without registering anything", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      persist_draft!(professional, patient, target_behavior, %{
+        "response_motor" => "Respuesta persistida"
+      })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      html = register_version(view, "   ")
+
+      assert html =~ "Ingresá una nota breve del cambio."
+      assert version_count() == 0
+      assert has_element?(view, "#functional-analysis-response-motor", "Respuesta persistida")
+      assert has_element?(view, "#editor-draft-status", "Guardado")
+    end
+
+    test "rejects unsaved AI-generated content and preserves the editor", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia citada para generar"
+      )
+
+      persist_draft!(professional, patient, target_behavior, %{
+        "antecedents_distal" => "Texto guardado"
+      })
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        generated_eorc_fields()
+      end)
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#functional-analysis-organism-sleep", "IA: organism_sleep")
+
+      html = register_version(view, "Incluye texto de IA")
+
+      assert html =~ "Guardá los cambios pendientes antes de registrar una versión."
+      assert version_count() == 0
+      assert has_element?(view, "#functional-analysis-organism-sleep", "IA: organism_sleep")
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Texto guardado")
+    end
+
+    test "rejects registration while an autosave is pending", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      persist_draft!(professional, patient, target_behavior, %{
+        "antecedents_distal" => "Texto guardado"
+      })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      :sys.replace_state(view.pid, fn state ->
+        %{state | socket: Phoenix.Component.assign(state.socket, :draft_status, :saving)}
+      end)
+
+      html = register_version(view, "Durante el autoguardado")
+
+      assert html =~ "Esperá a que termine el guardado antes de registrar una versión."
+      assert version_count() == 0
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Texto guardado")
+    end
+
+    test "rejects registration after a failed save and keeps the unsaved edit", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      draft =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Texto guardado"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{"antecedents_distal" => "Edición que falló"}
+      })
+
+      _ = :sys.get_state(view.pid)
+      assert has_element?(view, "#editor-draft-status", "Error al guardar")
+
+      html = register_version(view, "Después del error")
+
+      assert html =~ "Resolvé el error de guardado antes de registrar una versión."
+      assert version_count() == 0
+      assert has_element?(view, "#functional-analysis-antecedents-distal", "Edición que falló")
+    end
+
+    test "rejects registration in a conflicted session and preserves the stale edit", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      persist_draft!(professional, patient, target_behavior, %{"response_motor" => "Inicial"})
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      persist_draft!(professional, patient, target_behavior, %{"response_motor" => "Otra sesión"})
+
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{"response_motor" => "Edición desactualizada"}
+      })
+
+      _ = :sys.get_state(view.pid)
+      assert has_element?(view, "#editor-draft-status", "Conflicto al guardar")
+
+      html = register_version(view, "Con conflicto")
+
+      assert html =~ "Resolvé el conflicto de guardado antes de registrar una versión."
+      assert version_count() == 0
+      assert has_element?(view, "#functional-analysis-response-motor", "Edición desactualizada")
+      assert has_element?(view, "#editor-draft-status", "Conflicto al guardar")
+    end
+
+    test "a draft changed by another session after mount is reported as a conflict", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      persist_draft!(professional, patient, target_behavior, %{"response_motor" => "Inicial"})
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      persist_draft!(professional, patient, target_behavior, %{"response_motor" => "Otra sesión"})
+
+      html = register_version(view, "Sobre un borrador cambiado")
+
+      assert html =~ "Conflicto: otra sesión modificó el borrador."
+      assert version_count() == 0
+      assert has_element?(view, "#editor-draft-status", "Conflicto al guardar")
+      assert has_element?(view, "#functional-analysis-response-motor", "Inicial")
+    end
+
+    test "hides the action and rejects a forged event for a legally deleted draft", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      draft =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Se eliminará"
+        })
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      assert has_element?(view, "#draft-tombstone")
+      refute has_element?(view, @version_form)
+
+      html =
+        render_hook(view, "register_functional_analysis_version", %{
+          "version" => %{"change_note" => "Forzado"}
+        })
+
+      assert html =~ "El borrador fue eliminado legalmente."
+      assert version_count() == 0
+    end
+
+    test "rejects registration when no draft was ever persisted", %{
+      conn: conn,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      html = register_version(view, "Sin borrador")
+
+      assert html =~ "Guardá el análisis funcional antes de registrar una versión."
+      assert version_count() == 0
+      assert has_element?(view, "#editor-draft-status", "Borrador vacío")
+    end
+
+    test "is only reachable through the authenticated responsible professional", %{
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      assert {:error, {:redirect, %{to: "/login"}}} =
+               live(build_conn(), review_path(patient, target_behavior))
+
+      other_conn = log_in_professional(build_conn(), create_professional!())
+
+      assert {:error, {:live_redirect, %{to: "/patients"}}} =
+               live(other_conn, review_path(patient, target_behavior))
+
+      assert version_count() == 0
+    end
+
+    defp review_path(patient, target_behavior),
+      do: ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review"
+
+    defp persist_draft!(professional, patient, target_behavior, params) do
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id,
+          params
+        )
+
+      draft
+    end
+
+    defp register_version(view, note) do
+      view
+      |> form(@version_form, version: %{change_note: note})
+      |> render_submit()
+    end
+
+    defp version_count, do: Repo.aggregate(FunctionalAnalysisVersion, :count)
   end
 
   describe "structured functional-analysis draft and explicit note creation" do
