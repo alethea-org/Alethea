@@ -516,6 +516,92 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
            |> Map.fetch!(:functional_analysis_version_sequence) == 0
   end
 
+  test "a version belonging to another target behavior of the same patient is denied and audited" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, other_target} =
+      ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta separada")
+
+    {:ok, other_draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        other_target.id,
+        "Otro borrador"
+      )
+
+    {:ok, other_version} =
+      ClinicalRecord.register_functional_analysis_version(
+        professional,
+        patient.id,
+        other_target.id,
+        other_draft.lock_version,
+        "Otra versión"
+      )
+
+    assert {:error, :not_found} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               other_version.id
+             )
+
+    audit = Repo.get_by!(AuditLog, action: "clinical_record_access_denied")
+
+    assert audit.resource_type == "functional_analysis_version"
+    assert audit.resource_id == other_version.id
+    assert audit.professional_id == professional.id
+    assert audit.details == %{"outcome" => "denied"}
+  end
+
+  test "a nonexistent version id is denied and audited with that id" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    missing_version_id = Ecto.UUID.generate()
+
+    assert {:error, :not_found} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               missing_version_id
+             )
+
+    audit = Repo.get_by!(AuditLog, action: "clinical_record_access_denied")
+
+    assert audit.resource_type == "functional_analysis_version"
+    assert audit.resource_id == missing_version_id
+    assert audit.details == %{"outcome" => "denied"}
+  end
+
+  test "a malformed version id is denied and audited with a nil resource id that stays schema-valid" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    assert {:error, :not_found} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               "not-a-uuid"
+             )
+
+    # `cast_audit_id/1` maps the malformed id to `nil`; the persisted row
+    # below proves `Audit` validation accepts a nil `resource_id`.
+    audit = Repo.get_by!(AuditLog, action: "clinical_record_access_denied")
+
+    assert audit.resource_type == "functional_analysis_version"
+    assert is_nil(audit.resource_id)
+    assert audit.professional_id == professional.id
+    assert audit.details == %{"outcome" => "denied"}
+  end
+
   defp create_professional! do
     {:ok, professional} =
       Accounts.create_professional(%{
