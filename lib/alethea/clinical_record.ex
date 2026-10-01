@@ -1263,12 +1263,10 @@ defmodule Alethea.ClinicalRecord do
           {:error, :legally_deleted}
 
         {:ok, {:not_found_proposal, prop_id}} ->
-          log_denied_audit(professional.id, prop_id, "ai_proposal")
-          {:error, :not_found}
+          deny_or_not_found(professional.id, prop_id, "ai_proposal")
 
         {:ok, {:denied_target, audited_id}} ->
-          log_denied_audit(professional.id, audited_id, "target_behavior")
-          {:error, :not_found}
+          deny_or_not_found(professional.id, audited_id, "target_behavior")
 
         {:error, {:error, reason}} ->
           {:error, reason}
@@ -2134,6 +2132,25 @@ defmodule Alethea.ClinicalRecord do
         deny_access(professional_id, resource_id, resource_type)
 
       nil ->
+        {:error, :not_found}
+    end
+  end
+
+  # Post-transaction miss handler for writes whose lookup already ran inside a
+  # row-locking transaction. A tombstone makes the miss an explicit
+  # `:legally_deleted`; any other miss stays `:not_found`. Either way exactly one
+  # denied audit row is written, and the tombstone lookup stays outside the
+  # transaction. A nil id (malformed input) cannot match a tombstone.
+  defp deny_or_not_found(professional_id, resource_id, resource_type) do
+    tombstone =
+      if is_nil(resource_id), do: nil, else: Tombstone.for_resource(resource_type, resource_id)
+
+    case tombstone do
+      %Tombstone{} ->
+        deny_access(professional_id, resource_id, resource_type)
+
+      nil ->
+        log_denied_audit(professional_id, resource_id, resource_type)
         {:error, :not_found}
     end
   end

@@ -1647,14 +1647,71 @@ defmodule Alethea.ClinicalRecordTest do
                )
     end
 
-    test "target behavior deleted between validation and lock: returns not_found and logs denial",
-         %{
-           professional: professional,
-           patient: patient
-         } do
+    test "legally deleted proposal: returns legally_deleted and audits the denial on ai_proposal",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      Repo.delete!(proposal)
+      insert_tombstone!(professional, patient, "ai_proposal", proposal.id)
+
+      assert {:error, :legally_deleted} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      assert [_denial] = denial_audits(professional, "ai_proposal", proposal.id)
+      assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
+    end
+
+    test "legally deleted target behavior: returns legally_deleted and audits the denial on target_behavior",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      Repo.delete!(target_behavior)
+      insert_tombstone!(professional, patient, "target_behavior", target_behavior.id)
+
+      assert {:error, :legally_deleted} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      assert [_denial] = denial_audits(professional, "target_behavior", target_behavior.id)
+      assert Repo.aggregate(FunctionalAnalysisDraft, :count) == 0
+    end
+
+    test "target behavior deleted without tombstone: not_found and a single denied audit on target_behavior",
+         %{professional: professional, patient: patient} do
+      target_behavior = create_target_behavior!(professional, patient)
+      proposal = create_ai_proposal!(professional, patient, target_behavior)
+
+      Repo.delete!(target_behavior)
+
+      # accept_ai_proposal_into_draft/4 has no pre-transaction ownership check,
+      # so a missing target is first seen by the in-transaction row lock
+      # (`{:denied_target, _}` branch).
+      assert {:error, :not_found} =
+               ClinicalRecord.accept_ai_proposal_into_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 proposal.id
+               )
+
+      assert [_denial] = denial_audits(professional, "target_behavior", target_behavior.id)
+    end
+
+    test "upserts on a target behavior deleted before the call are rejected by the ownership pre-check with one denied audit each",
+         %{professional: professional, patient: patient} do
       target_behavior = create_target_behavior!(professional, patient)
 
-      # When target behavior is deleted concurrently right before lock acquisition
       Repo.delete!(target_behavior)
 
       assert {:error, :not_found} =
@@ -1673,18 +1730,10 @@ defmodule Alethea.ClinicalRecordTest do
                  "Draft for deleted target"
                )
 
-      denials =
-        AuditLog
-        |> where(
-          [a],
-          a.professional_id == ^professional.id and
-            a.action == "clinical_record_access_denied" and
-            a.resource_type == "target_behavior" and
-            a.resource_id == ^target_behavior.id
-        )
-        |> Repo.all()
-
-      assert length(denials) >= 2
+      # The in-transaction lock race itself cannot be interleaved
+      # deterministically in a single sandboxed process; this proves the
+      # pre-check path (exactly one audit per rejected call).
+      assert [_, _] = denial_audits(professional, "target_behavior", target_behavior.id)
     end
 
     test "transaction rollback: when draft persistence fails, proposal status remains pending", %{
@@ -3497,6 +3546,18 @@ defmodule Alethea.ClinicalRecordTest do
 
     {:ok, _rows} = Indexer.replace_chunks({resource_type, resource_id}, attrs)
     resource_id
+  end
+
+  defp denial_audits(professional, resource_type, resource_id) do
+    AuditLog
+    |> where(
+      [a],
+      a.professional_id == ^professional.id and
+        a.action == "clinical_record_access_denied" and
+        a.resource_type == ^resource_type and
+        a.resource_id == ^resource_id
+    )
+    |> Repo.all()
   end
 
   defp insert_tombstone!(professional, patient, resource_type, resource_id) do
