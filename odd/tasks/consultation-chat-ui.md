@@ -121,9 +121,11 @@ contract stays untouched.
     format check clean. No known failing focused check. Rollback boundary:
     `core_components.ex`, `hypothesis_panel.ex`, and their two regression test
     files; no schemas, persistence, or consultation domain changes.
-- [ ] **TASK-7 — Reset composer height after server form patch**
-  - Status: in progress; implementation and checks complete, work-unit commit
-    authorized. Route: delegated `gentle-ai-worker` (hook and Node test).
+- [x] **TASK-7 — Reset composer height after server form patch**
+  - Status: complete; work-unit commit
+    `b4a0b8d33e9a199056279f73a73d633b26e43a99`
+    (`fix(web): reset consultation composer height after updates`).
+    Route: delegated `gentle-ai-worker` (hook and Node test).
   - RED observed: Node VM hook regression failed because `updated()` was
     absent. GREEN observed: `node --test test/js/consultation_composer.test.mjs`
     3/3 after `ConsultationComposer.updated()` recalculates textarea height;
@@ -151,8 +153,12 @@ contract stays untouched.
   `sha256:20da04c0210687f5c61b58e75d0657b0f44bc95673d714a49f6dcfcc4d659e60`).
   The reviewer covered the code, tests, and this document as frozen before this
   final evidence note; no source edits followed review.
-- TASK-6 work-unit commit recorded (`1d880b1`). TASK-7 work-unit commit is
-  next; PR update/push remains a separate decision.
+- Both repair work-unit commits recorded (`1d880b1`, `b4a0b8d`). The
+  acknowledged native review covered their combined source changes before
+  commit; subsequent changes were documentation-only. Committed-only risk
+  assessment returned `unassessable` (first: untracked JS test before commit;
+  second: native schema incompatibility); independent verifier covered the
+  combined candidate. PR update/push remains a separate decision.
 
 ## Evidence
 
