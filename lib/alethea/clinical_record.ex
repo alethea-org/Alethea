@@ -1729,6 +1729,56 @@ defmodule Alethea.ClinicalRecord do
     end)
   end
 
+  @doc """
+  Lists authorized version summaries: metadata plus the decrypted change
+  note only. `body`/`encrypted_body` are never selected or decrypted
+  (GitHub #364) — this is the body-free listing used by the read-only
+  version browser.
+  """
+  @spec list_functional_analysis_version_summaries(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t()
+        ) :: {:ok, [FunctionalAnalysisVersion.t()]} | {:error, term()}
+  def list_functional_analysis_version_summaries(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id
+      ) do
+    with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+      versions =
+        FunctionalAnalysisVersion
+        |> where([version], version.patient_id == ^patient.id)
+        |> where([version], version.target_behavior_id == ^target_behavior_id)
+        |> order_by([version], asc: version.version_number)
+        |> select(
+          [version],
+          struct(version, [
+            :id,
+            :version_number,
+            :encryption_version,
+            :encrypted_change_note,
+            :professional_id,
+            :target_behavior_id,
+            :patient_id,
+            :inserted_at
+          ])
+        )
+        |> preload(:professional)
+        |> Repo.all()
+
+      {:ok, Enum.map(versions, &decrypt_functional_analysis_version_note(&1, keyring))}
+    end)
+  end
+
+  defp decrypt_functional_analysis_version_note(version, keyring) do
+    %{
+      version
+      | change_note:
+          decrypt_or_placeholder(version.encrypted_change_note, dek_for(version, keyring))
+    }
+  end
+
   @doc "Loads and decrypts one historical version scoped to its authorized patient and target behavior."
   @spec get_functional_analysis_version(
           Professional.t(),
