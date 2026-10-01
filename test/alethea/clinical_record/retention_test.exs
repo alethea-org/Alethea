@@ -607,7 +607,7 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
           "Approved"
         )
 
-      assert {:error, :deferred_for_versions} =
+      assert {:ok, :deferred_for_versions} =
                Retention.legally_delete_record(
                  {"target_behavior", target.id},
                  trigger: "sweep"

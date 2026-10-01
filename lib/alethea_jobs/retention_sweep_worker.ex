@@ -62,7 +62,10 @@ defmodule AletheaJobs.RetentionSweepWorker do
              actor: :system,
              trigger: "sweep"
            ) do
-        {:ok, _tombstone} ->
+        # `:deferred_for_versions` is an expected race (the record gained
+        # versions between selection and the locked deletion) and
+        # `Retention` reports it as a non-error skip — nothing to retry.
+        {:ok, _result} ->
           :ok
 
         {:error, reason} ->
