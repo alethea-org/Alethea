@@ -1606,15 +1606,37 @@ defmodule Alethea.ClinicalRecord do
         else
           # Decrypt/re-encrypt before consuming a sequence number so a
           # failure leaves no version row and no gap.
+          live_evidence_ids =
+            ConsultationEvidence
+            |> where(
+              [e],
+              e.patient_id == ^patient.id and e.target_behavior_id == ^target_behavior_id
+            )
+            |> where(
+              [e],
+              fragment(
+                "NOT EXISTS (SELECT 1 FROM clinical_record_tombstones t WHERE t.resource_type = 'consultation_evidence' AND t.resource_id = ?)",
+                e.id
+              )
+            )
+            |> order_by([e], asc: e.occurred_at, asc: e.id)
+            |> select([e], e.id)
+            |> Repo.all()
+
+          serialized_baseline = Jason.encode!(live_evidence_ids)
+
           with {:ok, encrypted_body} <- version_body_for(draft, keyring),
                {:ok, encrypted_note} <-
                  PatientVault.encrypt(change_note, keyring.clinical_record_dek),
+               {:ok, encrypted_baseline} <-
+                 PatientVault.encrypt(serialized_baseline, keyring.clinical_record_dek),
                {:ok, version_number} <-
                  increment_functional_analysis_version_sequence(target_behavior_id) do
             changeset =
               FunctionalAnalysisVersion.changeset(%FunctionalAnalysisVersion{}, %{
                 encrypted_body: encrypted_body,
                 encrypted_change_note: encrypted_note,
+                encrypted_cited_evidence_baseline: encrypted_baseline,
                 encryption_version: 2,
                 version_number: version_number,
                 draft_id: draft.id,
@@ -1694,7 +1716,16 @@ defmodule Alethea.ClinicalRecord do
         |> preload(:professional)
         |> Repo.all()
 
-      {:ok, Enum.map(versions, &decrypt_functional_analysis_version(&1, keyring))}
+      Enum.reduce_while(versions, {:ok, []}, fn version, {:ok, acc} ->
+        case decrypt_functional_analysis_version(version, keyring) do
+          {:ok, decrypted} -> {:cont, {:ok, [decrypted | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, list} -> {:ok, Enum.reverse(list)}
+        {:error, reason} -> {:error, reason}
+      end
     end)
   end
 
@@ -1718,10 +1749,20 @@ defmodule Alethea.ClinicalRecord do
                id: uuid,
                patient_id: patient.id,
                target_behavior_id: target_behavior_id
+             ),
+           {:ok, decrypted} <-
+             decrypt_functional_analysis_version(
+               Repo.preload(version, :professional),
+               keyring
              ) do
-        {:ok,
-         version |> Repo.preload(:professional) |> decrypt_functional_analysis_version(keyring)}
+        {:ok, decrypted}
       else
+        {:error, :decryption_failed} = error ->
+          error
+
+        {:error, :invalid_baseline} = error ->
+          error
+
         _ ->
           log_denied_audit(
             professional.id,
@@ -1737,10 +1778,50 @@ defmodule Alethea.ClinicalRecord do
   defp decrypt_functional_analysis_version(version, keyring) do
     dek = dek_for(version, keyring)
 
-    body = decrypt_or_placeholder(version.encrypted_body, dek)
-    change_note = decrypt_or_placeholder(version.encrypted_change_note, dek)
-    %{version | body: body, change_note: change_note}
+    with {:ok, baseline_ids} <-
+           decrypt_cited_evidence_baseline(version.encrypted_cited_evidence_baseline, dek) do
+      body = decrypt_or_placeholder(version.encrypted_body, dek)
+      change_note = decrypt_or_placeholder(version.encrypted_change_note, dek)
+
+      {:ok,
+       %{
+         version
+         | body: body,
+           change_note: change_note,
+           cited_evidence_baseline_ids: baseline_ids
+       }}
+    end
   end
+
+  defp decrypt_cited_evidence_baseline(nil, _dek), do: {:ok, nil}
+
+  defp decrypt_cited_evidence_baseline(ciphertext, dek) when is_binary(ciphertext) do
+    case PatientVault.decrypt(ciphertext, dek) do
+      {:ok, plaintext} ->
+        case Jason.decode(plaintext) do
+          {:ok, ids} when is_list(ids) ->
+            if Enum.all?(ids, &valid_baseline_uuid?/1) do
+              {:ok, ids}
+            else
+              {:error, :invalid_baseline}
+            end
+
+          _ ->
+            {:error, :invalid_baseline}
+        end
+
+      {:error, _reason} ->
+        {:error, :decryption_failed}
+    end
+  end
+
+  defp decrypt_cited_evidence_baseline(_, _dek), do: {:error, :invalid_baseline}
+
+  defp valid_baseline_uuid?(id) when is_binary(id) do
+    byte_size(id) == 36 and match?({:ok, _}, Ecto.UUID.cast(id))
+  end
+
+  defp valid_baseline_uuid?(_), do: false
 
   defp cast_audit_id(id) do
     case Ecto.UUID.cast(id) do
