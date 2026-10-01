@@ -14,6 +14,7 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
   use Oban.Testing, repo: Alethea.Repo
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias Alethea.Accounts
   alias Alethea.Accounts.{AuditLog, EncryptionKey}
@@ -616,6 +617,47 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
       assert Repo.get(TargetBehavior, target.id)
       assert Repo.get(FunctionalAnalysisVersion, version.id)
       refute Repo.get_by(Tombstone, resource_type: "target_behavior", resource_id: target.id)
+    end
+
+    test "a version-deferred sweep deletion is reported as a skip, not logged as a multi failure",
+         %{
+           professional: professional,
+           patient: patient
+         } do
+      target =
+        insert_target_behavior!(patient, professional, inserted_at: days_ago(@baseline_days + 1))
+
+      # Model eligibility having selected the target immediately before the version exists.
+      assert Enum.any?(Retention.eligible_records(TargetBehavior), &(&1.resource_id == target.id))
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, _version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, :deferred_for_versions} =
+                   Retention.legally_delete_record(
+                     {"target_behavior", target.id},
+                     trigger: "sweep"
+                   )
+        end)
+
+      refute log =~ "retention multi failed"
+      assert Repo.get(TargetBehavior, target.id)
     end
   end
 
