@@ -94,7 +94,7 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
       short_chunk_id = source.reference.chunk_id |> String.slice(0, 8)
       expected_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
 
-      assert html =~ ~s(id="citation-#{expected_ref}")
+      assert html =~ ~s(id="chat-turn-1-hypothesis-citation-#{expected_ref}")
       assert html =~ source.kind
     end
 
@@ -113,8 +113,8 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
       ref_b =
         "#{source_b.reference.resource_type}/#{String.slice(source_b.reference.chunk_id, 0, 8)}"
 
-      assert html =~ ~s(id="citation-#{ref_a}")
-      assert html =~ ~s(id="citation-#{ref_b}")
+      assert html =~ ~s(id="chat-turn-1-hypothesis-citation-#{ref_a}")
+      assert html =~ ~s(id="chat-turn-1-hypothesis-citation-#{ref_b}")
 
       lazy = LazyHTML.from_fragment(html)
       assert lazy |> LazyHTML.query("details") |> Enum.count() == 2
@@ -144,7 +144,7 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanelTest do
       [source] = @hypothesis.sources
       expected = SourceCitation.source_to_citation(source)
 
-      assert html =~ ~s(id="citation-#{expected.source_ref}")
+      assert html =~ ~s(id="chat-turn-1-hypothesis-citation-#{expected.source_ref}")
       assert html =~ expected.excerpt
     end
   end

@@ -70,7 +70,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       submit_query(view, "turno uno")
       html_one = render_async(view)
 
-      assert has_element?(view, "#consultation-synthesis")
+      assert has_element?(view, "#consultation-thread")
       assert has_element?(view, "#turn-0")
       assert has_element?(view, "#turn-0 .consultation__turn-query-text", "turno uno")
       assert has_element?(view, "#turn-0-synthesis", "Sintesis inicial sobre sueno.")
@@ -81,7 +81,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       submit_query(view, "turno dos")
       _html_two = render_async(view)
 
-      assert has_element?(view, "#consultation-synthesis")
+      assert has_element?(view, "#consultation-thread")
 
       # Both turn 0 and turn 1 are present in chained order
       assert has_element?(view, "#turn-0")
@@ -181,7 +181,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       submit_query(view, "turno uno")
       render_async(view)
 
-      assert has_element?(view, "#consultation-synthesis")
+      assert has_element?(view, "#consultation-thread")
       assert has_element?(view, "#turn-0")
 
       view
@@ -189,7 +189,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       |> render_click()
 
       assert has_element?(view, "#consultation-idle")
-      refute has_element?(view, "#consultation-synthesis")
+      refute has_element?(view, "#consultation-thread")
       refute has_element?(view, "#turn-0")
       refute has_element?(view, "#turn-1")
       refute has_element?(view, "#turn-2")
@@ -228,7 +228,7 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
 
       assert has_element?(new_view, "#consultation-idle")
       assert html =~ "consultation-idle"
-      refute has_element?(new_view, "#consultation-synthesis")
+      refute has_element?(new_view, "#consultation-thread")
       refute has_element?(new_view, "#turn-0")
       refute has_element?(new_view, "#consultation-messages")
       refute html =~ "Sintesis antes de logout."
@@ -275,10 +275,12 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
       assert html_blocked =~
                "El registro no cuenta con evidencia suficiente para responder esta consulta."
 
-      # Turn 1 remains visible in the stream
+      # Turn 1 remains visible in the stream; the blocked turn renders its
+      # notice in-thread and records no synthesis.
       assert has_element?(view, "#turn-0")
       assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
-      refute has_element?(view, "#turn-1")
+      assert has_element?(view, "#turn-1 #consultation-no-evidence")
+      refute has_element?(view, "#turn-1-synthesis")
 
       # Turn counter did not advance: retrying records at turn 1
       submit_query(view, "reintento")
@@ -322,10 +324,12 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
 
       assert has_element?(view, "#consultation-stale")
       assert html_stale =~ "La indexación del paciente está pendiente (1 elementos)"
-      # Turn 1 remains visible in stream
+      # Turn 1 remains visible in stream; the blocked turn renders its
+      # notice in-thread and records no synthesis.
       assert has_element?(view, "#turn-0")
       assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
-      refute has_element?(view, "#turn-1")
+      assert has_element?(view, "#turn-1 #consultation-stale")
+      refute has_element?(view, "#turn-1-synthesis")
     end
 
     test "turn 2 yielding :provider_failure displays error and keeps turn 1 in stream", %{
@@ -359,10 +363,12 @@ defmodule AletheaWeb.ConsultationLiveFollowupTest do
 
       assert has_element?(view, "#consultation-provider-error")
       assert html_failure =~ "No se pudo generar una respuesta. Intentá nuevamente."
-      # Turn 1 remains visible in stream
+      # Turn 1 remains visible in stream; the blocked turn renders its
+      # notice in-thread and records no synthesis.
       assert has_element?(view, "#turn-0")
       assert has_element?(view, "#turn-0-synthesis", "Sintesis turno uno")
-      refute has_element?(view, "#turn-1")
+      assert has_element?(view, "#turn-1 #consultation-provider-error")
+      refute has_element?(view, "#turn-1-synthesis")
     end
   end
 

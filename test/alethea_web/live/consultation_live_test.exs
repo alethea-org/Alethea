@@ -422,7 +422,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
       short_chunk_id = source.reference.chunk_id |> to_string() |> String.slice(0, 8)
       source_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
 
-      assert panel_html =~ ~s(id="citation-#{source_ref}")
+      assert panel_html =~ ~s(id="turn-0-hypothesis-citation-#{source_ref}")
     end
 
     test "diagnostic candidate prose yields hypothesis: nil and no panel in the DOM (R8 render half)",
@@ -445,6 +445,9 @@ defmodule AletheaWeb.ConsultationLiveTest do
       refute html =~ "review-hypothesis-panel"
     end
 
+    # consultation-chat-ui: the per-turn contract — the synthesis section
+    # and the hypothesis panel are siblings *inside* the turn article,
+    # never nested inside each other.
     test "#consultation-synthesis and the hypothesis panel are DOM siblings, neither nested (R12)",
          %{conn: conn, professional: professional, patient: patient} do
       insert_chunk!(professional, patient, @seeded_excerpt, near_vector())
@@ -464,19 +467,19 @@ defmodule AletheaWeb.ConsultationLiveTest do
       lazy = LazyHTML.from_fragment(html)
 
       assert lazy
-             |> LazyHTML.query("div.consultation > div#consultation-synthesis")
+             |> LazyHTML.query("article#turn-0 > section.consultation__synthesis")
              |> Enum.count() == 1
 
       assert lazy
-             |> LazyHTML.query("div.consultation > section.review-hypothesis-panel")
+             |> LazyHTML.query("article#turn-0 > section.review-hypothesis-panel")
              |> Enum.count() == 1
 
       assert lazy
-             |> LazyHTML.query("div#consultation-synthesis section.review-hypothesis-panel")
+             |> LazyHTML.query("section.consultation__synthesis section.review-hypothesis-panel")
              |> Enum.count() == 0
 
       assert lazy
-             |> LazyHTML.query("section.review-hypothesis-panel div#consultation-synthesis")
+             |> LazyHTML.query("section.review-hypothesis-panel section.consultation__synthesis")
              |> Enum.count() == 0
     end
   end
@@ -494,6 +497,127 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
       assert html =~ "consultation-synthesis"
       assert has_element?(view, "section.review-hypothesis-panel")
+    end
+  end
+
+  describe "conversational chat presentation (consultation-chat-ui)" do
+    test "the user bubble and typing indicator echo before the async answer resolves", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      # The submit reply is the synchronous DOM right after the event —
+      # with the instant Fake the async resolution lands before any
+      # later query renders, so the pending echo is asserted here,
+      # before render_async drives the resolution.
+      html = submit_query(view, "¿cómo viene el paciente?")
+      lazy = LazyHTML.from_fragment(html)
+
+      assert lazy
+             |> LazyHTML.query("#turn-0 .consultation__turn-query-text")
+             |> Enum.count() == 1
+
+      assert html =~ "¿cómo viene el paciente?"
+
+      assert lazy
+             |> LazyHTML.query("#consultation-retrieving")
+             |> Enum.count() == 1
+    end
+
+    test "no_evidence renders inside the turn and re-enables the composer", %{
+      conn: conn,
+      patient: patient
+    } do
+      set_fake_outcome(:no_evidence)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿algo sin evidencia?")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0 #consultation-no-evidence")
+      refute has_element?(view, "#consultation-ask-form button[type=submit][disabled]")
+    end
+
+    test "each synthesis turn keeps its own hypothesis panel", %{conn: conn, patient: patient} do
+      set_fake_outcome(:synthesis)
+      set_fake_hypothesis(canned_hypothesis!())
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+      render_async(view)
+
+      # Re-using the same hypothesis fixture on the second turn tests that child
+      # citation DOM IDs are scoped by panel/turn and avoid duplicate IDs.
+      set_fake_hypothesis(canned_hypothesis!())
+
+      submit_query(view, "¿y durante esta semana?")
+      render_async(view)
+
+      assert has_element?(view, "#turn-0-hypothesis")
+      assert has_element?(view, "#turn-1-hypothesis")
+      assert has_element?(view, "#turn-0-hypothesis .citation-list")
+      assert has_element?(view, "#turn-1-hypothesis .citation-list")
+      assert has_element?(view, "#turn-0-hypothesis-citation-clinical_note\\/11111111")
+      assert has_element?(view, "#turn-1-hypothesis-citation-clinical_note\\/11111111")
+      refute has_element?(view, "#citation-clinical_note\\/11111111")
+    end
+
+    test "the idle hero renders three suggestion chips that seed a pending turn", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      chips =
+        html |> LazyHTML.from_fragment() |> LazyHTML.query("#consultation-idle button")
+
+      assert Enum.count(chips) == 3
+
+      html =
+        view
+        |> element("#consultation-idle button", "¿Qué evidencia hay sobre el sueño?")
+        |> render_click()
+
+      # Same observation point as the immediate-echo test: the click
+      # reply is the pending DOM before the async resolution lands.
+      lazy = LazyHTML.from_fragment(html)
+
+      assert lazy
+             |> LazyHTML.query("#turn-0 .consultation__turn-query-text")
+             |> Enum.count() == 1
+
+      assert lazy
+             |> LazyHTML.query("#consultation-retrieving")
+             |> Enum.count() == 1
+    end
+
+    test "the thread and the composer carry their JS hooks", %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+
+      assert has_element?(view, "#consultation-thread[phx-hook=ConsultationScroll]")
+      assert has_element?(view, "#consultation-ask-form[phx-hook=ConsultationComposer]")
+    end
+
+    test "the send button is disabled while retrieving and re-enabled after resolution", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      html = submit_query(view, "¿cómo viene el paciente?")
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#consultation-ask-form button[type=submit][disabled]")
+             |> Enum.count() == 1
+
+      render_async(view)
+
+      refute has_element?(view, "#consultation-ask-form button[type=submit][disabled]")
     end
   end
 
@@ -528,6 +652,27 @@ defmodule AletheaWeb.ConsultationLiveTest do
 
       assert html =~ "consultation-idle"
       refute html =~ "consultation-synthesis"
+    end
+
+    test "'nueva conversación' while retrieving discards the late answer instead of crashing (R3)",
+         %{conn: conn, patient: patient} do
+      set_fake_outcome(:synthesis)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/consultation")
+
+      submit_query(view, "¿cómo viene el paciente?")
+
+      # Reset while the async answer is still in flight.
+      html = view |> element("#consultation-new-conversation") |> render_click()
+      assert html =~ "consultation-idle"
+
+      # The late answer lands after the reset: it must be discarded, not
+      # resolved against the fresh conversation (and never crash the
+      # LiveView on the exit path's pending_turn match).
+      html = render_async(view)
+
+      assert html =~ "consultation-idle"
+      refute has_element?(view, "#turn-0")
+      refute has_element?(view, "#turn-0-synthesis")
     end
 
     test "no conversation content is written anywhere", %{conn: conn, patient: patient} do

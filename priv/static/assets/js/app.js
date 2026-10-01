@@ -16,10 +16,62 @@ window.addEventListener("js:hide-modal", (e) => {
   if (el && el.close) el.close();
 });
 
+// Consultation chat — keeps the thread pinned to the newest message while
+// the user hasn't scrolled away (~120px tolerance).
+const ConsultationScroll = {
+  mounted() {
+    this.stickToBottom = true;
+    this.onScroll = () => {
+      const el = this.el;
+      this.stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    };
+    this.el.addEventListener("scroll", this.onScroll);
+    this.el.scrollTop = this.el.scrollHeight;
+  },
+  updated() {
+    if (this.stickToBottom) this.el.scrollTop = this.el.scrollHeight;
+  },
+  destroyed() {
+    this.el.removeEventListener("scroll", this.onScroll);
+  },
+};
+
+// Consultation chat — composer behavior: Enter sends (Shift+Enter inserts a
+// newline) and the textarea auto-grows up to 160px.
+const ConsultationComposer = {
+  mounted() {
+    const form = this.el;
+    const textarea = form.querySelector("textarea");
+    if (!textarea) return;
+    const submitButton = form.querySelector("button[type=submit]");
+
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (submitButton && submitButton.disabled) return;
+        form.requestSubmit();
+      }
+    });
+
+    this.grow = () => {
+      const el = form.querySelector("textarea");
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    };
+    textarea.addEventListener("input", this.grow);
+    this.grow();
+  },
+  updated() {
+    if (this.grow) this.grow();
+  },
+};
+
 // LiveView Setup
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
 let liveSocket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
   params: { _csrf_token: csrfToken },
+  hooks: { ConsultationScroll, ConsultationComposer },
 });
 
 // Connect if there are any LiveViews on the page
