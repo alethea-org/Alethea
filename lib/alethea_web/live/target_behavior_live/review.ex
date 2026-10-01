@@ -153,6 +153,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
       {:error, :not_found} ->
         {:ok, redirect_to_patients(socket, :not_found)}
+
+      {:error, reason} ->
+        {:ok, redirect_to_patients(socket, reason)}
     end
   end
 
@@ -954,8 +957,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     with {:ok, target_behavior} <-
            ClinicalRecord.get_target_behavior(professional, patient_id, target_behavior_id),
          {:ok, items} <-
-           ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id) do
-      {:ok, target_behavior, items}
+           ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id),
+         {:ok, baseline_set} <-
+           fetch_cited_evidence_baseline(professional, patient_id, target_behavior_id) do
+      annotated_items = annotate_timeline_items(items, baseline_set)
+      {:ok, target_behavior, annotated_items}
     end
   end
 
@@ -964,31 +970,74 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     patient_id = socket.assigns.patient_id
     target_behavior_id = socket.assigns.target_behavior_id
 
-    case ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id) do
-      {:ok, items} ->
-        evidence_count = Enum.count(items, &(&1.kind == :consultation_evidence))
-        observation_count = Enum.count(items, &(&1.kind == :clinician_observation))
-        proposal_count = Enum.count(items, &(&1.kind == :ai_proposal))
+    with {:ok, items} <-
+           ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id),
+         {:ok, baseline_set} <-
+           fetch_cited_evidence_baseline(professional, patient_id, target_behavior_id) do
+      annotated_items = annotate_timeline_items(items, baseline_set)
+      evidence_count = Enum.count(annotated_items, &(&1.kind == :consultation_evidence))
+      observation_count = Enum.count(annotated_items, &(&1.kind == :clinician_observation))
+      proposal_count = Enum.count(annotated_items, &(&1.kind == :ai_proposal))
 
-        socket
-        |> assign(:evidence_count, evidence_count)
-        |> assign(:observation_count, observation_count)
-        |> assign(:proposal_count, proposal_count)
-        |> assign(:has_sufficient_evidence, evidence_count > 0)
-        |> assign(:timeline_index, timeline_index(items))
-        |> stream(:timeline, items, reset: true)
-
-      # Access or the target behavior itself is gone since mount: leave rather
-      # than keep the previous (now stale) stream on screen (GitHub #289).
+      socket
+      |> assign(:evidence_count, evidence_count)
+      |> assign(:observation_count, observation_count)
+      |> assign(:proposal_count, proposal_count)
+      |> assign(:has_sufficient_evidence, evidence_count > 0)
+      |> assign(:timeline_index, timeline_index(annotated_items))
+      |> stream(:timeline, annotated_items, reset: true)
+    else
+      # Access or the target behavior itself is gone since mount, or decryption
+      # failed: fail closed and leave rather than keep the previous (now stale)
+      # stream on screen (GitHub #289, #366).
       {:error, :unauthorized} ->
         redirect_to_patients(socket, :unauthorized)
 
       {:error, :not_found} ->
         redirect_to_patients(socket, :not_found)
 
-      {:error, _reason} ->
-        socket
+      {:error, reason} ->
+        redirect_to_patients(socket, reason)
     end
+  end
+
+  defp fetch_cited_evidence_baseline(professional, patient_id, target_behavior_id) do
+    case ClinicalRecord.list_functional_analysis_versions(
+           professional,
+           patient_id,
+           target_behavior_id
+         ) do
+      {:ok, []} ->
+        {:ok, nil}
+
+      {:ok, versions} ->
+        latest_version = Enum.max_by(versions, & &1.version_number)
+
+        baseline =
+          case latest_version.cited_evidence_baseline_ids do
+            ids when is_list(ids) -> MapSet.new(ids)
+            _ -> nil
+          end
+
+        {:ok, baseline}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp annotate_timeline_items(items, nil) do
+    Enum.map(items, &Map.put(&1, :new_evidence?, false))
+  end
+
+  defp annotate_timeline_items(items, %MapSet{} = baseline_set) do
+    Enum.map(items, fn item ->
+      new_evidence? =
+        item.kind == :consultation_evidence and
+          not MapSet.member?(baseline_set, to_string(item.id))
+
+      Map.put(item, :new_evidence?, new_evidence?)
+    end)
   end
 
   defp find_citable_candidate(%AsyncResult{ok?: true, result: candidates}, chunk_id) do
@@ -1119,6 +1168,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   defp redirect_to_patients(socket, :not_found) do
     socket
     |> put_flash(:error, "La conducta objetivo no existe o no pertenece a este paciente.")
+    |> push_navigate(to: ~p"/patients")
+  end
+
+  defp redirect_to_patients(socket, _reason) do
+    socket
+    |> put_flash(:error, "No se pudo cargar la línea de tiempo clínica.")
     |> push_navigate(to: ~p"/patients")
   end
 
@@ -1274,6 +1329,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         {:noreply,
          socket
          |> assign(:version_form, version_form(""))
+         |> load_timeline()
          |> put_flash(:info, "Versión #{version.version_number} registrada.")}
 
       {:error, :invalid_change_note} ->
@@ -2182,11 +2238,23 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             <li
               :for={{dom_id, item} <- @streams.timeline}
               id={dom_id}
-              class={["review-item", review_item_class(item.kind)]}
+              class={[
+                "review-item",
+                review_item_class(item.kind),
+                (item.kind == :consultation_evidence and Map.get(item, :new_evidence?, false)) &&
+                  "review-item--new-evidence"
+              ]}
             >
               <div class="review-item__meta">
                 <span class="review-item__kind">{kind_label(item.kind)}</span>
                 <span class="review-item__time">{format_datetime(item.occurred_at)}</span>
+                <span
+                  :if={item.kind == :consultation_evidence and Map.get(item, :new_evidence?, false)}
+                  id={"new-evidence-marker-#{item.id}"}
+                  class="badge badge--new-evidence"
+                >
+                  Nueva evidencia citada
+                </span>
                 <span :if={item.kind == :clinician_observation} class="badge badge--uncited">
                   Sin cita — agregado por el clínico
                 </span>
