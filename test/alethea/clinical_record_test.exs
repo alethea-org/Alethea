@@ -1528,10 +1528,11 @@ defmodule Alethea.ClinicalRecordTest do
       assert_enqueued(worker: ClinicalRecordOutboxWorker)
     end
 
-    test "authorized, existing draft: proposal text is appended to current draft body and advances lock_version", %{
-      professional: professional,
-      patient: patient
-    } do
+    test "authorized, existing draft: proposal text is appended to current draft body and advances lock_version",
+         %{
+           professional: professional,
+           patient: patient
+         } do
       target_behavior = create_target_behavior!(professional, patient)
 
       # Create an existing draft first with lock_version = 1
