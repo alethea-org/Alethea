@@ -171,6 +171,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           )
           |> assign(:selected_version, nil)
           |> assign(:selected_version_content, nil)
+          |> assign(:continue_confirmation_pending, false)
           |> assign_async(:suggested_candidates, fn ->
             case ClinicalRecord.suggest_evidence_candidates(
                    professional,
@@ -753,13 +754,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         {:noreply, socket}
 
       true ->
-        seq = socket.assigns.autosave_seq + 1
-        send(self(), {:perform_autosave, merged_values, seq})
-
-        {:noreply,
-         socket
-         |> assign(:autosave_seq, seq)
-         |> assign(:draft_status, :saving)}
+        {:noreply, schedule_functional_analysis_autosave(socket, merged_values)}
     end
   end
 
@@ -896,10 +891,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   def handle_event("select_functional_analysis_version", %{"id" => "working-draft"}, socket) do
-    {:noreply,
-     socket
-     |> assign(:selected_version, nil)
-     |> assign(:selected_version_content, nil)}
+    {:noreply, put_selected_version(socket, nil, nil)}
   end
 
   def handle_event("select_functional_analysis_version", %{"id" => id}, socket) do
@@ -916,21 +908,67 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       {:ok, version} ->
         {_format, content} = FunctionalAnalysisContent.parse(version.body)
 
-        {:noreply,
-         socket
-         |> assign(:selected_version, version)
-         |> assign(:selected_version_content, content)}
+        {:noreply, put_selected_version(socket, version, content)}
 
       {:error, :unauthorized} ->
         {:noreply, redirect_to_patients(socket, :unauthorized)}
 
       {:error, _reason} ->
         socket
-        |> assign(:selected_version, nil)
-        |> assign(:selected_version_content, nil)
+        |> put_selected_version(nil, nil)
         |> put_flash(:error, "La versión no está disponible.")
         |> relist_version_summaries()
     end
+  end
+
+  @impl true
+  def handle_event("request_continue_from_version", _params, socket) do
+    case continuation_blocker(socket.assigns) do
+      :noop ->
+        {:noreply, socket}
+
+      {:flash, message} ->
+        {:noreply, put_flash(socket, :error, message)}
+
+      nil ->
+        if working_form_blank?(socket) do
+          apply_version_continuation(socket)
+        else
+          {:noreply, assign(socket, :continue_confirmation_pending, true)}
+        end
+    end
+  end
+
+  @impl true
+  def handle_event(
+        "confirm_continue_from_version",
+        _params,
+        %{assigns: %{continue_confirmation_pending: true}} = socket
+      ) do
+    case continuation_blocker(socket.assigns) do
+      :noop ->
+        {:noreply, socket}
+
+      {:flash, message} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, message)
+         |> assign(:continue_confirmation_pending, false)}
+
+      nil ->
+        apply_version_continuation(socket)
+    end
+  end
+
+  # No pending confirmation: a forged confirm must not bypass the
+  # replacement acknowledgement (AD7).
+  def handle_event("confirm_continue_from_version", _params, socket) do
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("cancel_continue_from_version", _params, socket) do
+    {:noreply, assign(socket, :continue_confirmation_pending, false)}
   end
 
   @impl true
@@ -1359,6 +1397,98 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   defp params_equal?(_, _), do: false
+
+  # Bumps seq so any queued stale autosave is ignored by :perform_autosave (:1035).
+  defp schedule_functional_analysis_autosave(socket, values) do
+    seq = socket.assigns.autosave_seq + 1
+    send(self(), {:perform_autosave, values, seq})
+    socket |> assign(:autosave_seq, seq) |> assign(:draft_status, :saving)
+  end
+
+  # Single choke point for selecting a version (or the working draft): every
+  # caller resets any pending continuation confirmation, so a stale
+  # confirmation can never survive a selection change (GitHub #365, AD6/C9).
+  defp put_selected_version(socket, version, content) do
+    socket
+    |> assign(:selected_version, version)
+    |> assign(:selected_version_content, content)
+    |> assign(:continue_confirmation_pending, false)
+  end
+
+  # Mirrors only the `:conflict` row of `version_registration_blocker/2`
+  # (AD3): a stale `functional_analysis_lock_version` would make the
+  # scheduled upsert re-conflict. `:save_failed`/`:saving` are explicitly
+  # allowed (L6/AD1-AD2). Checked before any re-fetch or scheduling so a
+  # forged event never causes a needless audited read (AD4).
+  defp continuation_blocker(assigns) do
+    cond do
+      not match?(%FunctionalAnalysisVersion{}, assigns.selected_version) ->
+        :noop
+
+      assigns.draft_generation_pending ->
+        :noop
+
+      assigns.draft_tombstoned_at != nil ->
+        :noop
+
+      assigns.draft_status == :conflict ->
+        {:flash, "Resolvé el conflicto de guardado antes de continuar desde una versión."}
+
+      true ->
+        nil
+    end
+  end
+
+  # Current work is "any unsaved keystroke", not just `draft_status` (AD8):
+  # `draft_status` reflects the last save, not the live form.
+  defp working_form_blank?(socket) do
+    socket
+    |> functional_analysis_form_values()
+    |> Map.values()
+    |> Enum.all?(&(String.trim(&1) == ""))
+  end
+
+  # L3: always re-fetches the version rather than trusting
+  # `@selected_version_content`, so a version deleted/altered between
+  # opening and confirming is never copied stale (C4).
+  defp apply_version_continuation(socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+    version_id = socket.assigns.selected_version.id
+
+    case ClinicalRecord.get_functional_analysis_version(
+           professional,
+           patient_id,
+           target_behavior_id,
+           version_id
+         ) do
+      {:ok, version} ->
+        {_format, content} = FunctionalAnalysisContent.parse(version.body)
+        values = content_params(content)
+
+        socket =
+          socket
+          |> assign(:functional_analysis_form, to_form(values, as: "functional_analysis"))
+          |> put_selected_version(nil, nil)
+          |> schedule_functional_analysis_autosave(values)
+          |> put_flash(
+            :info,
+            "Contenido de la Versión #{version.version_number} copiado al borrador de trabajo."
+          )
+
+        {:noreply, socket}
+
+      {:error, :unauthorized} ->
+        {:noreply, redirect_to_patients(socket, :unauthorized)}
+
+      {:error, _reason} ->
+        socket
+        |> put_selected_version(nil, nil)
+        |> put_flash(:error, "La versión no está disponible.")
+        |> relist_version_summaries()
+    end
+  end
 
   defp merge_generated_draft(current, generated) do
     Enum.reduce(FunctionalAnalysisDraftChain.eorc_fields(), current, fn field, values ->
@@ -2589,6 +2719,49 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <span id="functional-analysis-version-view-date">
                   {format_datetime(@selected_version.inserted_at)}
                 </span>
+              </div>
+
+              <div
+                :if={!@draft_tombstoned_at}
+                id="functional-analysis-version-actions"
+                class="form-actions"
+              >
+                <button
+                  :if={!@continue_confirmation_pending}
+                  type="button"
+                  id="functional-analysis-version-continue"
+                  phx-click="request_continue_from_version"
+                  class="button-primary button-primary--sm"
+                >
+                  Continuar desde esta versión
+                </button>
+              </div>
+              <div
+                :if={@continue_confirmation_pending}
+                id="functional-analysis-version-continue-confirmation"
+                role="alert"
+              >
+                <p id="functional-analysis-version-continue-warning">
+                  El borrador de trabajo actual será reemplazado por el contenido de la Versión {@selected_version.version_number}. La versión histórica no se modifica y no se registra una versión nueva.
+                </p>
+                <div class="form-actions">
+                  <button
+                    type="button"
+                    id="functional-analysis-version-continue-confirm"
+                    phx-click="confirm_continue_from_version"
+                    class="button-primary button-primary--sm"
+                  >
+                    Reemplazar borrador
+                  </button>
+                  <button
+                    type="button"
+                    id="functional-analysis-version-continue-cancel"
+                    phx-click="cancel_continue_from_version"
+                    class="button-secondary button-secondary--sm"
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
 
               <section
