@@ -602,6 +602,72 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
     assert audit.details == %{"outcome" => "denied"}
   end
 
+  test "registration against a legally deleted draft is denied with a draft denial audit" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        target.id,
+        "Borrador borrado"
+      )
+
+    assert {:ok, _tombstone} =
+             Alethea.ClinicalRecord.Retention.legally_delete_record(
+               {"functional_analysis_draft", draft.id},
+               actor: professional,
+               trigger: "manual"
+             )
+
+    refute Repo.get(FunctionalAnalysisDraft, draft.id)
+
+    assert {:error, :legally_deleted} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               1,
+               "Intento de registro"
+             )
+
+    audit = Repo.get_by!(AuditLog, action: "clinical_record_access_denied")
+
+    assert audit.resource_type == "functional_analysis_draft"
+    assert audit.resource_id == draft.id
+    assert audit.professional_id == professional.id
+    assert audit.details == %{"outcome" => "denied"}
+
+    assert Repo.aggregate(FunctionalAnalysisVersion, :count) == 0
+  end
+
+  test "registration against a target behavior outside the authorized patient is denied and audited" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    other_patient = create_patient!(professional)
+
+    {:ok, foreign_target} =
+      ClinicalRecord.create_target_behavior(professional, other_patient.id, "Conducta ajena")
+
+    assert {:error, :not_found} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               foreign_target.id,
+               1,
+               "Intento de registro"
+             )
+
+    audit = Repo.get_by!(AuditLog, action: "clinical_record_access_denied")
+
+    assert audit.resource_type == "target_behavior"
+    assert audit.resource_id == foreign_target.id
+    assert audit.professional_id == professional.id
+    assert audit.details == %{"outcome" => "denied"}
+  end
+
   defp create_professional! do
     {:ok, professional} =
       Accounts.create_professional(%{
