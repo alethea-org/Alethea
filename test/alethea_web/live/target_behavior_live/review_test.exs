@@ -1887,6 +1887,334 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     defp version_count, do: Repo.aggregate(FunctionalAnalysisVersion, :count)
   end
 
+  describe "read-only E-O-R-C version browsing (GitHub #364)" do
+    @working_draft_option "#functional-analysis-working-draft-option"
+    @eorc_fields ~w(
+      antecedents_distal antecedents_immediate
+      organism_sleep organism_pain_or_discomfort organism_hunger_or_nutrition organism_learning_history
+      response_physiological response_cognitive response_motor
+      consequences_short_term consequences_long_term
+    )
+
+    test "selector always renders the working draft first, lists versions oldest-first across a legal-deletion gap, and shows only the working draft when none are registered",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      assert has_element?(view, "#{@working_draft_option}[aria-pressed=\"true\"]")
+      refute has_element?(view, "[id^='functional-analysis-version-option-']")
+
+      versions =
+        for note <- ["Primera nota", "Segunda nota", "Tercera nota"] do
+          draft =
+            persist_draft!(professional, patient, target_behavior, %{"antecedents_distal" => note})
+
+          {:ok, version} =
+            ClinicalRecord.register_functional_analysis_version(
+              professional,
+              patient.id,
+              target_behavior.id,
+              draft.lock_version,
+              note
+            )
+
+          version
+        end
+
+      [first, second, third] = versions
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_version", third.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      fourth_draft =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Cuarta nota"
+        })
+
+      {:ok, fourth} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          fourth_draft.lock_version,
+          "Cuarta nota"
+        )
+
+      {:ok, view2, html2} = live(conn, review_path(patient, target_behavior))
+
+      assert has_element?(view2, "#{@working_draft_option}[aria-pressed=\"true\"]")
+      refute html2 =~ ~r/\d+ of \d+/
+
+      ordered = [first, second, fourth]
+      notes = ["Primera nota", "Segunda nota", "Cuarta nota"]
+
+      positions =
+        Enum.map(ordered, fn version ->
+          assert has_element?(
+                   view2,
+                   "#functional-analysis-version-option-#{version.id}",
+                   "Versión #{version.version_number}"
+                 )
+
+          {pos, _} = :binary.match(html2, "functional-analysis-version-option-#{version.id}")
+          pos
+        end)
+
+      assert positions == Enum.sort(positions)
+
+      for {version, note} <- Enum.zip(ordered, notes) do
+        assert has_element?(
+                 view2,
+                 "#functional-analysis-version-option-#{version.id}",
+                 note
+               )
+      end
+    end
+
+    test "selecting a version shows all 11 E-O-R-C fields plus the full note read-only and hides every write form",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      draft = persist_draft!(professional, patient, target_behavior, eorc_params("V2"))
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          "Nota completa de la versión dos"
+        )
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      view
+      |> element("#functional-analysis-version-option-#{version.id}")
+      |> render_click()
+
+      assert has_element?(view, "#functional-analysis-version-view")
+
+      for field <- @eorc_fields do
+        assert has_element?(
+                 view,
+                 "##{field_view_id(field)}",
+                 "#{field} V2"
+               )
+      end
+
+      assert has_element?(
+               view,
+               "#functional-analysis-version-view-change-note",
+               "Nota completa de la versión dos"
+             )
+
+      refute has_element?(view, "#functional-analysis-form")
+      refute has_element?(view, "#functional-analysis-version-form")
+      refute has_element?(view, "#generate-functional-analysis-draft")
+    end
+
+    test "returning to the working draft restores unsaved form content and the same draft status, across saved/save_failed/conflict",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      draft =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Guardado"
+        })
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          "Nota"
+        )
+
+      for {status, label} <- [
+            {:saved, "Guardado"},
+            {:save_failed, "Error al guardar"},
+            {:conflict, "Conflicto al guardar"}
+          ] do
+        {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+        render_change(view, "change_functional_analysis", %{
+          "functional_analysis" => %{"antecedents_distal" => "Edición sin guardar #{status}"}
+        })
+
+        _ = :sys.get_state(view.pid)
+
+        :sys.replace_state(view.pid, fn state ->
+          %{state | socket: Phoenix.Component.assign(state.socket, :draft_status, status)}
+        end)
+
+        view
+        |> element("#functional-analysis-version-option-#{version.id}")
+        |> render_click()
+
+        assert has_element?(view, "#functional-analysis-version-view")
+
+        view
+        |> element(@working_draft_option)
+        |> render_click()
+
+        refute has_element?(view, "#functional-analysis-version-view")
+
+        assert has_element?(
+                 view,
+                 "#functional-analysis-antecedents-distal",
+                 "Edición sin guardar #{status}"
+               )
+
+        assert has_element?(view, "#editor-draft-status", label)
+      end
+    end
+
+    test "a legally deleted version fails selection with a generic message, keeps the working draft active, and disappears from the list",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      draft =
+        persist_draft!(professional, patient, target_behavior, %{"antecedents_distal" => "Activo"})
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          "Nota"
+        )
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      assert has_element?(view, "#functional-analysis-version-option-#{version.id}")
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_version", version.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      html =
+        view
+        |> element("#functional-analysis-version-option-#{version.id}")
+        |> render_click()
+
+      assert html =~ "La versión no está disponible."
+      refute has_element?(view, "#functional-analysis-version-view")
+      assert has_element?(view, "#functional-analysis-form")
+      refute has_element?(view, "#functional-analysis-version-option-#{version.id}")
+    end
+
+    test "every write path no-ops while a version is selected, and a pending generation blocks selection itself",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      draft =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Protegido"
+        })
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          "Nota protegida"
+        )
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      view
+      |> element("#functional-analysis-version-option-#{version.id}")
+      |> render_click()
+
+      assert has_element?(view, "#functional-analysis-version-view")
+
+      {:ok, initial_content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      forged_events = [
+        {:change, "change_functional_analysis",
+         %{"functional_analysis" => %{"antecedents_distal" => "Forzado"}}},
+        {:hook, "save_functional_analysis",
+         %{"functional_analysis" => %{"antecedents_distal" => "Forzado"}}},
+        {:hook, "register_functional_analysis_version",
+         %{"version" => %{"change_note" => "Forzado"}}},
+        {:hook, "generate_functional_analysis_draft", %{}}
+      ]
+
+      for {kind, event, params} <- forged_events do
+        case kind do
+          :change -> render_change(view, event, params)
+          :hook -> render_hook(view, event, params)
+        end
+
+        _ = :sys.get_state(view.pid)
+      end
+
+      assert {:ok, ^initial_content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert version_count() == 1
+      assert has_element?(view, "#functional-analysis-version-view")
+
+      state = :sys.get_state(view.pid)
+      assert state.socket.assigns.functional_analysis_lock_version == draft.lock_version
+      refute state.socket.assigns.draft_generation_pending
+
+      # Fold-in (L5): a pending generation blocks selection itself, even via a forged event.
+      view
+      |> element(@working_draft_option)
+      |> render_click()
+
+      :sys.replace_state(view.pid, fn state ->
+        %{state | socket: Phoenix.Component.assign(state.socket, :draft_generation_pending, true)}
+      end)
+
+      html = render_hook(view, "select_functional_analysis_version", %{"id" => version.id})
+
+      refute html =~ "functional-analysis-version-view"
+      assert has_element?(view, "#functional-analysis-version-option-#{version.id}[disabled]")
+    end
+
+    defp eorc_params(marker) do
+      Map.new(@eorc_fields, fn field -> {field, "#{field} #{marker}"} end)
+    end
+
+    defp field_view_id(field),
+      do: "functional-analysis-version-view-#{String.replace(field, "_", "-")}"
+  end
+
   describe "structured functional-analysis draft and explicit note creation" do
     test "saving structured analysis persists it without creating a clinical note", %{
       conn: conn,

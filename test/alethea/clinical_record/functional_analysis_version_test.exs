@@ -880,6 +880,100 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
     evidence
   end
 
+  describe "body-free version summaries (GitHub #364)" do
+    test "summaries never carry a body, decrypt the note, order ascending across a legal-deletion gap, and enforce list/3's authorization" do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+      for note <- ["Primera nota", "Segunda nota", "Tercera nota"] do
+        {:ok, draft} =
+          ClinicalRecord.upsert_functional_analysis_draft(
+            professional,
+            patient.id,
+            target.id,
+            "Cuerpo de #{note}"
+          )
+
+        {:ok, _version} =
+          ClinicalRecord.register_functional_analysis_version(
+            professional,
+            patient.id,
+            target.id,
+            draft.lock_version,
+            note
+          )
+      end
+
+      assert {:ok, [_v1, _v2, v3]} =
+               ClinicalRecord.list_functional_analysis_version_summaries(
+                 professional,
+                 patient.id,
+                 target.id
+               )
+
+      assert {:ok, _tombstone} =
+               Alethea.ClinicalRecord.Retention.legally_delete_record(
+                 {"functional_analysis_version", v3.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      {:ok, fourth_draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target.id,
+          "Cuarto cuerpo"
+        )
+
+      {:ok, _v4} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target.id,
+          fourth_draft.lock_version,
+          "Cuarta nota"
+        )
+
+      assert {:ok, [first, second, fourth]} =
+               ClinicalRecord.list_functional_analysis_version_summaries(
+                 professional,
+                 patient.id,
+                 target.id
+               )
+
+      assert [first.version_number, second.version_number, fourth.version_number] == [1, 2, 4]
+      assert is_nil(first.body)
+      assert is_nil(first.encrypted_body)
+      assert first.change_note == "Primera nota"
+      assert second.change_note == "Segunda nota"
+      assert fourth.change_note == "Cuarta nota"
+      assert first.professional.id == professional.id
+
+      other_patient = create_patient!(professional)
+
+      {:ok, other_target} =
+        ClinicalRecord.create_target_behavior(professional, other_patient.id, "Otra conducta")
+
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.list_functional_analysis_version_summaries(
+                 other_professional,
+                 patient.id,
+                 target.id
+               )
+
+      assert {:error, :not_found} =
+               ClinicalRecord.list_functional_analysis_version_summaries(
+                 professional,
+                 patient.id,
+                 other_target.id
+               )
+    end
+  end
+
   defp create_professional! do
     {:ok, professional} =
       Accounts.create_professional(%{
