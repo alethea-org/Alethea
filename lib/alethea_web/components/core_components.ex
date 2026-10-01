@@ -627,9 +627,20 @@ defmodule AletheaWeb.CoreComponents do
   """
   attr :citations, :list, required: true, doc: "list of %Citation{} to render"
 
+  attr :id_prefix, :string,
+    default: nil,
+    doc:
+      "optional prefix to scope child citation DOM IDs (e.g. panel id to prevent collisions across turns)"
+
   def citation_list(assigns) do
     ~H"""
-    <section class="citation-list"><.citation :for={cite <- @citations} citation={cite} /></section>
+    <section class="citation-list">
+      <.citation
+        :for={cite <- @citations}
+        citation={cite}
+        id={@id_prefix && "#{@id_prefix}-citation-#{cite.source_ref}"}
+      />
+    </section>
     """
   end
 

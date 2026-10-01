@@ -26,7 +26,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
   alias Alethea.AI.{ClinicalConsultationChainMock, ClinicalHypothesisChainMock}
   alias Alethea.Clinical.Message
   alias Alethea.ClinicalRecord.Rag.Consultation
-  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Hypothesis, HypothesisPolicy}
+  alias Alethea.ClinicalRecord.Rag.Consultation.{Answer, Hypothesis}
   alias Alethea.Repo
 
   @seeded_excerpt "El paciente reporta mejoría del ánimo esta semana y mayor actividad social."
@@ -422,7 +422,7 @@ defmodule AletheaWeb.ConsultationLiveTest do
       short_chunk_id = source.reference.chunk_id |> to_string() |> String.slice(0, 8)
       source_ref = "#{source.reference.resource_type}/#{short_chunk_id}"
 
-      assert panel_html =~ ~s(id="citation-#{source_ref}")
+      assert panel_html =~ ~s(id="turn-0-hypothesis-citation-#{source_ref}")
     end
 
     test "diagnostic candidate prose yields hypothesis: nil and no panel in the DOM (R8 render half)",
@@ -548,12 +548,9 @@ defmodule AletheaWeb.ConsultationLiveTest do
       submit_query(view, "¿cómo viene el paciente?")
       render_async(view)
 
-      # A distinct hypothesis for the second turn: `citation_list/1`
-      # derives its DOM ids from source_ref alone, so two panels citing
-      # the same fixture would collide (LiveViewTest raises on
-      # duplicate ids). Distinct evidence per turn keeps every id
-      # unique while still proving the panels persist per turn.
-      set_fake_hypothesis(alternate_hypothesis!())
+      # Re-using the same hypothesis fixture on the second turn tests that child
+      # citation DOM IDs are scoped by panel/turn and avoid duplicate IDs.
+      set_fake_hypothesis(canned_hypothesis!())
 
       submit_query(view, "¿y durante esta semana?")
       render_async(view)
@@ -562,6 +559,9 @@ defmodule AletheaWeb.ConsultationLiveTest do
       assert has_element?(view, "#turn-1-hypothesis")
       assert has_element?(view, "#turn-0-hypothesis .citation-list")
       assert has_element?(view, "#turn-1-hypothesis .citation-list")
+      assert has_element?(view, "#turn-0-hypothesis-citation-clinical_note\\/11111111")
+      assert has_element?(view, "#turn-1-hypothesis-citation-clinical_note\\/11111111")
+      refute has_element?(view, "#citation-clinical_note\\/11111111")
     end
 
     test "the idle hero renders three suggestion chips that seed a pending turn", %{
@@ -692,29 +692,6 @@ defmodule AletheaWeb.ConsultationLiveTest do
     view
     |> form("#consultation-ask-form", consultation: %{query: query})
     |> render_submit()
-  end
-
-  # A second real %Hypothesis{} (same sole-constructor path as
-  # `canned_hypothesis!/0`) over a distinct fixture chunk, so the two
-  # per-turn panels cite different source_refs and every citation DOM
-  # id on the page stays unique.
-  defp alternate_hypothesis! do
-    {:ok, hypothesis} =
-      HypothesisPolicy.evaluate(
-        "Podría existir una relación entre el descanso reparador y la mejoría del ánimo.",
-        [
-          %{
-            chunk_id: "33333333-3333-3333-3333-333333333333",
-            source_resource_type: "clinical_note",
-            source_resource_id: "44444444-4444-4444-4444-444444444444",
-            source_occurred_at: ~U[2026-02-10 09:00:00.000000Z],
-            target_behavior_id: nil,
-            content: "El paciente durmió siete horas seguidas y reportó descanso reparador."
-          }
-        ]
-      )
-
-    hypothesis
   end
 
   defp set_fake_outcome(outcome, opts \\ []) do

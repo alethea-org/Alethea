@@ -91,7 +91,7 @@ defmodule AletheaWeb.GroundedChat.HypothesisPanel do
       </div>
 
       <p class="review-hypothesis-panel__statement">{@hypothesis.statement}</p>
-      <.citation_list citations={@citations} />
+      <.citation_list citations={@citations} id_prefix={@id} />
     </section>
     """
   end

@@ -58,9 +58,11 @@ contract stays untouched.
 - Domain untouched: `Alethea.ClinicalRecord.Rag.Consultation`,
   `FollowupState` semantics, turn-counter rules (only synthesis advances),
   authorization, zero persistence.
-- `CoreComponents.citation/1` / `citation_list/1` DOM contract unchanged
-  (`<details>` per source, `#turn-N-sources` container).
-- `HypothesisPanel` component unchanged; only its mount point moves per-turn.
+- Preserve the `CoreComponents.citation/1` DOM contract (`<details>` per
+  source, `#turn-N-sources` container); the approved review repair may scope
+  hypothesis citations by panel ID without changing citation data.
+- The approved PR #375 review repair may change `HypothesisPanel` only to
+  disambiguate citations repeated across turns.
 - No streaming (explicitly deferred), no markdown rendering of synthesis.
 - No new deps, no Petal, no Tailwind.
 
@@ -105,6 +107,43 @@ contract stays untouched.
   - Full `mix precommit` re-run (gentle-ai-verify, background): **exit 0** —
     compile --warnings-as-errors, deps.unlock --unused, format, test:
     1691 passed (6 doctests + 1685 tests), 5 skipped, 0 failures (185.2s).
+- [ ] **TASK-6 — Scope repeated hypothesis citation IDs by turn**
+  - Status: implementation and focused checks complete; work-unit commit
+    authorized and being recorded. Route: delegated `gentle-ai-worker`
+    (component and affected tests).
+  - RED observed: focused consultation suite 68/69; duplicate
+    `citation-clinical_note/11111111` ID crashes LiveViewTest with repeated
+    source on two synthesis turns. GREEN observed: 69/69 after optional
+    `citation_list/1` ID prefix and panel-scoped child IDs; default unscoped
+    citation tests 12/12. Existing hypothesis-panel unit assertions updated
+    for scoped IDs: isolated 6/6, combined consultation/component tests 75/75,
+    format check clean. No known failing focused check; completion awaits the
+    work-unit commit identity.
+- [ ] **TASK-7 — Reset composer height after server form patch**
+  - Status: implemented and verified in the uncommitted workspace; deferred to
+    its own work-unit commit. Route: delegated `gentle-ai-worker` (hook and Node
+    regression test). RED/GREEN evidence and final gate will be recorded with
+    that commit.
+
+## PR #375 review-repair plan
+
+- Scope: only the two Jorge-confirmed quick wins (duplicate hypothesis citation
+  IDs and persistent composer height). Other candidates are out of scope.
+- TDD: strict, from this feature's original testing configuration; focused
+  runner is the command above, final gate is `mix precommit`. JS browser proof
+  may be manual if no existing automated hook runner is available; never claim
+  an unrun browser check.
+- Delivery: existing PR #375 is already above the ~400-line advisory threshold;
+  this bounded correction stays on its branch without expanding product scope.
+  The user explicitly authorized work-unit commits for both repairs; push
+  and PR update remain unauthorized.
+- Native review of the combined correction candidate closed approved and was
+  acknowledged/burned (lineage `review-10afc4256717d92a`, target
+  `sha256:20da04c0210687f5c61b58e75d0657b0f44bc95673d714a49f6dcfcc4d659e60`).
+  The reviewer covered the code, tests, and this document as frozen before this
+  final evidence note; no source edits followed review.
+- Next step: record TASK-6's work-unit commit, then record TASK-7 separately.
+  PR update/push remains a separate decision.
 
 ## Evidence
 
