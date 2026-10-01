@@ -36,8 +36,40 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
   alias Alethea.ClinicalRecord.FunctionalAnalysisDraft
+  alias Alethea.ClinicalRecord.FunctionalAnalysisVersion
   alias AletheaWeb.TargetBehaviorLive.AudioMarker
   alias Phoenix.LiveView.AsyncResult
+
+  # Mirrors the editable form fieldset labels (:2398-2497) for the read-only
+  # version view (GitHub #364). Kept as a function, not `@foo` usage inside
+  # `~H`, since that always reads `assigns.foo`, never a module attribute.
+  @version_view_sections_data [
+    {"E", "Antecedentes",
+     [
+       {:antecedents_distal, "Antecedentes distales"},
+       {:antecedents_immediate, "Antecedentes inmediatos"}
+     ]},
+    {"O", "Organismo",
+     [
+       {:organism_sleep, "Sueño"},
+       {:organism_pain_or_discomfort, "Dolor o malestar"},
+       {:organism_hunger_or_nutrition, "Hambre o nutrición"},
+       {:organism_learning_history, "Historia de aprendizaje"}
+     ]},
+    {"R", "Respuesta",
+     [
+       {:response_physiological, "Fisiológica"},
+       {:response_cognitive, "Cognitiva"},
+       {:response_motor, "Motora o conductual"}
+     ]},
+    {"C", "Consecuencias",
+     [
+       {:consequences_short_term, "A corto plazo"},
+       {:consequences_long_term, "A largo plazo"}
+     ]}
+  ]
+
+  defp version_view_sections, do: @version_view_sections_data
 
   @search_source_filters [
     %{id: "all", label: "Todos"},
@@ -133,6 +165,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           )
           |> assign(:draft_tombstoned_at, draft_tombstoned_at)
           |> assign(:version_form, version_form(""))
+          |> assign(
+            :version_summaries,
+            load_version_summaries(professional, patient_id, target_behavior_id)
+          )
+          |> assign(:selected_version, nil)
+          |> assign(:selected_version_content, nil)
           |> assign_async(:suggested_candidates, fn ->
             case ClinicalRecord.suggest_evidence_candidates(
                    professional,
@@ -685,6 +723,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     end
   end
 
+  # Forged/stale write while a version is selected: silent no-op (R5/AD3).
+  @impl true
+  def handle_event(
+        "change_functional_analysis",
+        _params,
+        %{assigns: %{selected_version: %FunctionalAnalysisVersion{}}} = socket
+      ) do
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_event("change_functional_analysis", %{"functional_analysis" => params}, socket) do
     current_values = functional_analysis_form_values(socket)
@@ -713,6 +761,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
          |> assign(:autosave_seq, seq)
          |> assign(:draft_status, :saving)}
     end
+  end
+
+  # Forged/stale write while a version is selected: silent no-op (R5/AD3).
+  @impl true
+  def handle_event(
+        "generate_functional_analysis_draft",
+        _params,
+        %{assigns: %{selected_version: %FunctionalAnalysisVersion{}}} = socket
+      ) do
+    {:noreply, socket}
   end
 
   @impl true
@@ -749,6 +807,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
            end
          end)}
     end
+  end
+
+  # Forged/stale write while a version is selected: silent no-op (R5/AD3).
+  @impl true
+  def handle_event(
+        "save_functional_analysis",
+        _params,
+        %{assigns: %{selected_version: %FunctionalAnalysisVersion{}}} = socket
+      ) do
+    {:noreply, socket}
   end
 
   @impl true
@@ -795,6 +863,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     end
   end
 
+  # Forged/stale write while a version is selected: silent no-op (R5/AD3).
+  @impl true
+  def handle_event(
+        "register_functional_analysis_version",
+        _params,
+        %{assigns: %{selected_version: %FunctionalAnalysisVersion{}}} = socket
+      ) do
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_event("register_functional_analysis_version", params, socket) do
     note = version_note_param(params)
@@ -804,6 +882,54 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       nil -> register_functional_analysis_version(socket, note)
       {:flash, message} -> {:noreply, put_flash(socket, :error, message)}
       {:note, message} -> {:noreply, assign(socket, :version_form, version_form(note, message))}
+    end
+  end
+
+  # Pending AI generation blocks selection itself, forged or not (AD4/R8/L5).
+  @impl true
+  def handle_event(
+        "select_functional_analysis_version",
+        _params,
+        %{assigns: %{draft_generation_pending: true}} = socket
+      ) do
+    {:noreply, socket}
+  end
+
+  def handle_event("select_functional_analysis_version", %{"id" => "working-draft"}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_version, nil)
+     |> assign(:selected_version_content, nil)}
+  end
+
+  def handle_event("select_functional_analysis_version", %{"id" => id}, socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    case ClinicalRecord.get_functional_analysis_version(
+           professional,
+           patient_id,
+           target_behavior_id,
+           id
+         ) do
+      {:ok, version} ->
+        {_format, content} = FunctionalAnalysisContent.parse(version.body)
+
+        {:noreply,
+         socket
+         |> assign(:selected_version, version)
+         |> assign(:selected_version_content, content)}
+
+      {:error, :unauthorized} ->
+        {:noreply, redirect_to_patients(socket, :unauthorized)}
+
+      {:error, _reason} ->
+        socket
+        |> assign(:selected_version, nil)
+        |> assign(:selected_version_content, nil)
+        |> put_flash(:error, "La versión no está disponible.")
+        |> relist_version_summaries()
     end
   end
 
@@ -990,6 +1116,60 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         socket
     end
   end
+
+  # Mount is already authorized by `load_review/3`; any later error degrades
+  # to an empty list rather than failing the whole page.
+  defp load_version_summaries(professional, patient_id, target_behavior_id) do
+    case ClinicalRecord.list_functional_analysis_version_summaries(
+           professional,
+           patient_id,
+           target_behavior_id
+         ) do
+      {:ok, summaries} -> summaries
+      {:error, _reason} -> []
+    end
+  end
+
+  # AD5: an :unauthorized/:not_found here means access itself changed, so
+  # redirect instead of showing a stale list.
+  defp relist_version_summaries(socket) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    case ClinicalRecord.list_functional_analysis_version_summaries(
+           professional,
+           patient_id,
+           target_behavior_id
+         ) do
+      {:ok, summaries} -> {:noreply, assign(socket, :version_summaries, summaries)}
+      {:error, :unauthorized} -> {:noreply, redirect_to_patients(socket, :unauthorized)}
+      {:error, :not_found} -> {:noreply, redirect_to_patients(socket, :not_found)}
+    end
+  end
+
+  defp version_option_label(version) do
+    author =
+      case version.professional do
+        %{full_name: full_name, email: email} -> full_name || email
+        _other -> nil
+      end
+
+    "Versión #{version.version_number} · #{format_datetime(version.inserted_at)} · #{author} · #{truncate_note(version.change_note)}"
+  end
+
+  defp truncate_note(note) when is_binary(note) do
+    if String.length(note) > 60 do
+      String.slice(note, 0, 57) <> "…"
+    else
+      note
+    end
+  end
+
+  defp truncate_note(_note), do: ""
+
+  defp version_view_field_id(field),
+    do: "functional-analysis-version-view-#{String.replace(Atom.to_string(field), "_", "-")}"
 
   defp find_citable_candidate(%AsyncResult{ok?: true, result: candidates}, chunk_id) do
     Enum.find(candidates, fn candidate ->
@@ -2334,7 +2514,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <div class="form-actions">
                 <button
-                  :if={!@draft_tombstoned_at}
+                  :if={!@draft_tombstoned_at and is_nil(@selected_version)}
                   type="button"
                   id="generate-functional-analysis-draft"
                   phx-click="generate_functional_analysis_draft"
@@ -2357,7 +2537,96 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </div>
 
             <div
-              :if={@draft_status == :empty and !@draft_tombstoned_at}
+              id="functional-analysis-version-selector"
+              role="group"
+              aria-label="Versiones registradas"
+              class="version-selector"
+            >
+              <button
+                type="button"
+                id="functional-analysis-working-draft-option"
+                phx-click="select_functional_analysis_version"
+                phx-value-id="working-draft"
+                disabled={@draft_generation_pending}
+                aria-pressed={to_string(is_nil(@selected_version))}
+                class={[
+                  "filter-pill",
+                  is_nil(@selected_version) && "filter-pill--active"
+                ]}
+              >
+                Borrador de trabajo
+              </button>
+
+              <button
+                :for={version <- @version_summaries}
+                type="button"
+                id={"functional-analysis-version-option-#{version.id}"}
+                phx-click="select_functional_analysis_version"
+                phx-value-id={version.id}
+                disabled={@draft_generation_pending}
+                aria-pressed={to_string(@selected_version && @selected_version.id == version.id)}
+                class={[
+                  "filter-pill",
+                  @selected_version && @selected_version.id == version.id && "filter-pill--active"
+                ]}
+              >
+                {version_option_label(version)}
+              </button>
+            </div>
+
+            <section
+              :if={@selected_version}
+              id="functional-analysis-version-view"
+              class="functional-analysis-version-view"
+            >
+              <h2 class="t-title-sm">Versión {@selected_version.version_number}</h2>
+
+              <div class="review-item__meta">
+                <span id="functional-analysis-version-view-author">
+                  {(@selected_version.professional && @selected_version.professional.full_name) ||
+                    (@selected_version.professional && @selected_version.professional.email)}
+                </span>
+                <span id="functional-analysis-version-view-date">
+                  {format_datetime(@selected_version.inserted_at)}
+                </span>
+              </div>
+
+              <section
+                :if={
+                  @selected_version_content &&
+                    @selected_version_content.previous_notes not in [nil, ""]
+                }
+                id="functional-analysis-version-view-previous-notes"
+                class="previous-notes"
+              >
+                <h3>Notas anteriores</h3>
+                <pre class="previous-notes__content">{@selected_version_content.previous_notes}</pre>
+              </section>
+
+              <fieldset
+                :for={{letter, legend, fields} <- version_view_sections()}
+                class="functional-analysis-section"
+              >
+                <legend><span>{letter}</span> {legend}</legend>
+
+                <div :for={{field, label} <- fields} id={version_view_field_id(field)} class="field">
+                  <span class="field__label">{label}</span>
+                  <div class="functional-analysis-version-view__value">
+                    {@selected_version_content && Map.get(@selected_version_content, field)}
+                  </div>
+                </div>
+              </fieldset>
+
+              <div id="functional-analysis-version-view-change-note" class="field">
+                <span class="field__label">Nota del cambio</span>
+                <div class="functional-analysis-version-view__value">
+                  {@selected_version.change_note}
+                </div>
+              </div>
+            </section>
+
+            <div
+              :if={@draft_status == :empty and !@draft_tombstoned_at and is_nil(@selected_version)}
               id="empty-draft"
               class="empty-state empty-state--compact"
             >
@@ -2370,7 +2639,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </div>
 
             <.form
-              :if={!@draft_tombstoned_at}
+              :if={!@draft_tombstoned_at and is_nil(@selected_version)}
               for={@functional_analysis_form}
               id="functional-analysis-form"
               phx-change="change_functional_analysis"
@@ -2508,7 +2777,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </.form>
 
             <.form
-              :if={!@draft_tombstoned_at}
+              :if={!@draft_tombstoned_at and is_nil(@selected_version)}
               for={@version_form}
               id="functional-analysis-version-form"
               phx-submit="register_functional_analysis_version"
