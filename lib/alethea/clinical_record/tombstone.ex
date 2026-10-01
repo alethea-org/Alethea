@@ -19,7 +19,7 @@ defmodule Alethea.ClinicalRecord.Tombstone do
   # The seven existing ClinicalRecord `@resource_types`.
   @resource_types ~w(target_behavior clinical_note consultation_evidence
                      clinician_observation ai_proposal functional_analysis_draft
-                     session_transcript)
+                     functional_analysis_version session_transcript)
   @triggers ~w(sweep manual)
 
   @primary_key {:id, :binary_id, autogenerate: true}

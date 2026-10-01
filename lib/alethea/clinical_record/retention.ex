@@ -40,6 +40,7 @@ defmodule Alethea.ClinicalRecord.Retention do
     ClinicianObservation,
     ConsultationEvidence,
     FunctionalAnalysisDraft,
+    FunctionalAnalysisVersion,
     Lifecycle,
     Outbox,
     SessionTranscript,
@@ -57,6 +58,7 @@ defmodule Alethea.ClinicalRecord.Retention do
     {ConsultationEvidence, "consultation_evidence", :inserted_at},
     {ClinicianObservation, "clinician_observation", :updated_at},
     {AIProposal, "ai_proposal", :updated_at},
+    {FunctionalAnalysisVersion, "functional_analysis_version", :inserted_at},
     {FunctionalAnalysisDraft, "functional_analysis_draft", :updated_at},
     {ClinicalNote, "clinical_note", :inserted_at},
     {SessionTranscript, "session_transcript", :inserted_at},
@@ -103,6 +105,7 @@ defmodule Alethea.ClinicalRecord.Retention do
 
     schema
     |> join(:left, [r], l in Lifecycle, on: l.patient_id == r.patient_id)
+    |> exclude_records_with_versions(schema)
     |> where([r, l], is_nil(l.legal_hold_at))
     |> where(
       [r, l],
@@ -241,12 +244,12 @@ defmodule Alethea.ClinicalRecord.Retention do
 
     Ecto.Multi.new()
     |> Ecto.Multi.run(:record, fn repo, _changes ->
-      schema
-      |> where([r], r.id == ^ids.id)
-      |> repo.delete_all()
-      |> case do
-        {1, _} -> {:ok, :deleted}
+      with :ok <- lock_and_prepare_parent_deletion(repo, schema, ids, actor, trigger),
+           {1, _} <- schema |> where([r], r.id == ^ids.id) |> repo.delete_all() do
+        {:ok, :deleted}
+      else
         {0, _} -> {:error, :not_found}
+        {:error, reason} -> {:error, reason}
       end
     end)
     |> Ecto.Multi.insert(
@@ -285,6 +288,7 @@ defmodule Alethea.ClinicalRecord.Retention do
 
       {:error, step, reason, _changes} ->
         Logger.warning("clinical_record retention multi failed at #{step}")
+        if reason == :legal_hold_active, do: audit_hold_paused(actor, ids, resource_type)
         {:error, reason}
     end
   end
@@ -380,7 +384,8 @@ defmodule Alethea.ClinicalRecord.Retention do
               ConsultationEvidence,
               ClinicianObservation,
               AIProposal,
-              FunctionalAnalysisDraft
+              FunctionalAnalysisDraft,
+              FunctionalAnalysisVersion
             ] do
     schema
     |> where([r], r.id == ^resource_id)
@@ -402,6 +407,82 @@ defmodule Alethea.ClinicalRecord.Retention do
       nil -> nil
       ids -> Map.put(ids, :target_behavior_id, nil)
     end
+  end
+
+  defp exclude_records_with_versions(query, schema)
+       when schema in [FunctionalAnalysisDraft, TargetBehavior] do
+    target_id_field = if schema == TargetBehavior, do: :id, else: :target_behavior_id
+
+    where(
+      query,
+      [r, _l],
+      fragment(
+        "NOT EXISTS (SELECT 1 FROM functional_analysis_versions fav WHERE fav.target_behavior_id = ?)",
+        field(r, ^target_id_field)
+      )
+    )
+  end
+
+  defp exclude_records_with_versions(query, _schema), do: query
+
+  defp lock_and_prepare_parent_deletion(repo, schema, ids, actor, trigger)
+       when schema in [FunctionalAnalysisDraft, TargetBehavior] do
+    target_id = if schema == TargetBehavior, do: ids.id, else: ids.target_behavior_id
+
+    target =
+      TargetBehavior
+      |> where([target], target.id == ^target_id)
+      |> lock("FOR UPDATE")
+      |> repo.one()
+
+    current_ids = identifiers_for(schema, ids.id)
+
+    cond do
+      is_nil(target) or is_nil(current_ids) ->
+        {:error, :not_found}
+
+      target.patient_id != current_ids.patient_id or
+        target.professional_id != current_ids.professional_id or
+        current_ids.patient_id != ids.patient_id or
+        current_ids.professional_id != ids.professional_id or
+          current_ids.target_behavior_id != ids.target_behavior_id ->
+        {:error, :not_found}
+
+      Lifecycle.held?(target.patient_id) ->
+        {:error, :legal_hold_active}
+
+      true ->
+        version_ids =
+          FunctionalAnalysisVersion
+          |> where([version], version.target_behavior_id == ^target_id)
+          |> select([version], version.id)
+          |> repo.all()
+
+        cond do
+          trigger == "sweep" and version_ids != [] ->
+            {:error, :deferred_for_versions}
+
+          trigger == "manual" ->
+            delete_versions_for_parent(version_ids, actor, trigger)
+
+          true ->
+            :ok
+        end
+    end
+  end
+
+  defp lock_and_prepare_parent_deletion(_repo, _schema, _ids, _actor, _trigger), do: :ok
+
+  defp delete_versions_for_parent(version_ids, actor, trigger) do
+    Enum.reduce_while(version_ids, :ok, fn version_id, :ok ->
+      case legally_delete_record({"functional_analysis_version", version_id},
+             actor: actor,
+             trigger: trigger
+           ) do
+        {:ok, _tombstone} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp baseline_days, do: Application.get_env(:alethea, :retention_baseline_days, 3650)

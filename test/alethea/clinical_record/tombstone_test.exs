@@ -85,6 +85,19 @@ defmodule Alethea.ClinicalRecord.TombstoneTest do
       assert "is invalid" in errors_on(changeset).resource_type
     end
 
+    test "accepts functional_analysis_version tombstones", %{patient: patient} do
+      changeset =
+        Tombstone.changeset(%Tombstone{}, %{
+          resource_type: "functional_analysis_version",
+          resource_id: Ecto.UUID.generate(),
+          patient_id: patient.id,
+          deleted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          trigger: "manual"
+        })
+
+      assert changeset.valid?
+    end
+
     test "rejects a trigger outside {sweep, manual}", %{patient: patient} do
       changeset =
         Tombstone.changeset(%Tombstone{}, %{

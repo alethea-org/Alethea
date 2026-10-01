@@ -161,6 +161,23 @@ defmodule Alethea.ClinicalRecord.AuditTest do
     end
   end
 
+  test "functional-analysis version registration audit is content-free", %{
+    professional: professional
+  } do
+    changeset =
+      Audit.changeset(%Audit{
+        professional_id: professional.id,
+        action: "functional_analysis_version_registered",
+        resource_type: "functional_analysis_version",
+        resource_id: Ecto.UUID.generate(),
+        outcome: "success"
+      })
+
+    assert changeset.valid?
+    assert get_change(changeset, :details) == %{"outcome" => "success"}
+    refute Map.has_key?(get_change(changeset, :details), "body")
+  end
+
   describe "changeset/1 — clinical-record-retention vocabulary (sdd/clinical-record-retention, GitHub #197, task 1.8)" do
     test "accepts legal_hold_applied/patient", %{professional: professional} do
       changeset =

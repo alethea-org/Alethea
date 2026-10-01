@@ -132,6 +132,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             to_form(initial_content_params, as: "functional_analysis")
           )
           |> assign(:draft_tombstoned_at, draft_tombstoned_at)
+          |> assign(:version_form, version_form(""))
           |> assign_async(:suggested_candidates, fn ->
             case ClinicalRecord.suggest_evidence_candidates(
                    professional,
@@ -795,6 +796,18 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
+  def handle_event("register_functional_analysis_version", params, socket) do
+    note = version_note_param(params)
+    socket = assign(socket, :version_form, version_form(note))
+
+    case version_registration_blocker(socket, note) do
+      nil -> register_functional_analysis_version(socket, note)
+      {:flash, message} -> {:noreply, put_flash(socket, :error, message)}
+      {:note, message} -> {:noreply, assign(socket, :version_form, version_form(note, message))}
+    end
+  end
+
+  @impl true
   def handle_async(
         :functional_analysis_draft,
         {:ok, {:ok, %{generated: generated, evidence_ids: evidence_ids}}},
@@ -1200,6 +1213,109 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
       true ->
         :saved
+    end
+  end
+
+  defp version_note_param(%{"version" => %{"change_note" => note}}) when is_binary(note),
+    do: note
+
+  defp version_note_param(_params), do: ""
+
+  defp version_form(note, error \\ nil) do
+    errors = if error, do: [change_note: {error, []}], else: []
+    to_form(%{"change_note" => note}, as: "version", errors: errors)
+  end
+
+  # Only a draft that is confirmed persisted and identical to what the
+  # professional sees may be registered. Returns nil when registration may
+  # proceed, otherwise where the rejection must be shown.
+  defp version_registration_blocker(socket, note) do
+    assigns = socket.assigns
+
+    cond do
+      assigns.draft_tombstoned_at != nil ->
+        {:flash, "El borrador fue eliminado legalmente."}
+
+      assigns.draft_status == :conflict ->
+        {:flash, "Resolvé el conflicto de guardado antes de registrar una versión."}
+
+      assigns.draft_status == :save_failed ->
+        {:flash, "Resolvé el error de guardado antes de registrar una versión."}
+
+      assigns.draft_status == :saving ->
+        {:flash, "Esperá a que termine el guardado antes de registrar una versión."}
+
+      not params_equal?(
+        functional_analysis_form_values(socket),
+        assigns.last_saved_functional_analysis_params
+      ) ->
+        {:flash, "Guardá los cambios pendientes antes de registrar una versión."}
+
+      assigns.draft_status == :empty or assigns.functional_analysis_lock_version in [nil, 0] ->
+        {:flash, "Guardá el análisis funcional antes de registrar una versión."}
+
+      String.trim(note) == "" ->
+        {:note, "Ingresá una nota breve del cambio."}
+
+      true ->
+        nil
+    end
+  end
+
+  defp register_functional_analysis_version(socket, note) do
+    case ClinicalRecord.register_functional_analysis_version(
+           socket.assigns.current_professional,
+           socket.assigns.patient_id,
+           socket.assigns.target_behavior_id,
+           socket.assigns.functional_analysis_lock_version,
+           note
+         ) do
+      {:ok, version} ->
+        {:noreply,
+         socket
+         |> assign(:version_form, version_form(""))
+         |> put_flash(:info, "Versión #{version.version_number} registrada.")}
+
+      {:error, :invalid_change_note} ->
+        {:noreply,
+         assign(
+           socket,
+           :version_form,
+           version_form(note, "La nota debe tener entre 1 y 500 caracteres.")
+         )}
+
+      {:error, :conflict} ->
+        {:noreply,
+         socket
+         |> assign(:draft_status, :conflict)
+         |> put_flash(:error, "Conflicto: otra sesión modificó el borrador.")}
+
+      {:error, :legally_deleted} ->
+        {:noreply,
+         socket
+         |> assign(:draft_tombstoned_at, draft_deleted_at(socket))
+         |> assign(:draft_status, :tombstoned)
+         |> put_flash(:error, "El borrador fue eliminado legalmente.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, redirect_to_patients(socket, :unauthorized)}
+
+      {:error, :not_found} ->
+        {:noreply, redirect_to_patients(socket, :not_found)}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo registrar la versión.")}
+    end
+  end
+
+  defp draft_deleted_at(socket) do
+    case ClinicalRecord.get_functional_analysis_draft(
+           socket.assigns.current_professional,
+           socket.assigns.patient_id,
+           socket.assigns.target_behavior_id
+         ) do
+      {:ok, {:legally_deleted, deleted_at}} -> deleted_at
+      _other -> DateTime.utc_now()
     end
   end
 
@@ -2387,6 +2503,33 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   class="button-primary button-primary--sm"
                 >
                   <.icon name="hero-check" class="size-4" /> Guardar análisis
+                </button>
+              </div>
+            </.form>
+
+            <.form
+              :if={!@draft_tombstoned_at}
+              for={@version_form}
+              id="functional-analysis-version-form"
+              phx-submit="register_functional_analysis_version"
+              class="functional-analysis-version-form"
+            >
+              <.input
+                field={@version_form[:change_note]}
+                id="functional-analysis-version-note"
+                type="text"
+                label="Nota del cambio"
+                maxlength="500"
+                placeholder="Qué cambió en esta versión"
+                autocomplete="off"
+              />
+              <div class="form-actions functional-analysis-actions">
+                <button
+                  type="submit"
+                  id="register-functional-analysis-version"
+                  class="button-secondary button-secondary--sm"
+                >
+                  <.icon name="hero-lock-closed" class="size-4" /> Registrar versión
                 </button>
               </div>
             </.form>

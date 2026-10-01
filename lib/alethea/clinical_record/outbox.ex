@@ -12,6 +12,7 @@ defmodule Alethea.ClinicalRecord.Outbox do
     ClinicianObservation,
     ConsultationEvidence,
     FunctionalAnalysisDraft,
+    FunctionalAnalysisVersion,
     SessionTranscript,
     TargetBehavior
   }
@@ -35,6 +36,7 @@ defmodule Alethea.ClinicalRecord.Outbox do
           | ClinicianObservation.t()
           | AIProposal.t()
           | FunctionalAnalysisDraft.t()
+          | FunctionalAnalysisVersion.t()
           | SessionTranscript.t()
         ) :: Ecto.Changeset.t()
   def event(event_type, record) when is_binary(event_type) do
@@ -55,6 +57,7 @@ defmodule Alethea.ClinicalRecord.Outbox do
   defp resource_type(%ClinicianObservation{}), do: "clinician_observation"
   defp resource_type(%AIProposal{}), do: "ai_proposal"
   defp resource_type(%FunctionalAnalysisDraft{}), do: "functional_analysis_draft"
+  defp resource_type(%FunctionalAnalysisVersion{}), do: "functional_analysis_version"
   defp resource_type(%SessionTranscript{}), do: "session_transcript"
 
   @doc """

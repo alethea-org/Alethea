@@ -18,10 +18,13 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
   alias Alethea.Accounts
   alias Alethea.Accounts.{AuditLog, EncryptionKey}
 
+  alias Alethea.ClinicalRecord
+
   alias Alethea.ClinicalRecord.{
     AIProposal,
     ClinicalNote,
     ClinicianObservation,
+    FunctionalAnalysisVersion,
     Lifecycle,
     Retention,
     SessionTranscript,
@@ -31,6 +34,7 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
 
   alias AletheaJobs.ClinicalRecordOutboxWorker
   alias Alethea.Repo
+  alias Oban.Job
 
   @password "supersecret12"
   @baseline_days 3650
@@ -389,6 +393,229 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
       assert length(destroy_rows) == 1
 
       assert {:ok, ^patient_dek_before} = Accounts.load_patient_dek(patient, kek)
+    end
+  end
+
+  describe "functional-analysis version retention" do
+    test "defers old draft and target eligibility while a newer version is retained",
+         %{professional: professional, patient: patient} do
+      target_behavior =
+        insert_target_behavior!(patient, professional, inserted_at: days_ago(@baseline_days + 1))
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      old_draft_at = days_ago(@baseline_days + 1)
+
+      Repo.update_all(
+        from(d in Alethea.ClinicalRecord.FunctionalAnalysisDraft, where: d.id == ^draft.id),
+        set: [updated_at: old_draft_at]
+      )
+
+      eligible = Retention.eligible_records_all_tables()
+
+      refute Enum.any?(eligible, &(&1.resource_id == draft.id))
+      refute Enum.any?(eligible, &(&1.resource_id == target_behavior.id))
+      refute Enum.any?(eligible, &(&1.resource_id == version.id))
+    end
+  end
+
+  describe "functional-analysis version legal deletion" do
+    test "deleting a draft cascades historical ciphertext and deleting a version records a content-free tombstone",
+         %{professional: professional, patient: patient} do
+      target_behavior = insert_target_behavior!(patient, professional)
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      assert {:ok, version_tombstone} =
+               Retention.legally_delete_record(
+                 {"functional_analysis_version", version.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      assert version_tombstone.resource_type == "functional_analysis_version"
+      refute Repo.get(FunctionalAnalysisVersion, version.id)
+      assert Retention.eligible_records(FunctionalAnalysisVersion) == []
+
+      {:ok, next_draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Second persisted text"
+        )
+
+      {:ok, next_version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          next_draft.lock_version,
+          "Second approved"
+        )
+
+      assert {:ok, _draft_tombstone} =
+               Retention.legally_delete_record(
+                 {"functional_analysis_draft", next_draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      refute Repo.get(FunctionalAnalysisVersion, next_version.id)
+    end
+
+    test "manual draft deletion legally tombstones each associated version", %{
+      professional: professional,
+      patient: patient
+    } do
+      target = insert_target_behavior!(patient, professional)
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      assert {:ok, _draft_tombstone} =
+               Retention.legally_delete_record(
+                 {"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      refute Repo.get(FunctionalAnalysisVersion, version.id)
+
+      assert Repo.get_by!(Tombstone,
+               resource_type: "functional_analysis_version",
+               resource_id: version.id
+             )
+
+      assert audit_rows("clinical_record_legally_deleted", version.id) != []
+
+      assert Enum.any?(Repo.all(Job), &(&1.args["resource_id"] == version.id))
+    end
+
+    test "manual target deletion legally tombstones associated versions", %{
+      professional: professional,
+      patient: patient
+    } do
+      target = insert_target_behavior!(patient, professional)
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      assert {:ok, _target_tombstone} =
+               Retention.legally_delete_record(
+                 {"target_behavior", target.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      refute Repo.get(TargetBehavior, target.id)
+
+      assert Repo.get_by!(Tombstone,
+               resource_type: "functional_analysis_version",
+               resource_id: version.id
+             )
+
+      assert Repo.get_by!(AuditLog,
+               resource_type: "functional_analysis_version",
+               resource_id: version.id,
+               action: "clinical_record_legally_deleted"
+             )
+    end
+
+    test "a stale sweep selection defers target deletion after a version is registered", %{
+      professional: professional,
+      patient: patient
+    } do
+      target =
+        insert_target_behavior!(patient, professional, inserted_at: days_ago(@baseline_days + 1))
+
+      # Model eligibility having selected the target immediately before registration.
+      assert Enum.any?(Retention.eligible_records(TargetBehavior), &(&1.resource_id == target.id))
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      assert {:error, :deferred_for_versions} =
+               Retention.legally_delete_record(
+                 {"target_behavior", target.id},
+                 trigger: "sweep"
+               )
+
+      assert Repo.get(TargetBehavior, target.id)
+      assert Repo.get(FunctionalAnalysisVersion, version.id)
+      refute Repo.get_by(Tombstone, resource_type: "target_behavior", resource_id: target.id)
     end
   end
 

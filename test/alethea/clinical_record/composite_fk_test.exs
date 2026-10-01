@@ -25,7 +25,8 @@ defmodule Alethea.ClinicalRecord.CompositeFkTest do
     AIProposal,
     ClinicianObservation,
     ConsultationEvidence,
-    FunctionalAnalysisDraft
+    FunctionalAnalysisDraft,
+    FunctionalAnalysisVersion
   }
 
   alias Alethea.ClinicalRecord.Rag.Chunk
@@ -87,6 +88,33 @@ defmodule Alethea.ClinicalRecord.CompositeFkTest do
       for table <- @cascading_tables do
         assert count(table) == 0, "expected #{table} to cascade-delete with its target behavior"
       end
+    end
+
+    test "cascades through a draft to its immutable versions", %{
+      professional: professional,
+      patient_b: patient_b,
+      target_b: target_b
+    } do
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient_b.id,
+          target_b.id,
+          "Persisted analysis"
+        )
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient_b.id,
+          target_b.id,
+          draft.lock_version,
+          "Approved"
+        )
+
+      Repo.delete!(target_b)
+
+      refute Repo.get(FunctionalAnalysisVersion, version.id)
     end
 
     test "nilifies only rag_chunks.target_behavior_id and keeps its patient_id", %{

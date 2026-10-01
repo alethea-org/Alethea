@@ -13,6 +13,7 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
     ClinicianObservation,
     ConsultationEvidence,
     FunctionalAnalysisDraft,
+    FunctionalAnalysisVersion,
     Outbox,
     TargetBehavior
   }
@@ -164,6 +165,30 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
       assert args["resource_id"] == id
       refute Map.has_key?(args, "encrypted_body")
     end
+  end
+
+  test "version registration outbox args contain identifiers only" do
+    record = %FunctionalAnalysisVersion{
+      id: Ecto.UUID.generate(),
+      patient_id: Ecto.UUID.generate(),
+      professional_id: Ecto.UUID.generate(),
+      encrypted_body: "private body",
+      encrypted_change_note: "private note",
+      version_number: 1
+    }
+
+    changeset = Outbox.event("functional_analysis_version_registered", record)
+    args = get_change(changeset, :args)
+
+    assert changeset.valid?
+    assert args["event"] == "functional_analysis_version_registered"
+    assert args["resource_type"] == "functional_analysis_version"
+
+    assert Map.keys(args) |> Enum.sort() ==
+             Enum.sort(["event", "resource_type", "resource_id", "patient_id", "professional_id"])
+
+    refute inspect(args) =~ "private body"
+    refute inspect(args) =~ "private note"
   end
 
   describe "event/2 — allowlist drops non-identifier keys" do
