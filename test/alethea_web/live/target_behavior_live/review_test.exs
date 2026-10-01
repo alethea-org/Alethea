@@ -2215,6 +2215,588 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       do: "functional-analysis-version-view-#{String.replace(field, "_", "-")}"
   end
 
+  describe "continue from a previous E-O-R-C version (GitHub #365)" do
+    @continue_button "#functional-analysis-version-continue"
+    @continue_confirmation "#functional-analysis-version-continue-confirmation"
+    @continue_confirm "#functional-analysis-version-continue-confirm"
+    @continue_cancel "#functional-analysis-version-continue-cancel"
+    @eorc_fields ~w(
+      antecedents_distal antecedents_immediate
+      organism_sleep organism_pain_or_discomfort organism_hunger_or_nutrition organism_learning_history
+      response_physiological response_cognitive response_motor
+      consequences_short_term consequences_long_term
+    )
+
+    defp register_version!(professional, patient, target_behavior, marker, note) do
+      draft = persist_draft!(professional, patient, target_behavior, eorc_params(marker))
+
+      {:ok, version} =
+        ClinicalRecord.register_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          draft.lock_version,
+          note
+        )
+
+      version
+    end
+
+    defp open_version(view, version) do
+      view
+      |> element("#functional-analysis-version-option-#{version.id}")
+      |> render_click()
+    end
+
+    test "blank working draft applies the copy immediately with no confirmation (C2, C5, C7)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      blank_params = Map.new(@eorc_fields, fn field -> {field, ""} end)
+      _reset = persist_draft!(professional, patient, target_behavior, blank_params)
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      assert has_element?(view, "#functional-analysis-version-view")
+
+      html =
+        view
+        |> element(@continue_button)
+        |> render_click()
+
+      refute html =~ "functional-analysis-version-continue-confirmation"
+
+      assert html =~
+               "Contenido de la Versión #{version.version_number} copiado al borrador de trabajo."
+
+      refute has_element?(view, "#functional-analysis-version-view")
+
+      _ = :sys.get_state(view.pid)
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      for field <- @eorc_fields do
+        assert Map.get(content, String.to_existing_atom(field)) == "#{field} V2"
+      end
+
+      assert version_count() == 1
+    end
+
+    test "non-blank working draft requires confirmation before any write (C3, C1)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+
+      html =
+        view
+        |> element(@continue_button)
+        |> render_click()
+
+      assert html =~ "Versión #{version.version_number}"
+      assert html =~ "será reemplazado"
+      refute has_element?(view, @continue_button)
+      assert has_element?(view, @continue_confirm)
+      assert has_element?(view, @continue_cancel)
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content.antecedents_distal == "Trabajo actual"
+      assert version_count() == 1
+    end
+
+    test "confirming continuation copies the version via the real autosave path (C4, C5, C7)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      {:ok, original_version} =
+        ClinicalRecord.get_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          version.id
+        )
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      view |> element(@continue_button) |> render_click()
+
+      html = view |> element(@continue_confirm) |> render_click()
+
+      refute html =~ "id=\"functional-analysis-version-view\""
+      refute has_element?(view, "#functional-analysis-version-view")
+      assert has_element?(view, "#functional-analysis-form")
+
+      for field <- @eorc_fields do
+        assert has_element?(view, "##{form_field_id(field)}", "#{field} V2")
+      end
+
+      _ = :sys.get_state(view.pid)
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      for field <- @eorc_fields do
+        assert Map.get(content, String.to_existing_atom(field)) == "#{field} V2"
+      end
+
+      assert version_count() == 1
+
+      {:ok, reloaded_version} =
+        ClinicalRecord.get_functional_analysis_version(
+          professional,
+          patient.id,
+          target_behavior.id,
+          version.id
+        )
+
+      assert reloaded_version.body == original_version.body
+    end
+
+    test "cancel discards only the pending confirmation (C6)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      view |> element(@continue_button) |> render_click()
+
+      html = view |> element(@continue_cancel) |> render_click()
+
+      refute html =~ "functional-analysis-version-continue-confirmation"
+      assert has_element?(view, "#functional-analysis-version-view")
+      assert has_element?(view, @continue_button)
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content.antecedents_distal == "Trabajo actual"
+      assert version_count() == 1
+    end
+
+    test "conflict blocks both request and a forged confirm (C8)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+
+      :sys.replace_state(view.pid, fn state ->
+        %{state | socket: Phoenix.Component.assign(state.socket, :draft_status, :conflict)}
+      end)
+
+      html = view |> element(@continue_button) |> render_click()
+
+      assert html =~ "Resolvé el conflicto de guardado antes de continuar desde una versión."
+      refute has_element?(view, @continue_confirmation)
+
+      :sys.replace_state(view.pid, fn state ->
+        %{
+          state
+          | socket: Phoenix.Component.assign(state.socket, :continue_confirmation_pending, true)
+        }
+      end)
+
+      html = render_hook(view, "confirm_continue_from_version", %{})
+
+      assert html =~ "Resolvé el conflicto de guardado antes de continuar desde una versión."
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content.antecedents_distal == "Trabajo actual"
+      assert version_count() == 1
+    end
+
+    test "saving/save_failed with a queued stale autosave is superseded by the copy (C8, AD2)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      for status <- [:saving, :save_failed] do
+        version =
+          register_version!(
+            professional,
+            patient,
+            target_behavior,
+            "V#{status}",
+            "Nota #{status}"
+          )
+
+        _current =
+          persist_draft!(professional, patient, target_behavior, %{
+            "antecedents_distal" => "Trabajo actual #{status}"
+          })
+
+        {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+        render_change(view, "change_functional_analysis", %{
+          "functional_analysis" => %{"antecedents_distal" => "Edicion sin guardar #{status}"}
+        })
+
+        :sys.replace_state(view.pid, fn state ->
+          %{state | socket: Phoenix.Component.assign(state.socket, :draft_status, status)}
+        end)
+
+        open_version(view, version)
+        view |> element(@continue_button) |> render_click()
+        view |> element(@continue_confirm) |> render_click()
+
+        _ = :sys.get_state(view.pid)
+
+        {:ok, content} =
+          ClinicalRecord.get_functional_analysis_content(
+            professional,
+            patient.id,
+            target_behavior.id
+          )
+
+        assert content.antecedents_distal == "antecedents_distal V#{status}"
+      end
+    end
+
+    test "a version deleted between request and confirm fails generically and disappears from the list (C4)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version = register_version!(professional, patient, target_behavior, "V2", "Nota protegida")
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      view |> element(@continue_button) |> render_click()
+
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_version", version.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      html = view |> element(@continue_confirm) |> render_click()
+
+      assert html =~ "La versión no está disponible."
+      refute html =~ "V2"
+      refute has_element?(view, "#functional-analysis-version-option-#{version.id}")
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content.antecedents_distal == "Trabajo actual"
+    end
+
+    test "losing authorization between request and confirm redirects without copying", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      view |> element(@continue_button) |> render_click()
+
+      other_professional = create_professional!()
+
+      patient
+      |> Ecto.Changeset.change(professional_id: other_professional.id)
+      |> Repo.update!()
+
+      assert {:error, {:live_redirect, %{to: "/patients"}}} =
+               view
+               |> element(@continue_confirm)
+               |> render_click()
+
+      patient
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.force_change(:professional_id, professional.id)
+      |> Repo.update!()
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content.antecedents_distal == "Trabajo actual"
+    end
+
+    test "forged request/confirm while tombstoned, no selection, or generation pending is a no-op (C10)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      {:ok, initial_content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      base_seq = :sys.get_state(view.pid).socket.assigns.autosave_seq
+
+      # Table-driven, mirrors #364's forged-event block (:2162-2179): each
+      # case sets up one blocked precondition, fires both forged events, and
+      # the shared assertions below confirm none of them wrote anything.
+      forged_cases = [
+        {"no version selected", fn -> :ok end},
+        {"draft tombstoned",
+         fn ->
+           open_version(view, version)
+
+           :sys.replace_state(view.pid, fn state ->
+             %{
+               state
+               | socket:
+                   Phoenix.Component.assign(
+                     state.socket,
+                     :draft_tombstoned_at,
+                     DateTime.utc_now()
+                   )
+             }
+           end)
+         end},
+        {"generation pending",
+         fn ->
+           :sys.replace_state(view.pid, fn state ->
+             state.socket
+             |> Phoenix.Component.assign(:draft_tombstoned_at, nil)
+             |> Phoenix.Component.assign(:draft_generation_pending, true)
+             |> then(&%{state | socket: &1})
+           end)
+         end}
+      ]
+
+      for {_label, setup} <- forged_cases do
+        setup.()
+        render_hook(view, "request_continue_from_version", %{})
+        render_hook(view, "confirm_continue_from_version", %{})
+        _ = :sys.get_state(view.pid)
+      end
+
+      assert {:ok, ^initial_content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert version_count() == 1
+
+      final_state = :sys.get_state(view.pid)
+      assert final_state.socket.assigns.autosave_seq == base_seq
+    end
+
+    test "changing selection discards a pending confirmation so a later forged confirm writes nothing (C9)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      other_version =
+        register_version!(professional, patient, target_behavior, "V3", "Nota version tres")
+
+      _current =
+        persist_draft!(professional, patient, target_behavior, %{
+          "antecedents_distal" => "Trabajo actual"
+        })
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      view |> element(@continue_button) |> render_click()
+      assert has_element?(view, @continue_confirmation)
+
+      open_version(view, other_version)
+      refute has_element?(view, @continue_confirmation)
+
+      render_hook(view, "confirm_continue_from_version", %{})
+      _ = :sys.get_state(view.pid)
+
+      {:ok, content} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content.antecedents_distal == "Trabajo actual"
+
+      view |> element(@continue_button) |> render_click()
+      assert has_element?(view, @continue_confirmation)
+
+      view
+      |> element(@working_draft_option)
+      |> render_click()
+
+      refute has_element?(view, @continue_confirmation)
+
+      render_hook(view, "confirm_continue_from_version", %{})
+      _ = :sys.get_state(view.pid)
+
+      {:ok, content_after} =
+        ClinicalRecord.get_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id
+        )
+
+      assert content_after.antecedents_distal == "Trabajo actual"
+      assert version_count() == 2
+    end
+
+    test "AC5: reload shows the copied working draft and the historical version is unchanged (C7)",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      version =
+        register_version!(professional, patient, target_behavior, "V2", "Nota version dos")
+
+      blank_params = Map.new(@eorc_fields, fn field -> {field, ""} end)
+      _reset = persist_draft!(professional, patient, target_behavior, blank_params)
+
+      {:ok, view, _html} = live(conn, review_path(patient, target_behavior))
+
+      open_version(view, version)
+      view |> element(@continue_button) |> render_click()
+      _ = :sys.get_state(view.pid)
+
+      {:ok, reload_view, _html} = live(conn, review_path(patient, target_behavior))
+
+      for field <- @eorc_fields do
+        assert has_element?(reload_view, "##{form_field_id(field)}", "#{field} V2")
+      end
+
+      open_version(reload_view, version)
+
+      for field <- @eorc_fields do
+        assert has_element?(reload_view, "##{field_view_id(field)}", "#{field} V2")
+      end
+
+      assert has_element?(
+               reload_view,
+               "#functional-analysis-version-view-change-note",
+               "Nota version dos"
+             )
+    end
+
+    defp form_field_id(field), do: "functional-analysis-#{String.replace(field, "_", "-")}"
+  end
+
   describe "structured functional-analysis draft and explicit note creation" do
     test "saving structured analysis persists it without creating a clinical note", %{
       conn: conn,
