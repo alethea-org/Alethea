@@ -10,14 +10,21 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersion do
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
-  @derive {Inspect, except: [:body, :change_note]}
+  @derive {Inspect,
+           except: [
+             :body,
+             :change_note,
+             :cited_evidence_baseline_ids
+           ]}
   schema "functional_analysis_versions" do
     field :encrypted_body, :binary
     field :encrypted_change_note, :binary
+    field :encrypted_cited_evidence_baseline, :binary
     field :encryption_version, :integer
     field :version_number, :integer
     field :body, :string, virtual: true, redact: true
     field :change_note, :string, virtual: true, redact: true
+    field :cited_evidence_baseline_ids, {:array, :string}, virtual: true, redact: true
 
     belongs_to :draft, Alethea.ClinicalRecord.FunctionalAnalysisDraft
     belongs_to :patient, Alethea.Accounts.Patient
@@ -33,6 +40,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersion do
     |> cast(attrs, [
       :encrypted_body,
       :encrypted_change_note,
+      :encrypted_cited_evidence_baseline,
       :encryption_version,
       :version_number,
       :draft_id,

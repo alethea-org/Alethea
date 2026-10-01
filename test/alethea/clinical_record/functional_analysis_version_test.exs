@@ -7,6 +7,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
   alias Alethea.ClinicalRecord.FunctionalAnalysisVersion
   alias Alethea.ClinicalRecord.FunctionalAnalysisDraft
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
+  alias Alethea.ClinicalRecord.Retention
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
   alias Oban.Job
@@ -514,6 +515,369 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
 
     assert Repo.get!(Alethea.ClinicalRecord.TargetBehavior, target.id)
            |> Map.fetch!(:functional_analysis_version_sequence) == 0
+  end
+
+  test "captures precise encrypted citation baseline at registration and redacts virtual plaintext in Inspect" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft1} =
+      ClinicalRecord.upsert_functional_analysis_draft(professional, patient.id, target.id, "V1")
+
+    # Baseline with 0 live citations should be empty list
+    assert {:ok, v1} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft1.lock_version,
+               "First version with no citations"
+             )
+
+    assert is_binary(v1.encrypted_cited_evidence_baseline)
+
+    assert {:ok, loaded_v1} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               v1.id
+             )
+
+    assert loaded_v1.cited_evidence_baseline_ids == []
+
+    # Add 2 consultation evidences
+    e1 = add_evidence!(professional, patient, target, "Cita 1")
+    e2 = add_evidence!(professional, patient, target, "Cita 2")
+
+    {:ok, draft2} =
+      ClinicalRecord.upsert_functional_analysis_draft(professional, patient.id, target.id, "V2")
+
+    assert {:ok, v2} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft2.lock_version,
+               "Second version with 2 citations"
+             )
+
+    # Ciphertext opacity: binary ciphertext, never plaintext UUID
+    assert is_binary(v2.encrypted_cited_evidence_baseline)
+    refute v2.encrypted_cited_evidence_baseline =~ e1.id
+    refute v2.encrypted_cited_evidence_baseline =~ e2.id
+
+    # Audit log and outbox never leak clinical citation plaintext or UUIDs
+    audit = Repo.get_by!(AuditLog, resource_id: v2.id)
+    refute inspect(audit.details) =~ e1.id
+    refute inspect(audit.details) =~ e2.id
+
+    job = Enum.find(Repo.all(Job), &(&1.args["resource_id"] == v2.id))
+    assert job
+    refute inspect(job.args) =~ e1.id
+    refute inspect(job.args) =~ e2.id
+
+    # Authorized read/list exposes decrypted baseline
+    assert {:ok, loaded_v2} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               v2.id
+             )
+
+    assert Enum.sort(loaded_v2.cited_evidence_baseline_ids) == Enum.sort([e1.id, e2.id])
+
+    # Inspect redacts virtual plaintext ID field
+    refute inspect(loaded_v2) =~ e1.id
+    refute inspect(loaded_v2) =~ e2.id
+
+    assert {:ok, [list_v1, list_v2]} =
+             ClinicalRecord.list_functional_analysis_versions(professional, patient.id, target.id)
+
+    assert list_v1.cited_evidence_baseline_ids == []
+    assert Enum.sort(list_v2.cited_evidence_baseline_ids) == Enum.sort([e1.id, e2.id])
+  end
+
+  test "snapshots only currently live citation identity and excludes legally removed or cross-patient evidence" do
+    professional = create_professional!()
+    patient1 = create_patient!(professional)
+    patient2 = create_patient!(professional)
+
+    {:ok, target1} = ClinicalRecord.create_target_behavior(professional, patient1.id, "Target 1")
+    {:ok, target2} = ClinicalRecord.create_target_behavior(professional, patient2.id, "Target 2")
+
+    e1 = add_evidence!(professional, patient1, target1, "Evidence 1")
+    e2 = add_evidence!(professional, patient1, target1, "Evidence 2")
+    _other_evidence = add_evidence!(professional, patient2, target2, "Other patient evidence")
+
+    # Legally remove e1 before registration
+    assert {:ok, _tombstone} =
+             Retention.legally_delete_record(
+               {"consultation_evidence", e1.id},
+               actor: professional,
+               trigger: "manual"
+             )
+
+    e3 = add_evidence!(professional, patient1, target1, "Evidence 3")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient1.id,
+        target1.id,
+        "Draft content"
+      )
+
+    assert {:ok, version} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient1.id,
+               target1.id,
+               draft.lock_version,
+               "Version sign-off"
+             )
+
+    assert {:ok, loaded} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient1.id,
+               target1.id,
+               version.id
+             )
+
+    # Legally removed e1 is absent; cross-patient evidence is absent; only live e2 and e3 are present
+    assert Enum.sort(loaded.cited_evidence_baseline_ids) == Enum.sort([e2.id, e3.id])
+    refute e1.id in loaded.cited_evidence_baseline_ids
+  end
+
+  test "existing historical version rows without baseline decrypt with nil unknown baseline" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        target.id,
+        "Draft text"
+      )
+
+    assert {:ok, version} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft.lock_version,
+               "Note"
+             )
+
+    # Simulate legacy row by setting encrypted_cited_evidence_baseline to nil
+    # Note: we temporarily disable the no_update trigger for this simulation if needed,
+    # or test nil directly.
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions DISABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    Repo.query!(
+      "UPDATE functional_analysis_versions SET encrypted_cited_evidence_baseline = NULL WHERE id = $1",
+      [Ecto.UUID.dump!(version.id)]
+    )
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions ENABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    assert {:ok, loaded} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               version.id
+             )
+
+    assert is_nil(loaded.cited_evidence_baseline_ids)
+
+    assert {:ok, [listed]} =
+             ClinicalRecord.list_functional_analysis_versions(professional, patient.id, target.id)
+
+    assert is_nil(listed.cited_evidence_baseline_ids)
+  end
+
+  test "fails closed when ciphertext is corrupted rather than inventing a baseline" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        target.id,
+        "Draft text"
+      )
+
+    assert {:ok, version} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft.lock_version,
+               "Note"
+             )
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions DISABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    Repo.query!(
+      "UPDATE functional_analysis_versions SET encrypted_cited_evidence_baseline = $1 WHERE id = $2",
+      ["corrupted-ciphertext-not-valid", Ecto.UUID.dump!(version.id)]
+    )
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions ENABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    assert {:error, _reason} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               version.id
+             )
+
+    assert {:error, _reason} =
+             ClinicalRecord.list_functional_analysis_versions(
+               professional,
+               patient.id,
+               target.id
+             )
+
+    # Valid ciphertext of malformed payload (not a list of string UUIDs) also fails closed
+    {:ok, kek} = Accounts.load_professional_kek(professional)
+    {:ok, dek} = Accounts.load_clinical_record_dek(patient, kek)
+    {:ok, bad_payload_ciphertext} = PatientVault.encrypt(~s({"not": "a list"}), dek)
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions DISABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    Repo.query!(
+      "UPDATE functional_analysis_versions SET encrypted_cited_evidence_baseline = $1 WHERE id = $2",
+      [bad_payload_ciphertext, Ecto.UUID.dump!(version.id)]
+    )
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions ENABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    assert {:error, :invalid_baseline} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               version.id
+             )
+
+    assert {:error, :invalid_baseline} =
+             ClinicalRecord.list_functional_analysis_versions(
+               professional,
+               patient.id,
+               target.id
+             )
+
+    # Valid ciphertext of non-UUID strings in list also fails closed
+    {:ok, bad_uuid_ciphertext} = PatientVault.encrypt(~s(["not-a-valid-uuid"]), dek)
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions DISABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    Repo.query!(
+      "UPDATE functional_analysis_versions SET encrypted_cited_evidence_baseline = $1 WHERE id = $2",
+      [bad_uuid_ciphertext, Ecto.UUID.dump!(version.id)]
+    )
+
+    Repo.query!(
+      "ALTER TABLE functional_analysis_versions ENABLE TRIGGER functional_analysis_versions_no_update"
+    )
+
+    assert {:error, :invalid_baseline} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               version.id
+             )
+
+    assert {:error, :invalid_baseline} =
+             ClinicalRecord.list_functional_analysis_versions(
+               professional,
+               patient.id,
+               target.id
+             )
+  end
+
+  test "unauthorized professional cannot access version baseline" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+    _evidence = add_evidence!(professional, patient, target, "Cita confidencial")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        target.id,
+        "Contenido"
+      )
+
+    assert {:ok, version} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft.lock_version,
+               "Nota"
+             )
+
+    other = create_professional!()
+
+    assert {:error, :unauthorized} =
+             ClinicalRecord.get_functional_analysis_version(
+               other,
+               patient.id,
+               target.id,
+               version.id
+             )
+
+    assert {:error, :unauthorized} =
+             ClinicalRecord.list_functional_analysis_versions(
+               other,
+               patient.id,
+               target.id
+             )
+  end
+
+  defp add_evidence!(professional, patient, target, text) do
+    {:ok, note} = ClinicalRecord.create_clinical_note(professional, patient.id, text)
+
+    {:ok, evidence} =
+      ClinicalRecord.cite_evidence_source(
+        professional,
+        patient.id,
+        target.id,
+        %{
+          source_kind: "clinical_note",
+          source_id: note.id,
+          excerpt: text
+        }
+      )
+
+    evidence
   end
 
   describe "body-free version summaries (GitHub #364)" do
