@@ -2529,7 +2529,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   id="register-functional-analysis-version"
                   class="button-secondary button-secondary--sm"
                 >
-                  <.icon name="hero-bookmark" class="size-4" /> Registrar versión
+                  <.icon name="hero-lock-closed" class="size-4" /> Registrar versión
                 </button>
               </div>
             </.form>
