@@ -107,9 +107,10 @@ contract stays untouched.
   - Full `mix precommit` re-run (gentle-ai-verify, background): **exit 0** —
     compile --warnings-as-errors, deps.unlock --unused, format, test:
     1691 passed (6 doctests + 1685 tests), 5 skipped, 0 failures (185.2s).
-- [ ] **TASK-6 — Scope repeated hypothesis citation IDs by turn**
-  - Status: implementation and focused checks complete; work-unit commit
-    authorized and being recorded. Route: delegated `gentle-ai-worker`
+- [x] **TASK-6 — Scope repeated hypothesis citation IDs by turn**
+  - Status: complete; work-unit commit `1d880b187753c4c43b3c9b68650551f33268acd2`
+    (`fix(web): scope hypothesis citation ids to consultation turns`).
+    Route: delegated `gentle-ai-worker`
     (component and affected tests).
   - RED observed: focused consultation suite 68/69; duplicate
     `citation-clinical_note/11111111` ID crashes LiveViewTest with repeated
@@ -117,13 +118,21 @@ contract stays untouched.
     `citation_list/1` ID prefix and panel-scoped child IDs; default unscoped
     citation tests 12/12. Existing hypothesis-panel unit assertions updated
     for scoped IDs: isolated 6/6, combined consultation/component tests 75/75,
-    format check clean. No known failing focused check; completion awaits the
-    work-unit commit identity.
+    format check clean. No known failing focused check. Rollback boundary:
+    `core_components.ex`, `hypothesis_panel.ex`, and their two regression test
+    files; no schemas, persistence, or consultation domain changes.
 - [ ] **TASK-7 — Reset composer height after server form patch**
-  - Status: implemented and verified in the uncommitted workspace; deferred to
-    its own work-unit commit. Route: delegated `gentle-ai-worker` (hook and Node
-    regression test). RED/GREEN evidence and final gate will be recorded with
-    that commit.
+  - Status: in progress; implementation and checks complete, work-unit commit
+    authorized. Route: delegated `gentle-ai-worker` (hook and Node test).
+  - RED observed: Node VM hook regression failed because `updated()` was
+    absent. GREEN observed: `node --test test/js/consultation_composer.test.mjs`
+    3/3 after `ConsultationComposer.updated()` recalculates textarea height;
+    consultation/component tests 75/75. Independent verifier reconfirmed Node
+    3/3 and Elixir 75/75. First unbounded `mix precommit` stalled and timed out
+    after 30 minutes with no result; bounded retry `mix precommit` (360-second
+    tool timeout) exited 0: 1701 passed, 5 skipped, 0 failures (189.5s), no
+    incidental mutations. Rollback boundary: composer hook in `app.js` and its
+    new `test/js/consultation_composer.test.mjs`; no server changes.
 
 ## PR #375 review-repair plan
 
@@ -142,8 +151,8 @@ contract stays untouched.
   `sha256:20da04c0210687f5c61b58e75d0657b0f44bc95673d714a49f6dcfcc4d659e60`).
   The reviewer covered the code, tests, and this document as frozen before this
   final evidence note; no source edits followed review.
-- Next step: record TASK-6's work-unit commit, then record TASK-7 separately.
-  PR update/push remains a separate decision.
+- TASK-6 work-unit commit recorded (`1d880b1`). TASK-7 work-unit commit is
+  next; PR update/push remains a separate decision.
 
 ## Evidence
 

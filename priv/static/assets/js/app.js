@@ -53,12 +53,17 @@ const ConsultationComposer = {
       }
     });
 
-    const grow = () => {
-      textarea.style.height = "auto";
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    this.grow = () => {
+      const el = form.querySelector("textarea");
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
     };
-    textarea.addEventListener("input", grow);
-    grow();
+    textarea.addEventListener("input", this.grow);
+    this.grow();
+  },
+  updated() {
+    if (this.grow) this.grow();
   },
 };
 
