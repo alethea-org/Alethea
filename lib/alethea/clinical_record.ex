@@ -1252,9 +1252,6 @@ defmodule Alethea.ClinicalRecord do
 
           {:error, {:denied_target, audited_id}} ->
             {:denied_target, audited_id}
-
-          {:error, reason} ->
-            Repo.rollback(reason)
         end
       end)
       |> case do
@@ -1373,9 +1370,6 @@ defmodule Alethea.ClinicalRecord do
 
           {:error, {:denied_target, audited_id}} ->
             {:denied_target, audited_id}
-
-          {:error, reason} ->
-            Repo.rollback(reason)
         end
       end)
       |> case do
@@ -1469,9 +1463,6 @@ defmodule Alethea.ClinicalRecord do
 
           {:error, {:denied_target, audited_id}} ->
             {:denied_target, audited_id}
-
-          {:error, reason} ->
-            Repo.rollback(reason)
         end
       end)
       |> case do
@@ -1545,9 +1536,6 @@ defmodule Alethea.ClinicalRecord do
 
             {:error, {:denied_target, audited_id}} ->
               {:denied_target, audited_id}
-
-            {:error, reason} ->
-              Repo.rollback(reason)
           end
         end)
         |> case do

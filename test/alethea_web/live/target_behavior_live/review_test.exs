@@ -5533,6 +5533,493 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "new cited evidence marker since latest E-O-R-C version (#366)" do
+    test "when no version has been registered, all live evidence is visible and unmarked as initial context",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      ev1 =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Primera evidencia inicial"
+        )
+
+      ev2 =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Segunda evidencia inicial"
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, ".review-item--evidence", "Primera evidencia inicial")
+      assert has_element?(view, ".review-item--evidence", "Segunda evidencia inicial")
+      refute has_element?(view, ".badge--new-evidence")
+      refute has_element?(view, "#new-evidence-marker-#{ev1.id}")
+      refute has_element?(view, "#new-evidence-marker-#{ev2.id}")
+    end
+
+    test "registers baseline with old citation, then citing a new one keeps old visible unmarked and marks new",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      old_evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Cita textual en la primera versión"
+        )
+
+      {:ok, _draft} =
+        ClinicalRecord.upsert_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id,
+          %{"response_motor" => "Conducta registrada en v1"}
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      # Register version 1 to capture the baseline containing old_evidence.
+      view
+      |> form("#functional-analysis-version-form", version: %{change_note: "Versión 1"})
+      |> render_submit()
+
+      assert has_element?(view, ".review-item--evidence", "Cita textual en la primera versión")
+      refute has_element?(view, "#new-evidence-marker-#{old_evidence.id}")
+
+      # Now insert a new citation absent from version 1 baseline.
+      new_evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Nueva evidencia citada posteriormente"
+        )
+
+      # Re-mount Workbench to verify timeline loading with baseline.
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      # Old evidence remains visible and unmarked.
+      assert has_element?(view, ".review-item--evidence", "Cita textual en la primera versión")
+      refute has_element?(view, "#new-evidence-marker-#{old_evidence.id}")
+
+      # New evidence is marked as new cited evidence with unique DOM ID.
+      assert has_element?(view, ".review-item--evidence", "Nueva evidencia citada posteriormente")
+
+      assert has_element?(
+               view,
+               "#new-evidence-marker-#{new_evidence.id}",
+               "Nueva evidencia citada"
+             )
+
+      assert has_element?(view, ".badge--new-evidence")
+    end
+
+    test "latest-of-two registrations resets baseline so previously marked citation becomes unmarked",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      old_evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Cita inicial de v1"
+        )
+
+      {:ok, _draft} =
+        ClinicalRecord.upsert_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id,
+          %{"response_motor" => "Contenido v1"}
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#functional-analysis-version-form", version: %{change_note: "Versión 1"})
+      |> render_submit()
+
+      # Add second citation
+      new_evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Cita agregada luego de v1"
+        )
+
+      # Re-mount view: new_evidence is marked
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#new-evidence-marker-#{new_evidence.id}")
+
+      # Update draft and register version 2
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{"response_motor" => "Contenido v2 modificado"}
+      })
+
+      view
+      |> form("#functional-analysis-version-form", version: %{change_note: "Versión 2"})
+      |> render_submit()
+
+      # After version 2 registration, baseline is reset to include both citations.
+      # Both citations remain visible, and both are unmarked.
+      assert has_element?(view, ".review-item--evidence", "Cita inicial de v1")
+      assert has_element?(view, ".review-item--evidence", "Cita agregada luego de v1")
+      refute has_element?(view, "#new-evidence-marker-#{old_evidence.id}")
+      refute has_element?(view, "#new-evidence-marker-#{new_evidence.id}")
+      refute has_element?(view, ".badge--new-evidence")
+    end
+
+    test "legal deletion removes the new citation marker and does not display deleted item as live",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      old_evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Cita permanente de v1"
+        )
+
+      {:ok, _draft} =
+        ClinicalRecord.upsert_functional_analysis_content(
+          professional,
+          patient.id,
+          target_behavior.id,
+          %{"response_motor" => "Base v1"}
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view
+      |> form("#functional-analysis-version-form", version: %{change_note: "Versión 1"})
+      |> render_submit()
+
+      new_evidence =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Cita a ser eliminada legalmente"
+        )
+
+      # Verify it is marked before deletion
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(view, "#new-evidence-marker-#{new_evidence.id}")
+
+      # Legally delete the new citation
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"consultation_evidence", new_evidence.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      # Re-mount Workbench
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      # Deleted evidence text is NOT visible in live evidence elements
+      refute has_element?(view, ".review-item--evidence", "Cita a ser eliminada legalmente")
+      refute has_element?(view, "#timeline-#{new_evidence.id}")
+
+      # Marker is gone
+      refute has_element?(view, "#new-evidence-marker-#{new_evidence.id}")
+      refute has_element?(view, ".badge--new-evidence")
+
+      # Old evidence is visible and unmarked
+      assert has_element?(view, ".review-item--evidence", "Cita permanente de v1")
+      refute has_element?(view, "#new-evidence-marker-#{old_evidence.id}")
+
+      # Tombstone is rendered, but not as live evidence
+      assert has_element?(view, ".review-item--tombstone")
+      refute has_element?(view, ".review-item--evidence.review-item--tombstone")
+    end
+
+    test "cross-patient isolation: patient B's baseline is never leaked to patient A and authorization boundaries are enforced",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient_a,
+           target_behavior: target_behavior_a
+         } do
+      dek_a = load_dek!(professional, patient_a)
+
+      _ev_a =
+        insert_evidence!(
+          professional,
+          patient_a,
+          target_behavior_a,
+          dek_a,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Evidencia de Paciente A"
+        )
+
+      {:ok, _draft_a} =
+        ClinicalRecord.upsert_functional_analysis_content(
+          professional,
+          patient_a.id,
+          target_behavior_a.id,
+          %{"response_motor" => "Draft A"}
+        )
+
+      {:ok, view_a, _html} =
+        live(conn, ~p"/patients/#{patient_a.id}/target_behaviors/#{target_behavior_a.id}/review")
+
+      view_a
+      |> form("#functional-analysis-version-form", version: %{change_note: "Versión 1 de A"})
+      |> render_submit()
+
+      # Create patient B with own target behavior and evidence
+      patient_b = create_patient!(professional)
+      target_behavior_b = create_target_behavior!(professional, patient_b)
+      dek_b = load_dek!(professional, patient_b)
+
+      ev_b =
+        insert_evidence!(
+          professional,
+          patient_b,
+          target_behavior_b,
+          dek_b,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Evidencia de Paciente B"
+        )
+
+      # Mount Patient B's workbench: no version registered, evidence is unmarked initial context
+      {:ok, view_b, _html} =
+        live(conn, ~p"/patients/#{patient_b.id}/target_behaviors/#{target_behavior_b.id}/review")
+
+      assert has_element?(view_b, ".review-item--evidence", "Evidencia de Paciente B")
+      refute has_element?(view_b, "#new-evidence-marker-#{ev_b.id}")
+      refute has_element?(view_b, ".badge--new-evidence")
+
+      # Boundary 1: mismatched patient and target behavior is denied with flash
+      assert {:error, {:live_redirect, %{to: "/patients", flash: flash_mismatch}}} =
+               live(
+                 conn,
+                 ~p"/patients/#{patient_a.id}/target_behaviors/#{target_behavior_b.id}/review"
+               )
+
+      assert flash_mismatch["error"] =~
+               "La conducta objetivo no existe o no pertenece a este paciente."
+
+      assert {:error, :not_found} =
+               ClinicalRecord.list_functional_analysis_versions(
+                 professional,
+                 patient_a.id,
+                 target_behavior_b.id
+               )
+
+      # Boundary 2: non-responsible professional is denied
+      other_professional = create_professional!()
+      other_conn = log_in_professional(build_conn(), other_professional)
+
+      assert {:error, {:live_redirect, %{to: "/patients", flash: flash_unauthorized}}} =
+               live(
+                 other_conn,
+                 ~p"/patients/#{patient_a.id}/target_behaviors/#{target_behavior_a.id}/review"
+               )
+
+      assert flash_unauthorized["error"] =~
+               "No estás autorizado para ver esta línea de tiempo clínica."
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.list_functional_analysis_versions(
+                 other_professional,
+                 patient_a.id,
+                 target_behavior_a.id
+               )
+    end
+
+    test "legacy version with nil baseline treats all live evidence as unmarked initial context",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      ev =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Evidencia existente con versión legacy"
+        )
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Borrador legacy"
+        )
+
+      # Insert a legacy version with nil encrypted_cited_evidence_baseline
+      {:ok, body_cipher} = PatientVault.encrypt("Borrador legacy", dek)
+      {:ok, note_cipher} = PatientVault.encrypt("Versión sin baseline capturada", dek)
+
+      %FunctionalAnalysisVersion{}
+      |> FunctionalAnalysisVersion.changeset(%{
+        draft_id: draft.id,
+        patient_id: patient.id,
+        professional_id: professional.id,
+        target_behavior_id: target_behavior.id,
+        version_number: 1,
+        encryption_version: 1,
+        encrypted_body: body_cipher,
+        encrypted_change_note: note_cipher,
+        encrypted_cited_evidence_baseline: nil
+      })
+      |> Repo.insert!()
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               view,
+               ".review-item--evidence",
+               "Evidencia existente con versión legacy"
+             )
+
+      refute has_element?(view, "#new-evidence-marker-#{ev.id}")
+      refute has_element?(view, ".badge--new-evidence")
+    end
+
+    test "fail-closed on version baseline decryption failure redirects to /patients",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      _ev =
+        insert_evidence!(
+          professional,
+          patient,
+          target_behavior,
+          dek,
+          DateTime.utc_now(),
+          "clinical_note",
+          Ecto.UUID.generate(),
+          "Evidencia antes del fallo de descifrado"
+        )
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Borrador para versión corrupta"
+        )
+
+      {:ok, body_cipher} = PatientVault.encrypt("Borrador", dek)
+      {:ok, note_cipher} = PatientVault.encrypt("Nota", dek)
+
+      # Insert version with corrupted ciphertext for baseline
+      %FunctionalAnalysisVersion{}
+      |> FunctionalAnalysisVersion.changeset(%{
+        draft_id: draft.id,
+        patient_id: patient.id,
+        professional_id: professional.id,
+        target_behavior_id: target_behavior.id,
+        version_number: 1,
+        encryption_version: 1,
+        encrypted_body: body_cipher,
+        encrypted_change_note: note_cipher,
+        encrypted_cited_evidence_baseline: "corrupted_ciphertext_that_cannot_decrypt"
+      })
+      |> Repo.insert!()
+
+      # Workbench must fail closed and redirect to /patients
+      assert {:error, {:live_redirect, %{to: "/patients"}}} =
+               live(
+                 conn,
+                 ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review"
+               )
+    end
+  end
+
   defp insert_session_transcript_chunk!(professional, patient, content, speaker, start, stop) do
     {:ok, transcript} =
       ClinicalRecord.create_session_transcript(professional, patient.id, %{
