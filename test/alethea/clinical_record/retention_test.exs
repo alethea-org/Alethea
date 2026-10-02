@@ -25,6 +25,7 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
     AIProposal,
     ClinicalNote,
     ClinicianObservation,
+    FunctionalAnalysisDraft,
     FunctionalAnalysisVersion,
     Lifecycle,
     Retention,
@@ -246,6 +247,69 @@ defmodule Alethea.ClinicalRecord.RetentionTest do
       assert Repo.get(ClinicianObservation, observation.id)
       denied_rows = audit_rows("clinical_record_access_denied", observation.id)
       assert length(denied_rows) == 1
+    end
+  end
+
+  describe "legally_delete_record/2 — legal hold on locked-parent tables" do
+    test "a held patient denies a functional_analysis_draft deletion and audits the hold exactly once",
+         %{professional: professional, patient: patient} do
+      target_behavior = insert_target_behavior!(patient, professional)
+
+      {:ok, draft} =
+        ClinicalRecord.upsert_functional_analysis_draft(
+          professional,
+          patient.id,
+          target_behavior.id,
+          "Persisted clinical text"
+        )
+
+      {:ok, _lifecycle} = Lifecycle.apply_hold(professional, patient.id)
+
+      assert {:error, :legal_hold_active} =
+               Retention.legally_delete_record(
+                 {"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      assert Repo.get(FunctionalAnalysisDraft, draft.id)
+
+      refute Repo.get_by(Tombstone,
+               resource_type: "functional_analysis_draft",
+               resource_id: draft.id
+             )
+
+      # Exactly one hold-paused audit: the pre-lock guard writes it, and the
+      # `run_deletion_multi/5` fold must not write a second one.
+      denied = audit_rows("clinical_record_access_denied", draft.id)
+      assert length(denied) == 1
+      assert hd(denied).resource_type == "functional_analysis_draft"
+      assert hd(denied).details == %{"outcome" => "denied"}
+    end
+
+    test "a held patient denies a target_behavior deletion and audits the hold exactly once",
+         %{professional: professional, patient: patient} do
+      target_behavior = insert_target_behavior!(patient, professional)
+      {:ok, _lifecycle} = Lifecycle.apply_hold(professional, patient.id)
+
+      assert {:error, :legal_hold_active} =
+               Retention.legally_delete_record(
+                 {"target_behavior", target_behavior.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      assert Repo.get(TargetBehavior, target_behavior.id)
+
+      refute Repo.get_by(Tombstone,
+               resource_type: "target_behavior",
+               resource_id: target_behavior.id
+             )
+
+      denied = audit_rows("clinical_record_access_denied", target_behavior.id)
+      assert length(denied) == 1
+      assert hd(denied).resource_type == "target_behavior"
+      assert hd(denied).details == %{"outcome" => "denied"}
     end
   end
 
