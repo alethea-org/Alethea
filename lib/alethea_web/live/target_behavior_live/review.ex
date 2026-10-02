@@ -172,6 +172,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:selected_version, nil)
           |> assign(:selected_version_content, nil)
           |> assign(:continue_confirmation_pending, false)
+          |> assign(:ai_proposal_pending, false)
+          |> assign(:ai_proposal_original_draft, nil)
+          |> assign(:ai_proposal_original_status, nil)
+          |> assign(:ai_proposal_evidence_ids, nil)
+          |> assign(:draft_generation_request_values, nil)
           |> assign_async(:suggested_candidates, fn ->
             case ClinicalRecord.suggest_evidence_candidates(
                    professional,
@@ -753,6 +758,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       socket.assigns.draft_tombstoned_at != nil ->
         {:noreply, socket}
 
+      socket.assigns.ai_proposal_pending ->
+        # While in proposal preview, autosave is paused!
+        {:noreply, socket}
+
       params_equal?(merged_values, socket.assigns.last_saved_functional_analysis_params) ->
         {:noreply, socket}
 
@@ -780,6 +789,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       socket.assigns.draft_generation_pending ->
         {:noreply, socket}
 
+      socket.assigns.ai_proposal_pending ->
+        {:noreply, socket}
+
       not socket.assigns.has_sufficient_evidence ->
         {:noreply, put_flash(socket, :error, "No hay evidencia citada para generar el borrador.")}
 
@@ -787,18 +799,40 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         professional = socket.assigns.current_professional
         patient_id = socket.assigns.patient_id
         target_behavior_id = socket.assigns.target_behavior_id
+        request_values = functional_analysis_form_values(socket)
+        working_draft = Map.delete(request_values, "previous_notes")
 
         {:noreply,
          socket
          |> assign(:draft_generation_pending, true)
+         |> assign(:draft_generation_request_values, request_values)
          |> start_async(:functional_analysis_draft, fn ->
            with {:ok, items} <-
                   ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id),
+                {:ok, baseline_set} <-
+                  fetch_cited_evidence_baseline(professional, patient_id, target_behavior_id),
+                annotated_items = annotate_timeline_items(items, baseline_set),
                 %{texts: evidence} = selected when evidence != [] <-
-                  cited_sanitized_evidence(items),
+                  cited_sanitized_evidence(annotated_items),
+                new_evidence =
+                  annotated_items
+                  |> Enum.filter(
+                    &(&1.kind == :consultation_evidence and Map.get(&1, :new_evidence?, false))
+                  )
+                  |> Enum.map(&Sanitizer.sanitize(&1.text))
+                  |> Enum.reject(&(&1 == "")),
                 {:ok, generated} <-
-                  functional_analysis_draft_chain().run(%{sanitized_evidence: evidence}) do
-             {:ok, %{generated: generated, evidence_ids: selected.ids}}
+                  functional_analysis_draft_chain().run(%{
+                    sanitized_evidence: evidence,
+                    working_draft: working_draft,
+                    new_evidence: new_evidence
+                  }) do
+             {:ok,
+              %{
+                generated: generated,
+                evidence_ids: selected.ids,
+                request_values: request_values
+              }}
            else
              %{texts: []} -> {:error, :no_cited_evidence}
              error -> error
@@ -837,6 +871,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
         {:noreply,
          socket
+         |> assign(:ai_proposal_pending, false)
+         |> assign(:ai_proposal_original_draft, nil)
+         |> assign(:ai_proposal_original_status, nil)
+         |> assign(:ai_proposal_evidence_ids, nil)
          |> assign(:autosave_seq, socket.assigns.autosave_seq + 1)
          |> assign(
            :functional_analysis_form,
@@ -858,6 +896,145 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
          socket
          |> assign(:draft_status, :save_failed)
          |> put_flash(:error, "No se pudo guardar el análisis funcional.")}
+    end
+  end
+
+  @impl true
+  def handle_event("discard_ai_proposal", _params, socket) do
+    if socket.assigns.ai_proposal_pending do
+      original_values =
+        socket.assigns.ai_proposal_original_draft || functional_analysis_form_values(socket)
+
+      original_status = socket.assigns.ai_proposal_original_status || :saved
+
+      {:noreply,
+       socket
+       |> assign(:ai_proposal_pending, false)
+       |> assign(:ai_proposal_original_draft, nil)
+       |> assign(:ai_proposal_original_status, nil)
+       |> assign(:ai_proposal_evidence_ids, nil)
+       |> assign(
+         :functional_analysis_form,
+         to_form(original_values, as: "functional_analysis")
+       )
+       |> assign(:draft_status, original_status)
+       |> put_flash(:info, "Propuesta descartada. Se restauró el borrador de trabajo original.")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("apply_ai_proposal", _params, socket) do
+    if socket.assigns.ai_proposal_pending do
+      professional = socket.assigns.current_professional
+      patient_id = socket.assigns.patient_id
+      target_behavior_id = socket.assigns.target_behavior_id
+      evidence_ids = socket.assigns.ai_proposal_evidence_ids
+
+      with {:ok, items} <-
+             ClinicalRecord.review_timeline(professional, patient_id, target_behavior_id),
+           :ok <- cited_evidence_still_live(evidence_ids, items),
+           {:ok, current_content} <-
+             ClinicalRecord.get_functional_analysis_content(
+               professional,
+               patient_id,
+               target_behavior_id
+             ) do
+        case current_content do
+          {:legally_deleted, deleted_at} ->
+            {:noreply,
+             socket
+             |> assign(:ai_proposal_pending, false)
+             |> assign(:ai_proposal_original_draft, nil)
+             |> assign(:ai_proposal_original_status, nil)
+             |> assign(:ai_proposal_evidence_ids, nil)
+             |> assign(:draft_tombstoned_at, deleted_at)
+             |> assign(:draft_status, :tombstoned)
+             |> put_flash(:error, "El borrador fue eliminado legalmente.")}
+
+          _ ->
+            current_values = functional_analysis_form_values(socket)
+            expected_lock_version = socket.assigns.functional_analysis_lock_version
+
+            case ClinicalRecord.upsert_functional_analysis_content(
+                   professional,
+                   patient_id,
+                   target_behavior_id,
+                   current_values,
+                   expected_lock_version: expected_lock_version
+                 ) do
+              {:ok, draft} ->
+                content = FunctionalAnalysisContent.new(current_values)
+                content_map = content_params(content)
+
+                {:noreply,
+                 socket
+                 |> assign(:ai_proposal_pending, false)
+                 |> assign(:ai_proposal_original_draft, nil)
+                 |> assign(:ai_proposal_original_status, nil)
+                 |> assign(:ai_proposal_evidence_ids, nil)
+                 |> assign(:autosave_seq, socket.assigns.autosave_seq + 1)
+                 |> assign(
+                   :functional_analysis_form,
+                   to_form(content_map, as: "functional_analysis")
+                 )
+                 |> assign(:functional_analysis_lock_version, draft.lock_version)
+                 |> assign(:last_saved_functional_analysis_params, content_map)
+                 |> assign(:draft_status, compute_draft_status(nil, content))
+                 |> put_flash(:info, "Propuesta aplicada al borrador de trabajo.")}
+
+              {:error, :conflict} ->
+                {:noreply,
+                 socket
+                 |> assign(:ai_proposal_pending, false)
+                 |> assign(:ai_proposal_original_draft, nil)
+                 |> assign(:ai_proposal_original_status, nil)
+                 |> assign(:ai_proposal_evidence_ids, nil)
+                 |> assign(:draft_status, :conflict)
+                 |> put_flash(:error, "Conflicto: otra sesión modificó el borrador.")}
+
+              {:error, _reason} ->
+                {:noreply,
+                 socket
+                 |> assign(:draft_status, :save_failed)
+                 |> put_flash(:error, "No se pudo guardar el análisis funcional.")}
+            end
+        end
+      else
+        {:error, :stale_cited_evidence} ->
+          original_values =
+            socket.assigns.ai_proposal_original_draft || functional_analysis_form_values(socket)
+
+          original_status = socket.assigns.ai_proposal_original_status || :saved
+
+          {:noreply,
+           socket
+           |> assign(:ai_proposal_pending, false)
+           |> assign(:ai_proposal_original_draft, nil)
+           |> assign(:ai_proposal_original_status, nil)
+           |> assign(:ai_proposal_evidence_ids, nil)
+           |> assign(
+             :functional_analysis_form,
+             to_form(original_values, as: "functional_analysis")
+           )
+           |> assign(:draft_status, original_status)
+           |> put_flash(
+             :error,
+             "La propuesta se invalidó porque la evidencia citada cambió o fue eliminada."
+           )}
+
+        {:error, :unauthorized} ->
+          {:noreply, redirect_to_patients(socket, :unauthorized)}
+
+        {:error, :not_found} ->
+          {:noreply, redirect_to_patients(socket, :not_found)}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "No se pudo aplicar la propuesta.")}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
@@ -977,9 +1154,16 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   @impl true
   def handle_async(
         :functional_analysis_draft,
-        {:ok, {:ok, %{generated: generated, evidence_ids: evidence_ids}}},
+        {:ok, {:ok, %{generated: generated, evidence_ids: evidence_ids} = payload}},
         socket
       ) do
+    request_values =
+      Map.get(
+        payload,
+        :request_values,
+        socket.assigns.draft_generation_request_values || functional_analysis_form_values(socket)
+      )
+
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
     target_behavior_id = socket.assigns.target_behavior_id
@@ -998,19 +1182,46 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           {:noreply,
            socket
            |> assign(:draft_generation_pending, false)
+           |> assign(:draft_generation_request_values, nil)
            |> assign(:draft_tombstoned_at, deleted_at)
            |> assign(:draft_status, :tombstoned)
            |> put_flash(:error, "El borrador fue eliminado y no se restauró.")}
 
         _content ->
-          values = merge_generated_draft(functional_analysis_form_values(socket), generated)
+          current_form_values = functional_analysis_form_values(socket)
+
+          # Intervening clinician edits check:
+          # "Pending generation or preview cannot overwrite intervening clinician edits"
+          proposed_values =
+            Enum.reduce(FunctionalAnalysisDraftChain.eorc_fields(), current_form_values, fn field,
+                                                                                            acc ->
+              req_val = Map.get(request_values, field, "")
+              cur_val = Map.get(current_form_values, field, "")
+
+              if cur_val != req_val do
+                acc
+              else
+                case Map.get(generated, field) do
+                  gen_val when is_binary(gen_val) and gen_val != "" ->
+                    Map.put(acc, field, gen_val)
+
+                  _ ->
+                    acc
+                end
+              end
+            end)
 
           {:noreply,
            socket
            |> assign(:draft_generation_pending, false)
+           |> assign(:draft_generation_request_values, nil)
+           |> assign(:ai_proposal_pending, true)
+           |> assign(:ai_proposal_original_draft, current_form_values)
+           |> assign(:ai_proposal_original_status, socket.assigns.draft_status)
+           |> assign(:ai_proposal_evidence_ids, evidence_ids)
            |> assign(
              :functional_analysis_form,
-             to_form(values, as: "functional_analysis")
+             to_form(proposed_values, as: "functional_analysis")
            )
            |> put_flash(:info, "Borrador E-O-R-C generado. Revisalo antes de guardar.")}
       end
@@ -1025,6 +1236,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
         {:noreply,
          socket
          |> assign(:draft_generation_pending, false)
+         |> assign(:draft_generation_request_values, nil)
          |> put_flash(:error, "La evidencia citada cambió durante la generación.")}
 
       {:error, _reason} ->
@@ -1486,6 +1698,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       assigns.draft_tombstoned_at != nil ->
         :noop
 
+      assigns.ai_proposal_pending ->
+        :noop
+
       assigns.draft_status == :conflict ->
         {:flash, "Resolvé el conflicto de guardado antes de continuar desde una versión."}
 
@@ -1545,23 +1760,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     end
   end
 
-  defp merge_generated_draft(current, generated) do
-    Enum.reduce(FunctionalAnalysisDraftChain.eorc_fields(), current, fn field, values ->
-      current_value = Map.get(values, field, "")
-      generated_value = Map.get(generated, field, "")
-
-      if String.trim(current_value) == "" and
-           is_binary(generated_value) and String.trim(generated_value) != "" do
-        Map.put(values, field, generated_value)
-      else
-        values
-      end
-    end)
-  end
-
   defp draft_generation_error(socket) do
     socket
     |> assign(:draft_generation_pending, false)
+    |> assign(:draft_generation_request_values, nil)
     |> put_flash(:error, "No se pudo generar el borrador E-O-R-C.")
   end
 
@@ -1600,6 +1802,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     cond do
       assigns.draft_tombstoned_at != nil ->
         {:flash, "El borrador fue eliminado legalmente."}
+
+      assigns.ai_proposal_pending ->
+        {:flash, "Guardá los cambios pendientes antes de registrar una versión."}
 
       assigns.draft_status == :conflict ->
         {:flash, "Resolvé el conflicto de guardado antes de registrar una versión."}
@@ -2716,7 +2921,9 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   type="button"
                   id="generate-functional-analysis-draft"
                   phx-click="generate_functional_analysis_draft"
-                  disabled={@draft_generation_pending or !@has_sufficient_evidence}
+                  disabled={
+                    @draft_generation_pending or @ai_proposal_pending or !@has_sufficient_evidence
+                  }
                   class="button-primary button-primary--sm"
                 >
                   {if @draft_generation_pending,
@@ -2754,7 +2961,6 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               >
                 Borrador de trabajo
               </button>
-
               <button
                 :for={version <- @version_summaries}
                 type="button"
@@ -2804,6 +3010,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                   Continuar desde esta versión
                 </button>
               </div>
+
               <div
                 :if={@continue_confirmation_pending}
                 id="functional-analysis-version-continue-confirmation"
@@ -2812,6 +3019,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <p id="functional-analysis-version-continue-warning">
                   El borrador de trabajo actual será reemplazado por el contenido de la Versión {@selected_version.version_number}. La versión histórica no se modifica y no se registra una versión nueva.
                 </p>
+
                 <div class="form-actions">
                   <button
                     type="button"
@@ -2867,7 +3075,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
             </section>
 
             <div
-              :if={@draft_status == :empty and !@draft_tombstoned_at and is_nil(@selected_version)}
+              :if={
+                @draft_status == :empty and !@draft_tombstoned_at and is_nil(@selected_version) and
+                  !@ai_proposal_pending
+              }
               id="empty-draft"
               class="empty-state empty-state--compact"
             >
@@ -2877,6 +3088,44 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               <p class="empty-state__text">
                 Completá únicamente los campos respaldados por la revisión clínica.
               </p>
+            </div>
+
+            <div
+              :if={@ai_proposal_pending and !@draft_tombstoned_at and is_nil(@selected_version)}
+              id="ai-proposal-banner"
+              class="ai-proposal-banner"
+              role="region"
+              aria-label="Propuesta de revisión IA"
+            >
+              <div class="ai-proposal-banner__header">
+                <.icon name="hero-sparkles" class="size-4" />
+                <span id="ai-proposal-banner-badge" class="badge badge--ai-proposal">
+                  Propuesta IA pendiente
+                </span>
+              </div>
+
+              <p class="ai-proposal-banner__text" id="ai-proposal-banner-text">
+                Revisión propuesta en base al borrador y la evidencia citada. Podés editarla directamente en los campos. El autoguardado está pausado hasta que decidas aplicarla.
+              </p>
+
+              <div class="form-actions" id="ai-proposal-actions">
+                <button
+                  type="button"
+                  id="apply-ai-proposal"
+                  phx-click="apply_ai_proposal"
+                  class="button-primary button-primary--sm"
+                >
+                  Aplicar propuesta
+                </button>
+                <button
+                  type="button"
+                  id="discard-ai-proposal"
+                  phx-click="discard_ai_proposal"
+                  class="button-secondary button-secondary--sm"
+                >
+                  Descartar
+                </button>
+              </div>
             </div>
 
             <.form
@@ -3037,6 +3286,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 <button
                   type="submit"
                   id="register-functional-analysis-version"
+                  disabled={@ai_proposal_pending}
                   class="button-secondary button-secondary--sm"
                 >
                   <.icon name="hero-lock-closed" class="size-4" /> Registrar versión
