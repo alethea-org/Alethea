@@ -3316,6 +3316,35 @@ select.text-input {
   gap: var(--spacing-md);
 }
 
+.ai-proposal-banner {
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-left: 4px solid var(--colors-accent, #6366f1);
+  border-radius: var(--rounded-md);
+  background: var(--colors-surface-soft);
+  margin-bottom: var(--spacing-md);
+}
+
+.ai-proposal-banner__header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--colors-ink);
+}
+
+.ai-proposal-banner__text {
+  margin: var(--spacing-xs) 0 var(--spacing-sm);
+  color: var(--colors-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.badge--ai-proposal {
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+  font-weight: 600;
+}
+
 .previous-notes {
   padding: var(--spacing-md);
   border: 1px solid var(--colors-hairline);

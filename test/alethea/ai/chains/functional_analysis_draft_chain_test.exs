@@ -37,7 +37,7 @@ defmodule Alethea.AI.Chains.FunctionalAnalysisDraftChainTest do
 
   @clean_json Jason.encode!(@clean_fields)
 
-  describe "build_prompt/1" do
+  describe "build_prompt/1 and build_prompt/2" do
     test "numbers each evidence line" do
       prompt = FunctionalAnalysisDraftChain.build_prompt(@evidence)
 
@@ -62,6 +62,53 @@ defmodule Alethea.AI.Chains.FunctionalAnalysisDraftChainTest do
       assert prompt =~ "2. dos"
       assert prompt =~ "3. tres"
       refute prompt =~ "4. "
+    end
+
+    test "when working_draft is provided, includes non-empty draft fields as previous hypothesis to revise" do
+      draft = %{
+        "antecedents_distal" => "Separación conyugal hace 6 meses.",
+        "response_motor" => "Aislamiento en su dormitorio.",
+        "organism_sleep" => ""
+      }
+
+      prompt = FunctionalAnalysisDraftChain.build_prompt(@evidence, working_draft: draft)
+
+      assert prompt =~ "Borrador de análisis funcional actual"
+      assert prompt =~ "antecedents_distal: Separación conyugal hace 6 meses."
+      assert prompt =~ "response_motor: Aislamiento en su dormitorio."
+      refute prompt =~ "organism_sleep:"
+      assert prompt =~ "1. El paciente reporta insomnio recurrente"
+    end
+
+    test "excludes previous_notes from working_draft section" do
+      draft = %{
+        "antecedents_distal" => "Discusión familiar.",
+        "previous_notes" => "Nota confidencial anterior."
+      }
+
+      prompt = FunctionalAnalysisDraftChain.build_prompt(@evidence, working_draft: draft)
+
+      assert prompt =~ "antecedents_distal: Discusión familiar."
+      refute prompt =~ "previous_notes"
+      refute prompt =~ "Nota confidencial anterior."
+    end
+
+    test "when new_evidence is provided, explicitly flags those citations" do
+      all_evidence = [
+        "Cita antigua 1",
+        "Nueva cita incorporada recientemente",
+        "Cita antigua 2"
+      ]
+
+      new_evidence = ["Nueva cita incorporada recientemente"]
+
+      prompt =
+        FunctionalAnalysisDraftChain.build_prompt(all_evidence, new_evidence: new_evidence)
+
+      assert prompt =~ "1. Cita antigua 1"
+      assert prompt =~ "2. [NUEVA EVIDENCIA CITADA] Nueva cita incorporada recientemente"
+      assert prompt =~ "3. Cita antigua 2"
+      assert prompt =~ "NUEVA EVIDENCIA CITADA"
     end
   end
 
@@ -260,6 +307,29 @@ defmodule Alethea.AI.Chains.FunctionalAnalysisDraftChainTest do
                })
 
       assert value =~ "dato clínico aislado"
+    end
+
+    test "the mock receives working_draft and new_evidence when provided" do
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn params ->
+        send(test_pid, {:mock_called, params})
+        {:ok, %{"antecedents_distal" => "Hipótesis revisada"}}
+      end)
+
+      draft = %{"antecedents_distal" => "Hipótesis previa"}
+      new_ev = ["Nueva evidencia"]
+
+      assert {:ok, %{"antecedents_distal" => "Hipótesis revisada"}} =
+               Alethea.AI.FunctionalAnalysisDraftChainMock.run(%{
+                 sanitized_evidence: ["Evidencia previa", "Nueva evidencia"],
+                 working_draft: draft,
+                 new_evidence: new_ev
+               })
+
+      assert_received {:mock_called, received_params}
+      assert received_params.working_draft == draft
+      assert received_params.new_evidence == new_ev
     end
   end
 

@@ -43,14 +43,22 @@ defmodule Alethea.AI.Chains.FunctionalAnalysisDraftChain do
   ]
 
   @impl true
-  def run(%{sanitized_evidence: texts}) when is_list(texts) do
-    content = build_prompt(texts)
+  def run(%{sanitized_evidence: texts} = params) when is_list(texts) do
+    opts =
+      []
+      |> maybe_put_opt(:working_draft, Map.get(params, :working_draft))
+      |> maybe_put_opt(:new_evidence, Map.get(params, :new_evidence))
+
+    content = build_prompt(texts, opts)
 
     case LLMConfig.get_and_build(:functional_analysis_draft) do
       {:ok, _config, llm} -> do_run(llm, content)
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, val), do: [{key, val} | opts]
 
   @impl true
   def run!(params) do
@@ -69,7 +77,9 @@ defmodule Alethea.AI.Chains.FunctionalAnalysisDraftChain do
     - NUNCA uses tono de hecho consumado.
     - NUNCA completes con conocimiento general: usa solo la evidencia entregada.
 
-    Si la evidencia no cubre un campo, devuelve "" (cadena vacía) para ese campo.
+    Si se te entrega un borrador actual, evalúalo junto a la evidencia citada. Si la evidencia (en especial la nueva evidencia citada) contradice, matiza o amplía el borrador actual, propone la revisión pertinente para ese campo. No conserves hipótesis previas que la nueva evidencia invalide, pero tampoco reemplaces texto válido si la evidencia no lo amerita.
+
+    Si la evidencia no cubre un campo y no hay hipótesis previa válida, devuelve "" (cadena vacía) para ese campo.
 
     Campos a completar (glosario):
     - antecedents_distal: antecedentes distales, factores lejanos en el tiempo que predisponen la conducta.
@@ -116,15 +126,82 @@ defmodule Alethea.AI.Chains.FunctionalAnalysisDraftChain do
   Pure prompt builder — numbers the already-sanitized evidence strings.
   Carries no chunk/resource/target-behavior identifiers — the model has
   no channel to fabricate a citation.
+
+  Options:
+  - `:working_draft`: map of existing E-O-R-C fields to review/revise.
+  - `:new_evidence`: list of strings or MapSet of newly cited evidence items.
   """
-  @spec build_prompt([String.t()]) :: String.t()
-  def build_prompt(texts) when is_list(texts) do
+  @spec build_prompt([String.t()], keyword() | map()) :: String.t()
+  def build_prompt(texts, opts \\ []) when is_list(texts) do
+    opts = Map.new(opts)
+    draft_part = format_working_draft(Map.get(opts, :working_draft))
+    evidence_part = format_evidence(texts, Map.get(opts, :new_evidence))
+
+    case {draft_part, evidence_part} do
+      {"", evidence} -> evidence
+      {draft, ""} -> draft
+      {draft, evidence} -> draft <> "\n\n" <> evidence
+    end
+  end
+
+  defp format_working_draft(nil), do: ""
+
+  defp format_working_draft(draft) when is_map(draft) do
+    lines =
+      @eorc_fields
+      |> Enum.map(fn field ->
+        atom_key =
+          try do
+            String.to_existing_atom(field)
+          rescue
+            ArgumentError -> nil
+          end
+
+        val = Map.get(draft, field) || (atom_key && Map.get(draft, atom_key)) || ""
+        {field, String.trim(to_string(val))}
+      end)
+      |> Enum.reject(fn {_field, val} -> val == "" end)
+      |> Enum.map(fn {field, val} -> "- #{field}: #{val}" end)
+
+    case lines do
+      [] ->
+        ""
+
+      _ ->
+        "Borrador de análisis funcional actual (hipótesis clínica previa a revisar):\n" <>
+          Enum.join(lines, "\n")
+    end
+  end
+
+  defp format_working_draft(_), do: ""
+
+  defp format_evidence([], _new_evidence), do: ""
+
+  defp format_evidence(texts, new_evidence) do
+    new_set =
+      case new_evidence do
+        %MapSet{} = set -> set
+        list when is_list(list) -> MapSet.new(list)
+        _ -> MapSet.new()
+      end
+
     numbered =
       texts
       |> Enum.with_index(1)
-      |> Enum.map_join("\n", fn {text, index} -> "#{index}. #{text}" end)
+      |> Enum.map_join("\n", fn {text, index} ->
+        if MapSet.member?(new_set, text) do
+          "#{index}. [NUEVA EVIDENCIA CITADA] #{text}"
+        else
+          "#{index}. #{text}"
+        end
+      end)
 
-    "Evidencia clínica registrada en la línea de tiempo:\n" <> numbered
+    if MapSet.size(new_set) > 0 do
+      "Evidencia clínica registrada en la línea de tiempo (las citas marcadas con [NUEVA EVIDENCIA CITADA] fueron agregadas tras la última versión registrada):\n" <>
+        numbered
+    else
+      "Evidencia clínica registrada en la línea de tiempo:\n" <> numbered
+    end
   end
 
   @doc """
