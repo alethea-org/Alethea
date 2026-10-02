@@ -158,9 +158,15 @@ defmodule Alethea.ClinicalRecord.Retention do
 
   `opts`: `actor: %Professional{} | :system` (default `:system`),
   `trigger: "sweep" | "manual"` (required).
+
+  A `"sweep"` deletion whose parent acquired registered immutable
+  versions between eligibility selection and the locked deletion is an
+  expected race, not a failure: it returns `{:ok, :deferred_for_versions}`
+  and writes nothing.
   """
   @spec legally_delete_record(resource_ref(), keyword()) ::
           {:ok, Tombstone.t()}
+          | {:ok, :deferred_for_versions}
           | {:error, :not_found | :legal_hold_active | :already_deleted | term()}
   def legally_delete_record({resource_type, resource_id}, opts \\ [])
       when is_binary(resource_type) do
@@ -217,6 +223,9 @@ defmodule Alethea.ClinicalRecord.Retention do
     |> all_resource_refs()
     |> Enum.reduce_while({0, []}, fn ref, {count, tombstones} ->
       case legally_delete_record(ref, actor: professional, trigger: "manual") do
+        # `"manual"` never defers, but a deferred outcome is a skip, not a
+        # deletion to count and not a failure to halt on.
+        {:ok, :deferred_for_versions} -> {:cont, {count, tombstones}}
         {:ok, tombstone} -> {:cont, {count + 1, [tombstone | tombstones]}}
         {:error, reason} -> {:halt, {:error, {:partial, count, reason}}}
       end
@@ -285,6 +294,13 @@ defmodule Alethea.ClinicalRecord.Retention do
     |> case do
       {:ok, %{tombstone: tombstone}} ->
         {:ok, tombstone}
+
+      {:error, :record, :deferred_for_versions, _changes} ->
+        Logger.info(
+          "clinical_record retention deferred for #{resource_type}/#{ids.id}: registered versions exist"
+        )
+
+        {:ok, :deferred_for_versions}
 
       {:error, step, reason, _changes} ->
         Logger.warning("clinical_record retention multi failed at #{step}")
