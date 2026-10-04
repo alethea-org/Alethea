@@ -1802,6 +1802,979 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "Apply reviewed AI revision (#368)" do
+    test "conflict on apply clears proposal banner and restores clinician pre-proposal editor content",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para conflicto"
+      )
+
+      assert {:ok, draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Hipótesis original del clínico"}
+               )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:ok, %{"antecedents_distal" => "Propuesta IA en conflicto"}}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Propuesta IA en conflicto"
+             )
+
+      # Concurrent session updates the draft in DB behind our back
+      assert {:ok, _updated_draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Cambio concurrente de otra sesión"},
+                 expected_lock_version: draft.lock_version
+               )
+
+      # Clinician attempts to apply the proposal
+      view |> element("#apply-ai-proposal") |> render_click()
+
+      # Conflict is reported and banner is cleared
+      refute has_element?(view, "#ai-proposal-banner")
+      assert render(view) =~ "Conflicto: otra sesión modificó el borrador."
+
+      # CRITICAL: Form restores clinician pre-proposal draft, NOT keeping unaccepted proposal text!
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Hipótesis original del clínico"
+             )
+
+      refute render(view) =~ "Propuesta IA en conflicto"
+
+      # Pending autosave or subsequent state check does not overwrite DB with unaccepted text
+      _ = :sys.get_state(view.pid)
+
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Cambio concurrente de otra sesión"
+      refute persisted.antecedents_distal =~ "Propuesta IA"
+    end
+
+    test "baseline captured at generation start is preserved and detects intervening DB update at apply",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para baseline"
+      )
+
+      assert {:ok, draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Draft baseline original"}
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:chain_running, self()})
+
+        receive do
+          :finish ->
+            {:ok, %{"antecedents_distal" => "Propuesta con baseline capturado"}}
+        end
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:chain_running, chain_pid}
+
+      # Intervening DB update occurs while generation is running
+      assert {:ok, _concurrent} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Modificación concurrente durante generación"},
+                 expected_lock_version: draft.lock_version
+               )
+
+      send(chain_pid, :finish)
+      render_async(view, 5_000)
+
+      # Either rejected during preview or rejected on apply:
+      # If preview appeared, clicking apply MUST fail with conflict because baseline was captured at start
+      if has_element?(view, "#ai-proposal-banner") do
+        view |> element("#apply-ai-proposal") |> render_click()
+        assert render(view) =~ "Conflicto" or render(view) =~ "modificado"
+        refute has_element?(view, "#ai-proposal-banner")
+      else
+        assert render(view) =~ "modificado" or render(view) =~ "Conflicto"
+      end
+
+      # DB retains the concurrent edit, unaccepted proposal text was rejected
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Modificación concurrente durante generación"
+    end
+
+    test "duplicate apply is a safe idempotent no-op",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para duplicate apply"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Hipótesis antes de propuesta"}
+               )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:ok,
+         %{
+           "antecedents_distal" => "Texto propuesto aceptado",
+           "response_motor" => "Respuesta motora aceptada"
+         }}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      # First apply succeeds
+      view |> element("#apply-ai-proposal") |> render_click()
+      refute has_element?(view, "#ai-proposal-banner")
+      assert render(view) =~ "Propuesta aplicada al borrador de trabajo."
+
+      # Second apply is a safe no-op
+      render_click(view, "apply_ai_proposal")
+
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Texto propuesto aceptado"
+      assert persisted.response_motor == "Respuesta motora aceptada"
+
+      # No historical versions were created
+      assert {:ok, []} =
+               ClinicalRecord.list_functional_analysis_versions(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+    end
+
+    test "concurrent creation when no draft existed is rejected on apply and preserves clinician editor content",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para no-draft concurrent creation"
+      )
+
+      # Ensure no draft exists initially
+      assert {:ok, nil} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:ok, %{"antecedents_distal" => "Propuesta IA sobre borrador vacío"}}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      # Clinician types before generating proposal
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{
+          antecedents_distal: "Notas previas del clínico sin guardar",
+          previous_notes: ""
+        }
+      )
+      |> render_change()
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      # Another session concurrently creates a draft in DB
+      assert {:ok, _concurrent_draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Borrador creado por otro usuario"}
+               )
+
+      # Clinician clicks apply
+      view |> element("#apply-ai-proposal") |> render_click()
+
+      # Conflict is reported and banner cleared
+      refute has_element?(view, "#ai-proposal-banner")
+      assert render(view) =~ "Conflicto: otra sesión modificó el borrador."
+
+      # Clinician's pre-proposal editor content is restored
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Notas previas del clínico sin guardar"
+             )
+
+      refute render(view) =~ "Propuesta IA sobre borrador vacío"
+
+      # DB has the concurrent draft, not unaccepted text
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Borrador creado por otro usuario"
+    end
+
+    test "legal deletion of draft during preview shows tombstone and clears proposal state",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para tombstone"
+      )
+
+      assert {:ok, draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Hipótesis inicial"}
+               )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:ok, %{"antecedents_distal" => "Propuesta que será tombstoneada"}}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      # Legal deletion happens while in preview
+      assert {:ok, _tombstone} =
+               Retention.legally_delete_record({"functional_analysis_draft", draft.id},
+                 actor: professional,
+                 trigger: "manual"
+               )
+
+      # Attempt to apply proposal
+      view |> element("#apply-ai-proposal") |> render_click()
+
+      refute has_element?(view, "#ai-proposal-banner")
+      assert has_element?(view, "#draft-tombstone")
+      refute has_element?(view, "#functional-analysis-form")
+      refute render(view) =~ "Propuesta que será tombstoneada"
+    end
+
+    test "successful edited proposal apply persists to draft, survives reload, and enables subsequent normal autosave",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia para edición y reload"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Hipótesis inicial base"}
+               )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:ok,
+         %{
+           "antecedents_distal" => "Propuesta IA para editar",
+           "response_motor" => "Respuesta motora propuesta"
+         }}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      # Clinician edits the proposed text in the form
+      view
+      |> form("#functional-analysis-form",
+        functional_analysis: %{
+          antecedents_distal: "Edición manual del clínico sobre propuesta IA",
+          response_motor: "Respuesta motora propuesta",
+          previous_notes: ""
+        }
+      )
+      |> render_change()
+
+      # Apply the edited proposal
+      view |> element("#apply-ai-proposal") |> render_click()
+
+      refute has_element?(view, "#ai-proposal-banner")
+      assert render(view) =~ "Propuesta aplicada al borrador de trabajo."
+
+      # Persisted draft contains the edited text
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Edición manual del clínico sobre propuesta IA"
+      assert persisted.response_motor == "Respuesta motora propuesta"
+
+      # No version was registered
+      assert {:ok, []} =
+               ClinicalRecord.list_functional_analysis_versions(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      # Survives reload
+      {:ok, reloaded_view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               reloaded_view,
+               "#functional-analysis-antecedents-distal",
+               "Edición manual del clínico sobre propuesta IA"
+             )
+
+      assert has_element?(
+               reloaded_view,
+               "#functional-analysis-response-motor",
+               "Respuesta motora propuesta"
+             )
+
+      assert has_element?(reloaded_view, "#draft-status-label", "Guardado")
+
+      # Normal autosave works in the reloaded view
+      render_change(reloaded_view, "change_functional_analysis", %{
+        "functional_analysis" => %{
+          "antecedents_distal" => "Edición manual del clínico sobre propuesta IA",
+          "response_motor" => "Ajuste posterior mediante autosave normal"
+        }
+      })
+
+      _ = :sys.get_state(reloaded_view.pid)
+
+      assert has_element?(reloaded_view, "#draft-status-label", "Guardado")
+
+      assert {:ok, reloaded_persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert reloaded_persisted.response_motor == "Ajuste posterior mediante autosave normal"
+    end
+
+    test "clinician edits during pending generation are autosaved after discard and survive reload",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para edits during generation"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Texto inicial guardado"}
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:chain_running, self()})
+
+        receive do
+          :finish ->
+            {:ok, %{"antecedents_distal" => "Propuesta IA no deseada"}}
+        end
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:chain_running, chain_pid}
+
+      # Clinician makes legitimate edits while generation is pending
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{
+          "antecedents_distal" => "Edición legítima del clínico mientras generaba",
+          "previous_notes" => ""
+        }
+      })
+
+      # Finish generation and let it arrive as proposal
+      send(chain_pid, :finish)
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      # Clinician discards the proposal
+      view |> element("#discard-ai-proposal") |> render_click()
+      refute has_element?(view, "#ai-proposal-banner")
+
+      # Let pending messages / autosave process
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#draft-status-label", "Guardado")
+
+      # Database must have the clinician's legitimate edit
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Edición legítima del clínico mientras generaba"
+
+      # Reloading view retains the clinician's edit
+      {:ok, reloaded_view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               reloaded_view,
+               "#functional-analysis-antecedents-distal",
+               "Edición legítima del clínico mientras generaba"
+             )
+    end
+
+    test "clinician edits during pending generation are autosaved when generation fails and survive reload",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para error during generation"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Texto inicial antes de fallo"}
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:chain_running, self()})
+
+        receive do
+          :fail ->
+            {:error, :timeout}
+        end
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:chain_running, chain_pid}
+
+      # Clinician makes legitimate edits while generation is running
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{
+          "antecedents_distal" => "Edición legítima durante fallo de IA",
+          "previous_notes" => ""
+        }
+      })
+
+      # Trigger generation failure
+      send(chain_pid, :fail)
+      render_async(view, 5_000)
+
+      refute has_element?(view, "#ai-proposal-banner")
+      assert render(view) =~ "No se pudo generar el borrador E-O-R-C."
+
+      # Let autosave process
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#draft-status-label", "Guardado")
+
+      # Database must have the clinician's legitimate edit
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Edición legítima durante fallo de IA"
+
+      # Reloading view retains the clinician's edit
+      {:ok, reloaded_view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      assert has_element?(
+               reloaded_view,
+               "#functional-analysis-antecedents-distal",
+               "Edición legítima durante fallo de IA"
+             )
+    end
+
+    test "canceling generation while unchanged causes no redundant write",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para cancel unchanged"
+      )
+
+      assert {:ok, draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Texto inicial sin cambios"}
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:chain_running, self()})
+
+        receive do
+          :finish ->
+            {:ok, %{"antecedents_distal" => "Propuesta ignorada"}}
+        end
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:chain_running, chain_pid}
+
+      # Cancel generation without making any form edits
+      render_click(view, "discard_ai_proposal")
+
+      _ = :sys.get_state(view.pid)
+
+      # Lock version has not been incremented (no redundant write)
+      assert {:ok, current_draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert current_draft.lock_version == draft.lock_version
+
+      assert {:ok, current_content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert current_content.antecedents_distal == "Texto inicial sin cambios"
+
+      # Async finishes late, no side effect
+      send(chain_pid, :finish)
+      render_async(view, 5_000)
+
+      _ = :sys.get_state(view.pid)
+
+      assert {:ok, final_draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert final_draft.lock_version == draft.lock_version
+    end
+
+    test "intervening concurrent edit by another session while paused detects conflict safely on discard resumption",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para concurrent edit during pause"
+      )
+
+      assert {:ok, initial_draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Texto base sesión 1"}
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:chain_running, self()})
+
+        receive do
+          :finish ->
+            {:ok, %{"antecedents_distal" => "Propuesta que se descartará"}}
+        end
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:chain_running, chain_pid}
+
+      # Clinician edits working draft while generation is pending
+      render_change(view, "change_functional_analysis", %{
+        "functional_analysis" => %{
+          "antecedents_distal" => "Edición sesión 1 mientras generaba",
+          "previous_notes" => ""
+        }
+      })
+
+      # Intervening edit by another session advances lock version in DB
+      assert {:ok, concurrent_draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Edición sesión 2 concurrente"},
+                 expected_lock_version: initial_draft.lock_version
+               )
+
+      # Async generation arrives, notices baseline changed during generation, rejects proposal
+      # and resumes autosave of clinician's edits, which hits conflict against DB lock version
+      send(chain_pid, :finish)
+      render_async(view, 5_000)
+
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#draft-status-label", "Conflicto al guardar")
+
+      # DB retains the concurrent session's edit, safe from clobbering
+      assert {:ok, persisted_content} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted_content.antecedents_distal == "Edición sesión 2 concurrente"
+
+      assert {:ok, persisted_draft} =
+               ClinicalRecord.get_functional_analysis_draft(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted_draft.lock_version == concurrent_draft.lock_version
+    end
+
+    test "late async draft generation after discard cannot introduce unaccepted proposal text",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para late async"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Borrador antes de async"}
+               )
+
+      test_pid = self()
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        send(test_pid, {:chain_running, self()})
+
+        receive do
+          :finish ->
+            {:ok, %{"antecedents_distal" => "Propuesta tardía que no debe aparecer"}}
+        end
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      assert_receive {:chain_running, chain_pid}
+
+      # User discards or cancels generation before async finishes
+      render_click(view, "discard_ai_proposal")
+
+      send(chain_pid, :finish)
+      render_async(view, 5_000)
+
+      refute has_element?(view, "#ai-proposal-banner")
+      refute render(view) =~ "Propuesta tardía que no debe aparecer"
+
+      assert has_element?(
+               view,
+               "#functional-analysis-antecedents-distal",
+               "Borrador antes de async"
+             )
+
+      _ = :sys.get_state(view.pid)
+
+      assert {:ok, persisted} =
+               ClinicalRecord.get_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id
+               )
+
+      assert persisted.antecedents_distal == "Borrador antes de async"
+    end
+
+    test "unauthorized error on apply redirects to patients",
+         %{
+           conn: conn,
+           professional: professional,
+           patient: patient,
+           target_behavior: target_behavior
+         } do
+      dek = load_dek!(professional, patient)
+
+      insert_evidence!(
+        professional,
+        patient,
+        target_behavior,
+        dek,
+        DateTime.utc_now(),
+        "clinical_note",
+        Ecto.UUID.generate(),
+        "Evidencia clínica para unauthorized"
+      )
+
+      assert {:ok, _draft} =
+               ClinicalRecord.upsert_functional_analysis_content(
+                 professional,
+                 patient.id,
+                 target_behavior.id,
+                 %{"antecedents_distal" => "Hipótesis antes de desautorización"}
+               )
+
+      expect(Alethea.AI.FunctionalAnalysisDraftChainMock, :run, fn _params ->
+        {:ok, %{"antecedents_distal" => "Propuesta que será desautorizada"}}
+      end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      view |> element("#generate-functional-analysis-draft") |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(view, "#ai-proposal-banner")
+
+      # Patient is reassigned to another professional, revoking access
+      other_professional = create_professional!()
+      Alethea.Repo.update!(Ecto.Changeset.change(patient, professional_id: other_professional.id))
+
+      # Clinician attempts to apply proposal
+      assert {:error, {:live_redirect, %{to: "/patients"}}} =
+               view |> element("#apply-ai-proposal") |> render_click()
+    end
+  end
+
   describe "autosaved E-O-R-C working draft (GitHub #362)" do
     test "autosaves clinician changes without explicit Save and survives reload", %{
       conn: conn,
