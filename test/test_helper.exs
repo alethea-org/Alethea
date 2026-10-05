@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(assert_receive_timeout: 1_000)
 Ecto.Adapters.SQL.Sandbox.mode(Alethea.Repo, :manual)
 
 # Emotion analyzer slot is wired to Alethea.AI.EmotionAnalyzer.Fake in
