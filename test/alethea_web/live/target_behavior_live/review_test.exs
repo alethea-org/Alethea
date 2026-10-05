@@ -1083,7 +1083,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> render_change()
 
       send(chain_pid, :finish_draft_generation)
-      render_async(view)
+      render_async(view, 5_000)
 
       assert render(view) =~ "Borrador E-O-R-C generado. Revisalo antes de guardar."
 
@@ -1172,7 +1172,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> render_change()
 
       view |> element("#generate-functional-analysis-draft") |> render_click()
-      render_async(view)
+      render_async(view, 5_000)
 
       assert render(view) =~ "No se pudo generar el borrador E-O-R-C."
 
@@ -1229,7 +1229,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
                )
 
       send(chain_pid, :finish_draft_generation)
-      render_async(view)
+      render_async(view, 5_000)
 
       assert render(view) =~ "La evidencia citada cambió durante la generación."
       assert has_element?(view, "#functional-analysis-response-cognitive", "Edición sin guardar")
@@ -1283,7 +1283,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
                )
 
       send(chain_pid, :finish_draft_generation)
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#draft-tombstone")
       refute has_element?(view, "#functional-analysis-form")
@@ -2900,7 +2900,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       action = "#cite-suggested-candidate-#{candidate.id}"
       assert has_element?(view, action, "+ Citar todo")
@@ -2964,7 +2964,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       action = "#cite-suggested-candidate-#{candidate.id}"
       assert has_element?(view, action, "+ Citar todo")
@@ -3034,7 +3034,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      _rendered = render_async(view)
+      _rendered = render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidates-list article:nth-child(5)")
       refute has_element?(view, "#suggested-candidates-list article:nth-child(6)")
@@ -3086,7 +3086,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidate-#{candidate.id}")
       refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
@@ -3101,7 +3101,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidates-empty")
 
@@ -3122,7 +3122,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidates-empty")
       refute has_element?(view, "#suggested-candidates-list")
@@ -3152,7 +3152,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       dismiss_action = "#dismiss-suggested-candidate-#{candidate.id}"
       assert has_element?(view, dismiss_action, "Descartar ✕")
@@ -3181,7 +3181,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       dismiss_action = "#dismiss-suggested-candidate-#{candidate.id}"
       assert has_element?(view, dismiss_action)
@@ -3245,7 +3245,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidate-#{candidate1.id}")
       assert has_element?(view, "#suggested-candidate-#{candidate2.id}")
@@ -3259,7 +3259,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view_reloaded, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view_reloaded)
+      render_async(view_reloaded, 5_000)
 
       refute has_element?(view_reloaded, "#suggested-candidate-#{candidate1.id}")
       assert has_element?(view_reloaded, "#suggested-candidate-#{candidate2.id}")
@@ -3290,7 +3290,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidate-#{candidate.id}")
       refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
@@ -3314,7 +3314,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       forged_id = Ecto.UUID.generate()
 
@@ -3399,7 +3399,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       assert_receive {:search_embedding_started, search_task_pid}
       send(search_task_pid, :release_search_embedding)
 
-      render_async(view)
+      render_async(view, 5_000)
 
       card_selector = "#evidence-search-result-#{chunk.id}"
       assert has_element?(view, "#evidence-search-results-list #{card_selector}")
@@ -3426,7 +3426,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => "sin coincidencias"}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#evidence-search-empty")
       refute has_element?(view, "#evidence-search-results-list")
@@ -3453,13 +3453,13 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> form("#evidence-search-form", %{"search" => %{"query" => query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
       assert has_element?(view, "#evidence-search-results-list")
 
       view |> element("#clear-evidence-search") |> render_click()
@@ -3489,13 +3489,13 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> form("#evidence-search-form", %{"search" => %{"query" => query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
       assert has_element?(view, "#evidence-search-results-list")
 
       view
@@ -3595,7 +3595,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#evidence-search-result-#{note_chunk.id}")
       assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
@@ -3605,7 +3605,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> element("#evidence-search-filter-telegram")
       |> render_click()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(
                view,
@@ -3625,7 +3625,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> element("#evidence-search-filter-notes")
       |> render_click()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(
                view,
@@ -3640,7 +3640,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> element("#evidence-search-filter-all")
       |> render_click()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(
                view,
@@ -3714,7 +3714,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => initial_query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#evidence-search-result-#{telegram_chunk.id}")
       refute has_element?(view, "#evidence-search-result-#{note_chunk.id}")
@@ -3724,7 +3724,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => next_query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       # Filter remains active and persists across keystrokes
       assert has_element?(
@@ -3765,7 +3765,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       action_selector = "#cite-search-result-#{chunk.id}"
       assert has_element?(view, action_selector, "+ Citar")
@@ -3804,7 +3804,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       action_selector = "#cite-search-result-#{chunk.id}"
       assert has_element?(view, action_selector, "+ Citar")
@@ -3879,7 +3879,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => query}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       action_selector = "#cite-search-result-#{chunk.id}"
       assert has_element?(view, action_selector, "+ Citar")
@@ -3956,7 +3956,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => query1}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#cite-search-result-#{note1.id}", "+ Citar")
 
@@ -3970,7 +3970,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => query2}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       # Note 1 remains marked as cited
       assert has_element?(view, "#cited-confirmation-#{note1.id}", "✓ Citado")
@@ -4020,7 +4020,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#cite-suggested-candidate-#{candidate.id}", "+ Citar todo")
       assert has_element?(view, "#trim-suggested-candidate-#{candidate.id}", "Recortar")
@@ -4049,7 +4049,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       assert has_element?(view, "#suggested-candidate-#{candidate.id}")
       refute has_element?(view, "#cite-suggested-candidate-#{candidate.id}")
@@ -4079,7 +4079,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       refute has_element?(view, "#trim-candidate-form-#{candidate.id}")
 
@@ -4121,7 +4121,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> element("#trim-suggested-candidate-#{candidate.id}")
@@ -4177,7 +4177,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       # Open trim editor
       view
@@ -4232,7 +4232,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> element("#trim-suggested-candidate-#{candidate.id}")
@@ -4277,7 +4277,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> element("#trim-suggested-candidate-#{candidate.id}")
@@ -4331,7 +4331,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> element("#trim-suggested-candidate-#{candidate.id}")
@@ -4381,7 +4381,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       view
       |> element("#trim-suggested-candidate-#{candidate.id}")
@@ -4431,7 +4431,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       # Open trim on candidate 1
       view
@@ -4498,7 +4498,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       {:ok, view, _html} =
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-      render_async(view)
+      render_async(view, 5_000)
 
       transcript_card = "#suggested-candidate-#{transcript_candidate.id}"
       note_card = "#suggested-candidate-#{note_candidate.id}"
@@ -4518,7 +4518,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> form("#evidence-search-form", %{"search" => %{"query" => "angustia subterraneo"}})
       |> render_change()
 
-      render_async(view)
+      render_async(view, 5_000)
 
       result_card = "#evidence-search-result-#{transcript_candidate.id}"
       assert has_element?(view, "#{result_card} .badge--speaker-patient", "Paciente")
@@ -4552,7 +4552,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         {:ok, view, _html} =
           live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
-        render_async(view)
+        render_async(view, 5_000)
 
         case cite_path do
           :cite_all ->
@@ -4586,7 +4586,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
             |> form("#evidence-search-form", %{"search" => %{"query" => "crisis de panico"}})
             |> render_change()
 
-            render_async(view)
+            render_async(view, 5_000)
 
             assert has_element?(
                      view,
