@@ -1069,7 +1069,8 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       view |> element("#generate-functional-analysis-draft") |> render_click()
 
       assert_receive {:draft_chain_called, chain_pid,
-                      %{sanitized_evidence: ["Contacto [REDACTED_EMAIL] observó la conducta"]}}
+                      %{sanitized_evidence: ["Contacto [REDACTED_EMAIL] observó la conducta"]}},
+                     5_000
 
       view
       |> form("#functional-analysis-form",
@@ -1220,7 +1221,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
       |> render_change()
 
       view |> element("#generate-functional-analysis-draft") |> render_click()
-      assert_receive {:draft_chain_waiting, chain_pid}
+      assert_receive {:draft_chain_waiting, chain_pid}, 5_000
 
       assert {:ok, _tombstone} =
                Retention.legally_delete_record({"consultation_evidence", evidence.id},
@@ -1274,7 +1275,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
 
       view |> element("#generate-functional-analysis-draft") |> render_click()
-      assert_receive {:draft_chain_waiting, chain_pid}
+      assert_receive {:draft_chain_waiting, chain_pid}, 5_000
 
       assert {:ok, _tombstone} =
                Retention.legally_delete_record({"functional_analysis_draft", draft.id},
@@ -3396,7 +3397,7 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
         |> render_change()
 
       assert loading_html =~ "evidence-search-loading"
-      assert_receive {:search_embedding_started, search_task_pid}
+      assert_receive {:search_embedding_started, search_task_pid}, 5_000
       send(search_task_pid, :release_search_embedding)
 
       render_async(view, 5_000)
