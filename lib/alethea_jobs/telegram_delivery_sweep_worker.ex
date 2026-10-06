@@ -39,7 +39,20 @@ defmodule AletheaJobs.TelegramDeliverySweepWorker do
     * Crisis replies are never claimed, so they never enter `sending` and
       this worker never touches them.
 
-  `max_attempts: 1` — the next run picks up whatever a failed run left.
+  ## Failures
+
+  Each claim is resolved in its own transaction and its own failure
+  boundary: a claim that cannot be resolved is logged (message id and
+  failure kind only), keeps its `sending` state, and does not stop the
+  rest of the batch. After every claim was attempted the job returns
+  `{:error, "N of M ..."}` if any failed, so a sweep that keeps failing
+  shows up as discarded jobs with a recorded error in Oban, not only as
+  log lines. This differs from `AletheaJobs.RetentionSweepWorker`, which
+  returns `:ok` and logs: there a skipped record is merely retained
+  longer, here it is a patient reply whose fate nobody has been told.
+
+  `max_attempts: 1` — the error is never retried; the next cron run picks
+  up whatever a failed run left.
   """
 
   use Oban.Worker, queue: :telegram_outbound, max_attempts: 1
@@ -75,12 +88,44 @@ defmodule AletheaJobs.TelegramDeliverySweepWorker do
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
     cutoff = DateTime.add(DateTime.utc_now(), -claim_timeout_seconds(), :second)
+    stale = Clinical.stale_telegram_delivery_claims(cutoff)
 
-    cutoff
-    |> Clinical.stale_telegram_delivery_claims()
-    |> Enum.each(&resolve(&1, cutoff))
+    # Every stale claim is attempted; one that cannot be resolved must
+    # not keep the others in `sending` (claims are listed oldest first,
+    # so a failing one would otherwise block every run).
+    failed = Enum.count(stale, &(resolve_isolated(&1, cutoff) == :error))
 
-    :ok
+    if failed == 0 do
+      :ok
+    else
+      # Returned only after the whole batch was attempted. The job is
+      # not retried (`max_attempts: 1`) and resolved claims are no longer
+      # `sending`, so nothing is surfaced twice; the failed claims stay
+      # eligible for the next cron run.
+      {:error, "#{failed} of #{length(stale)} expired delivery claims could not be resolved"}
+    end
+  end
+
+  # The failure boundary is one claim: its transaction has already
+  # rolled back (state, dead-letter row), so the claim is exactly as the
+  # sweep found it. The log carries the message id and the kind of
+  # failure only — never the exception message or an exit reason, which
+  # could hold a changeset with reply text.
+  defp resolve_isolated(%Message{} = reply, cutoff) do
+    resolve(reply, cutoff)
+  rescue
+    exception -> log_unresolved(reply, inspect(exception.__struct__))
+  catch
+    kind, _value -> log_unresolved(reply, Atom.to_string(kind))
+  end
+
+  defp log_unresolved(%Message{} = reply, failure) do
+    Logger.error(
+      "TelegramDeliverySweepWorker: could not resolve expired delivery claim, left in " <>
+        "sending for the next run (message_id=#{reply.id}, failure=#{failure})"
+    )
+
+    :error
   end
 
   defp resolve(%Message{} = reply, cutoff) do

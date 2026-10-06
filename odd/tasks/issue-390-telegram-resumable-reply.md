@@ -46,6 +46,7 @@ Out: prompt, history, sanitization, output validation (#392); debounce/aggregati
 - [x] T2 — One logical reply with recoverable delivery intent. Reply provenance under a unique constraint; existing reply reused on repeated and concurrent executions (no second generation, diagnosis, or outbound row); crash between persistence and enqueue recovered on resume; crisis reply content, priority, and persistence unchanged. Route: delegated.
 - [x] T3 — Explicit delivery outcomes in the outbound path. Delivery state on the reply; acknowledged delivery never resent; ambiguous transport outcome represented and not resent on the journaling lane; pre-send failures still retry; crisis lane behavior unchanged. Route: delegated.
 - [x] T4 — Surface ambiguous deliveries and bound the `sending` state (review findings `R3-ambiguous-reply-silent-loss`, `R3-sending-state-stuck`). An ambiguous journaling outcome goes through the existing dead-letter row and `ops:alerts` broadcast with `outcome: "ambiguous"`; a cron sweep resolves delivery claims older than ten minutes to `ambiguous` and surfaces them once. Route: delegated.
+- [x] T5 — Isolate per-row failures in the delivery sweep (review finding `R3-sweep-head-of-line-blocking`). Each stale claim is resolved inside its own failure boundary; a failing one is logged without content, keeps `sending`, and no longer blocks the rest; the job returns an error after the whole batch was attempted. Route: delegated.
 
 Each task closes with at least one Conventional Commit on the feature branch, tests alongside the behavior.
 
@@ -130,7 +131,16 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - Candidate: commits `74abc21..1e37332` against the reviewed boundary `a920733` (risk medium, `slice_budget_reached`); consent granted by the user.
 - Outcome: approved on the `review-reliability` lens and acknowledged (lineage `review-9881777d384d85d1`, authority burned). The reviewed boundary is `1e37332`.
 - Informational findings, none blocking, open as follow-ups:
-  - `R3-sweep-head-of-line-blocking` (warning): the sweep resolves rows with no per-row failure isolation, so one raising row blocks the rest of the batch on every run.
+  - `R3-sweep-head-of-line-blocking` (warning): the sweep resolves rows with no per-row failure isolation, so one raising row blocks the rest of the batch on every run. **Resolved in T5.**
   - `R3-sweep-fallback-branches-untested` (warning): the no-chat-hash branch (log only, no dead-letter) and the other sweep fallbacks have no test.
   - `R3-claim-age-updated-at-unproved` (warning): no test shows that claiming refreshes `updated_at`. Checked by reading: `move_telegram_delivery` sets `updated_at` on every transition (`lib/alethea/clinical.ex:482`), so the behavior is correct and only the test is missing.
   - `R3-broadcast-before-commit` (suggestion): the `ops:alerts` broadcast runs inside the transaction, so an alert can precede or outlive a failed commit.
+
+### T5 (after follow-up review)
+
+- RED: `MIX_TEST_PARTITION=_390 mix test test/alethea_jobs/telegram_delivery_sweep_worker_test.exs` -> 7/10 passed, the three new tests failing with the `MatchError` that aborted the batch on the oldest row.
+- GREEN: same command -> 10 passed.
+- Closure: `MIX_TEST_PARTITION=_390 mix test test/alethea/jobs test/alethea/telegram test/alethea/clinical_test.exs test/alethea/foundation test/alethea_jobs` -> 465 passed (6 doctests, 459 tests). `MIX_TEST_PARTITION=_390 mix precommit` -> exit 0, 1812 passed (6 doctests, 1806 tests), 5 skipped.
+- Failure forced through data, not timing: the older stale reply belongs to a patient whose stored chat hash is not 64 characters, which the dead-letter changeset rejects, so surfacing raises inside that row's transaction. Restoring the hash removes the cause.
+- Decisions: the rescue/catch wraps one row's resolution only (worker-only change, `lib/alethea/clinical.ex` untouched). The log line carries the message id and the exception module or exit kind, never the exception message. The job returns `{:error, "N of M expired delivery claims could not be resolved"}` after attempting every row, unlike `RetentionSweepWorker` (`:ok` plus a warning), because an unresolved claim is a patient reply nobody has been told about and a log line alone was the gap the previous finding named; with `max_attempts: 1` the error is not retried, and resolved rows are no longer `sending`, so nothing is surfaced twice.
+- Commit: recorded by the closing docs commit.

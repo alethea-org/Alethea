@@ -11,6 +11,7 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
 
   import Alethea.FoundationTestHelper
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
@@ -19,6 +20,7 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
   alias AletheaJobs.TelegramDeliverySweepWorker
 
   @chat_id_hash String.duplicate("b", 64)
+  @other_chat_id_hash String.duplicate("c", 64)
   @patient_words "hoy me sentí muy mal"
   @reply "respuesta clínica"
 
@@ -124,6 +126,81 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
     assert Clinical.telegram_delivery_state(reply.id) == "sent"
   end
 
+  describe "a stale claim whose resolution fails" do
+    setup %{patient: healthy} do
+      failing = bound_patient(@other_chat_id_hash)
+
+      # The failing reply is the OLDEST stale claim, so it is attempted
+      # first on every run.
+      failing_reply = claimed_reply(failing)
+      healthy_reply = claimed_reply(healthy)
+      expire_claim(failing_reply, 2 * 86_400)
+      expire_claim(healthy_reply, 86_400)
+      corrupt_chat_hash(failing)
+
+      %{failing: failing, failing_reply: failing_reply, healthy_reply: healthy_reply}
+    end
+
+    test "does not stop the remaining stale claims from being resolved and surfaced",
+         %{failing_reply: failing_reply, healthy_reply: healthy_reply} do
+      log =
+        capture_log(fn ->
+          assert {:error, _} = perform_job(TelegramDeliverySweepWorker, %{})
+        end)
+
+      assert Clinical.telegram_delivery_state(healthy_reply.id) == "ambiguous"
+      assert [dead_letter] = Repo.all(OutboundDeadLetter)
+      assert dead_letter.chat_id_hash == @chat_id_hash
+      assert_receive {:outbound_dead_letter, %{chat_id_hash: @chat_id_hash}}
+      refute_receive {:outbound_dead_letter, _}, 50
+
+      # The failing row is all-or-nothing: no state change, no dead-letter.
+      assert Clinical.telegram_delivery_state(failing_reply.id) == "sending"
+
+      # It is reported, by id and a fixed label only.
+      assert log =~ "could not resolve expired delivery claim"
+      assert log =~ failing_reply.id
+      refute log =~ @reply
+      refute log =~ @patient_words
+      refute log =~ "not-a-chat-hash"
+    end
+
+    test "reports the failed run as an error without content, after attempting every row" do
+      capture_log(fn ->
+        assert {:error, reason} = perform_job(TelegramDeliverySweepWorker, %{})
+        send(self(), {:reason, reason})
+      end)
+
+      assert_received {:reason, reason}
+      assert reason == "1 of 2 expired delivery claims could not be resolved"
+    end
+
+    test "is picked up by a later run once the cause is gone, and nothing is surfaced twice",
+         %{failing: failing, failing_reply: failing_reply, healthy_reply: healthy_reply} do
+      capture_log(fn ->
+        assert {:error, _} = perform_job(TelegramDeliverySweepWorker, %{})
+        # Still failing: the healthy reply, already resolved, is not
+        # reported again by the rerun.
+        assert {:error, "1 of 1 " <> _} = perform_job(TelegramDeliverySweepWorker, %{})
+      end)
+
+      assert Repo.aggregate(OutboundDeadLetter, :count) == 1
+
+      set_chat_hash(failing.foundation_patient, @other_chat_id_hash)
+
+      assert :ok = perform_job(TelegramDeliverySweepWorker, %{})
+
+      assert Clinical.telegram_delivery_state(failing_reply.id) == "ambiguous"
+      assert Clinical.telegram_delivery_state(healthy_reply.id) == "ambiguous"
+
+      hashes = OutboundDeadLetter |> Repo.all() |> Enum.map(& &1.chat_id_hash) |> Enum.sort()
+      assert hashes == Enum.sort([@chat_id_hash, @other_chat_id_hash])
+
+      assert :ok = perform_job(TelegramDeliverySweepWorker, %{})
+      assert Repo.aggregate(OutboundDeadLetter, :count) == 2
+    end
+  end
+
   # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
@@ -144,12 +221,28 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
     reply
   end
 
-  defp expire_claim(%Message{id: id}) do
-    long_ago = DateTime.add(DateTime.utc_now(), -86_400, :second) |> DateTime.truncate(:second)
+  defp expire_claim(%Message{id: id}, seconds_ago \\ 86_400) do
+    long_ago =
+      DateTime.add(DateTime.utc_now(), -seconds_ago, :second) |> DateTime.truncate(:second)
+
     Repo.update_all(from(m in Message, where: m.id == ^id), set: [updated_at: long_ago])
   end
 
-  defp bound_patient do
+  # Makes surfacing this patient's replies raise: a dead-letter row
+  # rejects a chat hash that is not 64 characters.
+  defp corrupt_chat_hash(%{foundation_patient: foundation_patient}) do
+    set_chat_hash(foundation_patient, "not-a-chat-hash")
+  end
+
+  # Written by id: the struct held by the test may be stale.
+  defp set_chat_hash(%{id: id}, chat_id_hash) do
+    Repo.update_all(
+      from(p in Alethea.Foundation.Accounts.Patient, where: p.id == ^id),
+      set: [telegram_chat_id_hash: chat_id_hash]
+    )
+  end
+
+  defp bound_patient(chat_id_hash \\ @chat_id_hash) do
     foundation_pat =
       patient_fixture(professional_fixture(), %{alias: "Pat#{unique_int()}"})
 
@@ -171,7 +264,7 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
     foundation_pat =
       foundation_pat
       |> Ecto.Changeset.change(%{
-        telegram_chat_id_hash: @chat_id_hash,
+        telegram_chat_id_hash: chat_id_hash,
         legacy_patient_id: legacy_pat.id
       })
       |> Repo.update!()
