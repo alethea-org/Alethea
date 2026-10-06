@@ -24,7 +24,12 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
-  alias AletheaJobs.{ClinicalRecordOutboxWorker, EmotionAnalysisWorker}
+
+  alias AletheaJobs.{
+    ClinicalRecordOutboxWorker,
+    EmotionAnalysisWorker,
+    TelegramDeliverySweepWorker
+  }
 
   import Alethea.FoundationTestHelper
   import Ecto.Query
@@ -376,6 +381,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
       [job] = all_enqueued(worker: TelegramOutboundWorker)
 
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+
       %{patient: patient, inbound_args: args, job: job}
     end
 
@@ -411,23 +418,48 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
           {"a timeout after the request was sent", {:ambiguous, :timeout}},
           {"a 5xx from Telegram", {:server_error, 502}}
         ] do
-      test "#{label} is recorded as ambiguous and the reply is not resent",
+      test "#{label} is recorded as ambiguous, surfaced to operators, and the reply is not resent",
            %{patient: patient, inbound_args: inbound_args, job: job} do
         Fake.queue_responses([{:error, unquote(Macro.escape(reason))}])
 
         assert :ok = run_outbound(job)
 
         assert %Message{delivery_state: "ambiguous"} = reply(patient)
-        # No retry was scheduled and nothing was dead-lettered: the
-        # outcome is unknown, not failed.
+        # No retry was scheduled: the outcome is unknown, not failed.
         assert [_original_only] = all_enqueued(worker: TelegramOutboundWorker)
-        assert Repo.aggregate(OutboundDeadLetter, :count) == 0
+
+        # The reply is visible on the same surface as an exhausted
+        # delivery, marked as ambiguous rather than failed.
+        foundation_patient_id = patient.foundation_patient.id
+        chat_id_hash = patient.foundation_patient.telegram_chat_id_hash
+
+        assert [dead_letter] = Repo.all(OutboundDeadLetter)
+        assert dead_letter.outcome == "ambiguous"
+        assert dead_letter.lane == "safe"
+        assert dead_letter.patient_id == foundation_patient_id
+        assert dead_letter.chat_id_hash == chat_id_hash
+        assert dead_letter.last_error == unquote(inspect(reason))
+
+        assert_receive {:outbound_dead_letter,
+                        %{outcome: "ambiguous", lane: "safe", chat_id_hash: ^chat_id_hash} =
+                          payload}
+
+        # Nothing beyond what an exhausted delivery already carries: the
+        # reply text, never the patient's words or the plaintext chat id.
+        assert payload.text == @reply
+        refute inspect(payload) =~ "#{@chat_id}"
+        refute inspect(dead_letter) =~ "#{@chat_id}"
+        refute inspect(payload) =~ "hola"
+        refute inspect(dead_letter) =~ "hola"
 
         # A re-execution of the delivery job does not call Telegram. The
         # scripted error is consumed, so a second call would succeed and
         # be recorded by the Fake.
         assert :ok = run_outbound(job)
         assert Fake.sends() == []
+        # ...and does not surface the same reply a second time.
+        assert Repo.aggregate(OutboundDeadLetter, :count) == 1
+        refute_receive {:outbound_dead_letter, _}, 50
 
         # Nor does a repeated inbound job re-establish delivery.
         Repo.delete_all(Oban.Job)
@@ -473,14 +505,17 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert :ok = run_outbound(exhausted)
 
       assert %Message{delivery_state: "failed"} = reply(patient)
-      assert Repo.aggregate(OutboundDeadLetter, :count) == 1
+      # A definite failure stays distinguishable from an ambiguous one.
+      assert [dead_letter] = Repo.all(OutboundDeadLetter)
+      assert dead_letter.outcome == "failed"
+      assert_receive {:outbound_dead_letter, %{outcome: "failed"}}
 
       Repo.delete_all(Oban.Job)
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: inbound_args})
       refute_enqueued(worker: TelegramOutboundWorker)
     end
 
-    test "a delivery whose execution died mid-send is ambiguous: its re-execution does not send",
+    test "a delivery whose execution died mid-send is not resent, and is resolved to ambiguous and surfaced once the claim expires",
          %{patient: patient, job: job} do
       use_client_mock()
 
@@ -491,13 +526,34 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert_raise RuntimeError, fn -> run_outbound(job) end
 
       # The re-execution (Oban rescue of the orphaned job) uses a working
-      # client; it must still not send.
+      # client; it must still not send. It cannot tell a dead holder from
+      # a slow one, so it leaves the claim for the holder or the sweep.
       Application.put_env(:alethea, :telegram_client, Fake)
 
       assert :ok = run_outbound(job)
 
       assert Fake.sends() == []
+      assert %Message{delivery_state: "sending"} = reply(patient)
+      assert Repo.aggregate(OutboundDeadLetter, :count) == 0
+
+      # A sweep inside the bound leaves the claim alone.
+      assert :ok = perform_job(TelegramDeliverySweepWorker, %{})
+      assert %Message{delivery_state: "sending"} = reply(patient)
+
+      expire_claim(reply(patient))
+
+      assert :ok = perform_job(TelegramDeliverySweepWorker, %{})
+
       assert %Message{delivery_state: "ambiguous"} = reply(patient)
+      assert [dead_letter] = Repo.all(OutboundDeadLetter)
+      assert dead_letter.outcome == "ambiguous"
+      assert_receive {:outbound_dead_letter, %{outcome: "ambiguous", text: @reply}}
+
+      # Still never resent, by the delivery job or by a second sweep.
+      assert :ok = run_outbound(job)
+      assert :ok = perform_job(TelegramDeliverySweepWorker, %{})
+      assert Fake.sends() == []
+      assert Repo.aggregate(OutboundDeadLetter, :count) == 1
     end
 
     test "two concurrent executions of the same delivery job send once",
@@ -621,6 +677,12 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       attempt: 1,
       priority: job.priority
     })
+  end
+
+  # Moves a claim past the sweep's bound without waiting for it.
+  defp expire_claim(%Message{id: id}) do
+    long_ago = DateTime.add(DateTime.utc_now(), -86_400, :second) |> DateTime.truncate(:second)
+    Repo.update_all(from(m in Message, where: m.id == ^id), set: [updated_at: long_ago])
   end
 
   defp use_client_mock do

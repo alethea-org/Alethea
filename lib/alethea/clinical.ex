@@ -434,6 +434,43 @@ defmodule Alethea.Clinical do
     )
   end
 
+  @doc """
+  Replies whose delivery claim has been held since before `cutoff`
+  without a recorded outcome. The execution that claimed them is either
+  dead or has overrun every plausible request time.
+  """
+  @spec stale_telegram_delivery_claims(DateTime.t()) :: [Message.t()]
+  def stale_telegram_delivery_claims(%DateTime{} = cutoff) do
+    Repo.all(
+      from(m in Message,
+        where: m.delivery_state == "sending" and m.updated_at < ^cutoff,
+        order_by: m.updated_at
+      )
+    )
+  end
+
+  @doc """
+  Resolves one expired delivery claim to `"ambiguous"`: the request may
+  have reached Telegram, so the reply is never resent.
+
+  The age and state checks are part of the UPDATE itself, so it cannot
+  overwrite `"sent"`, cannot touch a claim that was renewed since it was
+  listed, and returns `:ok` to exactly one caller — a second run gets
+  `:unchanged`.
+  """
+  @spec expire_telegram_delivery_claim(binary(), DateTime.t()) :: :ok | :unchanged
+  def expire_telegram_delivery_claim(message_id, %DateTime{} = cutoff) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      from(m in Message,
+        where: m.id == ^message_id and m.delivery_state == "sending" and m.updated_at < ^cutoff
+      )
+      |> Repo.update_all(set: [delivery_state: "ambiguous", updated_at: now])
+
+    if count == 1, do: :ok, else: :unchanged
+  end
+
   # Single conditional UPDATE: the state check and the write are one
   # statement, so concurrent executions cannot both observe the same
   # source state.

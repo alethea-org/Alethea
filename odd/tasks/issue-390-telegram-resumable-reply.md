@@ -45,6 +45,7 @@ Out: prompt, history, sanitization, output validation (#392); debounce/aggregati
 - [x] T1 — Conversation-scoped inbound identity and resume. Migration swapping the unique index; find-or-insert inbound; a retry after a failure past the inbound insert resumes and produces the reply; equal Telegram message ids for two patients do not collide. Route: delegated (worktree writer; multi-file).
 - [x] T2 — One logical reply with recoverable delivery intent. Reply provenance under a unique constraint; existing reply reused on repeated and concurrent executions (no second generation, diagnosis, or outbound row); crash between persistence and enqueue recovered on resume; crisis reply content, priority, and persistence unchanged. Route: delegated.
 - [x] T3 — Explicit delivery outcomes in the outbound path. Delivery state on the reply; acknowledged delivery never resent; ambiguous transport outcome represented and not resent on the journaling lane; pre-send failures still retry; crisis lane behavior unchanged. Route: delegated.
+- [x] T4 — Surface ambiguous deliveries and bound the `sending` state (review findings `R3-ambiguous-reply-silent-loss`, `R3-sending-state-stuck`). An ambiguous journaling outcome goes through the existing dead-letter row and `ops:alerts` broadcast with `outcome: "ambiguous"`; a cron sweep resolves delivery claims older than ten minutes to `ambiguous` and surfaces them once. Route: delegated.
 
 Each task closes with at least one Conventional Commit on the feature branch, tests alongside the behavior.
 
@@ -74,6 +75,7 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - T1 done: composite identity index, `Clinical.find_or_save_telegram_inbound/4`, worker resumes the persisted inbound; the old duplicate-raise test in `telegram_message_worker_test.exs` is inverted.
 - T2 done: `messages.reply_to_message_id` under a unique index, `Clinical.save_telegram_reply/5` / `get_telegram_reply/1` / `telegram_reply_text/2`, worker reuses the persisted reply on repeated and concurrent executions and re-establishes delivery on resume; delivery job keyed by the outbound message.
 - T3 done: `messages.delivery_state` / `delivered_telegram_message_id`, claim-before-send in `TelegramOutboundWorker`, `Client.not_delivered?/1`, Req adapter separates "connection never established" from ambiguous transport failures, inbound resume only re-establishes a pending delivery.
+- T4 done: `foundation_outbound_dead_letters.outcome`, `TelegramOutboundWorker.surface_ambiguous_delivery/1`, `AletheaJobs.TelegramDeliverySweepWorker` on cron `*/5 * * * *`.
 - All tasks complete. Next: user chooses the delivery (chain) strategy; no push or PR was made.
 
 ## Verification evidence
@@ -107,9 +109,18 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - Candidate: commits `883e2b6..a920733` against branch point `d0cb932` (risk medium, `slice_budget_reached`); consent granted by the user.
 - Outcome: approved on the `review-reliability` lens and acknowledged (lineage `review-7715b2e0db7c5e73`, authority burned). The reviewed boundary is `a920733`.
 - Informational findings, none blocking, open as follow-ups:
-  - `R3-ambiguous-reply-silent-loss` (warning): an ambiguous journaling delivery ends with a log line only; no dead-letter or broadcast.
-  - `R3-sending-state-stuck` (warning): a claimed row whose execution dies stays in `sending`; the outbound job has `max_attempts: 1`, so nothing revisits it.
+  - `R3-ambiguous-reply-silent-loss` (warning): an ambiguous journaling delivery ends with a log line only; no dead-letter or broadcast. **Resolved in T4.**
+  - `R3-sending-state-stuck` (warning): a claimed row whose execution dies stays in `sending`; the outbound job has `max_attempts: 1`, so nothing revisits it. **Resolved in T4.**
   - `R3-perform-now-delivery-untested` (warning): the queue-full inline escalation gained delivery-state behavior with no test.
   - `R3-inbound-error-phi-coverage-removed` (warning): the inverted test was the only assertion that an inbound persistence error hides the session id.
   - `R3-test-env-leak` (warning): the idempotency test module changes application env without restoring it.
   - `R3-race-branches-unproved` (suggestion): two race-loser branches have no deterministic test.
+
+### T4 (after native review)
+
+- RED: `MIX_TEST_PARTITION=_390 mix test test/alethea/jobs/telegram_message_worker_idempotency_test.exs test/alethea_jobs/telegram_delivery_sweep_worker_test.exs test/alethea/foundation/accounts/outbound_dead_letter_test.exs` -> 25/39 passed, 14 failing (no dead-letter for an ambiguous outcome, no `outcome` field, no sweep worker, re-execution marking instead of leaving the claim).
+- GREEN: same command -> 39 passed.
+- Closure: `MIX_TEST_PARTITION=_390 mix test test/alethea/jobs test/alethea/telegram test/alethea/clinical_test.exs test/alethea/foundation test/alethea_jobs` -> 462 passed (6 doctests, 456 tests). `MIX_TEST_PARTITION=_390 mix precommit` -> exit 0, 1809 passed (6 doctests, 1803 tests), 5 skipped.
+- Mechanism for the stuck claim: cron sweep, not a per-claim watchdog (no extra job per send, no second plaintext copy of the body in job args, catches every stuck row). Bound 600 s (`:telegram_delivery_claim_timeout_seconds`), against a client request bounded by Req's 30 s connect + 15 s receive; the Pacer wait precedes the claim. Resolution is one conditional UPDATE on state and age, committed with the dead-letter row.
+- Decisions: an execution that finds the row `sending` no longer marks it ambiguous itself; it skips and leaves the claim to its holder or the sweep, so a slow-but-alive send raises no false alarm and each reply is surfaced once. The dead-letter `last_error` for an ambiguous outcome uses a fixed vocabulary (`{:ambiguous, reason}`, `{:server_error, status}`, `:unknown`), never `inspect/1` of an unknown term. The sweep reads the reply text from the encrypted row (same `text` payload an exhausted delivery carries) and falls back to a placeholder if it cannot be read. A stuck reply whose patient no longer has a Telegram chat hash is resolved but only logged, because a dead-letter row requires the hash. The sweep runs on the existing `telegram_outbound` queue. `claim age` is the row's `updated_at`, covered by a partial index.
+- Commit: recorded by the closing docs commit.
