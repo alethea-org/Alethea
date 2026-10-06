@@ -101,3 +101,15 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - At-most-one is demonstrated for: acknowledged delivery re-executed; ambiguous transport error; Telegram 5xx; execution that died mid-send; two concurrent executions of one delivery job (the second starts while the first request is in flight); repeated inbound job after the delivery job is gone.
 - Decisions beyond the design: Telegram 5xx counts as ambiguous on the journaling lane (the request reached Telegram); a plain transport `:timeout` is ambiguous because connect and receive timeouts are indistinguishable; an unknown error shape is ambiguous; the execution holding the claim may overwrite an `ambiguous` mark set by an observer with what it actually saw (`sent` or released to `pending`); the delivery job key covers incomplete jobs only, since the row claim is the guarantee; ambiguous outcomes are logged (hash prefix, message id, fixed outcome label), not dead-lettered or broadcast. Crisis lane: no claim and every error still retried; the row only records `sent` (a repeated job does not resend an acknowledged crisis reply) and `failed` on dead-letter.
 - Commit: `71a3c4a` feat(telegram): record delivery outcomes and never blindly resend a reply
+
+## Native review
+
+- Candidate: commits `883e2b6..a920733` against branch point `d0cb932` (risk medium, `slice_budget_reached`); consent granted by the user.
+- Outcome: approved on the `review-reliability` lens and acknowledged (lineage `review-7715b2e0db7c5e73`, authority burned). The reviewed boundary is `a920733`.
+- Informational findings, none blocking, open as follow-ups:
+  - `R3-ambiguous-reply-silent-loss` (warning): an ambiguous journaling delivery ends with a log line only; no dead-letter or broadcast.
+  - `R3-sending-state-stuck` (warning): a claimed row whose execution dies stays in `sending`; the outbound job has `max_attempts: 1`, so nothing revisits it.
+  - `R3-perform-now-delivery-untested` (warning): the queue-full inline escalation gained delivery-state behavior with no test.
+  - `R3-inbound-error-phi-coverage-removed` (warning): the inverted test was the only assertion that an inbound persistence error hides the session id.
+  - `R3-test-env-leak` (warning): the idempotency test module changes application env without restoring it.
+  - `R3-race-branches-unproved` (suggestion): two race-loser branches have no deterministic test.
