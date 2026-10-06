@@ -284,16 +284,16 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert_enqueued(worker: EmotionAnalysisWorker)
     end
 
-    test "calls phi_worker().process/1 with the inbound message id, raw content, and patient context",
+    test "calls phi_worker().process/1 with the inbound message id, the sanitized current turn, and the role-structured history",
          ctx do
       args = build_args("hola, buen día", telegram_message_id: 302, telegram_update_id: 7)
       _ = ctx
 
       Alethea.AI.PhiWorkerMock
-      |> expect(:process, fn %{message_id: mid, raw_content: text, patient_context: ctx_str} ->
+      |> expect(:process, fn %{message_id: mid, sanitized_content: text, history: history} ->
         assert is_binary(mid)
         assert text == "hola, buen día"
-        assert is_binary(ctx_str)
+        assert history == []
 
         {:ok,
          %{

@@ -234,6 +234,73 @@ defmodule Alethea.Clinical do
     end
   end
 
+  @typedoc """
+  One prior journaling message with the speaker made explicit:
+  `:patient` for inbound messages, `:alethea` for outbound ones.
+  """
+  @type conversation_turn :: %{role: :patient | :alethea, content: String.t()}
+
+  @doc """
+  Returns up to `limit` journaling turns that precede `current` (the
+  message being answered), oldest first, each tagged with its speaker.
+
+  `current` itself is never part of the result — the caller supplies it
+  once, as the current turn — and neither is anything that sorts after
+  it, so regenerating a reply for the same message reads the same
+  snapshot.
+
+  ## Ordering
+
+  `messages.timestamp` is second-truncated, so it cannot order two rows
+  written within the same second. Ties are broken by `direction` (the
+  patient's message before Alethea's reply, the only order a turn-based
+  exchange produces inside one second) and then by `id`, which makes the
+  result deterministic without a schema change. Two messages of the same
+  direction inside one second keep a stable but arbitrary relative order.
+
+  Content is returned decrypted and unsanitized; callers that hand it to
+  a model must pass it through `Alethea.AI.Sanitizer` first.
+  """
+  @spec list_conversation_turns(Alethea.Accounts.Patient.t(), Message.t(), pos_integer()) ::
+          {:ok, [conversation_turn()]} | {:error, term()}
+  def list_conversation_turns(patient, %Message{} = current, limit)
+      when is_integer(limit) and limit > 0 do
+    with {:ok, dek} <- patient_dek(patient) do
+      patient.id
+      |> turns_before(current, limit)
+      |> Enum.reduce_while({:ok, []}, fn message, {:ok, turns} ->
+        case decrypt_message_content(message, dek) do
+          {:ok, content} ->
+            {:cont, {:ok, [%{role: turn_role(message), content: content} | turns]}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+      end)
+    end
+  end
+
+  # Newest first, so `limit` keeps the most recent turns; the reduce in
+  # `list_conversation_turns/3` prepends and thereby restores
+  # chronological order.
+  defp turns_before(patient_id, %Message{} = current, limit) do
+    Message
+    |> where([m], m.patient_id == ^patient_id)
+    |> where(
+      [m],
+      m.timestamp < ^current.timestamp or
+        (m.timestamp == ^current.timestamp and m.direction < ^current.direction) or
+        (m.timestamp == ^current.timestamp and m.direction == ^current.direction and
+           m.id < ^current.id)
+    )
+    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  defp turn_role(%Message{direction: "inbound"}), do: :patient
+  defp turn_role(%Message{direction: "outbound"}), do: :alethea
+
   @spec save_ai_diagnosis(binary(), map()) :: {:ok, Diagnosis.t()} | {:error, term()}
   def save_ai_diagnosis(message_id, chain_result) do
     attrs = %{
