@@ -87,6 +87,11 @@ config :phoenix,
 # NEVER use this value in production.
 config :alethea, Alethea.Encryption.Vault, aes_key: "lcCL8CL/9+jxk2PmCJwpmkKc1PrJ8nlO9NDhsh/6UKc="
 
+# Only in tests: a cheap password hash. `Accounts.create_professional/1`
+# hashes inside `Repo.transaction/1`; with the default rounds, concurrent
+# async tests can hold a connection past the 15s DBConnection timeout.
+config :pbkdf2_elixir, :rounds, 1
+
 # AI adapter swap points (PR B of bootstrap-alethea-v2).
 # The behaviours are the contract; the Fakes are the no-op adapters
 # used in :test and :dev. Production adapters (HF Embeddings, Groq
