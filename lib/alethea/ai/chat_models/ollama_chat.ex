@@ -67,8 +67,11 @@ defmodule Alethea.AI.ChatModels.OllamaChat do
 
     LangChain.Telemetry.span([:langchain, :llm, :call], metadata, fn ->
       case request(model, messages) do
-        {:ok, content} -> {:ok, Message.new_assistant!(content)}
-        {:error, reason} -> {:error, reason}
+        {:ok, content, status} ->
+          {:ok, Message.new_assistant!(%{content: content, status: status})}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end)
   end
@@ -99,9 +102,9 @@ defmodule Alethea.AI.ChatModels.OllamaChat do
     url = String.trim_trailing(model.endpoint_url, "/") <> "/api/chat"
 
     case Req.post(url, options) do
-      {:ok, %Req.Response{status: 200, body: %{"message" => %{"content" => content}}}}
+      {:ok, %Req.Response{status: 200, body: %{"message" => %{"content" => content}} = body}}
       when is_binary(content) and byte_size(content) > 0 ->
-        {:ok, content}
+        {:ok, content, finish_status(body)}
 
       {:ok, %Req.Response{status: status}} ->
         {:error, "Ollama API returned HTTP #{status}"}
@@ -110,6 +113,13 @@ defmodule Alethea.AI.ChatModels.OllamaChat do
         {:error, "Ollama API request failed: #{inspect(reason)}"}
     end
   end
+
+  # Ollama reports `done_reason: "length"` when generation stopped at
+  # `num_predict`. That is the only reason surfaced as a non-complete
+  # status, so callers can tell an unfinished reply from a finished one;
+  # every other response stays `:complete`.
+  defp finish_status(%{"done_reason" => "length"}), do: :length
+  defp finish_status(_body), do: :complete
 
   defp message_payload(message) do
     %{

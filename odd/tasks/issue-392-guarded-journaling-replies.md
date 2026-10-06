@@ -58,7 +58,7 @@ Each task closes with at least one Conventional Commit on the feature branch, te
 - [x] Requests about diagnoses, medication, emotional analysis, or clinician notes direct the patient to their therapist without confirming or denying protected details; AI-identity questions get an honest answer. (prompt contract, same file)
 - [x] Instructions prohibit diagnosis, prescribing, dream interpretation, clinical jargon, suggested activities, comparisons with other patients, and opinions about mentioned people. (`journaling_prompt_test.exs` "prohibitions")
 - [x] Generated output validated with the existing diagnostic/prescriptive patterns before delivery; blocked output never reaches the patient; varied neutral exploratory fallback substituted. (guardrails test, "generated output is validated…"; `journaling_output_guard_test.exs`; `journaling_fallback_test.exs`)
-- [ ] Reply length bounded through generation configuration without misleading sentence truncation. **Partly met.** Bound: `max_tokens: 160` reaches the model as `num_predict` (chain test). No text is ever trimmed. A reply the AI worker reports as `truncated: true` is withheld and replaced by the fallback (guardrails test, "a reply cut off by the length limit"). Gap: with the default `:local` provider the signal never arrives, because `lib/alethea/ai/chat_models/ollama_chat.ex` discards Ollama's `done_reason` and always builds a `:complete` message. That file is outside the #392 edit surface; until it maps `done_reason: "length"` to `status: :length`, a local reply that hits the bound is delivered as generated.
+- [x] Reply length bounded through generation configuration without misleading sentence truncation. Bound: `max_tokens: 160` reaches the model as `num_predict` (chain test). No text is ever trimmed. `OllamaChat` maps `done_reason: "length"` to `status: :length` (`ollama_chat_test.exs`), the chain reports it as `truncated: true` on the local provider (chain test "local generation stopped at the length bound"), and the seam withholds it and substitutes the fallback (guardrails test, "a reply cut off by the length limit").
 - [x] Behavior tests through `TelegramMessageWorker.perform/1` with the AI worker boundary controlled; focused deterministic prompt/validation tests only for contracts the worker seam cannot establish. No live model or classifier calls.
 
 ## Checks
@@ -78,8 +78,8 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - T1 done: `Alethea.Telegram.JournalingReply.generate/3` is the seam `handle_safe_path/7` calls; `Clinical.list_conversation_turns/3` supplies the bounded role-tagged history; `PhiWorkerBehaviour.process/1` now takes `%{message_id, sanitized_content, history}`; the emotion-score block is gone from `PhiWorker`.
 - T2 done: `Alethea.AI.JournalingOutputGuard.check/1` validates the generated text inside the seam; blocked text is replaced by `Alethea.Telegram.JournalingFallback.for_inbound/1` before the worker can persist or enqueue anything.
 - T3 done: `Alethea.AI.JournalingPrompt` holds the structured instructions and examples; `max_tokens` for the journaling chain is 160; truncated replies are withheld.
-- Open: Ollama adapter does not report length-limited replies (see acceptance criteria). Needs a decision/owner for `lib/alethea/ai/chat_models/ollama_chat.ex`.
-- Next: user decision on the Ollama adapter follow-up and on the delivery/chain strategy.
+- Follow-up done: `OllamaChat` now surfaces length-limited generations, closing the acceptance criterion 8 gap on the default local provider; worker moduledoc step 7 corrected.
+- Next: user decision on the delivery/chain strategy.
 
 ## Decisions made during implementation
 
@@ -113,3 +113,7 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - Closure: `MIX_TEST_PARTITION=_392 mix precommit` → exit 0; 1833 passed (6 doctests, 1827 tests), 5 skipped, 0 failed.
 - T3 commit: adfd30d `feat(ai): give journaling replies structured instructions and a length bound`.
 - Authored changed lines at T3: `git diff --shortstat d0cb932..adfd30d` → 19 files changed, 1544 insertions(+), 117 deletions(-) (about 1000 of the insertions are tests and this document). Above the ~400-line delivery budget: chain strategy is a pending user decision; T1/T2/T3 commits are the slice boundaries.
+- Follow-up RED: `MIX_TEST_PARTITION=_392 mix test test/alethea/ai/chat_models/ollama_chat_test.exs test/alethea/ai/chains/guided_conversation_chain_test.exs` → 11/13 passed, 2 failed (message status `:complete` for `done_reason: "length"`; chain `truncated: false`).
+- Follow-up GREEN: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs test/alethea/ai test/alethea/telegram test/alethea/clinical_test.exs` → 507 passed (2 doctests, 505 tests), 0 failed.
+- Follow-up impact: the other chains on `OllamaChat` read only `last_message.content`, and `LLMChain` accepts `:length` like `:complete`, so their behavior is unchanged.
+- Follow-up closure: `MIX_TEST_PARTITION=_392 mix precommit` → exit 0; 1837 passed (6 doctests, 1831 tests), 5 skipped, 0 failed.

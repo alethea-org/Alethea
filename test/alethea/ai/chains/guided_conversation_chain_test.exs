@@ -117,6 +117,25 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
     end
   end
 
+  describe "run/1 — local generation stopped at the length bound" do
+    test "reports the reply as truncated so it is not delivered as complete" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "message" => %{"content" => "Gracias por contarlo. Me pregunto si"},
+          "done" => true,
+          "done_reason" => "length"
+        })
+      end)
+
+      assert {:ok, %{truncated: true}} =
+               GuidedConversationChain.run(%{
+                 sanitized_content: "Hoy me costó levantarme.",
+                 history: [],
+                 message_id: "msg-8"
+               })
+    end
+  end
+
   describe "run/1 — model failure" do
     test "returns an error tuple when the model call fails" do
       Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 500, "") end)

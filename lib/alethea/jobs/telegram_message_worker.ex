@@ -25,7 +25,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        safe path only**; the `:crisis` branch (`:telegram_outbound_crisis`
        lane, PubSub `:crisis_detected`, `urgent_intervention: true`)
        lands in PR #3b.
-    7. Route the reply through `Alethea.AI.PhiWorker.process/1` (PII-sanitized, emotion-enriched), then anchor an `ai_diagnosis` to the inbound message before enqueueing the outbound (REQ-C5-llm-reply-on-safe).
+    7. Route the reply through `Alethea.Telegram.JournalingReply.generate/3` (sanitized role-structured history, output guard with fallback), then anchor an `ai_diagnosis` to the inbound message before enqueueing the outbound (REQ-C5-llm-reply-on-safe).
     8. Persist outbound `Message` via `Clinical.save_telegram_message/7`
        with `direction: "outbound"`, `source: "elicited"` (REQ-C5-persist-outbound-reply).
     9. Enqueue `TelegramOutboundWorker` on `:telegram_outbound` with
