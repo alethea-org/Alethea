@@ -65,6 +65,47 @@ defmodule Alethea.Telegram.Client do
   """
   @type telegram_message_id :: pos_integer() | nil
 
+  @typedoc """
+  Why a send did not return an acknowledgement. The shape tells the
+  caller whether Telegram may have received the request (issue #390):
+
+  Known not delivered — Telegram rejected the request or it never left:
+
+    * `{:rate_limited, seconds}` / `:rate_limited` — 429.
+    * `{:http_error, status, body}` — any other explicit rejection.
+    * `:network` — the connection could not be established.
+
+  Possibly delivered — the request may have reached Telegram:
+
+    * `{:ambiguous, reason}` — the transport failed after the request
+      could have been sent (timeout, connection closed, unknown crash).
+    * `{:server_error, status}` — Telegram answered 5xx.
+
+  Any shape not listed is treated as possibly delivered.
+  """
+  @type send_error ::
+          {:rate_limited, pos_integer()}
+          | :rate_limited
+          | {:http_error, pos_integer(), term()}
+          | :network
+          | {:ambiguous, term()}
+          | {:server_error, pos_integer()}
+          | term()
+
+  @doc """
+  Whether a `send_message/2` error proves the message was NOT delivered,
+  so sending it again cannot produce a second patient-visible message.
+
+  Anything else (`{:ambiguous, _}`, `{:server_error, _}`, or an unknown
+  shape) must be treated as possibly delivered.
+  """
+  @spec not_delivered?(send_error()) :: boolean()
+  def not_delivered?({:rate_limited, _retry_after}), do: true
+  def not_delivered?(:rate_limited), do: true
+  def not_delivered?({:http_error, _status, _body}), do: true
+  def not_delivered?(:network), do: true
+  def not_delivered?(_reason), do: false
+
   @doc """
   Sends `text` to the chat identified by `chat_id`. Returns
   `{:ok, telegram_message_id}` on success (the id is `nil` if the
@@ -74,5 +115,5 @@ defmodule Alethea.Telegram.Client do
   this callback is the synchronous "send and ack" surface.
   """
   @callback send_message(chat_id(), message_text()) ::
-              {:ok, telegram_message_id()} | {:error, term()}
+              {:ok, telegram_message_id()} | {:error, send_error()}
 end

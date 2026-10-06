@@ -29,6 +29,40 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     - Production defaults: `base_backoff_ms = 1_000`,
       `max_backoff_ms = 300_000` (5 min). Tests override.
 
+  ## Delivery outcomes for persisted replies (issue #390)
+
+  When the args carry the `message_id` of a persisted reply, the reply
+  row holds the delivery state and this worker is what moves it
+  (`Alethea.Clinical.claim_telegram_delivery/1`,
+  `record_telegram_delivery/2`). Jobs without a tracked row (unregistered
+  chat, onboarding, reminders, goodbyes) keep the lifecycle above
+  unchanged.
+
+  Journaling lane — at most one patient-visible send per reply:
+
+    * The execution **claims** the row before sending. Only one execution
+      can hold the claim; any other finds the reply sent (no-op) or in
+      flight, and does NOT send. A claim whose holder died is resolved to
+      `ambiguous` by `AletheaJobs.TelegramDeliverySweepWorker` once it
+      expires.
+    * `{:ok, id}` → `sent`, Telegram's id stored. Never sent again.
+    * An error that proves the message was not delivered
+      (`Client.not_delivered?/1`: 429, explicit rejection, connection
+      never established) → the claim is released and the job reschedules;
+      on exhaustion the reply is `failed` and dead-lettered.
+    * Any other error (timeout after the request was sent, 5xx, unknown)
+      → `ambiguous`: no reschedule, no resend. At-most-one is chosen over
+      delivery certainty, so an ambiguous journaling reply may never
+      arrive; it is therefore surfaced through the dead-letter row and
+      `"ops:alerts"` broadcast with `outcome: "ambiguous"`
+      (`surface_ambiguous_delivery/1`).
+
+  Crisis lane — delivery policy unchanged: no claim, every error
+  (ambiguous ones included) is retried up to the budget and then
+  dead-lettered. The row only records `sent` on acknowledgement (an
+  acknowledged crisis reply is not sent again by a repeated job) and
+  `failed` on dead-letter.
+
   ## Why `max_attempts: 1` on the worker
 
   Oban's built-in retry would stack on top of the worker's own
@@ -60,6 +94,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   require Logger
 
+  alias Alethea.Clinical
   alias Alethea.Telegram.{Pacer, Client, LogRedactor}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Repo
@@ -92,6 +127,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     # context (e.g., a direct test invocation, or a future admin
     # retry path that doesn't have the patient in scope).
     patient_id = Map.get(args, "patient_id")
+    message_id = Map.get(args, "message_id")
 
     # 1. Pacer acquire. Blocks until tokens are available (1 msg/s/chat
     #    AND 30 msg/s global). The Pacer does NOT raise — it sleeps
@@ -101,19 +137,220 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     #    safety net that REQ-C7-crisis-priority-lane depends on.
     Pacer.acquire(chat_id_hash)
 
-    # 2. Send.
-    case telegram_client().send_message(chat_id, body) do
-      {:ok, _message_id} ->
+    # 2. Decide whether this execution may send (#390). Done after the
+    #    Pacer wait so a claim is held for the send only.
+    case begin_delivery(message_id, lane) do
+      {:skip, state} ->
+        Logger.info(
+          "TelegramOutboundWorker: reply not sent, delivery already decided " <>
+            "(chat_id_hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, delivery_state=#{state})"
+        )
+
         :ok
 
-      {:error, reason} when attempt >= @max_attempts ->
-        dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, attempt, lane)
-        :ok
+      delivery ->
+        # 3. Send.
+        case telegram_client().send_message(chat_id, body) do
+          {:ok, telegram_message_id} ->
+            record_delivery(delivery, message_id, {:sent, telegram_message_id})
+            :ok
 
-      {:error, reason} ->
-        reschedule(args, attempt + 1, compute_backoff_ms(attempt, reason), lane, priority)
-        :ok
+          {:error, reason} ->
+            handle_send_error(reason, delivery, %{
+              args: args,
+              attempt: attempt,
+              lane: lane,
+              priority: priority,
+              chat_id_hash: chat_id_hash,
+              patient_id: patient_id,
+              message_id: message_id,
+              body: body
+            })
+        end
     end
+  end
+
+  # A claimed journaling reply whose error does not prove non-delivery:
+  # the request may have reached Telegram. Record it and stop — no
+  # reschedule, no dead-letter, no resend.
+  defp handle_send_error(reason, :claimed = delivery, ctx) do
+    if Client.not_delivered?(reason) do
+      retry_or_dead_letter(reason, delivery, ctx)
+    else
+      # The state change and its dead-letter row commit together, and
+      # only the execution that actually moved the row surfaces it, so an
+      # ambiguous reply is reported exactly once.
+      {:ok, _} =
+        Repo.transaction(fn ->
+          case Clinical.record_telegram_delivery(ctx.message_id, :ambiguous) do
+            :ok ->
+              surface_ambiguous_delivery(%{
+                chat_id_hash: ctx.chat_id_hash,
+                patient_id: ctx.patient_id,
+                body: ctx.body,
+                reason: reason,
+                attempts: ctx.attempt
+              })
+
+            :unchanged ->
+              :ok
+          end
+        end)
+
+      :ok
+    end
+  end
+
+  # Untracked jobs and the crisis lane: every error is retried up to the
+  # budget, exactly as before #390.
+  defp handle_send_error(reason, delivery, ctx), do: retry_or_dead_letter(reason, delivery, ctx)
+
+  defp retry_or_dead_letter(reason, delivery, %{attempt: attempt} = ctx)
+       when attempt >= @max_attempts do
+    dead_letter_and_broadcast(
+      ctx.chat_id_hash,
+      ctx.patient_id,
+      ctx.body,
+      reason,
+      attempt,
+      ctx.lane
+    )
+
+    record_delivery(delivery, ctx.message_id, :failed)
+    :ok
+  end
+
+  defp retry_or_dead_letter(reason, :claimed, ctx) do
+    # The claim is released and the retry scheduled atomically: a retry
+    # job never finds its own reply still claimed (which it would have to
+    # treat as ambiguous), and a released reply always has its retry.
+    {:ok, :ok} =
+      Repo.transaction(fn ->
+        Clinical.record_telegram_delivery(ctx.message_id, :not_sent)
+        reschedule_after(reason, ctx)
+      end)
+
+    :ok
+  end
+
+  defp retry_or_dead_letter(reason, _delivery, ctx), do: reschedule_after(reason, ctx)
+
+  defp reschedule_after(reason, ctx) do
+    reschedule(
+      ctx.args,
+      ctx.attempt + 1,
+      compute_backoff_ms(ctx.attempt, reason),
+      ctx.lane,
+      ctx.priority
+    )
+  end
+
+  # ----------------------------------------------------------------
+  # Delivery state of persisted replies (#390)
+  # ----------------------------------------------------------------
+
+  # Returns how this execution relates to the reply row:
+  #   :untracked — no tracked row; legacy lifecycle.
+  #   :claimed   — journaling lane; this execution holds the claim.
+  #   :crisis    — crisis lane; tracked, sent without a claim.
+  #   {:skip, state} — must not send.
+  defp begin_delivery(message_id, lane) do
+    cond do
+      not tracked_message_id?(message_id) -> :untracked
+      crisis_lane?(lane) -> begin_crisis_delivery(message_id)
+      true -> begin_journaling_delivery(message_id)
+    end
+  end
+
+  defp begin_crisis_delivery(message_id) do
+    case Clinical.telegram_delivery_state(message_id) do
+      nil -> :untracked
+      "sent" -> {:skip, "sent"}
+      _state -> :crisis
+    end
+  end
+
+  defp begin_journaling_delivery(message_id) do
+    case Clinical.claim_telegram_delivery(message_id) do
+      :claimed ->
+        :claimed
+
+      {:not_claimed, nil} ->
+        :untracked
+
+      # Includes `"sending"`: another execution claimed this reply and
+      # has not recorded an outcome. It is either still in flight or died
+      # mid-send; either way the request may have reached Telegram, so
+      # this execution must not send. It cannot tell the two apart, so it
+      # leaves the claim to its holder, or to
+      # `AletheaJobs.TelegramDeliverySweepWorker` once the claim expires.
+      {:not_claimed, state} ->
+        {:skip, state}
+    end
+  end
+
+  defp record_delivery(:untracked, _message_id, _outcome), do: :ok
+
+  defp record_delivery(_delivery, message_id, outcome) do
+    Clinical.record_telegram_delivery(message_id, outcome)
+    :ok
+  end
+
+  defp tracked_message_id?(message_id) when is_binary(message_id),
+    do: match?({:ok, _}, Ecto.UUID.cast(message_id))
+
+  defp tracked_message_id?(_message_id), do: false
+
+  defp crisis_lane?(lane), do: lane == :crisis or lane == "crisis"
+
+  # A fixed vocabulary for the ambiguous dead-letter's `last_error`:
+  # never `inspect/1` an unknown error term, which could echo a response
+  # body into the row, the broadcast, and the log.
+  defp ambiguous_error({:ambiguous, reason} = error) when is_atom(reason), do: inspect(error)
+
+  defp ambiguous_error({:server_error, status} = error) when is_integer(status),
+    do: inspect(error)
+
+  defp ambiguous_error(_reason), do: ":unknown"
+
+  @doc """
+  Surfaces a journaling reply whose delivery is ambiguous — the request
+  may have reached Telegram, nobody knows whether the patient received
+  it, and it will not be resent (issue #390).
+
+  Goes through the same dead-letter row and `"ops:alerts"` broadcast as
+  an exhausted delivery, with `outcome: "ambiguous"` so it is not
+  mistaken for a definite failure (and not replayed blindly). The payload
+  is the one an exhausted delivery already carries.
+
+  Called by this worker when it observes an ambiguous outcome, and by
+  `AletheaJobs.TelegramDeliverySweepWorker` when a delivery claim expires
+  without one. The caller guarantees it runs once per reply by calling it
+  only after it moved the reply row to `ambiguous`.
+  """
+  @spec surface_ambiguous_delivery(%{
+          chat_id_hash: String.t(),
+          patient_id: binary() | nil,
+          body: String.t(),
+          reason: term(),
+          attempts: pos_integer()
+        }) :: :ok
+  def surface_ambiguous_delivery(%{
+        chat_id_hash: chat_id_hash,
+        patient_id: patient_id,
+        body: body,
+        reason: reason,
+        attempts: attempts
+      }) do
+    dead_letter_and_broadcast(
+      chat_id_hash,
+      patient_id,
+      body,
+      reason,
+      attempts,
+      :safe,
+      "ambiguous"
+    )
   end
 
   @doc """
@@ -153,11 +390,25 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     body = Map.fetch!(args, "body")
     lane = Map.get(args, "lane", :safe)
     patient_id = Map.get(args, "patient_id")
+    message_id = Map.get(args, "message_id")
 
     Pacer.acquire(chat_id_hash)
 
+    case begin_delivery(message_id, lane) do
+      {:skip, _state} ->
+        # The reply already has its outcome (e.g. an acknowledged crisis
+        # reply re-escalated by a repeated inbound job): nothing to send.
+        :ok
+
+      delivery ->
+        perform_now_send(delivery, message_id, chat_id, chat_id_hash, body, lane, patient_id)
+    end
+  end
+
+  defp perform_now_send(delivery, message_id, chat_id, chat_id_hash, body, lane, patient_id) do
     case telegram_client().send_message(chat_id, body) do
-      {:ok, _message_id} ->
+      {:ok, telegram_message_id} ->
+        record_delivery(delivery, message_id, {:sent, telegram_message_id})
         :ok
 
       {:error, reason} ->
@@ -169,6 +420,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         # the outcome so operator dashboards don't react to a "queue
         # full" event and replay an already-succeeded send.
         dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, 1, lane)
+        record_delivery(delivery, message_id, :failed)
         {:error, reason}
     end
   end
@@ -240,8 +492,23 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # Dead-letter + PubSub broadcast
   # ----------------------------------------------------------------
 
-  defp dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, attempt, lane) do
-    last_error = inspect(reason)
+  # `outcome` is `"failed"` for an exhausted delivery (known not to have
+  # arrived) and `"ambiguous"` for one that may have arrived and was not
+  # resent (#390). Both use the same row, broadcast, and log.
+  defp dead_letter_and_broadcast(
+         chat_id_hash,
+         patient_id,
+         body,
+         reason,
+         attempt,
+         lane,
+         outcome \\ "failed"
+       ) do
+    last_error =
+      case outcome do
+        "ambiguous" -> ambiguous_error(reason)
+        _failed -> inspect(reason)
+      end
 
     # Normalize the lane to a string for the persisted column. The
     # function accepts both atom (`:crisis` | `:safe`) and string
@@ -280,7 +547,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         # PubSub event. `patient_id` is nil for unbound-chat
         # dead-letters (the "unregistered" copy path).
         lane: lane_str,
-        patient_id: patient_id
+        patient_id: patient_id,
+        outcome: outcome
       })
       |> Repo.insert()
 
@@ -303,6 +571,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
          # once into `lane_str` for both the DB insert and the
          # broadcast.
          lane: lane_str,
+         # "failed" | "ambiguous" — matches the persisted column (#390).
+         outcome: outcome,
          at: now
        }}
     )
@@ -339,8 +609,14 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
       )
     end
 
+    headline =
+      case outcome do
+        "ambiguous" -> "ambiguous delivery outcome, reply will not be resent"
+        _failed -> "exhausted retries"
+      end
+
     Logger.error(
-      "TelegramOutboundWorker: exhausted retries, dead-letter written " <>
+      "TelegramOutboundWorker: #{headline}, dead-letter written " <>
         "(chat_id_hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, " <>
         "attempts=#{attempt}, lane=#{lane}, error=#{safe_error})"
     )

@@ -126,9 +126,15 @@ defmodule Alethea.Telegram.Client.Fake do
       `Retry-After` header; the worker's backoff uses this value.
     - `{:error, :rate_limited}` — 429 without `Retry-After`; the
       worker falls back to exponential backoff.
-    - `{:error, {:server_error, status_code}}` — 5xx; exponential
-      backoff.
-    - `{:error, :network}` — connection failure; exponential backoff.
+    - `{:error, {:server_error, status_code}}` — 5xx; possibly
+      delivered.
+    - `{:error, :network}` — the connection was never established;
+      known not delivered.
+    - `{:error, {:ambiguous, reason}}` — the transport failed after the
+      request may have been sent; possibly delivered.
+
+  See `Alethea.Telegram.Client.not_delivered?/1` for how the outbound
+  worker tells the two groups apart.
   """
   @spec queue_responses([{:ok, pos_integer()} | {:error, term()}]) :: :ok
   def queue_responses(responses) when is_list(responses) do

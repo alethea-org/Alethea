@@ -109,7 +109,11 @@ config :alethea, Oban,
        # `AletheaJobs.RetentionSweepWorker`'s moduledoc and the
        # `:retention_sweep_enabled` flag below (both must hold for any
        # deletion to actually occur).
-       {"30 3 * * *", AletheaJobs.RetentionSweepWorker}
+       {"30 3 * * *", AletheaJobs.RetentionSweepWorker},
+       # Issue #390. Resolves Telegram reply delivery claims that were
+       # never given an outcome — see
+       # `AletheaJobs.TelegramDeliverySweepWorker`.
+       {"*/5 * * * *", AletheaJobs.TelegramDeliverySweepWorker}
      ]}
   ]
 

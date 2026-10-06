@@ -41,6 +41,29 @@ defmodule Alethea.Clinical do
         session_id \\ nil,
         telegram_message_id \\ nil
       ) do
+    with {:ok, changeset} <-
+           encrypted_message_changeset(
+             patient,
+             text,
+             dek,
+             direction,
+             behavior_type,
+             session_id,
+             telegram_message_id
+           ) do
+      persist(changeset, direction, patient)
+    end
+  end
+
+  defp encrypted_message_changeset(
+         patient,
+         text,
+         dek,
+         direction,
+         behavior_type,
+         session_id,
+         telegram_message_id
+       ) do
     with {:ok, dek} <- get_dek(patient, dek),
          {:ok, encrypted_content} <- PatientVault.encrypt(text, dek) do
       attrs = %{
@@ -57,9 +80,7 @@ defmodule Alethea.Clinical do
           do: Map.put(attrs, :telegram_message_id, telegram_message_id),
           else: attrs
 
-      %Message{}
-      |> Message.changeset(attrs)
-      |> persist(direction, patient)
+      {:ok, Message.changeset(%Message{}, attrs)}
     end
   end
 
@@ -135,13 +156,12 @@ defmodule Alethea.Clinical do
 
   ## Duplicate handling
 
-  The `telegram_message_id` partial unique index rejects a second
-  row for the same id; this function surfaces the changeset error to
-  the caller — the worker treats it as a retry-eligible failure
-  (REQ-C3-worker-persists-message "persistence failure crashes the
-  job"). The Oban unique-period on `telegram_update_id` is the first
-  line of defence; this DB-level constraint is the safety net for
-  replays outside the Oban window.
+  The partial unique index on `(patient_id, telegram_message_id)`
+  rejects a second row for the same Telegram message in the same
+  patient's conversation; this function surfaces the changeset error to
+  the caller. Inbound callers that must survive a re-execution use
+  `find_or_save_telegram_inbound/4` instead, which resumes the persisted
+  row.
   """
   @spec save_telegram_message(
           Alethea.Foundation.Accounts.Patient.t(),
@@ -176,6 +196,299 @@ defmodule Alethea.Clinical do
 
       {:error, :legacy_not_found} ->
         {:error, :legacy_not_found}
+    end
+  end
+
+  @doc """
+  Persists the inbound `Message` for a Telegram update, or returns the one
+  already persisted for it (issue #390).
+
+  The identity of an inbound is the Telegram `message_id` within the
+  patient's conversation. A re-execution of the same job (Oban retry,
+  concurrent execution, replay outside the Oban unique window) finds the
+  existing row and resumes from it instead of failing on the unique
+  index. The row is created together with its patient-voice outbox event
+  exactly once (see `persist/3`).
+
+  If two executions race on the insert, the loser's insert is rejected by
+  the unique index and it returns the winner's row.
+
+  Returns `{:ok, %Message{}}`, or the same errors as
+  `save_telegram_message/6`.
+  """
+  @spec find_or_save_telegram_inbound(
+          Alethea.Foundation.Accounts.Patient.t(),
+          String.t(),
+          String.t(),
+          binary() | nil
+        ) :: {:ok, Message.t()} | {:error, term()}
+  def find_or_save_telegram_inbound(foundation_patient, text, telegram_message_id, session_id) do
+    case Alethea.Foundation.Accounts.legacy_patient(foundation_patient) do
+      {:ok, legacy_patient} ->
+        case get_telegram_inbound(legacy_patient.id, telegram_message_id) do
+          %Message{} = existing ->
+            {:ok, existing}
+
+          nil ->
+            legacy_patient
+            |> save_message(
+              text,
+              nil,
+              "inbound",
+              "spontaneous",
+              session_id,
+              telegram_message_id
+            )
+            |> resume_on_duplicate_inbound(legacy_patient.id, telegram_message_id)
+        end
+
+      :not_linked ->
+        {:error, :not_linked}
+
+      {:error, :legacy_not_found} ->
+        {:error, :legacy_not_found}
+    end
+  end
+
+  defp get_telegram_inbound(patient_id, telegram_message_id) do
+    Repo.one(
+      from(m in Message,
+        where:
+          m.patient_id == ^patient_id and m.direction == "inbound" and
+            m.telegram_message_id == ^telegram_message_id
+      )
+    )
+  end
+
+  defp resume_on_duplicate_inbound(
+         {:error, %Ecto.Changeset{} = changeset} = error,
+         patient_id,
+         telegram_message_id
+       ) do
+    with true <- unique_violation?(changeset, :telegram_message_id),
+         %Message{} = winner <- get_telegram_inbound(patient_id, telegram_message_id) do
+      {:ok, winner}
+    else
+      _ -> error
+    end
+  end
+
+  defp resume_on_duplicate_inbound(result, _patient_id, _telegram_message_id), do: result
+
+  defp unique_violation?(%Ecto.Changeset{errors: errors}, field) do
+    Enum.any?(errors, fn
+      {^field, {_message, opts}} -> Keyword.get(opts, :constraint) == :unique
+      _other -> false
+    end)
+  end
+
+  @doc """
+  Persists the outbound reply to one inbound Telegram message (issue #390).
+
+  The row records its provenance in `reply_to_message_id`, under a unique
+  index: an inbound has at most one reply. The content is encrypted with
+  the patient's DEK exactly like any other message. Its delivery starts
+  as `"pending"` (see `claim_telegram_delivery/1`).
+
+  Returns `{:error, :reply_already_exists}` when another execution already
+  persisted the reply for this inbound; the caller reuses that reply
+  (`get_telegram_reply/1`) instead of persisting or delivering a second
+  one. Like every outbound save it is a bare insert, safe to call inside
+  the caller's `Repo.transaction` (see `persist/3`).
+  """
+  @spec save_telegram_reply(
+          Alethea.Foundation.Accounts.Patient.t(),
+          String.t(),
+          String.t(),
+          binary(),
+          binary() | nil
+        ) :: {:ok, Message.t()} | {:error, :reply_already_exists} | {:error, term()}
+  def save_telegram_reply(foundation_patient, text, behavior_type, inbound_message_id, session_id) do
+    with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
+         {:ok, changeset} <-
+           encrypted_message_changeset(
+             legacy_patient,
+             text,
+             nil,
+             "outbound",
+             behavior_type,
+             session_id,
+             nil
+           ) do
+      changeset
+      |> Ecto.Changeset.put_change(:reply_to_message_id, inbound_message_id)
+      |> Ecto.Changeset.put_change(:delivery_state, "pending")
+      |> Repo.insert()
+      |> case do
+        {:ok, reply} ->
+          {:ok, reply}
+
+        {:error, %Ecto.Changeset{} = failed} = error ->
+          if unique_violation?(failed, :reply_to_message_id),
+            do: {:error, :reply_already_exists},
+            else: error
+      end
+    end
+  end
+
+  @doc """
+  Returns the reply persisted for an inbound Telegram message, or `nil`.
+  """
+  @spec get_telegram_reply(binary()) :: Message.t() | nil
+  def get_telegram_reply(inbound_message_id) do
+    Repo.get_by(Message, reply_to_message_id: inbound_message_id)
+  end
+
+  @doc """
+  Decrypts a persisted reply so a resumed execution can deliver the
+  content the clinical record already holds instead of generating a new
+  one. The plaintext is returned to the caller only; it is never logged.
+  """
+  @spec telegram_reply_text(Alethea.Foundation.Accounts.Patient.t(), Message.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def telegram_reply_text(foundation_patient, %Message{} = reply) do
+    with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
+         {:ok, dek} <- patient_dek(legacy_patient) do
+      decrypt_message_content(reply, dek)
+    end
+  end
+
+  @typedoc """
+  Delivery outcome of an outbound Telegram reply:
+
+    * `"pending"` — persisted, no send in progress.
+    * `"sending"` — one execution of the delivery job holds the claim.
+    * `"sent"` — Telegram acknowledged the message.
+    * `"ambiguous"` — the request may have reached Telegram and nobody
+      knows whether it was delivered. Never resent.
+    * `"failed"` — the retry budget ran out before any send.
+
+  `nil` means the row is not a tracked reply.
+  """
+  @type telegram_delivery_state :: String.t() | nil
+
+  @doc """
+  Claims the delivery of a persisted reply for one execution of the
+  delivery job (`"pending"` -> `"sending"`), atomically.
+
+  Returns `:claimed` to exactly one caller. Every other caller gets
+  `{:not_claimed, state}` with the state it lost to, and must not send:
+  the reply is already sent, in flight, or in an outcome that forbids a
+  resend.
+  """
+  @spec claim_telegram_delivery(binary()) ::
+          :claimed | {:not_claimed, telegram_delivery_state()}
+  def claim_telegram_delivery(message_id) do
+    case move_telegram_delivery(message_id, ["pending"], delivery_state: "sending") do
+      :ok -> :claimed
+      :unchanged -> {:not_claimed, telegram_delivery_state(message_id)}
+    end
+  end
+
+  @doc """
+  Returns the delivery state of a message, `nil` when it is untracked or
+  does not exist.
+  """
+  @spec telegram_delivery_state(binary()) :: telegram_delivery_state()
+  def telegram_delivery_state(message_id) do
+    Repo.one(from(m in Message, where: m.id == ^message_id, select: m.delivery_state))
+  end
+
+  @doc """
+  Records the outcome of a delivery attempt. Each outcome only applies
+  from the states it may legitimately follow, so a late or duplicate
+  report can never undo a stronger one:
+
+    * `{:sent, telegram_message_id}` — acknowledged. Wins over
+      `"ambiguous"`: the execution holding the claim learned the truth.
+    * `:not_sent` — the holder knows its request never reached Telegram;
+      the reply returns to `"pending"` for a later attempt.
+    * `:ambiguous` — only from `"sending"`; never downgrades `"sent"`.
+    * `:failed` — retry budget exhausted without a send.
+
+  Returns `:ok` when the row moved and `:unchanged` otherwise (including
+  untracked rows, which stay untouched).
+  """
+  @spec record_telegram_delivery(
+          binary(),
+          {:sent, integer() | String.t() | nil} | :not_sent | :ambiguous | :failed
+        ) :: :ok | :unchanged
+  def record_telegram_delivery(message_id, {:sent, telegram_message_id}) do
+    move_telegram_delivery(message_id, ["pending", "sending", "ambiguous"],
+      delivery_state: "sent",
+      delivered_telegram_message_id: telegram_message_id && to_string(telegram_message_id)
+    )
+  end
+
+  def record_telegram_delivery(message_id, :not_sent) do
+    move_telegram_delivery(message_id, ["sending", "ambiguous"], delivery_state: "pending")
+  end
+
+  def record_telegram_delivery(message_id, :ambiguous) do
+    move_telegram_delivery(message_id, ["sending"], delivery_state: "ambiguous")
+  end
+
+  def record_telegram_delivery(message_id, :failed) do
+    move_telegram_delivery(message_id, ["pending", "sending", "ambiguous"],
+      delivery_state: "failed"
+    )
+  end
+
+  @doc """
+  Replies whose delivery claim has been held since before `cutoff`
+  without a recorded outcome. The execution that claimed them is either
+  dead or has overrun every plausible request time.
+  """
+  @spec stale_telegram_delivery_claims(DateTime.t()) :: [Message.t()]
+  def stale_telegram_delivery_claims(%DateTime{} = cutoff) do
+    Repo.all(
+      from(m in Message,
+        where: m.delivery_state == "sending" and m.updated_at < ^cutoff,
+        order_by: m.updated_at
+      )
+    )
+  end
+
+  @doc """
+  Resolves one expired delivery claim to `"ambiguous"`: the request may
+  have reached Telegram, so the reply is never resent.
+
+  The age and state checks are part of the UPDATE itself, so it cannot
+  overwrite `"sent"`, cannot touch a claim that was renewed since it was
+  listed, and returns `:ok` to exactly one caller — a second run gets
+  `:unchanged`.
+  """
+  @spec expire_telegram_delivery_claim(binary(), DateTime.t()) :: :ok | :unchanged
+  def expire_telegram_delivery_claim(message_id, %DateTime{} = cutoff) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      from(m in Message,
+        where: m.id == ^message_id and m.delivery_state == "sending" and m.updated_at < ^cutoff
+      )
+      |> Repo.update_all(set: [delivery_state: "ambiguous", updated_at: now])
+
+    if count == 1, do: :ok, else: :unchanged
+  end
+
+  # Single conditional UPDATE: the state check and the write are one
+  # statement, so concurrent executions cannot both observe the same
+  # source state.
+  defp move_telegram_delivery(message_id, from_states, changes) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      from(m in Message, where: m.id == ^message_id and m.delivery_state in ^from_states)
+      |> Repo.update_all(set: Keyword.put(changes, :updated_at, now))
+
+    if count == 1, do: :ok, else: :unchanged
+  end
+
+  defp linked_legacy_patient(foundation_patient) do
+    case Alethea.Foundation.Accounts.legacy_patient(foundation_patient) do
+      {:ok, legacy_patient} -> {:ok, legacy_patient}
+      :not_linked -> {:error, :not_linked}
+      {:error, :legacy_not_found} -> {:error, :legacy_not_found}
     end
   end
 

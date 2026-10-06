@@ -50,6 +50,13 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
     # `lane` field. DB check constraint enforces the two values.
     field :lane, :string
 
+    # What is known about the delivery (issue #390). `"failed"`: the
+    # message is known not to have arrived (retry budget exhausted).
+    # `"ambiguous"`: the request may have reached Telegram and nobody
+    # knows whether the patient received it; it was NOT resent, so an
+    # operator must not replay it blindly either.
+    field :outcome, :string, default: "failed"
+
     timestamps(type: :utc_datetime)
   end
 
@@ -58,10 +65,20 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
   """
   def changeset(dead_letter, attrs) do
     dead_letter
-    |> cast(attrs, [:chat_id_hash, :text, :last_error, :attempts, :failed_at, :patient_id, :lane])
+    |> cast(attrs, [
+      :chat_id_hash,
+      :text,
+      :last_error,
+      :attempts,
+      :failed_at,
+      :patient_id,
+      :lane,
+      :outcome
+    ])
     |> validate_required([:chat_id_hash, :text, :last_error, :attempts, :failed_at, :lane])
     |> validate_length(:chat_id_hash, is: 64)
     |> validate_number(:attempts, greater_than: 0)
     |> validate_inclusion(:lane, ["safe", "crisis"])
+    |> validate_inclusion(:outcome, ["failed", "ambiguous"])
   end
 end

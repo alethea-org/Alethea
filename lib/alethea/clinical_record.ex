@@ -1493,6 +1493,153 @@ defmodule Alethea.ClinicalRecord do
   end
 
   @doc """
+  Applies an edited AI functional analysis proposal to the mutable working draft
+  within a single race-safe transaction.
+
+  Freshly verifies:
+  1. Professional authorization for patient access and target behavior ownership.
+  2. TargetBehavior existence and acquisition of a `FOR UPDATE` lock.
+  3. Draft legal deletion status (returns `{:error, :legally_deleted}` if tombstoned).
+  4. All cited consultation evidence remains live (not deleted, not tombstoned;
+     locked `FOR SHARE`, returns `{:error, :stale_cited_evidence}` if missing, tombstoned,
+     or belonging to another patient/target).
+  5. Optimistic concurrency against preview baseline:
+     - `:no_draft` requires that no draft existed when preview began.
+     - A positive integer (e.g. `1`, `2`) requires draft `lock_version` to match.
+     - Duplicate acceptance with the same baseline and matching content is idempotent:
+       returns `{:ok, existing_draft}` without incrementing `lock_version` or writing
+       duplicate draft/audit/outbox rows.
+     - Any other baseline mismatch returns `{:error, :conflict}`.
+
+  Required options in `opts`:
+  - `:draft_baseline` — `:no_draft` or a positive integer.
+  - `:cited_evidence_ids` — an explicit list of valid UUIDs (`[]` for deliberate no citations).
+
+  Missing, nil, unconstrained, or malformed options fail closed before any writes or
+  transactions with `{:error, :invalid_draft_baseline}` or `{:error, :invalid_cited_evidence_ids}`.
+
+  Persists the entire proposal ONLY to `FunctionalAnalysisDraft`. Never writes to
+  historical versions (`FunctionalAnalysisVersion`) or increments version sequence.
+  """
+  @spec apply_functional_analysis_ai_proposal(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          map(),
+          keyword()
+        ) ::
+          {:ok, FunctionalAnalysisDraft.t()}
+          | {:error,
+             :invalid_draft_baseline
+             | :invalid_cited_evidence_ids
+             | :unauthorized
+             | :not_found
+             | :legally_deleted
+             | :stale_cited_evidence
+             | :conflict
+             | Ecto.Changeset.t()
+             | term()}
+  def apply_functional_analysis_ai_proposal(
+        %Professional{} = professional,
+        patient_id,
+        target_behavior_id,
+        params,
+        opts \\ []
+      )
+      when is_map(params) do
+    with {:ok, baseline} <- validate_draft_baseline(opts),
+         {:ok, cited_evidence_ids} <- validate_cited_evidence_ids(opts) do
+      with_target_behavior(professional, patient_id, target_behavior_id, fn patient, keyring ->
+        Repo.transaction(fn ->
+          case lock_and_validate_target_behavior(professional, patient, target_behavior_id) do
+            {:ok, _target_behavior} ->
+              case Tombstone.for_target_behavior(target_behavior_id, "functional_analysis_draft") do
+                %Tombstone{resource_id: resource_id} ->
+                  {:denied_tombstone, resource_id}
+
+                nil ->
+                  case check_cited_evidence_liveness(
+                         patient.id,
+                         target_behavior_id,
+                         cited_evidence_ids
+                       ) do
+                    :ok ->
+                      existing_draft =
+                        Repo.get_by(FunctionalAnalysisDraft,
+                          target_behavior_id: target_behavior_id,
+                          patient_id: patient.id
+                        )
+
+                      new_body =
+                        params
+                        |> FunctionalAnalysisContent.new()
+                        |> FunctionalAnalysisContent.serialize()
+
+                      case check_proposal_baseline(existing_draft, new_body, keyring, baseline) do
+                        {:duplicate, draft} ->
+                          draft
+
+                        {:ok, next_lock_version} ->
+                          case persist_functional_analysis_draft(
+                                 professional,
+                                 patient,
+                                 target_behavior_id,
+                                 new_body,
+                                 keyring,
+                                 next_lock_version
+                               ) do
+                            {:ok, draft} -> draft
+                            {:error, reason} -> Repo.rollback(reason)
+                          end
+
+                        {:error, :conflict} ->
+                          Repo.rollback({:error, :conflict})
+                      end
+
+                    {:error, :stale_cited_evidence} ->
+                      Repo.rollback({:error, :stale_cited_evidence})
+                  end
+              end
+
+            {:error, {:denied_target, audited_id}} ->
+              {:denied_target, audited_id}
+          end
+        end)
+        |> case do
+          {:ok, {:denied_tombstone, resource_id}} ->
+            log_denied_audit(professional.id, resource_id, "functional_analysis_draft")
+            {:error, :legally_deleted}
+
+          {:ok, {:denied_target, audited_id}} ->
+            log_denied_audit(professional.id, audited_id, "target_behavior")
+            {:error, :not_found}
+
+          {:ok, %FunctionalAnalysisDraft{} = draft} ->
+            {:ok, draft}
+
+          {:error, {:error, :stale_cited_evidence}} ->
+            {:error, :stale_cited_evidence}
+
+          {:error, :stale_cited_evidence} ->
+            {:error, :stale_cited_evidence}
+
+          {:error, {:error, :conflict}} ->
+            {:error, :conflict}
+
+          {:error, :conflict} ->
+            {:error, :conflict}
+
+          {:error, {:error, reason}} ->
+            {:error, reason}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+    end
+  end
+
+  @doc """
   Registers the current persisted functional-analysis draft as an immutable
   version. The caller must present its exact lock version and a nonblank
   change note (at most 500 graphemes). The TargetBehavior row is locked in
@@ -2221,6 +2368,134 @@ defmodule Alethea.ClinicalRecord do
   end
 
   defp parse_lock_version(_), do: :invalid
+
+  defp validate_draft_baseline(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case Keyword.fetch(opts, :draft_baseline) do
+        {:ok, :no_draft} ->
+          {:ok, :no_draft}
+
+        {:ok, version} when is_integer(version) and version > 0 ->
+          {:ok, version}
+
+        _ ->
+          {:error, :invalid_draft_baseline}
+      end
+    else
+      {:error, :invalid_draft_baseline}
+    end
+  end
+
+  defp validate_draft_baseline(_), do: {:error, :invalid_draft_baseline}
+
+  defp validate_cited_evidence_ids(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case Keyword.fetch(opts, :cited_evidence_ids) do
+        {:ok, []} ->
+          {:ok, []}
+
+        {:ok, ids} when is_list(ids) ->
+          case cast_uuid_list(ids) do
+            {:ok, valid_uuids} -> {:ok, valid_uuids}
+            :error -> {:error, :invalid_cited_evidence_ids}
+          end
+
+        _ ->
+          {:error, :invalid_cited_evidence_ids}
+      end
+    else
+      {:error, :invalid_cited_evidence_ids}
+    end
+  end
+
+  defp validate_cited_evidence_ids(_), do: {:error, :invalid_cited_evidence_ids}
+
+  defp check_cited_evidence_liveness(_patient_id, _target_behavior_id, []), do: :ok
+
+  defp check_cited_evidence_liveness(patient_id, target_behavior_id, valid_uuids)
+       when is_list(valid_uuids) do
+    unique_uuids = Enum.uniq(valid_uuids)
+    sorted_uuids = Enum.sort(unique_uuids)
+
+    live_ids =
+      ConsultationEvidence
+      |> where(
+        [e],
+        e.id in ^sorted_uuids and e.patient_id == ^patient_id and
+          e.target_behavior_id == ^target_behavior_id
+      )
+      |> where(
+        [e],
+        fragment(
+          "NOT EXISTS (SELECT 1 FROM clinical_record_tombstones t WHERE t.resource_type = 'consultation_evidence' AND t.resource_id = ?)",
+          e.id
+        )
+      )
+      |> order_by([e], asc: e.id)
+      |> lock("FOR SHARE")
+      |> select([e], e.id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    if MapSet.size(live_ids) == length(unique_uuids) do
+      :ok
+    else
+      {:error, :stale_cited_evidence}
+    end
+  end
+
+  defp cast_uuid_list(ids) do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
+      case Ecto.UUID.cast(id) do
+        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp check_proposal_baseline(existing_draft, new_body, keyring, baseline) do
+    case baseline do
+      :no_draft ->
+        cond do
+          is_nil(existing_draft) ->
+            {:ok, 1}
+
+          existing_draft.lock_version == 1 and
+              draft_body_matches?(existing_draft, new_body, keyring) ->
+            {:duplicate, existing_draft}
+
+          true ->
+            {:error, :conflict}
+        end
+
+      expected_version when is_integer(expected_version) and expected_version > 0 ->
+        cond do
+          is_nil(existing_draft) ->
+            {:error, :conflict}
+
+          existing_draft.lock_version == expected_version + 1 and
+              draft_body_matches?(existing_draft, new_body, keyring) ->
+            {:duplicate, existing_draft}
+
+          existing_draft.lock_version == expected_version and
+              draft_body_matches?(existing_draft, new_body, keyring) ->
+            {:duplicate, existing_draft}
+
+          existing_draft.lock_version == expected_version ->
+            {:ok, expected_version + 1}
+
+          true ->
+            {:error, :conflict}
+        end
+    end
+  end
+
+  defp draft_body_matches?(%FunctionalAnalysisDraft{} = draft, new_body, keyring) do
+    case PatientVault.decrypt(draft.encrypted_body, dek_for(draft, keyring)) do
+      {:ok, ^new_body} -> true
+      _ -> false
+    end
+  end
 
   defp finalize_record_multi(transaction_result) do
     case transaction_result do
