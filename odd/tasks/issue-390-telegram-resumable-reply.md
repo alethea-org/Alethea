@@ -67,7 +67,7 @@ Each task closes with at least one Conventional Commit on the feature branch, te
 
 ## Delivery
 
-Forecast: above ~400 authored changed lines (three tasks, two workers, migration, tests). Strategy `ask-on-risk`: chain strategy to be chosen by the user before any pull request; work-unit commits are the slice boundaries. Push, PR, and merge are user decisions. Issue label is `status:needs-triage`; branch protection has required `status:approved` before merge.
+Forecast: above ~400 authored changed lines (three tasks, two workers, migration, tests). Strategy `exception-ok`, chosen by the user on 2026-10-06: one pull request with a size exception instead of a chain; work-unit commits remain the review boundaries. Push, PR, and merge are user decisions. Issue label is `status:needs-triage`; branch protection has required `status:approved` before merge.
 
 ## Progress
 
