@@ -16,6 +16,13 @@ defmodule Alethea.Clinical.Message do
     # Telegram message in a patient's chat" while leaving the column
     # `NULL` for rows from other channels (issue #390).
     field(:telegram_message_id, :string)
+    # Delivery outcome of an outbound Telegram reply (#390): "pending" |
+    # "sending" | "sent" | "ambiguous" | "failed"; `nil` for untracked
+    # rows. Set programmatically through `Alethea.Clinical` (never cast).
+    # Non-sensitive metadata — the content stays in `encrypted_content`.
+    field(:delivery_state, :string)
+    # The id Telegram returned for the delivered message.
+    field(:delivered_telegram_message_id, :string)
     field(:encrypted_content, :binary)
     field(:encryption_version, :integer, default: 1)
     field(:synced_to_graph, :boolean, default: false)

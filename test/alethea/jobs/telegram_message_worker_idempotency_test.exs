@@ -1,4 +1,5 @@
 Mox.defmock(Alethea.Jobs.IdempotencyOutboundEnqueueMock, for: Alethea.Telegram.OutboundEnqueue)
+Mox.defmock(Alethea.Jobs.IdempotencyTelegramClientMock, for: Alethea.Telegram.Client)
 
 defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   @moduledoc """
@@ -18,7 +19,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
 
   alias Alethea.AI.Diagnosis
   alias Alethea.Clinical.Message
-  alias Alethea.Jobs.IdempotencyOutboundEnqueueMock
+  alias Alethea.Foundation.Accounts.OutboundDeadLetter
+  alias Alethea.Jobs.{IdempotencyOutboundEnqueueMock, IdempotencyTelegramClientMock}
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
@@ -366,6 +368,211 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
     end
   end
 
+  describe "outbound delivery — explicit outcomes on the journaling lane" do
+    setup do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, "hola", telegram_message_id: 700, telegram_update_id: 50)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      [job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      %{patient: patient, inbound_args: args, job: job}
+    end
+
+    test "a persisted reply starts with a pending delivery", %{patient: patient} do
+      assert %Message{delivery_state: "pending", delivered_telegram_message_id: nil} =
+               reply(patient)
+    end
+
+    test "an acknowledged delivery stores Telegram's message id and is never sent again",
+         %{patient: patient, inbound_args: inbound_args, job: job} do
+      assert :ok = run_outbound(job)
+
+      assert [%{chat_id: @chat_id, text: @reply, message_id: telegram_id}] = Fake.sends()
+      delivered_id = to_string(telegram_id)
+
+      assert %Message{delivery_state: "sent", delivered_telegram_message_id: ^delivered_id} =
+               reply(patient)
+
+      # An outbound retry / duplicate execution of the delivery job.
+      assert :ok = run_outbound(job)
+      assert [_only_one_send] = Fake.sends()
+
+      # A repeated inbound job after the delivery job was pruned must not
+      # re-establish delivery of an acknowledged reply.
+      Repo.delete_all(Oban.Job)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: inbound_args})
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      assert %Message{delivery_state: "sent"} = reply(patient)
+    end
+
+    for {label, reason} <- [
+          {"a timeout after the request was sent", {:ambiguous, :timeout}},
+          {"a 5xx from Telegram", {:server_error, 502}}
+        ] do
+      test "#{label} is recorded as ambiguous and the reply is not resent",
+           %{patient: patient, inbound_args: inbound_args, job: job} do
+        Fake.queue_responses([{:error, unquote(Macro.escape(reason))}])
+
+        assert :ok = run_outbound(job)
+
+        assert %Message{delivery_state: "ambiguous"} = reply(patient)
+        # No retry was scheduled and nothing was dead-lettered: the
+        # outcome is unknown, not failed.
+        assert [_original_only] = all_enqueued(worker: TelegramOutboundWorker)
+        assert Repo.aggregate(OutboundDeadLetter, :count) == 0
+
+        # A re-execution of the delivery job does not call Telegram. The
+        # scripted error is consumed, so a second call would succeed and
+        # be recorded by the Fake.
+        assert :ok = run_outbound(job)
+        assert Fake.sends() == []
+
+        # Nor does a repeated inbound job re-establish delivery.
+        Repo.delete_all(Oban.Job)
+        assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: inbound_args})
+        refute_enqueued(worker: TelegramOutboundWorker)
+
+        assert %Message{delivery_state: "ambiguous"} = reply(patient)
+      end
+    end
+
+    for {label, reason} <- [
+          {"a 429 rejection", {:rate_limited, 2}},
+          {"a connection that was never established", :network}
+        ] do
+      test "#{label} precedes the send, so the delivery is retried and then acknowledged",
+           %{patient: patient, job: job} do
+        Fake.queue_responses([{:error, unquote(Macro.escape(reason))}])
+
+        assert :ok = run_outbound(job)
+
+        assert %Message{delivery_state: "pending"} = reply(patient)
+        assert Fake.sends() == []
+
+        assert [retry] =
+                 [worker: TelegramOutboundWorker]
+                 |> all_enqueued()
+                 |> Enum.filter(&(&1.args["_attempt"] == 2))
+
+        assert retry.queue == "telegram_outbound"
+
+        assert :ok = run_outbound(retry)
+
+        assert [%{text: @reply}] = Fake.sends()
+        assert %Message{delivery_state: "sent"} = reply(patient)
+      end
+    end
+
+    test "pre-send failures that exhaust the retry budget end as failed and are not re-established",
+         %{patient: patient, inbound_args: inbound_args, job: job} do
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+      exhausted = %{job | args: Map.put(job.args, "_attempt", 5)}
+
+      assert :ok = run_outbound(exhausted)
+
+      assert %Message{delivery_state: "failed"} = reply(patient)
+      assert Repo.aggregate(OutboundDeadLetter, :count) == 1
+
+      Repo.delete_all(Oban.Job)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: inbound_args})
+      refute_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "a delivery whose execution died mid-send is ambiguous: its re-execution does not send",
+         %{patient: patient, job: job} do
+      use_client_mock()
+
+      expect(IdempotencyTelegramClientMock, :send_message, fn @chat_id, @reply ->
+        raise "worker node lost while the request was in flight"
+      end)
+
+      assert_raise RuntimeError, fn -> run_outbound(job) end
+
+      # The re-execution (Oban rescue of the orphaned job) uses a working
+      # client; it must still not send.
+      Application.put_env(:alethea, :telegram_client, Fake)
+
+      assert :ok = run_outbound(job)
+
+      assert Fake.sends() == []
+      assert %Message{delivery_state: "ambiguous"} = reply(patient)
+    end
+
+    test "two concurrent executions of the same delivery job send once",
+         %{patient: patient, job: job} do
+      use_client_mock()
+      test_pid = self()
+
+      # Zero further calls are allowed: a second send would fail the test.
+      expect(IdempotencyTelegramClientMock, :send_message, 1, fn @chat_id, @reply ->
+        send(test_pid, {:sending, self()})
+
+        receive do
+          :acknowledge -> {:ok, 4242}
+        after
+          5_000 -> {:error, :never_released}
+        end
+      end)
+
+      first = Task.async(fn -> run_outbound(job) end)
+      assert_receive {:sending, in_flight}, 5_000
+
+      # The second execution starts while the first one's request is in
+      # flight. It finishes without calling the client.
+      assert :ok = Task.await(Task.async(fn -> run_outbound(job) end), 10_000)
+
+      send(in_flight, :acknowledge)
+      assert :ok = Task.await(first, 10_000)
+
+      # The acknowledgement of the one real send is the recorded outcome.
+      assert %Message{delivery_state: "sent", delivered_telegram_message_id: "4242"} =
+               reply(patient)
+    end
+  end
+
+  describe "outbound delivery — the crisis lane keeps its resend behavior" do
+    setup do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, @crisis_text, telegram_message_id: 800, telegram_update_id: 60)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      [job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      %{patient: patient, job: job}
+    end
+
+    test "an ambiguous transport outcome is retried on the crisis lane with its priority",
+         %{patient: patient, job: job} do
+      Fake.queue_responses([{:error, {:ambiguous, :timeout}}])
+
+      assert :ok = run_outbound(job)
+
+      assert [retry] =
+               [worker: TelegramOutboundWorker]
+               |> all_enqueued()
+               |> Enum.filter(&(&1.args["_attempt"] == 2))
+
+      assert retry.queue == "telegram_outbound_crisis"
+      assert retry.priority == 0
+      assert retry.args["body"] == @crisis_message
+
+      assert :ok = run_outbound(retry)
+
+      assert [%{text: @crisis_message}] = Fake.sends()
+      assert %Message{delivery_state: "sent"} = reply(patient)
+    end
+
+    test "an acknowledged crisis delivery is not sent again", %{patient: patient, job: job} do
+      assert :ok = run_outbound(job)
+      assert :ok = run_outbound(job)
+
+      assert [%{text: @crisis_message}] = Fake.sends()
+      assert %Message{delivery_state: "sent"} = reply(patient)
+    end
+  end
+
   # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
@@ -399,6 +606,25 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
         order_by: m.inserted_at
       )
     )
+  end
+
+  defp reply(patient) do
+    [reply] = messages(patient, "outbound")
+    reply
+  end
+
+  # Executes a delivery job the way Oban would, against the configured
+  # Telegram client.
+  defp run_outbound(%Oban.Job{} = job) do
+    TelegramOutboundWorker.perform(%Oban.Job{
+      args: job.args,
+      attempt: 1,
+      priority: job.priority
+    })
+  end
+
+  defp use_client_mock do
+    Application.put_env(:alethea, :telegram_client, IdempotencyTelegramClientMock)
   end
 
   defp diagnoses(inbound_id) do

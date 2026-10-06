@@ -13,7 +13,20 @@ defmodule Alethea.Telegram.Client.Req do
     - `429` with `Retry-After` header   → `{:error, {:rate_limited, retry_after_seconds}}`
     - `429` without `Retry-After`       → `{:error, {:rate_limited, 1}}` (default)
     - `5xx`                              → `{:error, {:server_error, status}}`
-    - Network / transport failure        → `{:error, :network}`
+    - Connection never established       → `{:error, :network}`
+    - Any other transport failure        → `{:error, {:ambiguous, reason}}`
+
+  ## Delivery certainty (issue #390)
+
+  A transport failure is only reported as `:network` when the connection
+  could not be established (refused, DNS, unreachable): the request never
+  left, so the caller may send again. Every other transport failure —
+  a timeout, a connection closed mid-exchange, an unexpected exception or
+  exit — may have happened after Telegram received the request, and is
+  reported as `{:ambiguous, reason}` so the caller does not blindly
+  resend. A plain `:timeout` cannot be attributed to the connect or the
+  receive phase, so it is ambiguous. See
+  `Alethea.Telegram.Client.not_delivered?/1`.
 
   The error term contract is the SAME one the `Telegram.Client.Fake`
   uses (with `queue_responses/1`), so the outbound worker's retry /
@@ -64,6 +77,17 @@ defmodule Alethea.Telegram.Client.Req do
 
   @base_url "https://api.telegram.org"
 
+  # Transport failures that can only happen before a connection exists,
+  # i.e. before any byte of the request was sent.
+  @connection_not_established [
+    :econnrefused,
+    :nxdomain,
+    :ehostunreach,
+    :enetunreach,
+    :ehostdown,
+    :enetdown
+  ]
+
   @impl Client
   def send_message(chat_id, text)
       when is_integer(chat_id) and chat_id > 0 and is_binary(text) do
@@ -85,22 +109,26 @@ defmodule Alethea.Telegram.Client.Req do
         {:ok, %{status: status, body: body}} ->
           {:error, {:http_error, status, body}}
 
-        {:error, _reason} ->
+        {:error, %{reason: reason}} when reason in @connection_not_established ->
           {:error, :network}
+
+        {:error, %{reason: reason}} when is_atom(reason) ->
+          {:error, {:ambiguous, reason}}
+
+        {:error, _reason} ->
+          {:error, {:ambiguous, :unknown}}
       end
     rescue
       _exception ->
-        # Req does not catch transport exceptions (connection refused,
-        # DNS failure, socket reset, etc.). The adapter surfaces them
-        # as `{:error, :network}` so the outbound worker's retry /
-        # dead-letter path treats them uniformly with 5xx responses.
-        {:error, :network}
+        # An exception out of the HTTP stack does not say whether the
+        # request was already on the wire, so the outcome is unknown.
+        {:error, {:ambiguous, :exception}}
     catch
       :exit, _reason ->
-        {:error, :network}
+        {:error, {:ambiguous, :exit}}
 
       :throw, _value ->
-        {:error, :network}
+        {:error, {:ambiguous, :throw}}
     end
   end
 

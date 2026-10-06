@@ -374,6 +374,27 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # persisted. The body is the persisted (decrypted) content, never a
   # regenerated or re-read configuration value: the patient receives
   # exactly what the clinical record holds.
+  #
+  # Only a delivery that is still pending is re-established. A reply
+  # that is sent, in flight, ambiguous, or failed already has its
+  # outcome; enqueueing it again could only produce a second
+  # patient-visible message or repeat a decided failure.
+  defp resume_reply(
+         _foundation_patient,
+         _chat_id,
+         _chat_id_hash,
+         hash_prefix,
+         %Message{delivery_state: state}
+       )
+       when state in ["sending", "sent", "ambiguous", "failed"] do
+    Logger.info(
+      "TelegramMessageWorker: reply already has a delivery outcome, not re-enqueued " <>
+        "(hash_prefix=#{hash_prefix}, delivery_state=#{state})"
+    )
+
+    :ok
+  end
+
   defp resume_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, %Message{} = reply) do
     case Clinical.telegram_reply_text(foundation_patient, reply) do
       {:ok, body} when is_binary(body) ->
@@ -578,9 +599,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
     # Delivery intent is keyed by the outbound message (#390): a resumed
     # or concurrent execution that re-establishes delivery of the same
-    # reply collapses onto the existing job instead of adding a second
-    # one. Replies without a message row (unregistered chat) are not
-    # keyed. The outbound worker's own reschedules do not carry the key.
+    # reply collapses onto the job that is still live instead of adding
+    # a second one. The key is hygiene, not the guarantee: at-most-one
+    # send is enforced by the outbound worker's claim on the reply row,
+    # so the key only covers incomplete jobs and a pending reply whose
+    # job is gone can always get a new one. Replies without a message row
+    # (unregistered chat) are not keyed. The outbound worker's own
+    # reschedules do not carry the key.
     job_opts = [queue: queue, priority: priority] ++ delivery_job_key(message_id)
 
     new_args
@@ -614,7 +639,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   defp delivery_job_key(nil), do: []
 
   defp delivery_job_key(_message_id),
-    do: [unique: [keys: [:message_id], period: :infinity, states: :all]]
+    do: [unique: [keys: [:message_id], period: :infinity, states: :incomplete]]
 
   # Reads the outbound enqueue adapter from Application env at call-time.
   # Production uses the real `Alethea.Telegram.OutboundEnqueue` (which
