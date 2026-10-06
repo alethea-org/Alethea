@@ -195,6 +195,45 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
     end
   end
 
+  describe "perform/1 — a reply cut off by the length limit" do
+    test "is not delivered as if it were complete; the fallback is sent instead" do
+      fragment = "Gracias por contarlo. Me pregunto si en ese momento tú"
+
+      expect(Alethea.AI.PhiWorkerMock, :process, fn payload ->
+        {:ok, payload.message_id |> ai_result(fragment) |> Map.put(:truncated, true)}
+      end)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args: build_args("Hoy me pasó algo raro.", 30)
+               })
+
+      outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
+      [job] = all_enqueued(worker: TelegramOutboundWorker)
+      body = decrypted_body(outbound)
+
+      refute body =~ "Me pregunto si"
+      assert_neutral_exploratory(body)
+      assert job.args["body"] == body
+    end
+
+    test "a complete reply reported as not truncated is delivered unchanged" do
+      reply = "Gracias por contarlo. ¿Qué pasó después?"
+
+      expect(Alethea.AI.PhiWorkerMock, :process, fn payload ->
+        {:ok, payload.message_id |> ai_result(reply) |> Map.put(:truncated, false)}
+      end)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args: build_args("Hoy me pasó algo raro.", 31)
+               })
+
+      outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
+      assert decrypted_body(outbound) == reply
+    end
+  end
+
   describe "perform/1 — sentiment pipeline regression" do
     test "the inbound message is still handed to emotion analysis and anchors the model call" do
       payload = perform_capturing_payload("Hoy fue un día pesado.", 9)

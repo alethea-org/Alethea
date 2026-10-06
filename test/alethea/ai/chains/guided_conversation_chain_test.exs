@@ -9,6 +9,8 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
   use ExUnit.Case, async: false
 
   alias Alethea.AI.Chains.GuidedConversationChain
+  alias Alethea.AI.JournalingPrompt
+  alias LangChain.Message
 
   setup do
     Application.put_env(:alethea, :ollama_chat_req_options, plug: {Req.Test, __MODULE__})
@@ -52,7 +54,53 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
     end
   end
 
+  describe "run/1 — instructions and generation bounds" do
+    test "sends the journaling instructions as the only system message" do
+      request =
+        run_capturing_request(%{
+          sanitized_content: "Hoy me costó levantarme.",
+          history: [%{role: :alethea, content: "¿Cómo estuvo tu día?"}],
+          message_id: "msg-4"
+        })
+
+      assert [%{"role" => "system", "content" => instructions}] =
+               Enum.filter(request["messages"], &(&1["role"] == "system"))
+
+      assert instructions == JournalingPrompt.system_prompt()
+    end
+
+    test "bounds the reply length through the generation configuration" do
+      request =
+        run_capturing_request(%{
+          sanitized_content: "Hoy me costó levantarme.",
+          history: [],
+          message_id: "msg-5"
+        })
+
+      assert request["options"]["num_predict"] == 160
+      assert GuidedConversationChain.suggested_max_tokens() == 160
+    end
+  end
+
+  describe "truncated?/1" do
+    test "is true only for a model message that stopped at the length limit" do
+      assert GuidedConversationChain.truncated?(%Message{role: :assistant, status: :length})
+      refute GuidedConversationChain.truncated?(%Message{role: :assistant, status: :complete})
+    end
+  end
+
   describe "run/1 — result" do
+    test "reports a reply the model finished on its own as not truncated" do
+      stub_reply("Gracias por contarlo. ¿Cómo lo viviste?")
+
+      assert {:ok, %{truncated: false}} =
+               GuidedConversationChain.run(%{
+                 sanitized_content: "Hoy me costó levantarme.",
+                 history: [],
+                 message_id: "msg-6"
+               })
+    end
+
     test "anchors the reply to the source message and tags it as elicited" do
       stub_reply("Gracias por contarlo. ¿Cómo lo viviste?")
 
@@ -66,6 +114,19 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
       assert result.response == "Gracias por contarlo. ¿Cómo lo viviste?"
       assert result.source_message_id == "msg-3"
       assert result.behavior_type == :elicited
+    end
+  end
+
+  describe "run/1 — model failure" do
+    test "returns an error tuple when the model call fails" do
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 500, "") end)
+
+      assert {:error, _reason} =
+               GuidedConversationChain.run(%{
+                 sanitized_content: "Hoy me costó levantarme.",
+                 history: [],
+                 message_id: "msg-7"
+               })
     end
   end
 

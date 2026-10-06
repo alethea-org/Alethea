@@ -153,22 +153,19 @@ config :alethea, :retention_sweep_enabled, false
 config :alethea, :retention_baseline_days, 3650
 
 # Global configuration for LangChain chains
+#
+# `max_tokens` is the journaling reply-length bound (#392): replies are
+# an acknowledgement plus at most one question, so 160 tokens leaves
+# headroom over the "three short sentences" the instructions ask for
+# while keeping a runaway generation Telegram-sized. A reply that hits
+# the bound is withheld, never trimmed. The instructions themselves live
+# in `Alethea.AI.JournalingPrompt`.
 config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   provider: :local,
   model: System.get_env("LLM_MODEL", "phi4-mini"),
   stream: false,
   temperature: 0.0,
-  max_tokens: 512,
-  system_prompt: """
-  Eres Alethea, un asistente clínico de apoyo socrático.
-  TU ROL: Escuchar activamente y formular preguntas breves que inviten a la reflexión.
-  REGLAS DE ORO (INNEGOCIABLES):
-  1. PROHIBIDO emitir diagnósticos o etiquetas clínicas.
-  2. PROHIBIDO dar consejos médicos, sugerir medicación o tratamientos.
-  3. NO valides ni refutes pensamientos distorsionados; en su lugar, pregunta "¿Qué evidencia tienes para pensar eso?" o "¿Hay otra forma de ver esto?".
-  4. Mantén un tono empático pero profesional y neutral.
-  5. Si detectas riesgo inminente, el sistema perimetral ya actuó, tú continúa con el proceso reflexivo calmado.
-  """
+  max_tokens: 160
 
 # Grounded clinical consultation synthesis (#226b). Pinned to `:local`
 # so a `:cloud` provider is structurally impossible (D2 / AD5) —

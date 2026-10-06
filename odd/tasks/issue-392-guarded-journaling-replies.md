@@ -45,21 +45,21 @@ Out: retries, identity, delivery state (#390); debounce/aggregation, running sum
 
 - [x] T1 — Role-structured, sanitized, bounded history through the reply seam. New generation seam called from `handle_safe_path/7`; last 10 prior messages with explicit roles, chronological, stable order, current turn not duplicated; all material sanitized; emotion-score block removed. Route: delegated (worktree writer; multi-file).
 - [x] T2 — Output guard with varied neutral fallback. Diagnostic/prescriptive output blocked before persistence and delivery; persisted outbound and delivery job carry the fallback; variants deterministic per inbound. Route: delegated.
-- [ ] T3 — Structured instructions, examples, role messages, and length bound. Prompt contract tests for the rules and prohibitions the worker seam cannot establish; journaling max-tokens configuration; no truncated reply delivered. Route: delegated.
+- [x] T3 — Structured instructions, examples, role messages, and length bound. Prompt contract tests for the rules and prohibitions the worker seam cannot establish; journaling max-tokens configuration; no truncated reply delivered. Route: delegated.
 
 Each task closes with at least one Conventional Commit on the feature branch, tests alongside the behavior.
 
 ## Acceptance criteria (from the issue)
 
-- [ ] Structured instructions with representative examples, one warm-professional tone, brief acknowledgement before at most one exploratory question.
-- [ ] Up to the last 10 conversation messages in chronological, explicit patient/Alethea roles, stable ordering, no duplicated current turn.
-- [ ] All conversational material supplied to the model is sanitized; protected clinician records and inferred clinical data excluded.
-- [ ] Unrelated and repeated unrelated requests receive brief journaling redirection; practical-advice requests explore the concern rather than solve it.
-- [ ] Requests about diagnoses, medication, emotional analysis, or clinician notes direct the patient to their therapist without confirming or denying protected details; AI-identity questions get an honest answer.
-- [ ] Instructions prohibit diagnosis, prescribing, dream interpretation, clinical jargon, suggested activities, comparisons with other patients, and opinions about mentioned people.
-- [ ] Generated output validated with the existing diagnostic/prescriptive patterns before delivery; blocked output never reaches the patient; varied neutral exploratory fallback substituted.
-- [ ] Reply length bounded through generation configuration without misleading sentence truncation.
-- [ ] Behavior tests through `TelegramMessageWorker.perform/1` with the AI worker boundary controlled; focused deterministic prompt/validation tests only for contracts the worker seam cannot establish. No live model or classifier calls.
+- [x] Structured instructions with representative examples, one warm-professional tone, brief acknowledgement before at most one exploratory question. (`journaling_prompt_test.exs`; `guided_conversation_chain_test.exs` "sends the journaling instructions as the only system message")
+- [x] Up to the last 10 conversation messages in chronological, explicit patient/Alethea roles, stable ordering, no duplicated current turn. (guardrails test, "conversation history supplied to the model"; `clinical_test.exs` `list_conversation_turns/3`; chain test "conversation roles")
+- [x] All conversational material supplied to the model is sanitized; protected clinician records and inferred clinical data excluded. (guardrails test, "sanitization of everything supplied to the model"; `phi_worker_test.exs`)
+- [x] Unrelated and repeated unrelated requests receive brief journaling redirection; practical-advice requests explore the concern rather than solve it. (prompt contract: `journaling_prompt_test.exs` "redirection rules" and `examples/0`. Model compliance is not testable without a live model.)
+- [x] Requests about diagnoses, medication, emotional analysis, or clinician notes direct the patient to their therapist without confirming or denying protected details; AI-identity questions get an honest answer. (prompt contract, same file)
+- [x] Instructions prohibit diagnosis, prescribing, dream interpretation, clinical jargon, suggested activities, comparisons with other patients, and opinions about mentioned people. (`journaling_prompt_test.exs` "prohibitions")
+- [x] Generated output validated with the existing diagnostic/prescriptive patterns before delivery; blocked output never reaches the patient; varied neutral exploratory fallback substituted. (guardrails test, "generated output is validated…"; `journaling_output_guard_test.exs`; `journaling_fallback_test.exs`)
+- [ ] Reply length bounded through generation configuration without misleading sentence truncation. **Partly met.** Bound: `max_tokens: 160` reaches the model as `num_predict` (chain test). No text is ever trimmed. A reply the AI worker reports as `truncated: true` is withheld and replaced by the fallback (guardrails test, "a reply cut off by the length limit"). Gap: with the default `:local` provider the signal never arrives, because `lib/alethea/ai/chat_models/ollama_chat.ex` discards Ollama's `done_reason` and always builds a `:complete` message. That file is outside the #392 edit surface; until it maps `done_reason: "length"` to `status: :length`, a local reply that hits the bound is delivered as generated.
+- [x] Behavior tests through `TelegramMessageWorker.perform/1` with the AI worker boundary controlled; focused deterministic prompt/validation tests only for contracts the worker seam cannot establish. No live model or classifier calls.
 
 ## Checks
 
@@ -77,7 +77,9 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - Worktree, CodeGraph index, deps, and partitioned test database `alethea_test_392` prepared.
 - T1 done: `Alethea.Telegram.JournalingReply.generate/3` is the seam `handle_safe_path/7` calls; `Clinical.list_conversation_turns/3` supplies the bounded role-tagged history; `PhiWorkerBehaviour.process/1` now takes `%{message_id, sanitized_content, history}`; the emotion-score block is gone from `PhiWorker`.
 - T2 done: `Alethea.AI.JournalingOutputGuard.check/1` validates the generated text inside the seam; blocked text is replaced by `Alethea.Telegram.JournalingFallback.for_inbound/1` before the worker can persist or enqueue anything.
-- Next: T3.
+- T3 done: `Alethea.AI.JournalingPrompt` holds the structured instructions and examples; `max_tokens` for the journaling chain is 160; truncated replies are withheld.
+- Open: Ollama adapter does not report length-limited replies (see acceptance criteria). Needs a decision/owner for `lib/alethea/ai/chat_models/ollama_chat.ex`.
+- Next: user decision on the Ollama adapter follow-up and on the delivery/chain strategy.
 
 ## Decisions made during implementation
 
@@ -90,6 +92,11 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - T2: four fallback variants, selected with `:erlang.phash2(inbound.id, 4)` — deterministic per inbound, varied across inbounds.
 - T2: a blocked result keeps the chain result shape but carries `response: <fallback>`, `model_version: "journaling-fallback"` and `guardrail: :diagnostic | :prescriptive`; the `ai_diagnoses` row anchored to the inbound therefore stores the fallback, not the blocked text. The block is logged with reason and message id only.
 - T2: the existing pattern catalog also blocks a reply that merely names medication or a diagnosis while redirecting to the therapist. Kept as is (conservative); T3's prompt examples redirect without those words.
+- T3: `max_tokens: 160` (config and `suggested_max_tokens/0`); the instructions ask for at most three short sentences. Temperature stays 0.0.
+- T3: token-limit cut-off is handled by signal, not by text heuristics: the chain sets `truncated: true` when the LangChain message status is `:length`, and the seam substitutes the fallback with `guardrail: :incomplete`. A punctuation heuristic was rejected (false positives, and it would have invalidated the shared test file's default stub reply).
+- T3: the dead `system_prompt:` key was removed from `config/config.exs`; the prompt lives in code, static, with no interpolation.
+- T3: the chain's `LLMChain.run/1` result handling now also matches LangChain's `{:error, chain, reason}`; before, a failed model call raised `CaseClauseError` inside the chain instead of returning `{:error, reason}`.
+- T3: seven examples (journaling, unrelated request, repeated unrelated request, practical advice, clinical information, medication, AI identity); each passes the output guard.
 
 ## Verification evidence
 
@@ -100,3 +107,7 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - T1 commit: 5d52bd2 `feat(telegram): supply role-structured sanitized history to journaling replies`.
 - T2 RED: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs/telegram_message_worker_guardrails_test.exs` → 10/15 passed, 5 failed (blocked text present in the persisted outbound and the delivery job; `model_version` still `phi-4-mini`).
 - T2 GREEN: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs/telegram_message_worker_guardrails_test.exs test/alethea/ai/journaling_output_guard_test.exs test/alethea/telegram/journaling_fallback_test.exs` → 26 passed.
+- T2 commit: a7912d5 `feat(telegram): block diagnostic and prescriptive journaling replies`.
+- T3 RED: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs/telegram_message_worker_guardrails_test.exs test/alethea/ai/chains/guided_conversation_chain_test.exs test/alethea/ai/journaling_prompt_test.exs` → failures for the undefined `JournalingPrompt`, missing `truncated`, `num_predict` 512, and the truncated fragment being delivered; later `CaseClauseError` for the model-failure test.
+- T3 GREEN: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs test/alethea/ai test/alethea/telegram test/alethea/clinical_test.exs` → 503 passed (2 doctests, 501 tests), 0 failed.
+- Closure: `MIX_TEST_PARTITION=_392 mix precommit` → exit 0; 1833 passed (6 doctests, 1827 tests), 5 skipped, 0 failed.

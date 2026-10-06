@@ -25,6 +25,11 @@ defmodule Alethea.Telegram.JournalingReply do
   to the block reason and `:model_version` set to
   `"journaling-fallback"`.
 
+  A reply the AI worker marks `truncated: true` (the model stopped at
+  the length limit) is withheld the same way, with `guardrail:
+  :incomplete`: reply length is bounded by generation configuration, and
+  a sentence cut off by that bound is not delivered as if it were whole.
+
   History is bounded at — and excludes — the inbound message being
   answered, so generating again for the same inbound reads the same
   snapshot.
@@ -78,7 +83,7 @@ defmodule Alethea.Telegram.JournalingReply do
   # the blocked text. `:model_version` is replaced because the fallback
   # was not written by the model.
   defp guard(chain_result, inbound) do
-    case JournalingOutputGuard.check(chain_result.response) do
+    case check(chain_result) do
       :ok ->
         chain_result
 
@@ -94,6 +99,12 @@ defmodule Alethea.Telegram.JournalingReply do
         |> Map.put(:guardrail, reason)
     end
   end
+
+  # A reply the AI worker reports as cut off by the length limit is an
+  # unfinished sentence. It is never trimmed into something that looks
+  # complete; it is withheld like any other blocked reply.
+  defp check(%{truncated: true}), do: {:blocked, :incomplete}
+  defp check(%{response: reply}), do: JournalingOutputGuard.check(reply)
 
   # A history that cannot be loaded or decrypted degrades to an empty
   # one: the patient still gets a reply to the current turn, and nothing
