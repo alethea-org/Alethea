@@ -1,3 +1,5 @@
+Mox.defmock(Alethea.Jobs.IdempotencyOutboundEnqueueMock, for: Alethea.Telegram.OutboundEnqueue)
+
 defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   @moduledoc """
   Resume and duplicate-safety behavior of the Telegram journaling reply
@@ -14,7 +16,9 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   use Oban.Testing, repo: Alethea.Repo
   import Mox
 
+  alias Alethea.AI.Diagnosis
   alias Alethea.Clinical.Message
+  alias Alethea.Jobs.IdempotencyOutboundEnqueueMock
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
@@ -27,6 +31,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   @chat_id 123_456_789
   @other_chat_id 987_654_321
   @reply "respuesta clínica"
+  @crisis_text "me voy a quitar la vida"
+  @crisis_message "Estoy aquí para ayudarte. Llamame al 0800-..."
 
   setup do
     Application.put_env(:alethea, :telegram_chat_id_pepper, @pepper)
@@ -163,6 +169,203 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
     end
   end
 
+  describe "perform/1 — one logical reply per inbound" do
+    test "the reply records the inbound that caused it" do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, "hola", telegram_message_id: 500, telegram_update_id: 30)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      [inbound] = messages(patient, "inbound")
+      [outbound] = messages(patient, "outbound")
+
+      assert outbound.reply_to_message_id == inbound.id
+      assert inbound.reply_to_message_id == nil
+    end
+
+    test "a repeated execution reuses the persisted reply: no second generation, diagnosis, outbound row, or delivery job" do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, "hola", telegram_message_id: 501, telegram_update_id: 31)
+      test_pid = self()
+
+      stub(Alethea.AI.PhiWorkerMock, :process, fn %{message_id: mid} ->
+        send(test_pid, :generated)
+        phi_reply(mid)
+      end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert_received :generated
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      refute_received :generated
+
+      [inbound] = messages(patient, "inbound")
+      assert [outbound] = messages(patient, "outbound")
+      assert [_one_diagnosis] = diagnoses(inbound.id)
+
+      outbound_id = outbound.id
+
+      assert [%Oban.Job{args: %{"message_id" => ^outbound_id, "body" => @reply}}] =
+               all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "two concurrent executions of the same job produce one reply and one delivery job" do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, "hola", telegram_message_id: 502, telegram_update_id: 32)
+      test_pid = self()
+
+      # Hold both executions inside reply generation until both have
+      # entered it, so neither can observe the other's persisted reply
+      # before generating: they must race on persistence itself.
+      stub(Alethea.AI.PhiWorkerMock, :process, fn %{message_id: mid} ->
+        send(test_pid, {:generating, self()})
+
+        receive do
+          :release -> phi_reply(mid)
+        after
+          5_000 -> {:error, :never_released}
+        end
+      end)
+
+      executions =
+        for _ <- 1..2 do
+          Task.async(fn -> TelegramMessageWorker.perform(%Oban.Job{args: args}) end)
+        end
+
+      assert_receive {:generating, first}, 5_000
+      assert_receive {:generating, second}, 5_000
+      refute first == second
+      send(first, :release)
+      send(second, :release)
+
+      assert [:ok, :ok] = Task.await_many(executions, 10_000)
+
+      assert [inbound] = messages(patient, "inbound")
+      assert [outbound] = messages(patient, "outbound")
+      assert outbound.reply_to_message_id == inbound.id
+      assert [_one_diagnosis] = diagnoses(inbound.id)
+
+      outbound_id = outbound.id
+
+      assert [%Oban.Job{args: %{"message_id" => ^outbound_id}}] =
+               all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "a failure between persisting the reply and enqueueing its delivery is recovered on resume" do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, "hola", telegram_message_id: 503, telegram_update_id: 33)
+      test_pid = self()
+
+      stub(Alethea.AI.PhiWorkerMock, :process, fn %{message_id: mid} ->
+        send(test_pid, :generated)
+        phi_reply(mid)
+      end)
+
+      fail_outbound_enqueue_once()
+
+      assert_raise RuntimeError, ~r/failed to enqueue TelegramOutboundWorker/, fn ->
+        TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      # The reply is persisted but has no delivery job.
+      assert_received :generated
+      assert [outbound] = messages(patient, "outbound")
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      # The resume re-established delivery of the SAME persisted reply
+      # without generating another one.
+      refute_received :generated
+      outbound_id = outbound.id
+      assert [%Message{id: ^outbound_id}] = messages(patient, "outbound")
+      [inbound] = messages(patient, "inbound")
+      assert [_one_diagnosis] = diagnoses(inbound.id)
+
+      assert [
+               %Oban.Job{
+                 queue: "telegram_outbound",
+                 args: %{"message_id" => ^outbound_id, "body" => @reply, "chat_id" => @chat_id}
+               }
+             ] = all_enqueued(worker: TelegramOutboundWorker)
+    end
+  end
+
+  describe "perform/1 — crisis replies keep their content, priority, and persistence" do
+    test "a repeated crisis execution reuses the persisted crisis reply on the crisis lane" do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, @crisis_text, telegram_message_id: 600, telegram_update_id: 40)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      [inbound] = messages(patient, "inbound")
+
+      assert [%Message{behavior_type: "crisis_bypass"} = outbound] =
+               messages(patient, "outbound")
+
+      assert outbound.reply_to_message_id == inbound.id
+
+      assert [%Diagnosis{model_version: "crisis-bypass", ai_response: @crisis_message}] =
+               diagnoses(inbound.id)
+
+      outbound_id = outbound.id
+
+      assert [
+               %Oban.Job{
+                 queue: "telegram_outbound_crisis",
+                 priority: 0,
+                 args: %{
+                   "message_id" => ^outbound_id,
+                   "body" => @crisis_message,
+                   "lane" => "crisis"
+                 }
+               }
+             ] = all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "a crisis reply persisted without a delivery job is delivered on resume with its persisted content" do
+      patient = bind_patient(@chat_id)
+      args = build_args(@chat_id, @crisis_text, telegram_message_id: 601, telegram_update_id: 41)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+
+      fail_outbound_enqueue_once()
+
+      assert_raise RuntimeError, ~r/failed to enqueue TelegramOutboundWorker/, fn ->
+        TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      assert [outbound] = messages(patient, "outbound")
+      refute_enqueued(worker: TelegramOutboundWorker)
+      assert_receive {:crisis_detected, _}
+
+      # The professional edits the crisis message before the retry: the
+      # patient must still receive the reply the clinical record holds.
+      patient.legacy_patient.professional
+      |> Ecto.Changeset.change(%{crisis_message: "Mensaje editado después"})
+      |> Repo.update!()
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      outbound_id = outbound.id
+      assert [%Message{id: ^outbound_id}] = messages(patient, "outbound")
+      [inbound] = messages(patient, "inbound")
+      assert [_one_diagnosis] = diagnoses(inbound.id)
+
+      assert [
+               %Oban.Job{
+                 queue: "telegram_outbound_crisis",
+                 priority: 0,
+                 args: %{"message_id" => ^outbound_id, "body" => @crisis_message}
+               }
+             ] = all_enqueued(worker: TelegramOutboundWorker)
+
+      # The psychologist alert is re-raised on resume (at-least-once): a
+      # lost crisis alert is worse than a repeated one.
+      assert_receive {:crisis_detected, %{level: _, triggers: _}}
+    end
+  end
+
   # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
@@ -198,7 +401,22 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
     )
   end
 
-  defp bind_patient(chat_id, crisis_message \\ "Estoy aquí para ayudarte. Llamame al 0800-...") do
+  defp diagnoses(inbound_id) do
+    Repo.all(from(d in Diagnosis, where: d.message_id == ^inbound_id))
+  end
+
+  # Simulates a crash between the reply's commit and its delivery
+  # enqueue: the first outbound enqueue fails, later ones reach Oban.
+  defp fail_outbound_enqueue_once do
+    IdempotencyOutboundEnqueueMock
+    |> expect(:insert, fn _changeset -> {:error, :enqueue_crashed} end)
+    |> stub(:insert, fn changeset -> Oban.insert(changeset) end)
+
+    Application.put_env(:alethea, :telegram_outbound_enqueue, IdempotencyOutboundEnqueueMock)
+    on_exit(fn -> Application.delete_env(:alethea, :telegram_outbound_enqueue) end)
+  end
+
+  defp bind_patient(chat_id, crisis_message \\ @crisis_message) do
     foundation_pro = professional_fixture()
     foundation_pat = patient_fixture(foundation_pro, %{alias: "Pat#{unique_int()}"})
 

@@ -43,7 +43,7 @@ Out: prompt, history, sanitization, output validation (#392); debounce/aggregati
 ## Tasks
 
 - [x] T1 — Conversation-scoped inbound identity and resume. Migration swapping the unique index; find-or-insert inbound; a retry after a failure past the inbound insert resumes and produces the reply; equal Telegram message ids for two patients do not collide. Route: delegated (worktree writer; multi-file).
-- [ ] T2 — One logical reply with recoverable delivery intent. Reply provenance under a unique constraint; existing reply reused on repeated and concurrent executions (no second generation, diagnosis, or outbound row); crash between persistence and enqueue recovered on resume; crisis reply content, priority, and persistence unchanged. Route: delegated.
+- [x] T2 — One logical reply with recoverable delivery intent. Reply provenance under a unique constraint; existing reply reused on repeated and concurrent executions (no second generation, diagnosis, or outbound row); crash between persistence and enqueue recovered on resume; crisis reply content, priority, and persistence unchanged. Route: delegated.
 - [ ] T3 — Explicit delivery outcomes in the outbound path. Delivery state on the reply; acknowledged delivery never resent; ambiguous transport outcome represented and not resent on the journaling lane; pre-send failures still retry; crisis lane behavior unchanged. Route: delegated.
 
 Each task closes with at least one Conventional Commit on the feature branch, tests alongside the behavior.
@@ -72,7 +72,8 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 
 - Worktree, CodeGraph index, deps, and partitioned test database `alethea_test_390` prepared.
 - T1 done: composite identity index, `Clinical.find_or_save_telegram_inbound/4`, worker resumes the persisted inbound; the old duplicate-raise test in `telegram_message_worker_test.exs` is inverted.
-- Next: T2.
+- T2 done: `messages.reply_to_message_id` under a unique index, `Clinical.save_telegram_reply/5` / `get_telegram_reply/1` / `telegram_reply_text/2`, worker reuses the persisted reply on repeated and concurrent executions and re-establishes delivery on resume; delivery job keyed by the outbound message.
+- Next: T3.
 
 ## Verification evidence
 
@@ -81,4 +82,12 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - RED: `MIX_TEST_PARTITION=_390 mix test test/alethea/jobs/telegram_message_worker_idempotency_test.exs` -> 0/3 passed, all three raising `failed to persist inbound (reason=[:telegram_message_id])`.
 - GREEN: same command -> 3 passed. `mix test test/alethea/jobs/telegram_message_worker_test.exs test/alethea/jobs/telegram_message_worker_idempotency_test.exs test/alethea/clinical_test.exs` -> 60 passed.
 - Decisions beyond the design: the reply is persisted in the inbound's own session (`inbound.session_id`) on resume; `EmotionAnalysisWorker` is enqueued with a per-inbound Oban unique key so a resume does not analyse the same message twice.
-- Commit: recorded in the T2 entry below.
+- Commit: `883e2b6` feat(telegram): scope inbound identity to the conversation and resume it
+
+### T2
+
+- RED: `MIX_TEST_PARTITION=_390 mix test test/alethea/jobs/telegram_message_worker_idempotency_test.exs` -> 3/9 passed, the six new reply tests failing (no `reply_to_message_id`, second generation/outbound row on repeat, `failed to persist inbound`-free but duplicate outbound rows on the concurrent run, no recovery after the failed enqueue).
+- GREEN: same command -> 9 passed. `MIX_TEST_PARTITION=_390 mix test test/alethea/jobs test/alethea/telegram test/alethea/clinical_test.exs` -> 246 passed (2 doctests, 244 tests).
+- Concurrency is demonstrated by "two concurrent executions of the same job produce one reply and one delivery job": both executions are held inside generation, then race on the reply's unique index.
+- Decisions beyond the design: a concurrent loser has already generated (holding a DB lock across the LLM call was rejected); its text is discarded. A resumed reply ships the persisted, decrypted content, not regenerated text or the current crisis-message configuration. A resumed crisis execution raises `:crisis_detected` again (at-least-once alert). The delivery lane on resume follows the persisted row's `behavior_type`.
+- Commit: recorded in the T3 entry below.

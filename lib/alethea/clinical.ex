@@ -41,6 +41,29 @@ defmodule Alethea.Clinical do
         session_id \\ nil,
         telegram_message_id \\ nil
       ) do
+    with {:ok, changeset} <-
+           encrypted_message_changeset(
+             patient,
+             text,
+             dek,
+             direction,
+             behavior_type,
+             session_id,
+             telegram_message_id
+           ) do
+      persist(changeset, direction, patient)
+    end
+  end
+
+  defp encrypted_message_changeset(
+         patient,
+         text,
+         dek,
+         direction,
+         behavior_type,
+         session_id,
+         telegram_message_id
+       ) do
     with {:ok, dek} <- get_dek(patient, dek),
          {:ok, encrypted_content} <- PatientVault.encrypt(text, dek) do
       attrs = %{
@@ -57,9 +80,7 @@ defmodule Alethea.Clinical do
           do: Map.put(attrs, :telegram_message_id, telegram_message_id),
           else: attrs
 
-      %Message{}
-      |> Message.changeset(attrs)
-      |> persist(direction, patient)
+      {:ok, Message.changeset(%Message{}, attrs)}
     end
   end
 
@@ -259,6 +280,83 @@ defmodule Alethea.Clinical do
       {^field, {_message, opts}} -> Keyword.get(opts, :constraint) == :unique
       _other -> false
     end)
+  end
+
+  @doc """
+  Persists the outbound reply to one inbound Telegram message (issue #390).
+
+  The row records its provenance in `reply_to_message_id`, under a unique
+  index: an inbound has at most one reply. The content is encrypted with
+  the patient's DEK exactly like any other message.
+
+  Returns `{:error, :reply_already_exists}` when another execution already
+  persisted the reply for this inbound; the caller reuses that reply
+  (`get_telegram_reply/1`) instead of persisting or delivering a second
+  one. Like every outbound save it is a bare insert, safe to call inside
+  the caller's `Repo.transaction` (see `persist/3`).
+  """
+  @spec save_telegram_reply(
+          Alethea.Foundation.Accounts.Patient.t(),
+          String.t(),
+          String.t(),
+          binary(),
+          binary() | nil
+        ) :: {:ok, Message.t()} | {:error, :reply_already_exists} | {:error, term()}
+  def save_telegram_reply(foundation_patient, text, behavior_type, inbound_message_id, session_id) do
+    with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
+         {:ok, changeset} <-
+           encrypted_message_changeset(
+             legacy_patient,
+             text,
+             nil,
+             "outbound",
+             behavior_type,
+             session_id,
+             nil
+           ) do
+      changeset
+      |> Ecto.Changeset.put_change(:reply_to_message_id, inbound_message_id)
+      |> Repo.insert()
+      |> case do
+        {:ok, reply} ->
+          {:ok, reply}
+
+        {:error, %Ecto.Changeset{} = failed} = error ->
+          if unique_violation?(failed, :reply_to_message_id),
+            do: {:error, :reply_already_exists},
+            else: error
+      end
+    end
+  end
+
+  @doc """
+  Returns the reply persisted for an inbound Telegram message, or `nil`.
+  """
+  @spec get_telegram_reply(binary()) :: Message.t() | nil
+  def get_telegram_reply(inbound_message_id) do
+    Repo.get_by(Message, reply_to_message_id: inbound_message_id)
+  end
+
+  @doc """
+  Decrypts a persisted reply so a resumed execution can deliver the
+  content the clinical record already holds instead of generating a new
+  one. The plaintext is returned to the caller only; it is never logged.
+  """
+  @spec telegram_reply_text(Alethea.Foundation.Accounts.Patient.t(), Message.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def telegram_reply_text(foundation_patient, %Message{} = reply) do
+    with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
+         {:ok, dek} <- patient_dek(legacy_patient) do
+      decrypt_message_content(reply, dek)
+    end
+  end
+
+  defp linked_legacy_patient(foundation_patient) do
+    case Alethea.Foundation.Accounts.legacy_patient(foundation_patient) do
+      {:ok, legacy_patient} -> {:ok, legacy_patient}
+      :not_linked -> {:error, :not_linked}
+      {:error, :legacy_not_found} -> {:error, :legacy_not_found}
+    end
   end
 
   @spec list_recent_messages(binary(), non_neg_integer()) :: [Message.t()]

@@ -23,6 +23,11 @@ defmodule Alethea.Clinical.Message do
 
     belongs_to(:patient, Alethea.Accounts.Patient)
     belongs_to(:session, Alethea.Clinical.Session)
+    # Reply provenance (#390): set on an outbound Telegram reply, pointing
+    # at the inbound message that caused it. Set programmatically (never
+    # cast). Partial unique index `messages_reply_to_message_id_unique`
+    # guarantees at most one reply row per inbound.
+    belongs_to(:reply_to_message, __MODULE__)
     has_many(:ai_diagnoses, Alethea.AI.Diagnosis)
     has_one(:emotion_analysis, Alethea.Clinical.EmotionAnalysis)
 
@@ -61,5 +66,6 @@ defmodule Alethea.Clinical.Message do
     |> unique_constraint(:telegram_message_id,
       name: :messages_patient_telegram_message_id_unique
     )
+    |> unique_constraint(:reply_to_message_id, name: :messages_reply_to_message_id_unique)
   end
 end
