@@ -124,3 +124,13 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - Mechanism for the stuck claim: cron sweep, not a per-claim watchdog (no extra job per send, no second plaintext copy of the body in job args, catches every stuck row). Bound 600 s (`:telegram_delivery_claim_timeout_seconds`), against a client request bounded by Req's 30 s connect + 15 s receive; the Pacer wait precedes the claim. Resolution is one conditional UPDATE on state and age, committed with the dead-letter row.
 - Decisions: an execution that finds the row `sending` no longer marks it ambiguous itself; it skips and leaves the claim to its holder or the sweep, so a slow-but-alive send raises no false alarm and each reply is surfaced once. The dead-letter `last_error` for an ambiguous outcome uses a fixed vocabulary (`{:ambiguous, reason}`, `{:server_error, status}`, `:unknown`), never `inspect/1` of an unknown term. The sweep reads the reply text from the encrypted row (same `text` payload an exhausted delivery carries) and falls back to a placeholder if it cannot be read. A stuck reply whose patient no longer has a Telegram chat hash is resolved but only logged, because a dead-letter row requires the hash. The sweep runs on the existing `telegram_outbound` queue. `claim age` is the row's `updated_at`, covered by a partial index.
 - Commit: `68a0929` fix(telegram): surface ambiguous replies and bound the sending state
+
+### Follow-up review (T4)
+
+- Candidate: commits `74abc21..1e37332` against the reviewed boundary `a920733` (risk medium, `slice_budget_reached`); consent granted by the user.
+- Outcome: approved on the `review-reliability` lens and acknowledged (lineage `review-9881777d384d85d1`, authority burned). The reviewed boundary is `1e37332`.
+- Informational findings, none blocking, open as follow-ups:
+  - `R3-sweep-head-of-line-blocking` (warning): the sweep resolves rows with no per-row failure isolation, so one raising row blocks the rest of the batch on every run.
+  - `R3-sweep-fallback-branches-untested` (warning): the no-chat-hash branch (log only, no dead-letter) and the other sweep fallbacks have no test.
+  - `R3-claim-age-updated-at-unproved` (warning): no test shows that claiming refreshes `updated_at`. Checked by reading: `move_telegram_delivery` sets `updated_at` on every transition (`lib/alethea/clinical.ex:482`), so the behavior is correct and only the test is missing.
+  - `R3-broadcast-before-commit` (suggestion): the `ops:alerts` broadcast runs inside the transaction, so an alert can precede or outlive a failed commit.
