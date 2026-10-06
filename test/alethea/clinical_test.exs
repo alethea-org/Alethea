@@ -98,6 +98,90 @@ defmodule Alethea.ClinicalTest do
     summary
   end
 
+  describe "list_conversation_turns/3" do
+    setup do
+      {:ok, professional} =
+        Accounts.create_professional(%{
+          email: "turns-#{System.unique_integer([:positive])}@alethea.com",
+          password: "password1234",
+          full_name: "Dra. Turnos"
+        })
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{"alias" => "Paciente Turnos", "professional_id" => professional.id},
+          kek
+        )
+
+      %{patient: patient, professional: professional, kek: kek}
+    end
+
+    test "returns the turns before the current message, oldest first, tagged by speaker", %{
+      patient: patient
+    } do
+      insert_turn(patient, "inbound", "primero", ~U[2026-02-01 10:00:00Z])
+      insert_turn(patient, "outbound", "segundo", ~U[2026-02-01 10:01:00Z])
+      current = insert_turn(patient, "inbound", "actual", ~U[2026-02-01 10:02:00Z])
+      insert_turn(patient, "outbound", "posterior", ~U[2026-02-01 10:03:00Z])
+
+      assert Clinical.list_conversation_turns(patient, current, 10) ==
+               {:ok,
+                [
+                  %{role: :patient, content: "primero"},
+                  %{role: :alethea, content: "segundo"}
+                ]}
+    end
+
+    test "keeps the most recent turns when more than the limit precede the current message", %{
+      patient: patient
+    } do
+      for minute <- 1..4 do
+        insert_turn(
+          patient,
+          "inbound",
+          "m#{minute}",
+          DateTime.new!(~D[2026-02-01], Time.new!(10, minute, 0))
+        )
+      end
+
+      current = insert_turn(patient, "inbound", "actual", ~U[2026-02-01 11:00:00Z])
+
+      assert {:ok, turns} = Clinical.list_conversation_turns(patient, current, 2)
+      assert Enum.map(turns, & &1.content) == ["m3", "m4"]
+    end
+
+    test "treats a reply stored in the same second as the current message as later, not prior",
+         %{patient: patient} do
+      same_second = ~U[2026-02-01 10:00:00Z]
+      insert_turn(patient, "outbound", "respuesta al actual", same_second)
+      current = insert_turn(patient, "inbound", "actual", same_second)
+
+      assert Clinical.list_conversation_turns(patient, current, 10) == {:ok, []}
+    end
+
+    test "never returns another patient's messages", ctx do
+      %{patient: patient, professional: pro, kek: kek} = ctx
+
+      {:ok, other} =
+        Accounts.create_patient(%{"alias" => "Otro", "professional_id" => pro.id}, kek)
+
+      insert_turn(other, "inbound", "ajeno", ~U[2026-02-01 09:00:00Z])
+      current = insert_turn(patient, "inbound", "actual", ~U[2026-02-01 10:00:00Z])
+
+      assert Clinical.list_conversation_turns(patient, current, 10) == {:ok, []}
+    end
+  end
+
+  defp insert_turn(patient, direction, text, timestamp) do
+    behavior_type = if direction == "inbound", do: "spontaneous", else: "elicited"
+    {:ok, message} = Clinical.save_message(patient, text, nil, direction, behavior_type)
+
+    Repo.update_all(from(m in Message, where: m.id == ^message.id), set: [timestamp: timestamp])
+    Repo.get!(Message, message.id)
+  end
+
   # ----------------------------------------------------------------
   # save_message/7 — transactional inbound emission
   # (sdd/telegram-rag-ingestion-262, Slice 2, AD2/AD3, tasks 4.1-4.4)

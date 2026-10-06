@@ -40,4 +40,40 @@ defmodule Alethea.AI.ChatModels.OllamaChatTest do
 
     assert {:ok, %Message{content: "How are you feeling?"}} = OllamaChat.call(model, "hello")
   end
+
+  describe "call/3 — how the generation ended" do
+    test "marks a reply Ollama stopped at the token limit as length-limited", %{model: model} do
+      stub_response(%{
+        "message" => %{"role" => "assistant", "content" => "Gracias por contarlo. Me pregunto si"},
+        "done" => true,
+        "done_reason" => "length"
+      })
+
+      assert {:ok, %Message{status: :length, content: "Gracias por contarlo. Me pregunto si"}} =
+               OllamaChat.call(model, "hola")
+    end
+
+    test "keeps a reply the model finished on its own complete", %{model: model} do
+      stub_response(%{
+        "message" => %{"role" => "assistant", "content" => "Gracias por contarlo."},
+        "done" => true,
+        "done_reason" => "stop"
+      })
+
+      assert {:ok, %Message{status: :complete}} = OllamaChat.call(model, "hola")
+    end
+
+    test "keeps a reply complete when Ollama reports no reason", %{model: model} do
+      stub_response(%{
+        "message" => %{"role" => "assistant", "content" => "Gracias por contarlo."},
+        "done" => true
+      })
+
+      assert {:ok, %Message{status: :complete}} = OllamaChat.call(model, "hola")
+    end
+  end
+
+  defp stub_response(body) do
+    Req.Test.stub(__MODULE__, fn conn -> Req.Test.json(conn, body) end)
+  end
 end

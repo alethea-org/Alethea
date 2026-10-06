@@ -27,7 +27,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        safe path only**; the `:crisis` branch (`:telegram_outbound_crisis`
        lane, PubSub `:crisis_detected`, `urgent_intervention: true`)
        lands in PR #3b.
-    7. Route the reply through `Alethea.AI.PhiWorker.process/1` (PII-sanitized, emotion-enriched), then anchor an `ai_diagnosis` to the inbound message before enqueueing the outbound (REQ-C5-llm-reply-on-safe).
+    7. Route the reply through `Alethea.Telegram.JournalingReply.generate/3` (sanitized role-structured history, output guard with fallback), then anchor an `ai_diagnosis` to the inbound message before enqueueing the outbound (REQ-C5-llm-reply-on-safe).
     8. Persist outbound `Message` via `Clinical.save_telegram_message/7`
        with `direction: "outbound"`, `source: "elicited"` (REQ-C5-persist-outbound-reply).
     9. Enqueue `TelegramOutboundWorker` on `:telegram_outbound` with
@@ -73,7 +73,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
-  alias Alethea.Telegram.{ChatIdHash, LogRedactor}
+  alias Alethea.Telegram.{ChatIdHash, JournalingReply, LogRedactor}
   alias Alethea.Jobs.TelegramOutboundWorker
 
   alias AletheaJobs.{
@@ -84,12 +84,6 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   }
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
-
-  # Reads the PhiWorker port from Application env at call-time, so the
-  # Telegram safe path runs the same PII-sanitizing, emotion-enriching
-  # chain. Production uses `Alethea.AI.PhiWorker`; tests bind the port
-  # to the Mox `Alethea.AI.PhiWorkerMock`.
-  defp phi_worker, do: Application.get_env(:alethea, :phi_worker, Alethea.AI.PhiWorker)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
@@ -238,24 +232,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
          text,
          session_id
        ) do
-    context_limit =
-      Application.get_env(:alethea, Alethea.Clinical, [])[:recent_message_limit] || 10
-
-    {:ok, legacy_patient} = FoundationAccounts.legacy_patient(foundation_patient)
-
-    context =
-      case Clinical.build_patient_context(legacy_patient, context_limit) do
-        {:ok, ctx} -> ctx
-        {:error, _reason} -> ""
-      end
-
-    case phi_worker().process(%{
-           message_id: inbound.id,
-           raw_content: text,
-           patient_context: context
-         }) do
-      {:ok, %{response: reply} = chain_result}
-      when is_binary(reply) and reply != "" ->
+    case JournalingReply.generate(foundation_patient, inbound, text) do
+      {:ok, chain_result} ->
         persist_and_enqueue_outbound(
           foundation_patient,
           chat_id,
@@ -266,7 +244,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
           session_id
         )
 
-      {:ok, %{response: _empty}} ->
+      {:error, :empty_response} ->
         raise "TelegramMessageWorker: PhiWorker returned empty response " <>
                 "(hash_prefix=#{hash_prefix})"
 

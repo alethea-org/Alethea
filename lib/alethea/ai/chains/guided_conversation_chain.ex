@@ -2,6 +2,16 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   @moduledoc """
   Chain de LangChain para conversación guiada con un LLM externo.
 
+  Envía al modelo las instrucciones de `Alethea.AI.JournalingPrompt`
+  como único mensaje de sistema, los turnos previos como mensajes con
+  rol (paciente → `user`, Alethea → `assistant`) y el turno actual.
+
+  El largo de la respuesta se acota solo por configuración de generación
+  (`max_tokens`, 160 por defecto) más la instrucción de respuestas
+  breves; nunca se recorta el texto generado. Si el modelo se detuvo por
+  ese límite, el resultado lleva `truncated: true` para que quien lo
+  consume no entregue una oración a medias como si estuviera completa.
+
   Métricas de telemetry:
   - `[:alethea, :ai, :chain, :start]` - Inicio de chain
   - `[:alethea, :ai, :chain, :stop]` - Fin de chain con duración
@@ -10,15 +20,16 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   """
   @behaviour Alethea.AI.Chains.ChainBehaviour
 
+  alias Alethea.AI.JournalingPrompt
   alias Alethea.AI.LLMConfig
   alias Alethea.AI.ChatModels.OllamaChat
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
   @impl true
-  def run(%{sanitized_content: content, patient_context: ctx, message_id: msg_id}) do
+  def run(%{sanitized_content: content, history: history, message_id: msg_id}) do
     case LLMConfig.get_and_build(:guided_conversation) do
-      {:ok, _config, llm} -> do_run(llm, content, ctx, msg_id)
+      {:ok, _config, llm} -> do_run(llm, content, history, msg_id)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -30,17 +41,22 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   end
 
   @impl true
-  def suggested_system_prompt, do: default_system_prompt()
+  def suggested_system_prompt, do: JournalingPrompt.system_prompt()
 
   @impl true
-  def suggested_max_tokens, do: 512
+  def suggested_max_tokens, do: 160
 
   @impl true
   def supported_providers, do: [:local, :cloud]
 
-  defp do_run(%OllamaChat{} = llm, content, ctx, msg_id) do
-    system_msg = build_system_message(ctx)
+  @doc """
+  Whether the model stopped `message` because it reached the length
+  limit rather than finishing on its own.
+  """
+  @spec truncated?(Message.t()) :: boolean()
+  def truncated?(%Message{status: status}), do: status == :length
 
+  defp do_run(%OllamaChat{} = llm, content, history, msg_id) do
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
       %{
@@ -51,12 +67,12 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     )
 
     start_time = System.monotonic_time(:millisecond)
-    result = do_chain_run(llm, system_msg, content)
+    result = do_chain_run(llm, history, content)
     duration = System.monotonic_time(:millisecond) - start_time
 
     metadata =
       case result do
-        {:ok, response} ->
+        {:ok, %Message{content: response}} ->
           %{
             chain: :guided_conversation,
             duration_ms: duration,
@@ -78,9 +94,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     result |> wrap_result(msg_id)
   end
 
-  defp do_run(llm, content, ctx, msg_id) do
-    system_msg = build_system_message(ctx)
-
+  defp do_run(llm, content, history, msg_id) do
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
       %{
@@ -91,7 +105,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     )
 
     start_time = System.monotonic_time(:millisecond)
-    result = do_chain_run(llm, system_msg, content)
+    result = do_chain_run(llm, history, content)
     duration = System.monotonic_time(:millisecond) - start_time
 
     :telemetry.execute([:alethea, :ai, :chain, :stop], %{duration_ms: duration}, %{
@@ -103,33 +117,35 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     result |> wrap_result(msg_id)
   end
 
-  defp do_chain_run(llm, system_msg, content) do
+  # Prior turns reach the model as distinct chat messages, never as one
+  # flattened context block, so it cannot mistake its own earlier
+  # questions for something the patient said.
+  defp do_chain_run(llm, history, content) do
+    messages =
+      [Message.new_system!(JournalingPrompt.system_prompt())] ++
+        Enum.map(history, &turn_message/1) ++ [Message.new_user!(content)]
+
     %{llm: llm, verbose: false}
     |> LLMChain.new!()
-    |> LLMChain.add_message(Message.new_system!(system_msg))
-    |> LLMChain.add_message(Message.new_user!(content))
+    |> LLMChain.add_messages(messages)
     |> LLMChain.run()
     |> case do
-      {:ok, chain} -> {:ok, chain.last_message.content}
+      {:ok, chain} -> {:ok, chain.last_message}
+      # LangChain reports a failed run as `{:error, chain, reason}`.
+      {:error, _chain, reason} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp build_system_message(context),
-    do: "#{default_system_prompt()}\n\nContexto del paciente: #{context}"
+  defp turn_message(%{role: :patient, content: content}), do: Message.new_user!(content)
+  defp turn_message(%{role: :alethea, content: content}), do: Message.new_assistant!(content)
 
-  defp default_system_prompt,
-    do: """
-    Eres un asistente clínico de apoyo. Tu rol es escuchar y formular preguntas exploratorias.
-    NO valides ni refutes los pensamientos del paciente sin instrucción explícita del terapeuta.
-    Evita emitir diagnósticos o consejos médicos directos.
-    """
-
-  defp wrap_result({:ok, response}, msg_id),
+  defp wrap_result({:ok, %Message{} = message}, msg_id),
     do:
       {:ok,
        %{
-         response: response,
+         response: message.content,
+         truncated: truncated?(message),
          source_message_id: msg_id,
          model_version: "phi-4-mini",
          behavior_type: :elicited
