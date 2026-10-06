@@ -17,9 +17,11 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        caption), drop it: no Message row, no outbound job, return
        `:ok` (REQ-C5-persist-inbound-message "empty text payloads
        are dropped").
-    4. Persist inbound `Message` via `Clinical.save_telegram_message/7`
+    4. Persist inbound `Message` via `Clinical.find_or_save_telegram_inbound/4`
        with `direction: "inbound"`, `source: "spontaneous"`,
-       `telegram_message_id` (REQ-C3-worker-persists-message).
+       `telegram_message_id` (REQ-C3-worker-persists-message). A
+       re-execution finds the row already persisted for that Telegram
+       message in the patient's conversation and resumes from it (#390).
     5. Enqueue `EmotionAnalysisWorker` on `:ai_analysis` (REQ-C5-trigger-emotion-analysis).
     6. Classify via `Alerts.CrisisMonitor.detect/1`. **PR #3a covers the
        safe path only**; the `:crisis` branch (`:telegram_outbound_crisis`
@@ -138,12 +140,14 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       legacy_patient = Accounts.get_patient_with_professional(legacy_patient.id)
       {:ok, session} = SessionManager.current_open_session(legacy_patient.id)
 
+      # Find-or-insert (#390): a re-execution of this job (Oban retry,
+      # concurrent run, replay) resumes the inbound it already persisted
+      # instead of dying on the unique index, so a failure after this
+      # point no longer makes every retry unable to produce the reply.
       inbound =
-        case Clinical.save_telegram_message(
+        case Clinical.find_or_save_telegram_inbound(
                foundation_patient,
                text,
-               "inbound",
-               "spontaneous",
                to_string(telegram_message_id),
                session.id
              ) do
@@ -184,6 +188,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
 
+      # The reply belongs to the session its inbound was recorded in; a
+      # resumed execution may observe a newer open session.
+      reply_session_id = inbound.session_id || session.id
+
       case CrisisMonitor.detect(text) do
         :safe ->
           handle_safe_path(
@@ -193,7 +201,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
             hash_prefix,
             inbound,
             text,
-            session.id
+            reply_session_id
           )
 
         {:crisis, level, triggers} ->
@@ -206,7 +214,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
             inbound,
             level,
             triggers,
-            session.id
+            reply_session_id
           )
       end
     end
@@ -325,8 +333,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # Enqueue helpers
   # ----------------------------------------------------------------
 
+  # Keyed by the inbound message (#390): a resumed execution collapses
+  # onto the job the first execution enqueued instead of analysing the
+  # same message twice, and still enqueues it when the first execution
+  # died before reaching this point.
   defp enqueue_emotion_analysis(message_id, hash_prefix) do
-    EmotionAnalysisWorker.new(%{message_id: message_id})
+    %{message_id: message_id}
+    |> EmotionAnalysisWorker.new(unique: [keys: [:message_id], period: :infinity, states: :all])
     |> Oban.insert()
     |> case do
       {:ok, _job} ->

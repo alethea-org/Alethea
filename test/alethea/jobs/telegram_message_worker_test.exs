@@ -718,53 +718,39 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   describe "perform/1 — failure modes" do
     setup :setup_bound_patient
 
-    test "inbound persistence failure raises without leaking session_id (Oban retries; no outbound enqueued)",
+    test "an inbound already persisted for the same Telegram message is resumed, not re-inserted (#390)",
          ctx do
-      _ = ctx
+      # Pre-insert the inbound a previous execution of this job left
+      # behind (same patient, telegram_message_id "401"). Before #390
+      # the worker's insert collided on the unique index and every
+      # retry raised `failed to persist inbound`, so the reply was
+      # never produced.
+      existing =
+        Repo.insert!(%Message{
+          direction: "inbound",
+          behavior_type: "spontaneous",
+          encrypted_content: <<0>>,
+          telegram_message_id: "401",
+          timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
+          patient_id: ctx.legacy_patient.id
+        })
 
-      # Pre-insert a Message with telegram_message_id "401" so the
-      # worker's insert collides on the partial unique index.
-      Repo.insert!(%Message{
-        direction: "inbound",
-        behavior_type: "spontaneous",
-        encrypted_content: <<0>>,
-        telegram_message_id: "401",
-        timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
-        patient_id: ctx.legacy_patient.id
-      })
+      resume_args = build_args("hola", telegram_message_id: 401, telegram_update_id: 11)
 
-      collision_args = build_args("hola", telegram_message_id: 401, telegram_update_id: 11)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: resume_args})
 
-      # Pre-fetch the open session UUID the worker will try to attach
-      # to the colliding inbound. R2 judges required runtime proof
-      # that this UUID does NOT appear in the raised error message —
-      # mirror of the sibling diagnosis-leak test at lines 598-628
-      # which uses `refute error.message =~ sentinel_reply`.
-      {:ok, open_session} = SessionManager.current_open_session(ctx.legacy_patient.id)
-      session_uuid = open_session.id
+      # Still exactly one inbound row — the pre-existing one.
+      assert [%Message{id: inbound_id}] =
+               Repo.all(
+                 from(m in Message,
+                   where: m.patient_id == ^ctx.legacy_patient.id and m.direction == "inbound"
+                 )
+               )
 
-      # R1 + R2 fixes: the worker must raise a sanitized RuntimeError
-      # (via `SafeReason.for_log/1` from `AletheaJobs.SafeReason` —
-      # originally a private `safe_reason/1` helper in this worker, now
-      # extracted so `SessionTimeoutWorker` can use it too; #86 R2) on
-      # inbound persistence failure, NOT a raw MatchError whose exception
-      # value embeds the Ecto.Changeset `changes` map (which carries the
-      # session UUID introduced by #85). Pre-fix, this exception value
-      # was captured by Oban into oban_jobs.errors and exception logs —
-      # leaking clinical metadata into operational data.
-      error =
-        assert_raise RuntimeError, ~r/failed to persist inbound/, fn ->
-          TelegramMessageWorker.perform(%Oban.Job{args: collision_args})
-        end
+      assert inbound_id == existing.id
 
-      # Runtime proof the fix achieves its stated PHI goal. Without
-      # `SafeReason.for_log/1` (or analog), the session UUID would appear
-      # in `error.message` via
-      # inspect(%Ecto.Changeset{changes: %{session_id: <uuid>}}).
-      refute error.message =~ session_uuid
-
-      # No outbound was enqueued (the inbound did not succeed).
-      refute_enqueued(worker: TelegramOutboundWorker)
+      # The resumed execution completed the reply.
+      assert_enqueued(worker: TelegramOutboundWorker, queue: :telegram_outbound)
     end
 
     test "LLM unavailability raises (Oban retries the job)", ctx do

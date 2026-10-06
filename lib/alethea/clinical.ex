@@ -135,13 +135,12 @@ defmodule Alethea.Clinical do
 
   ## Duplicate handling
 
-  The `telegram_message_id` partial unique index rejects a second
-  row for the same id; this function surfaces the changeset error to
-  the caller — the worker treats it as a retry-eligible failure
-  (REQ-C3-worker-persists-message "persistence failure crashes the
-  job"). The Oban unique-period on `telegram_update_id` is the first
-  line of defence; this DB-level constraint is the safety net for
-  replays outside the Oban window.
+  The partial unique index on `(patient_id, telegram_message_id)`
+  rejects a second row for the same Telegram message in the same
+  patient's conversation; this function surfaces the changeset error to
+  the caller. Inbound callers that must survive a re-execution use
+  `find_or_save_telegram_inbound/4` instead, which resumes the persisted
+  row.
   """
   @spec save_telegram_message(
           Alethea.Foundation.Accounts.Patient.t(),
@@ -177,6 +176,89 @@ defmodule Alethea.Clinical do
       {:error, :legacy_not_found} ->
         {:error, :legacy_not_found}
     end
+  end
+
+  @doc """
+  Persists the inbound `Message` for a Telegram update, or returns the one
+  already persisted for it (issue #390).
+
+  The identity of an inbound is the Telegram `message_id` within the
+  patient's conversation. A re-execution of the same job (Oban retry,
+  concurrent execution, replay outside the Oban unique window) finds the
+  existing row and resumes from it instead of failing on the unique
+  index. The row is created together with its patient-voice outbox event
+  exactly once (see `persist/3`).
+
+  If two executions race on the insert, the loser's insert is rejected by
+  the unique index and it returns the winner's row.
+
+  Returns `{:ok, %Message{}}`, or the same errors as
+  `save_telegram_message/6`.
+  """
+  @spec find_or_save_telegram_inbound(
+          Alethea.Foundation.Accounts.Patient.t(),
+          String.t(),
+          String.t(),
+          binary() | nil
+        ) :: {:ok, Message.t()} | {:error, term()}
+  def find_or_save_telegram_inbound(foundation_patient, text, telegram_message_id, session_id) do
+    case Alethea.Foundation.Accounts.legacy_patient(foundation_patient) do
+      {:ok, legacy_patient} ->
+        case get_telegram_inbound(legacy_patient.id, telegram_message_id) do
+          %Message{} = existing ->
+            {:ok, existing}
+
+          nil ->
+            legacy_patient
+            |> save_message(
+              text,
+              nil,
+              "inbound",
+              "spontaneous",
+              session_id,
+              telegram_message_id
+            )
+            |> resume_on_duplicate_inbound(legacy_patient.id, telegram_message_id)
+        end
+
+      :not_linked ->
+        {:error, :not_linked}
+
+      {:error, :legacy_not_found} ->
+        {:error, :legacy_not_found}
+    end
+  end
+
+  defp get_telegram_inbound(patient_id, telegram_message_id) do
+    Repo.one(
+      from(m in Message,
+        where:
+          m.patient_id == ^patient_id and m.direction == "inbound" and
+            m.telegram_message_id == ^telegram_message_id
+      )
+    )
+  end
+
+  defp resume_on_duplicate_inbound(
+         {:error, %Ecto.Changeset{} = changeset} = error,
+         patient_id,
+         telegram_message_id
+       ) do
+    with true <- unique_violation?(changeset, :telegram_message_id),
+         %Message{} = winner <- get_telegram_inbound(patient_id, telegram_message_id) do
+      {:ok, winner}
+    else
+      _ -> error
+    end
+  end
+
+  defp resume_on_duplicate_inbound(result, _patient_id, _telegram_message_id), do: result
+
+  defp unique_violation?(%Ecto.Changeset{errors: errors}, field) do
+    Enum.any?(errors, fn
+      {^field, {_message, opts}} -> Keyword.get(opts, :constraint) == :unique
+      _other -> false
+    end)
   end
 
   @spec list_recent_messages(binary(), non_neg_integer()) :: [Message.t()]
