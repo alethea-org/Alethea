@@ -44,7 +44,7 @@ Out: retries, identity, delivery state (#390); debounce/aggregation, running sum
 ## Tasks
 
 - [x] T1 — Role-structured, sanitized, bounded history through the reply seam. New generation seam called from `handle_safe_path/7`; last 10 prior messages with explicit roles, chronological, stable order, current turn not duplicated; all material sanitized; emotion-score block removed. Route: delegated (worktree writer; multi-file).
-- [ ] T2 — Output guard with varied neutral fallback. Diagnostic/prescriptive output blocked before persistence and delivery; persisted outbound and delivery job carry the fallback; variants deterministic per inbound. Route: delegated.
+- [x] T2 — Output guard with varied neutral fallback. Diagnostic/prescriptive output blocked before persistence and delivery; persisted outbound and delivery job carry the fallback; variants deterministic per inbound. Route: delegated.
 - [ ] T3 — Structured instructions, examples, role messages, and length bound. Prompt contract tests for the rules and prohibitions the worker seam cannot establish; journaling max-tokens configuration; no truncated reply delivered. Route: delegated.
 
 Each task closes with at least one Conventional Commit on the feature branch, tests alongside the behavior.
@@ -76,7 +76,8 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 
 - Worktree, CodeGraph index, deps, and partitioned test database `alethea_test_392` prepared.
 - T1 done: `Alethea.Telegram.JournalingReply.generate/3` is the seam `handle_safe_path/7` calls; `Clinical.list_conversation_turns/3` supplies the bounded role-tagged history; `PhiWorkerBehaviour.process/1` now takes `%{message_id, sanitized_content, history}`; the emotion-score block is gone from `PhiWorker`.
-- Next: T2.
+- T2 done: `Alethea.AI.JournalingOutputGuard.check/1` validates the generated text inside the seam; blocked text is replaced by `Alethea.Telegram.JournalingFallback.for_inbound/1` before the worker can persist or enqueue anything.
+- Next: T3.
 
 ## Decisions made during implementation
 
@@ -86,6 +87,9 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - T1: an unloadable or undecryptable history degrades to an empty history (same as the previous `""` context fallback) with a content-free warning.
 - T1: role messages in the chain (design decision 7) landed with T1 rather than T3, because the chain has to accept the new `history` shape for T1 to be coherent on its own.
 - T1: the worker's private `phi_worker/0` (previously :86-90) was removed because the seam now resolves the boundary; leaving it would fail `compile --warnings-as-errors`. The worker moduledoc step 7 still says "emotion-enriched" and is left untouched (outside the #392 edit region).
+- T2: four fallback variants, selected with `:erlang.phash2(inbound.id, 4)` — deterministic per inbound, varied across inbounds.
+- T2: a blocked result keeps the chain result shape but carries `response: <fallback>`, `model_version: "journaling-fallback"` and `guardrail: :diagnostic | :prescriptive`; the `ai_diagnoses` row anchored to the inbound therefore stores the fallback, not the blocked text. The block is logged with reason and message id only.
+- T2: the existing pattern catalog also blocks a reply that merely names medication or a diagnosis while redirecting to the therapist. Kept as is (conservative); T3's prompt examples redirect without those words.
 
 ## Verification evidence
 
@@ -93,3 +97,6 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - T1 GREEN: same command → 8 passed.
 - T1 focused set: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs test/alethea/ai test/alethea/telegram test/alethea/clinical_test.exs` → 463 passed (baseline on d0cb932: 446 passed).
 - T1 note: the `PhiWorker` emotion-score test and the chain role-message tests were written after the implementation (GREEN only); their worker-level counterparts were RED first.
+- T1 commit: 5d52bd2 `feat(telegram): supply role-structured sanitized history to journaling replies`.
+- T2 RED: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs/telegram_message_worker_guardrails_test.exs` → 10/15 passed, 5 failed (blocked text present in the persisted outbound and the delivery job; `model_version` still `phi-4-mini`).
+- T2 GREEN: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs/telegram_message_worker_guardrails_test.exs test/alethea/ai/journaling_output_guard_test.exs test/alethea/telegram/journaling_fallback_test.exs` → 26 passed.

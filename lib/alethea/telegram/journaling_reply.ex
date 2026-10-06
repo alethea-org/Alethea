@@ -16,6 +16,15 @@ defmodule Alethea.Telegram.JournalingReply do
   Nothing else: no clinician records, no emotion scores, no other
   inferred clinical data.
 
+  ## What may come back
+
+  The generated text is validated with `Alethea.AI.JournalingOutputGuard`
+  before it is returned. Blocked text never leaves this module: the
+  result carries a neutral exploratory fallback from
+  `Alethea.Telegram.JournalingFallback` instead, with `:guardrail` set
+  to the block reason and `:model_version` set to
+  `"journaling-fallback"`.
+
   History is bounded at — and excludes — the inbound message being
   answered, so generating again for the same inbound reads the same
   snapshot.
@@ -23,12 +32,14 @@ defmodule Alethea.Telegram.JournalingReply do
 
   require Logger
 
-  alias Alethea.AI.Sanitizer
+  alias Alethea.AI.{JournalingOutputGuard, Sanitizer}
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
+  alias Alethea.Telegram.JournalingFallback
 
   @history_limit 10
+  @fallback_model_version "journaling-fallback"
 
   @type chain_result :: %{required(:response) => String.t(), optional(atom()) => term()}
 
@@ -50,13 +61,37 @@ defmodule Alethea.Telegram.JournalingReply do
 
     case ai_worker().process(request) do
       {:ok, %{response: reply} = chain_result} when is_binary(reply) and reply != "" ->
-        {:ok, chain_result}
+        {:ok, guard(chain_result, inbound)}
 
       {:ok, %{response: _empty}} ->
         {:error, :empty_response}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # The generated text is checked before the caller can persist or
+  # deliver it. A blocked reply is discarded here: the returned result
+  # carries the fallback as `:response`, so neither the outbound message,
+  # the delivery job, nor the AI record anchored to the inbound ever sees
+  # the blocked text. `:model_version` is replaced because the fallback
+  # was not written by the model.
+  defp guard(chain_result, inbound) do
+    case JournalingOutputGuard.check(chain_result.response) do
+      :ok ->
+        chain_result
+
+      {:blocked, reason} ->
+        Logger.warning(
+          "JournalingReply: generated reply blocked, fallback substituted " <>
+            "(reason=#{reason}, message_id=#{inbound.id})"
+        )
+
+        chain_result
+        |> Map.put(:response, JournalingFallback.for_inbound(inbound.id))
+        |> Map.put(:model_version, @fallback_model_version)
+        |> Map.put(:guardrail, reason)
     end
   end
 

@@ -18,7 +18,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
 
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
-  alias Alethea.Jobs.TelegramMessageWorker
+  alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.ChatIdHash
   alias AletheaJobs.EmotionAnalysisWorker
@@ -127,6 +127,74 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
     end
   end
 
+  describe "perform/1 — generated output is validated before it can reach the patient" do
+    test "a diagnostic reply is replaced by a neutral exploratory fallback" do
+      blocked = "Por lo que describes, parece un trastorno de ansiedad."
+
+      delivered = perform_with_generated_reply("Últimamente me cuesta respirar.", blocked, 20)
+
+      refute delivered.persisted_body =~ "trastorno"
+      assert_neutral_exploratory(delivered.persisted_body)
+    end
+
+    test "a prescriptive reply is replaced by a neutral exploratory fallback" do
+      blocked = "Te recomiendo iniciar terapia y retomar la medicación."
+
+      delivered = perform_with_generated_reply("No sé qué hacer con esto.", blocked, 21)
+
+      refute delivered.persisted_body =~ "recomiendo"
+      refute delivered.persisted_body =~ "medicación"
+      assert_neutral_exploratory(delivered.persisted_body)
+    end
+
+    test "blocked wording is caught regardless of case and accents" do
+      blocked = "Eso suena a un DIAGNÓSTICO claro."
+
+      delivered = perform_with_generated_reply("Me pasa seguido.", blocked, 22)
+
+      refute String.downcase(delivered.persisted_body) =~ "diagn"
+      assert_neutral_exploratory(delivered.persisted_body)
+    end
+
+    test "the delivery job carries the fallback, never the blocked text" do
+      blocked = "Deberías tomar algo para dormir; es un cuadro clínico típico."
+
+      delivered = perform_with_generated_reply("Hace días que no duermo.", blocked, 23)
+
+      assert delivered.job_body == delivered.persisted_body
+      refute delivered.job_body =~ "Deberías"
+      refute delivered.job_body =~ "cuadro"
+    end
+
+    test "the blocked text is not stored as the AI response anchored to the inbound" do
+      blocked = "Claramente padeces un trastorno."
+
+      delivered = perform_with_generated_reply("Me siento raro.", blocked, 24)
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+      diagnosis = Repo.one!(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+
+      assert diagnosis.ai_response == delivered.persisted_body
+      refute diagnosis.model_version == "phi-4-mini"
+    end
+
+    test "a reply within the journaling role is delivered unchanged" do
+      reply = "Gracias por contarlo. ¿Qué fue lo más difícil de ese momento?"
+
+      delivered = perform_with_generated_reply("Hoy tuve un día complicado.", reply, 25)
+
+      assert delivered.persisted_body == reply
+      assert delivered.job_body == reply
+    end
+
+    test "exactly one reply is persisted and enqueued when the output is blocked" do
+      perform_with_generated_reply("Me siento mal.", "Tienes un trastorno.", 26)
+
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+      assert length(all_enqueued(worker: TelegramOutboundWorker)) == 1
+    end
+  end
+
   describe "perform/1 — sentiment pipeline regression" do
     test "the inbound message is still handed to emotion analysis and anchors the model call" do
       payload = perform_capturing_payload("Hoy fue un día pesado.", 9)
@@ -155,6 +223,40 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
     assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: build_args(text, n)})
     assert_receive {:ai_worker_payload, payload}
     payload
+  end
+
+  # Runs the worker with the model's output fixed to `generated`, and
+  # returns what the patient would receive: the persisted outbound body
+  # and the body carried by the delivery job.
+  defp perform_with_generated_reply(text, generated, n) do
+    expect(Alethea.AI.PhiWorkerMock, :process, fn payload ->
+      {:ok, ai_result(payload.message_id, generated)}
+    end)
+
+    assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: build_args(text, n)})
+
+    outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
+    [job] = all_enqueued(worker: TelegramOutboundWorker)
+
+    %{persisted_body: decrypted_body(outbound), job_body: job.args["body"]}
+  end
+
+  # Independent statement of what a fallback must be: short, a single
+  # question, and free of the wording the guard exists to stop.
+  defp assert_neutral_exploratory(body) do
+    assert String.ends_with?(body, "?")
+    assert body |> String.graphemes() |> Enum.count(&(&1 == "?")) == 1
+    assert String.length(body) <= 160
+
+    refute String.downcase(body) =~
+             ~r/diagn|trastorno|tratamiento|medic|recom|deber[ií]as|terapia/
+  end
+
+  defp decrypted_body(%Message{} = message) do
+    legacy_patient = Repo.get!(Alethea.Accounts.Patient, message.patient_id)
+    {:ok, dek} = Clinical.patient_dek(legacy_patient)
+    {:ok, plaintext} = Clinical.decrypt_message_content(message, dek)
+    plaintext
   end
 
   defp ai_result(message_id, response) do
