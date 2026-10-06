@@ -144,3 +144,7 @@ Forecast: above ~400 authored changed lines (three tasks, two workers, migration
 - Failure forced through data, not timing: the older stale reply belongs to a patient whose stored chat hash is not 64 characters, which the dead-letter changeset rejects, so surfacing raises inside that row's transaction. Restoring the hash removes the cause.
 - Decisions: the rescue/catch wraps one row's resolution only (worker-only change, `lib/alethea/clinical.ex` untouched). The log line carries the message id and the exception module or exit kind, never the exception message. The job returns `{:error, "N of M expired delivery claims could not be resolved"}` after attempting every row, unlike `RetentionSweepWorker` (`:ok` plus a warning), because an unresolved claim is a patient reply nobody has been told about and a log line alone was the gap the previous finding named; with `max_attempts: 1` the error is not retried, and resolved rows are no longer `sending`, so nothing is surfaced twice.
 - Commit: `ddcbf12` fix(telegram): isolate per-row failures in the delivery sweep
+
+### T5 review assessment
+
+- Range `1e37332..d75c233` assessed medium, `review_due: false` (`under_budget`, 176 changed lines). No native review ran for T5; it stays pending in the slice and the reviewed boundary remains `1e37332`.
