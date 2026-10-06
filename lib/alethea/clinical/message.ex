@@ -8,12 +8,21 @@ defmodule Alethea.Clinical.Message do
     field(:direction, :string)
     field(:behavior_type, :string, default: "spontaneous")
     # Telegram inbound traceability (REQ-C3-worker-persists-message).
-    # Nullable because not every channel writes one. Partial unique index
-    # `messages_telegram_message_id_unique` enforces "at most one
-    # inbound row per Telegram message_id" while leaving the column
-    # `NULL` for rows from other channels (migration
-    # `20260620000001_add_telegram_message_id_to_messages.exs`).
+    # Nullable because not every channel writes one. Telegram message ids
+    # are counters per chat, so the identity is scoped to the patient's
+    # conversation: partial unique index
+    # `messages_patient_telegram_message_id_unique` on
+    # `(patient_id, telegram_message_id)` enforces "at most one row per
+    # Telegram message in a patient's chat" while leaving the column
+    # `NULL` for rows from other channels (issue #390).
     field(:telegram_message_id, :string)
+    # Delivery outcome of an outbound Telegram reply (#390): "pending" |
+    # "sending" | "sent" | "ambiguous" | "failed"; `nil` for untracked
+    # rows. Set programmatically through `Alethea.Clinical` (never cast).
+    # Non-sensitive metadata — the content stays in `encrypted_content`.
+    field(:delivery_state, :string)
+    # The id Telegram returned for the delivered message.
+    field(:delivered_telegram_message_id, :string)
     field(:encrypted_content, :binary)
     field(:encryption_version, :integer, default: 1)
     field(:synced_to_graph, :boolean, default: false)
@@ -21,6 +30,11 @@ defmodule Alethea.Clinical.Message do
 
     belongs_to(:patient, Alethea.Accounts.Patient)
     belongs_to(:session, Alethea.Clinical.Session)
+    # Reply provenance (#390): set on an outbound Telegram reply, pointing
+    # at the inbound message that caused it. Set programmatically (never
+    # cast). Partial unique index `messages_reply_to_message_id_unique`
+    # guarantees at most one reply row per inbound.
+    belongs_to(:reply_to_message, __MODULE__)
     has_many(:ai_diagnoses, Alethea.AI.Diagnosis)
     has_one(:emotion_analysis, Alethea.Clinical.EmotionAnalysis)
 
@@ -57,7 +71,8 @@ defmodule Alethea.Clinical.Message do
     # Ecto-level validate_inclusion is kept in lockstep with the DB constraint.
     |> validate_inclusion(:behavior_type, ["spontaneous", "elicited", "crisis_bypass"])
     |> unique_constraint(:telegram_message_id,
-      name: :messages_telegram_message_id_unique
+      name: :messages_patient_telegram_message_id_unique
     )
+    |> unique_constraint(:reply_to_message_id, name: :messages_reply_to_message_id_unique)
   end
 end

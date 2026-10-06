@@ -13,7 +13,8 @@ defmodule Alethea.Telegram.Client.ReqTest do
     - `200 OK` with `ok: false`         → `{:error, {:http_error, 200, body}}`
     - `429` with `Retry-After`           → `{:error, {:rate_limited, retry_after}}`
     - `5xx`                              → `{:error, {:server_error, status}}`
-    - Network / transport failure        → `{:error, :network}`
+    - Connection never established       → `{:error, :network}`
+    - Any other transport failure        → `{:error, {:ambiguous, reason}}`
 
   The Req.Test adapter is wired via
   `Application.put_env(:alethea, :telegram_client_req_options, plug: {Req.Test, __MODULE__})`
@@ -168,15 +169,48 @@ defmodule Alethea.Telegram.Client.ReqTest do
   # Network / transport failure
   # ----------------------------------------------------------------
 
-  describe "send_message/2 — network failure" do
-    test "returns {:error, :network} when the transport raises (Req.post/2 returns {:error, _})" do
+  describe "send_message/2 — transport failure (delivery certainty, #390)" do
+    test "returns {:error, :network} when the connection was never established" do
+      for reason <- [:econnrefused, :nxdomain, :ehostunreach] do
+        Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+          Req.Test.transport_error(conn, reason)
+        end)
+
+        assert {:error, :network} = Client.Req.send_message(@chat_id, @body)
+      end
+    end
+
+    test "returns {:error, {:ambiguous, reason}} when the request may have reached Telegram" do
+      for reason <- [:timeout, :closed] do
+        Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+          Req.Test.transport_error(conn, reason)
+        end)
+
+        assert {:error, {:ambiguous, ^reason}} = Client.Req.send_message(@chat_id, @body)
+      end
+    end
+
+    test "returns {:error, {:ambiguous, :exception}} when the HTTP stack raises" do
       Req.Test.stub(Alethea.Telegram.Client.Req, fn _conn ->
-        # Force Req to error out by raising from the stub. Req.Test
-        # wraps the exception in {:error, _}.
-        raise "connection refused"
+        # An exception does not say whether the request was already on
+        # the wire, so it must not be reported as a pre-send failure.
+        raise "socket reset"
       end)
 
-      assert {:error, :network} = Client.Req.send_message(@chat_id, @body)
+      assert {:error, {:ambiguous, :exception}} = Client.Req.send_message(@chat_id, @body)
+    end
+
+    test "a single call is made per send: the adapter does not retry on its own" do
+      test_pid = self()
+
+      Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+        send(test_pid, :request_made)
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, {:ambiguous, :timeout}} = Client.Req.send_message(@chat_id, @body)
+      assert_received :request_made
+      refute_received :request_made
     end
   end
 

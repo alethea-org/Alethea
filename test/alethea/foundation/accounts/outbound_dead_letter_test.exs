@@ -55,6 +55,37 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetterTest do
     end
   end
 
+  describe "changeset/2 — outcome (issue #390)" do
+    test "defaults to failed: an exhausted delivery that is known not to have arrived" do
+      assert {:ok, row} =
+               %OutboundDeadLetter{}
+               |> OutboundDeadLetter.changeset(@valid_attrs)
+               |> Repo.insert()
+
+      assert row.outcome == "failed"
+    end
+
+    test "accepts ambiguous: a delivery that may or may not have arrived" do
+      assert {:ok, row} =
+               %OutboundDeadLetter{}
+               |> OutboundDeadLetter.changeset(Map.put(@valid_attrs, :outcome, "ambiguous"))
+               |> Repo.insert()
+
+      assert row.outcome == "ambiguous"
+    end
+
+    test "rejects any other outcome" do
+      changeset =
+        OutboundDeadLetter.changeset(
+          %OutboundDeadLetter{},
+          Map.put(@valid_attrs, :outcome, "delivered")
+        )
+
+      refute changeset.valid?
+      assert %{outcome: [_]} = errors_on(changeset)
+    end
+  end
+
   describe "changeset/2 — validations" do
     test "rejects nil chat_id_hash" do
       attrs = Map.delete(@valid_attrs, :chat_id_hash)
