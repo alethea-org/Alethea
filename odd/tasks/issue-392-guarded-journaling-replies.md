@@ -117,3 +117,13 @@ Forecast: above ~400 authored changed lines (new seam, guard, prompt, config, te
 - Follow-up GREEN: `MIX_TEST_PARTITION=_392 mix test test/alethea/jobs test/alethea/ai test/alethea/telegram test/alethea/clinical_test.exs` → 507 passed (2 doctests, 505 tests), 0 failed.
 - Follow-up impact: the other chains on `OllamaChat` read only `last_message.content`, and `LLMChain` accepts `:length` like `:complete`, so their behavior is unchanged.
 - Follow-up closure: `MIX_TEST_PARTITION=_392 mix precommit` → exit 0; 1837 passed (6 doctests, 1831 tests), 5 skipped, 0 failed.
+
+## Native review
+
+- Candidate: commits `5d52bd2..bdcf915` against branch point `d0cb932` (risk medium, `slice_budget_reached`); consent granted by the user.
+- Outcome: approved on the `review-reliability` lens and acknowledged (lineage `review-ca35b52fbea32c2b`, authority burned). The reviewed boundary is `bdcf915`.
+- Informational findings, none blocking, open as follow-ups:
+  - `R3-history-degrade-untested` (warning): a failed patient lookup or history load degrades to an empty history and the reply is still generated; no test exercises that path.
+  - `R3-guardrail-metadata-assertions` (suggestion): the fallback model version and guardrail reason are only weakly asserted.
+  - `R3-same-second-tiebreak-coverage` (suggestion): the same-second id tie-break has no test.
+  - `R3-turn-message-poison-row` (suggestion): a stored row with an unexpected direction or content the message constructor rejects would raise on every attempt.
