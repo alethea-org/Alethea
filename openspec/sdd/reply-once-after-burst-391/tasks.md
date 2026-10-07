@@ -34,25 +34,25 @@ All code/SQL verbatim from design §Interfaces/Contracts. AD = design decision, 
 ## S1 — `feat/391-telegram-burst-reply` (base `main`)
 
 ### Phase 1: Setup
-- [ ] 1.1 Create branch from fresh `main`; commit `openspec/sdd/reply-once-after-burst-391/{proposal,spec,design,tasks}.md` ALONE (`docs(sdd): plan #391 burst reply`) before any code.
-- [ ] 1.2 Baseline: `mix test test/alethea/jobs/ test/alethea/clinical_test.exs`; record pass count + `mix compile --warnings-as-errors --force` warning set.
+- [x] 1.1 Create branch from fresh `main`; commit `openspec/sdd/reply-once-after-burst-391/{proposal,spec,design,tasks}.md` ALONE (`docs(sdd): plan #391 burst reply`) before any code. — done in a prior session (`758459d`).
+- [x] 1.2 Baseline: `mix test test/alethea/jobs/ test/alethea/clinical_test.exs`; record pass count + `mix compile --warnings-as-errors --force` warning set. — 153 passed, 0 failures. Compile baseline: **1** pre-existing warning (`lib/alethea/clinical_record.ex:2411`, `validate_cited_evidence_ids/1` clause never used) — this differs from the 4-warnings-at-lines-1256/1377/1473/1549 claim given in the apply prompt; reported as a factual discrepancy, not fixed (file untouched, out of S1 scope).
 
 ### Phase 2: Migration + schema (R10, AD2)
-- [ ] 2.1 RED `test/alethea/migrations/burst_coverage_test.exs`: pre-existing inbound rows → self-covered, `list_burst_members == []` [R10]. Backfill SQL exposed as callable migration-module function if sandboxed `Ecto.Migrator` is impractical; flag choice in apply report.
-- [ ] 2.2 `mix ecto.gen.migration add_burst_coverage_to_messages`: nullable `replied_by_message_id` → `messages` (`on_delete: :nothing`); partial index `(patient_id) WHERE direction='inbound' AND replied_by_message_id IS NULL`; index `(replied_by_message_id) WHERE NOT NULL`; check constraint + `'superseded'`; `up` backfill `SET replied_by_message_id=id WHERE direction='inbound'`; `down` restores 5-state check (`20261006040546…:30-34`).
-- [ ] 2.3 `lib/alethea/clinical/message.ex`: `belongs_to :replied_by_message` (binary_id), NOT in `cast/2`.
+- [x] 2.1 RED `test/alethea/migrations/burst_coverage_test.exs`: pre-existing inbound rows → self-covered, `list_burst_members == []` [R10]. Backfill SQL exposed as callable function, but on `Alethea.Clinical.BurstBackfill` (a `lib/` module), not the migration module — `priv/repo/migrations/*.exs` files are not loaded by `mix test`'s normal compile step, so a function on the migration module itself is unreachable from test code. The migration's `up/0` delegates to `BurstBackfill.sql/0` so the exact statement is shared, not duplicated.
+- [x] 2.2 `mix ecto.gen.migration add_burst_coverage_to_messages` → `priv/repo/migrations/20261007185102_add_burst_coverage_to_messages.exs`: nullable `replied_by_message_id` → `messages` (`on_delete: :nothing`); partial index `(patient_id) WHERE direction='inbound' AND replied_by_message_id IS NULL`; index `(replied_by_message_id) WHERE NOT NULL`; check constraint + `'superseded'`; `up` backfill `SET replied_by_message_id=id WHERE direction='inbound'`; `down` restores 5-state check (`20261006040546…:30-34`).
+- [x] 2.3 `lib/alethea/clinical/message.ex`: `belongs_to :replied_by_message` (binary_id via module's `@foreign_key_type` default, mirroring `reply_to_message`), NOT in `cast/2`.
 
 ### Phase 3: Read side (R8, R2, R9, AD8)
-- [ ] 3.1 RED `clinical_test.exs:101` extension: `superseded` + `sent` reply → only `sent` text in turns [R8].
-- [ ] 3.2 `clinical.ex:599-612`: `where: is_nil(m.delivery_state) or m.delivery_state != "superseded"`; typedoc adds `superseded`.
-- [ ] 3.3 RED `list_burst_members/1`: ids "9","10","11" inserted out of order → order 9,10,11; self-covered excluded; member covered by pending `elicited` reply included (absorb, AD5) [R2, R11].
-- [ ] 3.4 `clinical.ex`: `list_burst_members/1` per design members SQL, `ORDER BY telegram_message_id::bigint`, returns `[{%Message{}, text}]`.
-- [ ] 3.5 RED `test/alethea/telegram/journaling_reply_test.exs`: 3 members → `PhiWorkerMock` gets texts joined `"\n\n"` in order, each sanitized once, `message_id` = newest, history bounded at earliest member (no member in history) [R9].
-- [ ] 3.6 `journaling_reply.ex:58-77,112-125`: `generate_burst/2`; `generate/3` → `generate_burst(p, [{inbound, text}])`; guard/fallback use `List.last`. Guard/fallback/prompt untouched.
+- [x] 3.1 RED `clinical_test.exs:101` extension: `superseded` + `sent` reply → only `sent` text in turns [R8].
+- [x] 3.2 `clinical.ex` `turns_before/3`: `where: is_nil(m.delivery_state) or m.delivery_state != "superseded"`; typedoc adds `superseded`.
+- [x] 3.3 RED `list_burst_members/1` (in `clinical_test.exs`, new describe block): ids "9","10","11" inserted out of order → order 9,10,11; self-covered excluded (covered by migration test); member covered by pending `elicited` reply included (absorb, AD5) [R2, R11].
+- [x] 3.4 `clinical.ex`: `list_burst_members/1` per design members SQL, `ORDER BY telegram_message_id::bigint`, returns `{:ok, [{%Message{}, text}]} | {:error, term()}` (decrypting convention matched to `list_conversation_turns/3`/`build_patient_context/2`, since the design's bare-list pseudocode in `arm/1` is S2's sketch, not a literal spec for this function's error path).
+- [x] 3.5 RED `test/alethea/telegram/journaling_reply_test.exs`: 3 members → `PhiWorkerMock` gets texts joined `"\n\n"` in order, each sanitized once, `message_id` = newest, history bounded at earliest member (no member in history) [R9].
+- [x] 3.6 `journaling_reply.ex`: `generate_burst/2`; `generate/3` → `generate_burst(p, [{inbound, text}])`; guard/fallback use `List.last`. Guard/fallback/prompt untouched.
 
 ### Phase 4: Size + verify
-- [ ] 4.1 Trim lever BEFORE any size exception: table-drive 3.3 member cases + 2.1 backfill cases. Then `git diff --stat origin/main`.
-- [ ] 4.2 Existing suite green unchanged (vs 1.2 count); zero new warnings; `mix format --check-formatted`.
+- [x] 4.1 Trim lever applied BEFORE requesting any size exception: table-drove the 3.3 ordering case (one test, `for tg_id <- [...]` over 3 out-of-order ids) instead of 3 separate tests. `git diff --stat --cached origin/main` (full literal command, includes the already-committed SDD docs commit + an unrelated pre-existing untracked `.gga` file): 14 files changed, 1181 insertions(+), 4 deletions(-). **S1's actual code diff** (vs `HEAD`, excluding the prior docs commit and `.gga`): 8 files changed, 510 insertions(+), 4 deletions(-) = 514 changed lines. This exceeds the ~300-line floor forecast but sits inside the documented 12–97% overrun precedent band; no exception requested — the 3-PR chain was already the pre-decided delivery strategy for exactly this reason.
+- [x] 4.2 Existing suite green unchanged (153/153, same as 1.2) + 7 new tests = 160/160 passed; zero new compile warnings (same single pre-existing one); `mix format --check-formatted` clean after `mix format`.
 
 ---
 

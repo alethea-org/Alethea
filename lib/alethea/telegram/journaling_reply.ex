@@ -51,6 +51,10 @@ defmodule Alethea.Telegram.JournalingReply do
   @doc """
   Generates the reply for `inbound`, whose plaintext is `text`.
 
+  A thin delegate to `generate_burst/2` for the single-member case
+  (#391): `generate(p, inbound, text)` is
+  `generate_burst(p, [{inbound, text}])`.
+
   Returns `{:ok, chain_result}` with a non-empty `:response`, or
   `{:error, reason}` — `:empty_response` when the model returned no text,
   otherwise the reason reported by the AI worker.
@@ -58,15 +62,48 @@ defmodule Alethea.Telegram.JournalingReply do
   @spec generate(FoundationAccounts.Patient.t(), Message.t(), String.t()) ::
           {:ok, chain_result()} | {:error, term()}
   def generate(foundation_patient, %Message{} = inbound, text) when is_binary(text) do
+    generate_burst(foundation_patient, [{inbound, text}])
+  end
+
+  @doc """
+  Generates one reply covering every `members` of a Telegram burst
+  (#391), each a `{inbound, text}` pair.
+
+  Every member's sanitized text is supplied exactly once, in the
+  order given, joined by a blank line into the current turn
+  (`sanitized_content`) — design AD8: the single-string contract needs
+  no change to `Alethea.AI.PhiWorkerBehaviour`. The anchor — the
+  reply's `message_id`, and the message the guard/fallback attach to —
+  is the newest member, `List.last(members)`.
+
+  History is bounded at the earliest member (`List.first(members)`),
+  so no member of the burst ever appears in its own history: a burst
+  job retried after a rollback reads the same snapshot.
+
+  Returns `{:ok, chain_result}` with a non-empty `:response`, or
+  `{:error, reason}` — `:empty_response` when the model returned no
+  text, otherwise the reason reported by the AI worker.
+  """
+  @spec generate_burst(FoundationAccounts.Patient.t(), [{Message.t(), String.t()}, ...]) ::
+          {:ok, chain_result()} | {:error, term()}
+  def generate_burst(foundation_patient, [_ | _] = members) do
+    {earliest, _text} = List.first(members)
+    {anchor, _text} = List.last(members)
+
+    sanitized_content =
+      members
+      |> Enum.map(fn {_message, text} -> Sanitizer.sanitize(text) end)
+      |> Enum.join("\n\n")
+
     request = %{
-      message_id: inbound.id,
-      sanitized_content: Sanitizer.sanitize(text),
-      history: sanitized_history(foundation_patient, inbound)
+      message_id: anchor.id,
+      sanitized_content: sanitized_content,
+      history: sanitized_history(foundation_patient, earliest)
     }
 
     case ai_worker().process(request) do
       {:ok, %{response: reply} = chain_result} when is_binary(reply) and reply != "" ->
-        {:ok, guard(chain_result, inbound)}
+        {:ok, guard(chain_result, anchor)}
 
       {:ok, %{response: _empty}} ->
         {:error, :empty_response}

@@ -340,6 +340,64 @@ defmodule Alethea.Clinical do
   end
 
   @doc """
+  Returns every uncovered inbound Telegram message for
+  `foundation_patient`, decrypted, ordered by `telegram_message_id` as
+  an integer — not text, not `inserted_at` (#391, R2).
+
+  A member is a row where `replied_by_message_id` IS NULL, or where it
+  points at a reply that is still `"pending"`: a new burst also
+  absorbs the patient's still-undelivered ordinary reply, so that
+  reply's members join the new burst instead of being dispatched stale
+  (design AD5, R11).
+
+  Rows backfilled with the self-reference marker
+  (`replied_by_message_id == id`, design AD2, the migration that added
+  this column) are legacy, outside the burst model: a self-reference
+  can never satisfy the `IS NULL` check or appear in the pending-reply
+  subquery, so they are excluded the same way a genuinely covered row
+  is (R10).
+  """
+  @spec list_burst_members(Alethea.Foundation.Accounts.Patient.t()) ::
+          {:ok, [{Message.t(), String.t()}]} | {:error, term()}
+  def list_burst_members(foundation_patient) do
+    with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
+         {:ok, dek} <- patient_dek(legacy_patient) do
+      legacy_patient.id
+      |> burst_members_query()
+      |> Repo.all()
+      |> Enum.reduce_while({:ok, []}, fn message, {:ok, acc} ->
+        case decrypt_message_content(message, dek) do
+          {:ok, content} -> {:cont, {:ok, [{message, content} | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, acc} -> {:ok, Enum.reverse(acc)}
+        error -> error
+      end
+    end
+  end
+
+  defp burst_members_query(patient_id) do
+    pending_reply_ids =
+      from(r in Message,
+        where:
+          r.patient_id == ^patient_id and r.direction == "outbound" and
+            r.behavior_type == "elicited" and r.delivery_state == "pending",
+        select: r.id
+      )
+
+    from(m in Message,
+      where:
+        m.patient_id == ^patient_id and m.direction == "inbound" and
+          not is_nil(m.telegram_message_id) and
+          (is_nil(m.replied_by_message_id) or
+             m.replied_by_message_id in subquery(pending_reply_ids)),
+      order_by: fragment("?::bigint", m.telegram_message_id)
+    )
+  end
+
+  @doc """
   Decrypts a persisted reply so a resumed execution can deliver the
   content the clinical record already holds instead of generating a new
   one. The plaintext is returned to the caller only; it is never logged.
@@ -362,6 +420,9 @@ defmodule Alethea.Clinical do
     * `"ambiguous"` — the request may have reached Telegram and nobody
       knows whether it was delivered. Never resent.
     * `"failed"` — the retry budget ran out before any send.
+    * `"superseded"` — the reply's coverage was reclaimed by a later
+      burst or crisis reply before it was dispatched (#391). Never
+      sent; excluded from `list_conversation_turns/3`.
 
   `nil` means the row is not a tracked reply.
   """
@@ -599,6 +660,7 @@ defmodule Alethea.Clinical do
   defp turns_before(patient_id, %Message{} = current, limit) do
     Message
     |> where([m], m.patient_id == ^patient_id)
+    |> where([m], is_nil(m.delivery_state) or m.delivery_state != "superseded")
     |> where(
       [m],
       m.timestamp < ^current.timestamp or
