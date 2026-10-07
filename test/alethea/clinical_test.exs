@@ -298,6 +298,264 @@ defmodule Alethea.ClinicalTest do
     )
   end
 
+  # ----------------------------------------------------------------
+  # Transaction primitives (#391, S2 — AD5, AD6, R6, R11)
+  # ----------------------------------------------------------------
+
+  describe "lock_patient_conversation!/1" do
+    setup do
+      legacy_professional = legacy_professional_fixture()
+      legacy_patient = legacy_patient_fixture(legacy_professional)
+      %{legacy_patient: legacy_patient}
+    end
+
+    test "returns :ok when called inside a transaction", %{legacy_patient: legacy_patient} do
+      assert Repo.transaction(fn ->
+               Clinical.lock_patient_conversation!(legacy_patient.id)
+             end) == {:ok, :ok}
+    end
+
+    test "raises when the patient does not exist" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Repo.transaction(fn ->
+          Clinical.lock_patient_conversation!(Ecto.UUID.generate())
+        end)
+      end
+    end
+  end
+
+  describe "supersede_absorbed/1" do
+    setup do
+      legacy_professional = legacy_professional_fixture()
+      legacy_patient = legacy_patient_fixture(legacy_professional)
+
+      foundation_patient =
+        professional_fixture()
+        |> patient_fixture()
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      %{foundation_patient: foundation_patient}
+    end
+
+    test "moves only pending replies to superseded and returns the affected count, leaving a sent reply untouched",
+         %{foundation_patient: foundation_patient} do
+      {:ok, inbound1} =
+        Clinical.save_telegram_message(foundation_patient, "uno", "inbound", "spontaneous", "30")
+
+      {:ok, pending1} =
+        Clinical.save_telegram_reply(foundation_patient, "r1", "elicited", inbound1.id, nil)
+
+      {:ok, inbound2} =
+        Clinical.save_telegram_message(foundation_patient, "dos", "inbound", "spontaneous", "31")
+
+      {:ok, pending2} =
+        Clinical.save_telegram_reply(foundation_patient, "r2", "elicited", inbound2.id, nil)
+
+      {:ok, inbound3} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "tres",
+          "inbound",
+          "spontaneous",
+          "32"
+        )
+
+      {:ok, sent_reply} =
+        Clinical.save_telegram_reply(foundation_patient, "r3", "elicited", inbound3.id, nil)
+
+      mark_delivery_state(sent_reply, "sent")
+
+      assert Clinical.supersede_absorbed([pending1.id, pending2.id, sent_reply.id]) == 2
+
+      assert Repo.get!(Message, pending1.id).delivery_state == "superseded"
+      assert Repo.get!(Message, pending2.id).delivery_state == "superseded"
+      assert Repo.get!(Message, sent_reply.id).delivery_state == "sent"
+    end
+
+    test "returns 0 for an empty list" do
+      assert Clinical.supersede_absorbed([]) == 0
+    end
+  end
+
+  describe "cover_members/3" do
+    setup do
+      legacy_professional = legacy_professional_fixture()
+      legacy_patient = legacy_patient_fixture(legacy_professional)
+
+      foundation_patient =
+        professional_fixture()
+        |> patient_fixture()
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      %{foundation_patient: foundation_patient, legacy_patient: legacy_patient}
+    end
+
+    test "covers uncovered rows and rows covered by an absorbed reply, leaves an already-answered row and a self-covered legacy row untouched, and returns the affected count",
+         %{foundation_patient: foundation_patient} do
+      {:ok, uncovered} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "sin cobertura",
+          "inbound",
+          "spontaneous",
+          "40"
+        )
+
+      {:ok, absorbed_inbound} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "cubierto por pendiente",
+          "inbound",
+          "spontaneous",
+          "41"
+        )
+
+      {:ok, absorbed_reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "respuesta pendiente",
+          "elicited",
+          absorbed_inbound.id,
+          nil
+        )
+
+      cover_member(absorbed_inbound, absorbed_reply)
+
+      {:ok, already_answered} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "ya respondido",
+          "inbound",
+          "spontaneous",
+          "42"
+        )
+
+      {:ok, other_reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "otra respuesta",
+          "elicited",
+          already_answered.id,
+          nil
+        )
+
+      mark_delivery_state(other_reply, "sent")
+      cover_member(already_answered, other_reply)
+
+      {:ok, self_covered} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "legado",
+          "inbound",
+          "spontaneous",
+          "43"
+        )
+
+      cover_member(self_covered, self_covered)
+
+      {:ok, new_reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "respuesta nueva",
+          "elicited",
+          uncovered.id,
+          nil
+        )
+
+      count =
+        Clinical.cover_members(
+          [uncovered.id, absorbed_inbound.id, already_answered.id, self_covered.id],
+          new_reply.id,
+          [absorbed_reply.id]
+        )
+
+      assert count == 2
+      assert Repo.get!(Message, uncovered.id).replied_by_message_id == new_reply.id
+      assert Repo.get!(Message, absorbed_inbound.id).replied_by_message_id == new_reply.id
+      assert Repo.get!(Message, already_answered.id).replied_by_message_id == other_reply.id
+      assert Repo.get!(Message, self_covered.id).replied_by_message_id == self_covered.id
+    end
+
+    test "returns 0 for an empty member list" do
+      assert Clinical.cover_members([], Ecto.UUID.generate(), []) == 0
+    end
+  end
+
+  describe "uncovered_inbound?/1" do
+    setup do
+      legacy_professional = legacy_professional_fixture()
+      legacy_patient = legacy_patient_fixture(legacy_professional)
+
+      foundation_patient =
+        professional_fixture()
+        |> patient_fixture()
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      %{foundation_patient: foundation_patient, legacy_patient: legacy_patient}
+    end
+
+    test "true when an inbound row has no coverage", %{
+      foundation_patient: foundation_patient,
+      legacy_patient: legacy_patient
+    } do
+      {:ok, _uncovered} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "sin respuesta",
+          "inbound",
+          "spontaneous",
+          "50"
+        )
+
+      assert Clinical.uncovered_inbound?(legacy_patient.id) == true
+    end
+
+    test "false when every inbound row is covered, including a self-covered legacy row", %{
+      foundation_patient: foundation_patient,
+      legacy_patient: legacy_patient
+    } do
+      {:ok, legacy_row} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "legado",
+          "inbound",
+          "spontaneous",
+          "51"
+        )
+
+      cover_member(legacy_row, legacy_row)
+
+      {:ok, covered_inbound} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "con respuesta",
+          "inbound",
+          "spontaneous",
+          "52"
+        )
+
+      {:ok, reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "respuesta",
+          "elicited",
+          covered_inbound.id,
+          nil
+        )
+
+      cover_member(covered_inbound, reply)
+
+      assert Clinical.uncovered_inbound?(legacy_patient.id) == false
+    end
+
+    test "false for a patient with no inbound rows at all", %{legacy_patient: legacy_patient} do
+      assert Clinical.uncovered_inbound?(legacy_patient.id) == false
+    end
+  end
+
   defp insert_turn(patient, direction, text, timestamp) do
     behavior_type = if direction == "inbound", do: "spontaneous", else: "elicited"
     {:ok, message} = Clinical.save_message(patient, text, nil, direction, behavior_type)

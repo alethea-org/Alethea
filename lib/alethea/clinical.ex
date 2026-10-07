@@ -398,6 +398,170 @@ defmodule Alethea.Clinical do
   end
 
   @doc """
+  Locks the patient's conversation for the rest of the caller's
+  transaction (design AD6): `SELECT … FROM patients WHERE id = $1 FOR
+  UPDATE`. Serializes the burst save transaction and the crisis
+  transaction against each other, so a coverage write can never
+  observe a stale view of the other's progress (#391).
+
+  Lock order across the feature is always the patient, then outbound
+  rows (the dispatch claim), then inbound rows (burst coverage) — the
+  same order the dispatch transaction takes — so this call can never
+  deadlock against it.
+
+  Must be called inside a `Repo.transaction/1`; the lock releases at
+  commit or rollback. Raises `Ecto.NoResultsError` if the patient does
+  not exist (a caller-side bug, not a runtime race).
+  """
+  @spec lock_patient_conversation!(binary()) :: :ok
+  def lock_patient_conversation!(patient_id) do
+    Repo.one!(
+      from(p in Alethea.Accounts.Patient,
+        where: p.id == ^patient_id,
+        select: p.id,
+        lock: "FOR UPDATE"
+      )
+    )
+
+    :ok
+  end
+
+  @doc """
+  Marks `reply_ids` superseded, from `"pending"` only (design AD5): a
+  burst also absorbs the patient's still-undelivered ordinary reply.
+  Returns the number of rows actually moved — the caller compares it
+  against `length(reply_ids)` to detect a lost race (the dispatch
+  claim moved one to `"sending"` first) and roll back (#391, R11).
+  """
+  @spec supersede_absorbed([binary()]) :: non_neg_integer()
+  def supersede_absorbed([]), do: 0
+
+  def supersede_absorbed(reply_ids) when is_list(reply_ids) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      from(m in Message, where: m.id in ^reply_ids and m.delivery_state == "pending")
+      |> Repo.update_all(set: [delivery_state: "superseded", updated_at: now])
+
+    count
+  end
+
+  @doc """
+  Claims coverage of `member_ids` for `reply_id` (design core SQL):
+  only rows that are still uncovered (`replied_by_message_id IS NULL`)
+  or covered by one of `absorbed_reply_ids` (a reply this same save is
+  superseding via `supersede_absorbed/1`, design AD5) are moved. A row
+  already covered by a different, still-live reply is left untouched —
+  as is a self-covered legacy row (design AD2), which can never match
+  either predicate (its `replied_by_message_id` equals its own `id`,
+  never `NULL` and never a reply id). Returns the number of rows
+  moved; the caller compares it against `length(member_ids)` to detect
+  a lost race (#391, R2, R6, R11).
+  """
+  @spec cover_members([binary()], binary(), [binary()]) :: non_neg_integer()
+  def cover_members(member_ids, reply_id, absorbed_reply_ids \\ [])
+
+  def cover_members([], _reply_id, _absorbed_reply_ids), do: 0
+
+  def cover_members(member_ids, reply_id, absorbed_reply_ids) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      from(m in Message,
+        where:
+          m.id in ^member_ids and
+            (is_nil(m.replied_by_message_id) or
+               m.replied_by_message_id in ^absorbed_reply_ids)
+      )
+      |> Repo.update_all(set: [replied_by_message_id: reply_id, updated_at: now])
+
+    count
+  end
+
+  @doc """
+  True if `patient_id` has any Telegram inbound row with no coverage
+  (`replied_by_message_id IS NULL`) — design's invariant I check.
+  Used at save time to detect a newer inbound that arrived during
+  generation (R3), and after a crisis release to decide whether to
+  re-arm (AD4, crisis step 6). A self-covered legacy row (design AD2)
+  is never uncovered, so pre-#391 backlog never reports `true` (#391).
+  """
+  @spec uncovered_inbound?(binary()) :: boolean()
+  def uncovered_inbound?(patient_id) do
+    Repo.exists?(
+      from(m in Message,
+        where:
+          m.patient_id == ^patient_id and m.direction == "inbound" and
+            not is_nil(m.telegram_message_id) and is_nil(m.replied_by_message_id)
+      )
+    )
+  end
+
+  @doc """
+  Ids of the patient's still-`"pending"` ordinary (`"elicited"`)
+  replies (design's crisis step 2; the same subquery
+  `list_burst_members/1` uses for absorption, design AD5, #391).
+  """
+  @spec pending_reply_ids(binary()) :: [binary()]
+  def pending_reply_ids(patient_id) do
+    Repo.all(
+      from(m in Message,
+        where:
+          m.patient_id == ^patient_id and m.direction == "outbound" and
+            m.behavior_type == "elicited" and m.delivery_state == "pending",
+        select: m.id
+      )
+    )
+  end
+
+  @doc """
+  Ids of the inbound Telegram messages a crisis reply must cover
+  (design's crisis step 4): every row up to and including `crisis_tg`
+  (compared as an integer, not text) that is uncovered, or covered by
+  one of `pending_ids` — a reply this same crisis is about to
+  supersede via `supersede_absorbed/1` (design AD5 applied to the
+  crisis path, #391, R5).
+  """
+  @spec crisis_cover_candidates(binary(), String.t(), [binary()]) :: [binary()]
+  def crisis_cover_candidates(patient_id, crisis_tg, pending_ids) do
+    crisis_tg_int = String.to_integer(crisis_tg)
+
+    Repo.all(
+      from(m in Message,
+        where:
+          m.patient_id == ^patient_id and m.direction == "inbound" and
+            not is_nil(m.telegram_message_id) and
+            fragment("?::bigint", m.telegram_message_id) <= ^crisis_tg_int and
+            (is_nil(m.replied_by_message_id) or m.replied_by_message_id in ^pending_ids),
+        select: m.id
+      )
+    )
+  end
+
+  @doc """
+  Releases coverage from `reply_ids` (design's crisis step 5): a row
+  still pointing at one of these is a member of the just-superseded
+  reply that `crisis_cover_candidates/3` did NOT also hand to the
+  crisis reply, because it postdates `crisis_tg` (processed out of
+  order — #391, R5 "after crisis"). Setting it back to `NULL` lets the
+  next burst arm pick it up. Returns the number of rows released; the
+  caller re-arms only when this is greater than zero (design's crisis
+  step 6, AD4).
+  """
+  @spec release_coverage([binary()]) :: non_neg_integer()
+  def release_coverage([]), do: 0
+
+  def release_coverage(reply_ids) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {count, _} =
+      from(m in Message, where: m.replied_by_message_id in ^reply_ids)
+      |> Repo.update_all(set: [replied_by_message_id: nil, updated_at: now])
+
+    count
+  end
+
+  @doc """
   Decrypts a persisted reply so a resumed execution can deliver the
   content the clinical record already holds instead of generating a new
   one. The plaintext is returned to the caller only; it is never logged.
