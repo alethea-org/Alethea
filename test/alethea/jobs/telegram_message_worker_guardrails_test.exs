@@ -8,6 +8,13 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
   the mocked boundary; what the patient would receive is asserted on the
   persisted outbound `Message` and the enqueued `TelegramOutboundWorker`
   job. No live model or classifier is involved.
+
+  #391: `perform/1` only persists the inbound and arms the burst-reply
+  job now; generation happens when `Alethea.Jobs.TelegramBurstReplyWorker`
+  runs. Both shared helpers below (`perform_capturing_payload/2`,
+  `perform_with_generated_reply/3`) drive that job explicitly via
+  `run_burst_reply/0` before asserting on the model payload or the
+  persisted/enqueued reply.
   """
 
   use Alethea.DataCase, async: false
@@ -18,7 +25,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
 
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
-  alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
+  alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.ChatIdHash
   alias AletheaJobs.EmotionAnalysisWorker
@@ -208,6 +215,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
                  args: build_args("Hoy me pasó algo raro.", 30)
                })
 
+      assert :ok = run_burst_reply()
+
       outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
       [job] = all_enqueued(worker: TelegramOutboundWorker)
       body = decrypted_body(outbound)
@@ -229,6 +238,8 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
                  args: build_args("Hoy me pasó algo raro.", 31)
                })
 
+      assert :ok = run_burst_reply()
+
       outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
       assert decrypted_body(outbound) == reply
     end
@@ -249,8 +260,9 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
   # Helpers
   # ----------------------------------------------------------------
 
-  # Runs the worker for one inbound text and returns the payload that
-  # reached the AI worker boundary.
+  # Runs the worker for one inbound text, drives the armed burst-reply
+  # job (#391), and returns the payload that reached the AI worker
+  # boundary.
   defp perform_capturing_payload(text, n) do
     test_pid = self()
 
@@ -260,24 +272,33 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
     end)
 
     assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: build_args(text, n)})
+    assert :ok = run_burst_reply()
     assert_receive {:ai_worker_payload, payload}
     payload
   end
 
-  # Runs the worker with the model's output fixed to `generated`, and
-  # returns what the patient would receive: the persisted outbound body
-  # and the body carried by the delivery job.
+  # Runs the worker with the model's output fixed to `generated`, drives
+  # the armed burst-reply job (#391), and returns what the patient would
+  # receive: the persisted outbound body and the body carried by the
+  # delivery job.
   defp perform_with_generated_reply(text, generated, n) do
     expect(Alethea.AI.PhiWorkerMock, :process, fn payload ->
       {:ok, ai_result(payload.message_id, generated)}
     end)
 
     assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: build_args(text, n)})
+    assert :ok = run_burst_reply()
 
     outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
     [job] = all_enqueued(worker: TelegramOutboundWorker)
 
     %{persisted_body: decrypted_body(outbound), job_body: job.args["body"]}
+  end
+
+  # #391: executes the single armed burst-reply job the way Oban would.
+  defp run_burst_reply do
+    [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+    TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args})
   end
 
   # Independent statement of what a fallback must be: short, a single

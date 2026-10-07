@@ -594,19 +594,77 @@ defmodule Alethea.Clinical do
 
   @doc """
   Claims the delivery of a persisted reply for one execution of the
-  delivery job (`"pending"` -> `"sending"`), atomically.
+  delivery job, atomically deciding claim-or-supersede in one UPDATE
+  (design AD7, #391 R4): `"pending"` moves to `"sending"` unless the
+  reply's patient has a newer uncovered Telegram inbound, in which
+  case it moves to `"superseded"` instead — a newer burst or crisis
+  reply already answers the patient more recently, so this reply must
+  never be sent.
 
-  Returns `:claimed` to exactly one caller. Every other caller gets
-  `{:not_claimed, state}` with the state it lost to, and must not send:
-  the reply is already sent, in flight, or in an outcome that forbids a
-  resend.
+  A `:superseded` outcome also releases this reply's coverage (`SET
+  replied_by_message_id = NULL WHERE replied_by_message_id = reply_id`)
+  in the SAME transaction as the claim UPDATE (design AD7's race
+  analysis: the two must commit together, or a concurrent burst save
+  could observe a stale, uncovered-and-unarmed, or double-covered
+  view). The caller re-arms the burst job after this returns.
+
+  Returns `:claimed` to exactly one caller, `:superseded` when this
+  reply lost to a newer inbound, or `{:not_claimed, state}` with the
+  state it lost to (already sent, in flight, or in an outcome that
+  forbids a resend) when the row was not `"pending"` at all.
   """
   @spec claim_telegram_delivery(binary()) ::
-          :claimed | {:not_claimed, telegram_delivery_state()}
+          :claimed | :superseded | {:not_claimed, telegram_delivery_state()}
   def claim_telegram_delivery(message_id) do
-    case move_telegram_delivery(message_id, ["pending"], delivery_state: "sending") do
-      :ok -> :claimed
-      :unchanged -> {:not_claimed, telegram_delivery_state(message_id)}
+    {:ok, result} =
+      Repo.transaction(fn ->
+        case claim_or_supersede(message_id) do
+          :claimed ->
+            :claimed
+
+          :superseded ->
+            release_coverage([message_id])
+            :superseded
+
+          {:not_claimed, state} ->
+            {:not_claimed, state}
+        end
+      end)
+
+    result
+  end
+
+  # Design core SQL (verbatim, `clinical.ex:382` replaced): one UPDATE,
+  # `RETURNING delivery_state` so the caller can tell which branch of
+  # the `CASE` fired without a second query.
+  defp claim_or_supersede(message_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    from(m in Message,
+      where: m.id == ^message_id and m.delivery_state == "pending",
+      select: m.delivery_state,
+      update: [
+        set: [
+          updated_at: ^now,
+          delivery_state:
+            fragment(
+              """
+              CASE WHEN EXISTS (
+                SELECT 1 FROM messages i
+                WHERE i.patient_id = ? AND i.direction = 'inbound'
+                  AND i.replied_by_message_id IS NULL
+              ) THEN 'superseded' ELSE 'sending' END
+              """,
+              m.patient_id
+            )
+        ]
+      ]
+    )
+    |> Repo.update_all([])
+    |> case do
+      {1, ["sending"]} -> :claimed
+      {1, ["superseded"]} -> :superseded
+      {0, []} -> {:not_claimed, telegram_delivery_state(message_id)}
     end
   end
 

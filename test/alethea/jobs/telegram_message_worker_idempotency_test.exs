@@ -11,6 +11,15 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   One persisted patient message must complete its reply despite worker
   retries, concurrent executions, and outbound retries, without creating
   another patient-visible response.
+
+  #391: the safe path no longer generates synchronously inside
+  `perform/1` — it arms `Alethea.Jobs.TelegramBurstReplyWorker`, which
+  does the generation and the save transaction. Every scenario here
+  that used to assert on generation/persistence directly after
+  `perform/1` now drives the armed burst job explicitly via
+  `run_burst_reply/0` (or `run_burst_reply_for/1` when more than one
+  patient is in play) before asserting on the reply, diagnosis, or
+  delivery job — matching Oban's real dispatch of that job.
   """
 
   use Alethea.DataCase, async: false
@@ -21,7 +30,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   alias Alethea.Clinical.Message
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Jobs.{IdempotencyOutboundEnqueueMock, IdempotencyTelegramClientMock}
-  alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
+  alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
 
@@ -100,20 +109,31 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
         phi_reply(mid)
       end)
 
-      assert_raise RuntimeError, ~r/PhiWorker error/, fn ->
-        TelegramMessageWorker.perform(%Oban.Job{args: args})
-      end
+      # #391: perform/1 only persists the inbound and arms the burst
+      # job now — it never calls PhiWorker itself.
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
 
       assert [%Message{id: inbound_id}] = messages(patient, "inbound")
       refute_enqueued(worker: TelegramOutboundWorker)
 
-      # The Oban retry of the same job: same args, inbound already persisted.
+      # The Oban retry of the same inbound job: same args, inbound
+      # already persisted, idempotently re-arms the same burst job.
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      assert [%Message{id: ^inbound_id}] = messages(patient, "inbound")
+      assert [] = messages(patient, "outbound")
+
+      # The burst job's own first attempt hits the transient PhiWorker
+      # failure and raises (Oban's max_attempts: 3 retries the job
+      # itself); its retry regenerates and succeeds.
+      assert_raise RuntimeError, ~r/PhiWorker error/, fn -> run_burst_reply() end
+      assert :ok = run_burst_reply()
 
       assert [%Message{id: ^inbound_id}] = messages(patient, "inbound")
       assert [%Message{behavior_type: "elicited"}] = messages(patient, "outbound")
 
-      # Both attempts worked on the same persisted inbound.
+      # Both attempts worked on the same persisted inbound (the burst
+      # anchor).
       assert_received {:generation_for, ^inbound_id}
       assert_received {:generation_for, ^inbound_id}
 
@@ -125,14 +145,11 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       patient = bind_patient(@chat_id)
       args = build_args(@chat_id, "hola", telegram_message_id: 402, telegram_update_id: 12)
 
-      Alethea.AI.PhiWorkerMock
-      |> expect(:process, fn _ -> {:error, :service_unavailable} end)
-      |> expect(:process, fn %{message_id: mid} -> phi_reply(mid) end)
-
-      assert_raise RuntimeError, fn ->
-        TelegramMessageWorker.perform(%Oban.Job{args: args})
-      end
-
+      # #391: the emotion job and the outbox event both fire inside
+      # `perform/1` itself, before the burst arm — independent of
+      # generation (R7). No PhiWorkerMock expectation is needed; the
+      # default stub (set in `setup`) is never reached by either call.
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
 
       [inbound] = messages(patient, "inbound")
@@ -162,6 +179,13 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert [%Message{telegram_message_id: "7"} = second_inbound] = messages(second, "inbound")
       refute first_inbound.id == second_inbound.id
 
+      # Each patient gets its own debounced burst job — no collision
+      # on the shared Telegram message id.
+      assert [_, _] = all_enqueued(worker: TelegramBurstReplyWorker)
+
+      assert :ok = run_burst_reply_for(first)
+      assert :ok = run_burst_reply_for(second)
+
       # Each conversation gets its own reply and its own delivery job.
       assert [_] = messages(first, "outbound")
       assert [_] = messages(second, "outbound")
@@ -182,6 +206,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       args = build_args(@chat_id, "hola", telegram_message_id: 500, telegram_update_id: 30)
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = run_burst_reply()
 
       [inbound] = messages(patient, "inbound")
       [outbound] = messages(patient, "outbound")
@@ -201,8 +226,12 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       end)
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = run_burst_reply()
       assert_received :generated
 
+      # A repeated execution of the SAME inbound job, now that the
+      # reply already exists: `resume_reply/5` re-establishes delivery
+      # without arming a new burst job or generating again.
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
       refute_received :generated
 
@@ -216,38 +245,32 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
                all_enqueued(worker: TelegramOutboundWorker)
     end
 
-    test "two concurrent executions of the same job produce one reply and one delivery job" do
+    test "two concurrent executions of the same inbound job produce one inbound row and one armed burst job" do
+      # #391: `perform/1` no longer generates, so racing it no longer
+      # races generation — it races the inbound's find-or-save and the
+      # burst arm, both already idempotent (unique index / Oban
+      # uniqueness). The generation-level race (two burst executions on
+      # the same members) is `TelegramBurstReplyWorker`'s own R6
+      # concurrency test (`telegram_burst_reply_worker_test.exs`).
       patient = bind_patient(@chat_id)
       args = build_args(@chat_id, "hola", telegram_message_id: 502, telegram_update_id: 32)
-      test_pid = self()
-
-      # Hold both executions inside reply generation until both have
-      # entered it, so neither can observe the other's persisted reply
-      # before generating: they must race on persistence itself.
-      stub(Alethea.AI.PhiWorkerMock, :process, fn %{message_id: mid} ->
-        send(test_pid, {:generating, self()})
-
-        receive do
-          :release -> phi_reply(mid)
-        after
-          5_000 -> {:error, :never_released}
-        end
-      end)
 
       executions =
         for _ <- 1..2 do
           Task.async(fn -> TelegramMessageWorker.perform(%Oban.Job{args: args}) end)
         end
 
-      assert_receive {:generating, first}, 5_000
-      assert_receive {:generating, second}, 5_000
-      refute first == second
-      send(first, :release)
-      send(second, :release)
-
       assert [:ok, :ok] = Task.await_many(executions, 10_000)
 
       assert [inbound] = messages(patient, "inbound")
+
+      assert [_one_job] =
+               Repo.all(
+                 from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramBurstReplyWorker"
+               )
+
+      assert :ok = run_burst_reply()
+
       assert [outbound] = messages(patient, "outbound")
       assert outbound.reply_to_message_id == inbound.id
       assert [_one_diagnosis] = diagnoses(inbound.id)
@@ -258,36 +281,55 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
                all_enqueued(worker: TelegramOutboundWorker)
     end
 
-    test "a failure between persisting the reply and enqueueing its delivery is recovered on resume" do
+    test "a save-transaction failure after generation rolls back everything; the burst job's own retry recovers by regenerating (design AD9)" do
+      # #391, design AD9: delivery is enqueued INSIDE the burst save
+      # transaction now (not after it, like the pre-#391 sync path this
+      # test used to exercise) — a burst job retry finds no uncovered
+      # rows to resume, so any failure after generation rolls back the
+      # reply and diagnosis too. There is deliberately nothing to
+      # "resume without regenerating" here anymore; recovery is the
+      # burst job's own Oban retry, which regenerates from scratch.
+      # (A diagnosis-save failure is used to force the rollback because
+      # the burst worker's delivery enqueue is not behind a mockable
+      # adapter the way `TelegramMessageWorker.enqueue_outbound/6` is —
+      # see the apply report's Deviations.)
       patient = bind_patient(@chat_id)
       args = build_args(@chat_id, "hola", telegram_message_id: 503, telegram_update_id: 33)
       test_pid = self()
 
-      stub(Alethea.AI.PhiWorkerMock, :process, fn %{message_id: mid} ->
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn %{message_id: mid} ->
+        send(test_pid, :generated)
+
+        {:ok,
+         %{
+           response: @reply,
+           source_message_id: mid,
+           # No `model_version` — forces `save_ai_diagnosis/2` to fail,
+           # inside the same transaction the delivery enqueue runs in.
+           behavior_type: :elicited
+         }}
+      end)
+      |> expect(:process, fn %{message_id: mid} ->
         send(test_pid, :generated)
         phi_reply(mid)
       end)
 
-      fail_outbound_enqueue_once()
-
-      assert_raise RuntimeError, ~r/failed to enqueue TelegramOutboundWorker/, fn ->
-        TelegramMessageWorker.perform(%Oban.Job{args: args})
-      end
-
-      # The reply is persisted but has no delivery job.
-      assert_received :generated
-      assert [outbound] = messages(patient, "outbound")
-      refute_enqueued(worker: TelegramOutboundWorker)
-
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
 
-      # The resume re-established delivery of the SAME persisted reply
-      # without generating another one.
-      refute_received :generated
-      outbound_id = outbound.id
-      assert [%Message{id: ^outbound_id}] = messages(patient, "outbound")
+      assert_raise RuntimeError, ~r/failed to save burst reply/, fn -> run_burst_reply() end
+      assert_received :generated
+      assert [] = messages(patient, "outbound")
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      assert :ok = run_burst_reply()
+      assert_received :generated
+
+      [outbound] = messages(patient, "outbound")
       [inbound] = messages(patient, "inbound")
       assert [_one_diagnosis] = diagnoses(inbound.id)
+
+      outbound_id = outbound.id
 
       assert [
                %Oban.Job{
@@ -379,6 +421,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       args = build_args(@chat_id, "hola", telegram_message_id: 700, telegram_update_id: 50)
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = run_burst_reply()
       [job] = all_enqueued(worker: TelegramOutboundWorker)
 
       Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
@@ -677,6 +720,25 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       attempt: 1,
       priority: job.priority
     })
+  end
+
+  # #391: executes the single armed burst-reply job the way Oban would.
+  # Raises if generation/save fails (matching the worker's own
+  # behavior — Oban would retry the job).
+  defp run_burst_reply do
+    [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+    TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args})
+  end
+
+  # Same as `run_burst_reply/0`, but picks the job armed for a specific
+  # patient when more than one is scheduled (two-patient scenarios).
+  defp run_burst_reply_for(%{foundation_patient: foundation_patient}) do
+    [job] =
+      [worker: TelegramBurstReplyWorker]
+      |> all_enqueued()
+      |> Enum.filter(&(&1.args["patient_id"] == foundation_patient.id))
+
+    TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args})
   end
 
   # Moves a claim past the sweep's bound without waiting for it.

@@ -97,6 +97,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   alias Alethea.Clinical
   alias Alethea.Telegram.{Pacer, Client, LogRedactor}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
+  alias Alethea.Jobs.TelegramBurstReplyWorker
   alias Alethea.Repo
 
   @max_attempts 5
@@ -139,7 +140,11 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
     # 2. Decide whether this execution may send (#390). Done after the
     #    Pacer wait so a claim is held for the send only.
-    case begin_delivery(message_id, lane) do
+    case begin_delivery(message_id, lane, %{
+           patient_id: patient_id,
+           chat_id: chat_id,
+           chat_id_hash: chat_id_hash
+         }) do
       {:skip, state} ->
         Logger.info(
           "TelegramOutboundWorker: reply not sent, delivery already decided " <>
@@ -254,11 +259,11 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   #   :claimed   — journaling lane; this execution holds the claim.
   #   :crisis    — crisis lane; tracked, sent without a claim.
   #   {:skip, state} — must not send.
-  defp begin_delivery(message_id, lane) do
+  defp begin_delivery(message_id, lane, arm_ctx) do
     cond do
       not tracked_message_id?(message_id) -> :untracked
       crisis_lane?(lane) -> begin_crisis_delivery(message_id)
-      true -> begin_journaling_delivery(message_id)
+      true -> begin_journaling_delivery(message_id, arm_ctx)
     end
   end
 
@@ -270,10 +275,19 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     end
   end
 
-  defp begin_journaling_delivery(message_id) do
+  defp begin_journaling_delivery(message_id, arm_ctx) do
     case Clinical.claim_telegram_delivery(message_id) do
       :claimed ->
         :claimed
+
+      # #391, design AD7/R4: a newer uncovered inbound exists for this
+      # reply's patient — a later burst or crisis reply already answers
+      # more recently. The claim UPDATE already released this reply's
+      # coverage in the same transaction; re-arm so the released
+      # members get picked up by the next burst run, then skip the send.
+      :superseded ->
+        TelegramBurstReplyWorker.arm(arm_ctx)
+        {:skip, "superseded"}
 
       {:not_claimed, nil} ->
         :untracked
@@ -394,7 +408,11 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
     Pacer.acquire(chat_id_hash)
 
-    case begin_delivery(message_id, lane) do
+    case begin_delivery(message_id, lane, %{
+           patient_id: patient_id,
+           chat_id: chat_id,
+           chat_id_hash: chat_id_hash
+         }) do
       {:skip, _state} ->
         # The reply already has its outcome (e.g. an acknowledged crisis
         # reply re-escalated by a repeated inbound job): nothing to send.

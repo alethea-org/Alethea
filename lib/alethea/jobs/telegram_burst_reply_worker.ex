@@ -65,6 +65,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Telegram.JournalingReply
+  alias AletheaJobs.SafeReason
 
   @window_seconds 45
 
@@ -151,8 +152,14 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
         :ok
 
       {:error, reason} ->
+        # PHI hygiene (matches `TelegramMessageWorker`'s crisis/safe-path
+        # raises): a diagnosis-save failure's `{:error, reason}` can be
+        # an `%Ecto.Changeset{}` whose `changes` carries the plaintext
+        # AI reply. `inspect/1` must never render it directly —
+        # `SafeReason.for_log/1` surfaces only the failed field keys (or
+        # the raw reason for a non-changeset error).
         raise "TelegramBurstReplyWorker: failed to save burst reply " <>
-                "(reason=#{inspect(reason)})"
+                "(reason=#{SafeReason.for_log(reason)})"
     end
   end
 
