@@ -109,21 +109,36 @@ defmodule Alethea.Repo.Migrations.RenameTelegramChatIdToHash do
         end)
 
       pepper ->
-        execute(
-          """
-          UPDATE foundation_patients
-          SET telegram_chat_id_hash = encode(
-            hmac(
-              convert_to(telegram_chat_id, 'UTF8'),
-              convert_to($1, 'UTF8'),
-              'sha256'
-            ),
-            'hex'
+        # The column added above is still queued in the migration runner;
+        # the statements below run immediately, so it has to exist first.
+        flush()
+
+        # The HMAC is computed here rather than in SQL (`hmac/3` belongs to
+        # pgcrypto, which this database does not install) and must stay
+        # byte-identical to `Alethea.Telegram.ChatIdHash.hash/2`:
+        # HMAC-SHA256 keyed by the pepper over the chat_id, lowercase hex.
+        # It is inlined so a later change to that module cannot alter what
+        # this migration wrote. `log: false` keeps the chat_id and the hash
+        # out of the query log.
+        %{rows: rows} =
+          repo().query!(
+            "SELECT id, telegram_chat_id FROM foundation_patients WHERE telegram_chat_id IS NOT NULL",
+            [],
+            log: false
           )
-          WHERE telegram_chat_id IS NOT NULL
-          """,
-          [pepper]
-        )
+
+        Enum.each(rows, fn [id, chat_id] ->
+          hash =
+            :hmac
+            |> :crypto.mac(:sha256, pepper, chat_id)
+            |> Base.encode16(case: :lower)
+
+          repo().query!(
+            "UPDATE foundation_patients SET telegram_chat_id_hash = $1 WHERE id = $2",
+            [hash, id],
+            log: false
+          )
+        end)
     end
   end
 end
