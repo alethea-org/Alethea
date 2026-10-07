@@ -169,8 +169,18 @@ These issue items need the authorized remote environment and stay open here:
 
 ## Next step
 
-Native review of slice 1 (base `8e3cbac`, assessed high: executable mode on
-`rel/overlays/bin/migrate`), then slice 2 starting with T4.
+Slice 2 on `chore/402-prod-config-ai-telegram`: T4 and T5 through one writer,
+then T6.
+
+## Native review
+
+- Slice 1, base `8e3cbac` through `2caeb19`: assessed high (executable mode on
+  `rel/overlays/bin/migrate`); consent granted by the user; four lenses;
+  approved and acknowledged (lineage `review-5246702de73ab3fa`). Twelve
+  non-blocking advisory findings were returned with locations only (six
+  warnings: this document 83-86, the migration 130-141, `Dockerfile:13-15`,
+  `clinical_record.ex:2408`, `release_test.exs:17-20`,
+  `health_controller.ex:84-87`). Reviewed boundary is now `2caeb19`.
 
 ## Accepted changes during slice 1
 
