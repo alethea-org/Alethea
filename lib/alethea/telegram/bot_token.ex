@@ -2,8 +2,8 @@ defmodule Alethea.Telegram.BotToken do
   @moduledoc """
   GenServer accessor for the sealed Telegram bot config (C-6).
 
-  Loads `Alethea.Foundation.Accounts.BotConfig.for_env(Mix.env())` once at
-  boot, holds the plaintext in process state, and serves it via
+  Loads `Alethea.Foundation.Accounts.BotConfig.for_env/1` for the configured
+  environment (`config :alethea, :env`) once at boot, holds the plaintext in process state, and serves it via
   synchronous `GenServer.call/2`.
 
   ## Plaintext boundary
@@ -42,7 +42,7 @@ defmodule Alethea.Telegram.BotToken do
 
   ## Fail-loud boot (REQ-C6-no-plaintext-in-env)
 
-  If no `BotConfig` row exists for `Mix.env()`, `init/1` raises a
+  If no `BotConfig` row exists for the configured `:env`, `init/1` raises a
   clear, logged error. The operator is forced to bootstrap a row
   (via `BotConfig.upsert/1` or a seed) before the system accepts any
   Telegram traffic. This is the safe failure mode: a misconfigured
@@ -148,11 +148,11 @@ defmodule Alethea.Telegram.BotToken do
 
         Logger.error(
           "Alethea.Telegram.BotToken failed to boot: " <>
-            "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag(reason)}). " <>
+            "no BotConfig row for env=#{env()} (reason: #{reason_tag(reason)}). " <>
             "Seed a row via Alethea.Foundation.Accounts.BotConfig.upsert/1 before starting the app."
         )
 
-        raise "Alethea.Telegram.BotToken: no BotConfig row for env=#{Mix.env()}"
+        raise "Alethea.Telegram.BotToken: no BotConfig row for env=#{env()}"
     end
   end
 
@@ -220,9 +220,14 @@ defmodule Alethea.Telegram.BotToken do
     end
   end
 
+  # The build environment, set from `config_env()` in `config/config.exs`.
+  # `Mix.env()` is not available in a release, where this module boots.
+  @spec env() :: atom()
+  defp env, do: Application.fetch_env!(:alethea, :env)
+
   @spec load() :: {:ok, plain()} | {:error, :not_found | term()}
   defp load do
-    case BotConfig.for_env(to_string(Mix.env())) do
+    case BotConfig.for_env(to_string(env())) do
       {:ok, %BotConfig{bot_token: t, secret_token: s, bot_username: u}}
       when is_binary(t) and is_binary(s) and is_binary(u) ->
         {:ok, %{bot_token: t, secret_token: s, bot_username: u}}
@@ -252,7 +257,7 @@ defmodule Alethea.Telegram.BotToken do
 
     Logger.error(
       "Alethea.Telegram.BotToken reload failed: " <>
-        "no BotConfig row for env=#{Mix.env()} (reason: #{reason_tag(reason)}). " <>
+        "no BotConfig row for env=#{env()} (reason: #{reason_tag(reason)}). " <>
         "Re-seed the row via Alethea.Foundation.Accounts.BotConfig.upsert/1 and send :reload again. " <>
         "Failing closed: bot_token/0 now returns nil until the row is restored."
     )

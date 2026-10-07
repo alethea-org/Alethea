@@ -12,7 +12,7 @@ defmodule Alethea.Operator.DemoProcessor do
           {:ok, %{emotions_processed: non_neg_integer(), weekly_report: :generated}}
           | {:error,
              :development_only | :invalid_patient_id | :patient_not_found | :processing_failed}
-  def process(patient_id, env \\ Mix.env()) do
+  def process(patient_id, env \\ Application.fetch_env!(:alethea, :env)) do
     with :ok <- ensure_development(env),
          {:ok, patient_id} <- valid_patient_id(patient_id),
          {:ok, patient} <- patient(patient_id),

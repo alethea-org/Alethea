@@ -11,6 +11,10 @@ config :alethea,
   ecto_repos: [Alethea.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# The build environment, readable at runtime. `Mix.env()` does not exist in a
+# release, so runtime code reads `Application.fetch_env!(:alethea, :env)`.
+config :alethea, :env, config_env()
+
 # Configure the endpoint
 config :alethea, AletheaWeb.Endpoint,
   url: [host: "localhost"],

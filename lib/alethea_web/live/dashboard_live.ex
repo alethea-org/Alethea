@@ -449,7 +449,7 @@ defmodule AletheaWeb.DashboardLive do
   # bot_username (test/dev/prod env row). Missing config -> nil, and
   # the panel then shows the 6-digit code only.
   defp telegram_deep_link(token) when is_binary(token) do
-    case BotConfig.for_env(to_string(Mix.env())) do
+    case BotConfig.for_env(to_string(Application.fetch_env!(:alethea, :env))) do
       {:ok, %BotConfig{bot_username: username}} when is_binary(username) and username != "" ->
         "https://t.me/#{username}?start=#{token}"
 
