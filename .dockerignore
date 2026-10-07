@@ -1,44 +1,59 @@
+# Everything the image build does not read. The build needs exactly:
+# mix.exs, mix.lock, config/, lib/, priv/ and rel/.
+
 # Git
 .git
 .gitignore
+.github
 
-# Build artifacts
+# Build artifacts and fetched dependencies (rebuilt inside the image)
 _build
-rel
-
-# Dependencies
 deps
-_build
-
-# IDE
-.vscode
-.idea
-*.swp
-*.swo
-
-# Test artifacts
-cover
-htmlcov
-tmp
-
-# Assets (generated during build)
-priv/static/cache
-
-# Development files
-.dockerignore
-Dockerfile*
-docker-compose*
-.docker
-.dockerignore
-
-# Documentation
-*.md
-docs
+erl_crash.dump
+*.ez
 
 # Environment files (contain secrets)
 .env
 .env.*
 *.local
+
+# Tests and test artifacts
+test
+cover
+htmlcov
+tmp
+
+# Generated static cache (digests are not committed)
+priv/static/cache
+
+# Docker and local orchestration files
+.dockerignore
+Dockerfile*
+docker-compose*
+.docker
+entrypoint.sh
+
+# Documentation and planning
+*.md
+docs
+odd
+openspec
+
+# Sources the release does not use (static assets are committed in priv/static)
+assets
+scripts
+services
+skills-lock.json
+
+# Tooling state
+.codegraph
+.claude
+.atl
+.elixir_ls
+.vscode
+.idea
+*.swp
+*.swo
 
 # Node (if any)
 node_modules

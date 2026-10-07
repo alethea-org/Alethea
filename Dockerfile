@@ -1,81 +1,94 @@
-# ============================================
-# Stage 1: Builder
-# ============================================
-FROM elixir:1.17-alpine AS builder
+# Production image: a Mix release built and run on Debian.
+#
+# Follows the `mix phx.gen.release --docker` layout. The versions are pinned to
+# the Elixir/OTP line CI tests against (.github/workflows/elixir.yml) and to a
+# dated Debian snapshot, so a rebuild is reproducible.
+#
+#   - https://hub.docker.com/r/hexpm/elixir/tags?name=debian-trixie
+#   - https://hub.docker.com/_/debian/tags?name=trixie-20260824-slim
+#
+# No secret and no DATABASE_URL is baked in: config/runtime.exs reads them from
+# the environment when the release boots.
 
-# Install build dependencies
-RUN apk add --no-cache \
-    build-base \
-    git \
-    nodejs \
-    npm \
-    inotify-tools
+ARG ELIXIR_VERSION=1.19.5
+ARG OTP_VERSION=28.5.0.5
+ARG DEBIAN_VERSION=trixie-20260824-slim
 
-# Create app directory
+ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
+ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
+
+# ============================================
+# Stage 1: build the release
+# ============================================
+FROM ${BUILDER_IMAGE} AS builder
+
+# No production dependency compiles native code today (the only NIF, lazy_html,
+# is test-only). The toolchain stays so that adding one does not break the
+# build; it never reaches the runner image.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends build-essential git \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy mix files first for better caching
+RUN mix local.hex --force \
+  && mix local.rebar --force
+
+ENV MIX_ENV="prod"
+
+# Dependencies first, so this layer is reused until mix.exs or mix.lock change.
 COPY mix.exs mix.lock ./
-COPY config ./config
+RUN mix deps.get --only $MIX_ENV
+RUN mkdir config
 
-# Install dependencies (cached if mix.exs/mix.lock unchanged)
-RUN mix local.hex --force && \
-    mix local.rebar --force && \
-    mix deps.get
+# Compile-time config only. Changing it recompiles the dependencies.
+COPY config/config.exs config/${MIX_ENV}.exs config/
+RUN mix deps.compile
 
-# Copy the rest of the application
-COPY lib ./lib
-COPY priv ./priv
-COPY assets ./assets
+# priv carries the committed static assets (priv/static) and the migrations
+# (priv/repo). There is no asset pipeline, so there is no asset build step.
+COPY priv priv
+COPY lib lib
 
-# Build the application
-RUN mix assets.deploy && \
-    MIX_ENV=prod mix release
+RUN mix compile
+
+# Runtime config is copied after compilation: changing it must not recompile.
+COPY config/runtime.exs config/
+
+COPY rel rel
+RUN mix release
 
 # ============================================
-# Stage 2: Runtime
+# Stage 2: run the release
 # ============================================
-FROM alpine:3.19 AS runtime
+FROM ${RUNNER_IMAGE} AS final
 
-# Install runtime dependencies
-RUN apk add --no-cache \
-    bash \
-    libstdc++ \
-    libgcc \
-    libcrypto3 \
-    libssl3 \
-    ca-certificates \
-    openssl
+# ca-certificates is what lets the release verify TLS peers (the database and
+# outbound HTTPS) against the system trust store.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Create app user
-RUN addgroup -g 1000 app && \
-    adduser -u 1000 -G app -s /bin/sh -D app
+RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+  && locale-gen
+
+ENV LANG="en_US.UTF-8"
+ENV LANGUAGE="en_US:en"
+ENV LC_ALL="en_US.UTF-8"
 
 WORKDIR /app
+RUN chown nobody /app
 
-# Copy the release from builder stage
-COPY --from=builder /app/_build/prod/rel/alethea ./
+ENV MIX_ENV="prod"
 
-# Copy the executable and libraries
-COPY --from=builder --chown=app:app /app/_build/prod/rel/alethea/bin/* ./bin/
-COPY --from=builder --chown=app:app /app/_build/prod/rel/alethea/lib ./lib
+COPY --from=builder --chown=nobody:root /app/_build/${MIX_ENV}/rel/alethea ./
 
-# Create necessary directories
-RUN mkdir -p /app/tmp /app/logs && \
-    chown -R app:app /app
+USER nobody
 
-USER app
-
-# Expose port
 EXPOSE 4000
 
-# Set environment defaults
-ENV MIX_ENV=prod
-ENV PORT=4000
+# No image-level HEALTHCHECK: the slim runner has neither curl nor wget, and
+# the platform probes GET /health and /health/ready over HTTP itself.
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1
-
-# Run the application
-CMD ["bin/alethea", "start"]
+# bin/server sets PHX_SERVER=true; without it the endpoint does not listen.
+CMD ["/app/bin/server"]
