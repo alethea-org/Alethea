@@ -16,11 +16,21 @@ defmodule Alethea.AI do
 
   - `:test` env  → the Fakes from `lib/alethea/ai/{embeddings,whisper,emotion_analyzer}/fake.ex`.
   - `:dev` env   → also Fakes (safe; no network).
-  - `:prod` env  → concrete adapters (HF Embeddings, Groq Whisper) —
-                   not in this change; they land in
-                   `ai-embeddings-hf-foundation` and `ai-whisper-groq-foundation`.
-                   The emotion analyzer stays as a development-only
-                   capability (issue #198).
+  - `:prod` env  → every slot is wired explicitly by `config/runtime.exs`
+                   (issue #402): either the concrete adapter, enabled
+                   through its environment switch together with its
+                   endpoint, or the slot's `Disabled` adapter. No Fake
+                   is reachable there. The emotion analyzer stays a
+                   development-only capability (issue #198); whether a
+                   deployment enables it is a product decision.
+
+  ## Disabled capabilities
+
+  "Disabled" is a configured state, not a missing key. `enabled?/1`
+  answers whether a slot can do work, so a caller can skip an optional
+  step instead of treating a switched-off capability as a failure. A
+  caller that does not ask still gets a tagged error from the `Disabled`
+  adapter, never fabricated data.
 
   ## Why a separate module
 
@@ -41,6 +51,36 @@ defmodule Alethea.AI do
   dispatch into the configured adapter. The legacy code is
   untouched by this change.
   """
+
+  @typedoc "A discovery slot of this module."
+  @type slot :: :ai_embeddings | :ai_whisper | :emotion_analyzer
+
+  @disabled_adapters %{
+    ai_embeddings: Alethea.AI.Embeddings.Disabled,
+    ai_whisper: Alethea.AI.Whisper.Disabled,
+    emotion_analyzer: Alethea.AI.EmotionAnalyzer.Disabled
+  }
+
+  @doc """
+  Whether the capability behind `slot` is wired to a working adapter.
+
+  Returns `false` when the slot holds its `Disabled` adapter and also
+  when it is not configured at all, so asking never raises.
+  """
+  @spec enabled?(slot()) :: boolean()
+  def enabled?(slot) when is_map_key(@disabled_adapters, slot) do
+    case Application.fetch_env(:alethea, slot) do
+      {:ok, adapter} -> adapter != disabled_adapter(slot)
+      :error -> false
+    end
+  end
+
+  @doc """
+  Returns the adapter that represents the disabled state of `slot`.
+  """
+  @spec disabled_adapter(slot()) :: module()
+  def disabled_adapter(slot) when is_map_key(@disabled_adapters, slot),
+    do: Map.fetch!(@disabled_adapters, slot)
 
   @doc """
   Returns the module configured at `:ai_embeddings`.

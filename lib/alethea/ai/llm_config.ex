@@ -5,6 +5,16 @@ defmodule Alethea.AI.LLMConfig do
   Elimina la duplicación de código de configuración entre chains.
   Provee defaults seguros y validación de parámetros.
 
+  ## Endpoint resolution
+
+  A chain's endpoint comes from its own configuration, then from the
+  global `config :alethea, Alethea.AI.LLMConfig, <provider>: [...]`, then
+  from a provider default. The `:local` default (`http://localhost:11434`)
+  exists for development and tests only: in production there is no local
+  default, so a chain whose provider has no configured endpoint resolves
+  to `endpoint_url: nil` and `build_llm/1` returns `{:error, _}` ("not
+  configured") instead of calling localhost (issue #402).
+
   ## Uso
 
       alias Alethea.AI.LLMConfig
@@ -37,7 +47,7 @@ defmodule Alethea.AI.LLMConfig do
           provider: provider(),
           model: String.t(),
           api_key: String.t() | nil,
-          endpoint_url: String.t(),
+          endpoint_url: String.t() | nil,
           temperature: float(),
           max_tokens: pos_integer(),
           timeout: pos_integer(),
@@ -64,7 +74,7 @@ defmodule Alethea.AI.LLMConfig do
             provider: Alethea.AI.LLMConfig.provider(),
             model: String.t(),
             api_key: String.t() | nil,
-            endpoint_url: String.t(),
+            endpoint_url: String.t() | nil,
             temperature: float(),
             max_tokens: pos_integer(),
             timeout: pos_integer(),
@@ -144,6 +154,10 @@ defmodule Alethea.AI.LLMConfig do
   Construye un LLM instance listo para usar.
   """
   @spec build_llm(config()) :: {:ok, OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
+  def build_llm(%Config{provider: provider, endpoint_url: nil}) do
+    {:error, "LLM endpoint for the #{inspect(provider)} provider is not configured"}
+  end
+
   def build_llm(%Config{provider: :local} = config) do
     {:ok,
      OllamaChat.new!(%{
@@ -157,21 +171,19 @@ defmodule Alethea.AI.LLMConfig do
   end
 
   def build_llm(%Config{provider: :cloud} = config) do
-    case config.api_key do
-      nil ->
-        {:error, "API key required for cloud provider"}
-
-      api_key when is_binary(api_key) ->
-        {:ok,
-         ChatOpenAI.new!(%{
-           model: config.model,
-           api_key: api_key,
-           endpoint: config.endpoint_url,
-           temperature: config.temperature,
-           max_tokens: config.max_tokens,
-           stream: config.stream,
-           receive_timeout: config.timeout
-         })}
+    if usable_api_key?(config.api_key) do
+      {:ok,
+       ChatOpenAI.new!(%{
+         model: config.model,
+         api_key: config.api_key,
+         endpoint: config.endpoint_url,
+         temperature: config.temperature,
+         max_tokens: config.max_tokens,
+         stream: config.stream,
+         receive_timeout: config.timeout
+       })}
+    else
+      {:error, "API key required for cloud provider"}
     end
   end
 
@@ -220,13 +232,25 @@ defmodule Alethea.AI.LLMConfig do
   # Private
   # ─────────────────────────────────────────────────────────────────
 
+  # An empty or blank string is not a credential.
+  defp usable_api_key?(api_key), do: is_binary(api_key) and String.trim(api_key) != ""
+
   defp resolve_api_key(nil), do: nil
-  defp resolve_api_key(api_key) when is_binary(api_key), do: api_key
+
+  # A blank key is no key: it must not pass as a credential.
+  defp resolve_api_key(api_key) when is_binary(api_key) do
+    if String.trim(api_key) == "", do: nil, else: api_key
+  end
 
   defp resolve_api_key({:system, env_var}) when is_binary(env_var),
-    do: System.get_env(env_var)
+    do: resolve_api_key(System.get_env(env_var))
 
-  defp default_endpoint(:local), do: "http://localhost:11434"
+  # The localhost default serves development and tests. Production has no
+  # local default: an unconfigured endpoint stays `nil` ("not configured").
+  defp default_endpoint(:local) do
+    if Application.get_env(:alethea, :env) == :prod, do: nil, else: "http://localhost:11434"
+  end
+
   defp default_endpoint(:cloud), do: "https://api.openai.com/v1/"
 
   defp default_model(:local), do: "phi4-mini"
