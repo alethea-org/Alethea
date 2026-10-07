@@ -7,6 +7,34 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   channel recorded in the job args (currently `"telegram"`; the
   legacy `"whatsapp"` path was retired in #87).
 
+  ## Failure-tolerant closure (issue #402)
+
+  The closure is a sequence of steps with different weights:
+
+    1. close the session;
+    2. emotion trends — optional, skipped when the analyzer is disabled
+       (`Alethea.AI.enabled?(:emotion_analyzer)`), unavailable or returns
+       an invalid vector;
+    3. session summary — independent of the trends;
+    4. goodbye — independent of both.
+
+  A step that fails never prevents the following ones. Nothing is
+  recorded from a capability that produced no valid result: no trends,
+  and the summary prompt receives an empty emotion profile instead of a
+  fabricated one. A skipped trends step is not a job failure; a failed
+  summary is, so Oban retries it.
+
+  A retry finds the session already closed and resumes instead of
+  restarting: the summary is written only when this session has none
+  (matched by patient and the session's own period), and the goodbye is
+  inserted as a unique job keyed by the session id, so neither can
+  happen twice. A closed session on a first attempt is still a no-op.
+
+  Known limit: trends carry no session reference, so a retry cannot tell
+  whether they were saved and never re-runs the analyzer. Trends are lost
+  for a session only when the first attempt dies between closing the
+  session and saving them.
+
   ## Uniqueness policy (Round 1 fix — verify-flagged CRITICAL)
 
   The worker's `unique: [fields: [:args], period: :infinity]` policy
@@ -111,9 +139,11 @@ defmodule AletheaJobs.SessionTimeoutWorker do
     # session's lifetime — see @moduledoc "Uniqueness policy".
     unique: [fields: [:args], period: :infinity]
 
+  import Ecto.Query, only: [from: 2]
+
   alias Alethea.{Accounts, AI, Clinical}
   alias Alethea.AI.Sanitizer
-  alias Alethea.Clinical.{EmotionAnalysis, Session, SessionManager}
+  alias Alethea.Clinical.{EmotionAnalysis, Session, SessionManager, Summary}
   alias AletheaJobs.SafeReason
 
   require Logger
@@ -143,6 +173,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   # (no migration, no Session schema column) — see exploration.md's
   # "Channel-dispatch mechanism" decision.
   def perform(%Oban.Job{
+        attempt: attempt,
         args: %{
           "session_id" => session_id,
           "patient_id" => patient_id,
@@ -151,17 +182,13 @@ defmodule AletheaJobs.SessionTimeoutWorker do
           "chat_id_hash" => chat_id_hash
         }
       }) do
-    session = Alethea.Repo.get!(Session, session_id)
-
-    if session.status == "closed" do
-      :ok
-    else
-      run_close_flow(session, patient_id,
-        channel: "telegram",
-        chat_id: chat_id,
-        chat_id_hash: chat_id_hash
-      )
-    end
+    Session
+    |> Alethea.Repo.get!(session_id)
+    |> close(patient_id, attempt,
+      channel: "telegram",
+      chat_id: chat_id,
+      chat_id_hash: chat_id_hash
+    )
   end
 
   # Legacy WhatsApp timeout job scheduled before the #87 retirement. The
@@ -172,60 +199,157 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   # nor this legacy `"phone"` shape raises FunctionClauseError (fails loud +
   # Oban-visible) rather than being silently swallowed.
   def perform(%Oban.Job{
+        attempt: attempt,
         args: %{
           "session_id" => session_id,
           "patient_id" => patient_id,
           "phone" => _phone
         }
       }) do
-    session = Alethea.Repo.get!(Session, session_id)
+    Session
+    |> Alethea.Repo.get!(session_id)
+    |> close(patient_id, attempt, channel: "retired_whatsapp")
+  end
 
-    if session.status == "closed" do
-      :ok
-    else
-      run_close_flow(session, patient_id, channel: "retired_whatsapp")
+  # Open session: run the whole closure.
+  defp close(%Session{status: status} = session, patient_id, _attempt, opts)
+       when status != "closed" do
+    patient = Accounts.get_patient!(patient_id)
+
+    case SessionManager.close_session(session) do
+      {:ok, closed_session} ->
+        finish_closure(closed_session, patient, opts, :first_run)
+
+      {:error, reason} ->
+        log_failure(session, reason)
+        {:error, reason}
     end
   end
 
-  defp run_close_flow(session, patient_id, opts) do
-    patient = Accounts.get_patient!(patient_id)
+  # Closed session on a first attempt: a duplicate job, nothing to do.
+  # (`attempt` is 0 on a job struct built by hand, 1 on a first execution.)
+  defp close(%Session{}, _patient_id, attempt, _opts) when attempt <= 1, do: :ok
 
-    with {:ok, closed_session} <- SessionManager.close_session(session),
-         messages <- Clinical.list_session_messages(closed_session.id),
-         {:ok, texts} <- decrypt_messages(patient, messages),
-         sanitized_texts = Enum.map(texts, &Sanitizer.sanitize/1),
-         {:ok, emotion_scores} <- AI.emotion_analyzer().analyze_batch(sanitized_texts),
-         {:ok, _emotion_data} <- EmotionAnalysis.canonical_scores(emotion_scores),
-         :ok <- Clinical.save_trends(patient, emotion_scores, closed_session),
-         {:ok, summary_text} <- session_summary_chain().run(sanitized_texts, emotion_scores),
-         {:ok, _summary} <-
-           Clinical.save_summary(%{
-             period_start: closed_session.started_at,
-             period_end: closed_session.closed_at,
-             summary_text: summary_text,
-             status_level: extract_status_level(summary_text),
-             type: "session",
-             patient_id: patient.id
-           }) do
-      send_goodbye(opts, @goodbye_message)
+  # Closed session on a retry: an earlier attempt of this job closed it and
+  # may have stopped before the summary or the goodbye. Resume those.
+  defp close(%Session{} = closed_session, patient_id, _attempt, opts) do
+    finish_closure(closed_session, Accounts.get_patient!(patient_id), opts, :resume)
+  end
+
+  # Runs every step after the close. The steps are independent: each one
+  # reports its own outcome and none of them stops the next. The job result
+  # is the summary result, the only step a retry can still complete.
+  defp finish_closure(closed_session, patient, opts, mode) do
+    texts = sanitized_texts(patient, closed_session)
+    emotion_scores = record_trends(patient, closed_session, texts, mode)
+    summary_result = record_summary(patient, closed_session, texts, emotion_scores)
+
+    send_goodbye(closed_session, opts, @goodbye_message)
+
+    summary_result
+  end
+
+  defp sanitized_texts(patient, closed_session) do
+    messages = Clinical.list_session_messages(closed_session.id)
+
+    with {:ok, texts} <- decrypt_messages(patient, messages) do
+      {:ok, Enum.map(texts, &Sanitizer.sanitize/1)}
+    end
+  end
+
+  # Optional step. Returns the scores that were actually recorded, so the
+  # summary prompt only ever sees an emotion profile that is also in the
+  # clinical record; `[]` when the step was skipped.
+  defp record_trends(_patient, _closed_session, _texts, :resume), do: []
+  defp record_trends(_patient, _closed_session, {:error, _reason}, :first_run), do: []
+
+  defp record_trends(patient, closed_session, {:ok, texts}, :first_run) do
+    if AI.enabled?(:emotion_analyzer) do
+      with {:ok, emotion_scores} <- AI.emotion_analyzer().analyze_batch(texts),
+           {:ok, _emotion_data} <- EmotionAnalysis.canonical_scores(emotion_scores),
+           :ok <- Clinical.save_trends(patient, emotion_scores, closed_session) do
+        emotion_scores
+      else
+        {:error, reason} ->
+          # Capability name and reason tag only: never message content,
+          # scores or chat identifiers.
+          Logger.warning(
+            "SessionTimeoutWorker: optional step skipped for session #{closed_session.id} " <>
+              "(capability=emotion_analyzer reason=#{SafeReason.for_log(reason)})"
+          )
+
+          []
+      end
+    else
+      # Disabled is a configured state, not a failure: nothing to report.
+      []
+    end
+  end
+
+  defp record_summary(_patient, closed_session, {:error, reason}, _emotion_scores) do
+    log_failure(closed_session, reason)
+    {:error, reason}
+  end
+
+  defp record_summary(patient, closed_session, {:ok, texts}, emotion_scores) do
+    if session_summary_recorded?(patient, closed_session) do
       :ok
     else
-      {:error, reason} ->
-        # PHI-safe error rendering (R2 #86 PR-1 fix). Bare
-        # `inspect(reason)` would embed `Ecto.Changeset.changes`
-        # — which carries `summary_text` (AI-generated clinical
-        # summary) + `patient_id` when `Clinical.save_summary/1`
-        # fails validation. `SafeReason.for_log/1` only surfaces
-        # the failed-validation field keys for changesets; for
-        # non-changeset reasons it falls back to `inspect/1` (which
-        # is the desired behaviour — non-changeset reasons carry
-        # no PHI by shape). See `AletheaJobs.SafeReason` moduledoc.
-        Logger.error(
-          "SessionTimeoutWorker failed for session #{session.id}: #{SafeReason.for_log(reason)}"
-        )
-
-        {:error, reason}
+      with {:ok, chain_result} <- session_summary_chain().run(texts, emotion_scores),
+           {:ok, summary_text} <- summary_text(chain_result),
+           {:ok, _summary} <-
+             Clinical.save_summary(%{
+               period_start: closed_session.started_at,
+               period_end: closed_session.closed_at,
+               summary_text: summary_text,
+               status_level: extract_status_level(summary_text),
+               type: "session",
+               patient_id: patient.id
+             }) do
+        :ok
+      else
+        {:error, reason} ->
+          log_failure(closed_session, reason)
+          {:error, reason}
+      end
     end
+  end
+
+  # A session summary is identified by its patient and the session's own
+  # period, which is what makes a retried closure idempotent without a
+  # session reference on the summary row. The period has one-second
+  # precision; sessions of one patient cannot share it because a session
+  # stays open for at least the inactivity window before this job runs.
+  defp session_summary_recorded?(patient, closed_session) do
+    Alethea.Repo.exists?(
+      from(s in Summary,
+        where:
+          s.patient_id == ^patient.id and s.type == "session" and
+            s.period_start == ^closed_session.started_at and
+            s.period_end == ^closed_session.closed_at
+      )
+    )
+  end
+
+  # `SessionSummaryChain.run/2` returns `%{summary: text, ...}`; the
+  # behaviour (and its mock) documents a bare string. Both are accepted,
+  # anything else is a failed summary and is never persisted.
+  defp summary_text(text) when is_binary(text), do: {:ok, text}
+  defp summary_text(%{summary: text}) when is_binary(text), do: {:ok, text}
+  defp summary_text(_other), do: {:error, :invalid_summary}
+
+  # PHI-safe error rendering (R2 #86 PR-1 fix). Bare `inspect(reason)`
+  # would embed `Ecto.Changeset.changes` — which carries `summary_text`
+  # (AI-generated clinical summary) + `patient_id` when
+  # `Clinical.save_summary/1` fails validation. `SafeReason.for_log/1`
+  # only surfaces the failed-validation field keys for changesets; for
+  # non-changeset reasons it falls back to `inspect/1` (which is the
+  # desired behaviour — non-changeset reasons carry no PHI by shape).
+  # See `AletheaJobs.SafeReason` moduledoc.
+  defp log_failure(session, reason) do
+    Logger.error(
+      "SessionTimeoutWorker failed for session #{session.id}: #{SafeReason.for_log(reason)}"
+    )
   end
 
   # Channel switch on the goodbye send (PR-1 #86). The summary /
@@ -243,18 +367,32 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   #     but they ARE persisted at rest in `oban_jobs.args` for the
   #     lifetime of the scheduled timeout job (see the worker
   #     @moduledoc "PHI at rest — chat_id in oban_jobs.args").
-  defp send_goodbye(opts, body) when is_list(opts) do
+  #
+  # The job is unique per session (issue #402): `session_id` rides in the
+  # args only as the uniqueness key, across every job state and with no
+  # time window, so a retried closure can ask for the goodbye again and
+  # still deliver it once. A later session has another id and gets its own.
+  defp send_goodbye(closed_session, opts, body) when is_list(opts) do
     case Keyword.fetch!(opts, :channel) do
       "telegram" ->
         chat_id = Keyword.fetch!(opts, :chat_id)
         chat_id_hash = Keyword.fetch!(opts, :chat_id_hash)
 
-        TelegramOutboundWorker.new(%{
-          chat_id: chat_id,
-          chat_id_hash: chat_id_hash,
-          body: body,
-          patient_id: nil
-        })
+        TelegramOutboundWorker.new(
+          %{
+            chat_id: chat_id,
+            chat_id_hash: chat_id_hash,
+            body: body,
+            patient_id: nil,
+            session_id: closed_session.id
+          },
+          unique: [
+            fields: [:worker, :args],
+            keys: [:session_id],
+            period: :infinity,
+            states: :all
+          ]
+        )
         |> Oban.insert!()
 
         :ok
@@ -274,13 +412,19 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   defp decrypt_messages(patient, messages) do
     case Clinical.patient_dek(patient) do
       {:ok, dek} ->
-        texts =
-          Enum.map(messages, fn msg ->
-            {:ok, text} = Clinical.decrypt_message_content(msg, dek)
-            text
-          end)
-
-        {:ok, texts}
+        # A message that cannot be decrypted fails the summary step with a
+        # tagged reason instead of raising, so the goodbye still goes out.
+        messages
+        |> Enum.reduce_while({:ok, []}, fn msg, {:ok, texts} ->
+          case Clinical.decrypt_message_content(msg, dek) do
+            {:ok, text} -> {:cont, {:ok, [text | texts]}}
+            _error -> {:halt, {:error, :message_decryption_failed}}
+          end
+        end)
+        |> case do
+          {:ok, texts} -> {:ok, Enum.reverse(texts)}
+          {:error, _reason} = error -> error
+        end
 
       {:error, reason} ->
         {:error, reason}

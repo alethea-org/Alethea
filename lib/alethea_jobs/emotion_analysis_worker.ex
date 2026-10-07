@@ -4,6 +4,14 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
 
   Este worker se encola después de guardar un mensaje y procesa
   el análisis de emociones sin bloquear el flujo principal.
+
+  ## Disabled analyzer (issue #402)
+
+  The job is enqueued for every inbound message. When the emotion
+  analyzer is switched off (`Alethea.AI.enabled?(:emotion_analyzer)` is
+  false) the job completes immediately: the message is not decrypted,
+  nothing is written, and nothing is logged, because a disabled
+  capability is a configured state and not a per-message failure.
   """
   use Oban.Worker, queue: :ai_analysis, max_attempts: 1
 
@@ -16,6 +24,14 @@ defmodule AletheaJobs.EmotionAnalysisWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"message_id" => message_id}}) do
+    if AI.enabled?(:emotion_analyzer) do
+      analyze(message_id)
+    else
+      :ok
+    end
+  end
+
+  defp analyze(message_id) do
     case Clinical.get_message(message_id) do
       {:ok, message} ->
         process_message(message)

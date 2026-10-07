@@ -310,51 +310,246 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     end
   end
 
-  test "unavailable emotion analysis creates no trends or summary", %{
-    patient: patient,
-    session: session,
-    phone: phone
-  } do
-    # Issue #198 — swap to the inline Mox mock to drive the failure shape.
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+  # ----------------------------------------------------------------
+  # Issue #402 — AI capability degradation.
+  #
+  # Emotion trends are an optional step of the closure. The session
+  # summary and the goodbye do not depend on them, so a disabled or
+  # failing analyzer must not leave the closure half-done, and nothing
+  # may be recorded from a capability that produced no valid result.
+  # ----------------------------------------------------------------
 
-    Alethea.AI.EmotionAnalyzerBehaviourMock
-    |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
+  describe "AI capability degradation (issue #402)" do
+    @summary_text "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"
+    @message_text "Me siento bien hoy"
 
-    capture_log(fn ->
-      assert {:error, :unavailable} =
-               perform_job(SessionTimeoutWorker, %{
-                 session_id: session.id,
-                 patient_id: patient.id,
-                 phone: phone
-               })
-    end)
+    defp telegram_job_args(session, patient) do
+      %{
+        session_id: session.id,
+        patient_id: patient.id,
+        channel: "telegram",
+        chat_id: 987_654_321,
+        chat_id_hash: "test_chat_id_hash_abcdef"
+      }
+    end
 
-    assert Repo.aggregate(Trend, :count) == 0
-    assert Repo.aggregate(Summary, :count) == 0
-  end
+    defp goodbye_jobs do
+      Repo.all(from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker")
+    end
 
-  test "malformed emotion analysis creates no trends or summary", %{
-    patient: patient,
-    session: session,
-    phone: phone
-  } do
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+    defp session_summaries(patient) do
+      Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))
+    end
 
-    Alethea.AI.EmotionAnalyzerBehaviourMock
-    |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
+    test "a disabled analyzer is not an error: summary and goodbye complete, no trends recorded",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, EmotionAnalyzer.Disabled)
 
-    capture_log(fn ->
-      assert {:error, :invalid_emotion_scores} =
-               perform_job(SessionTimeoutWorker, %{
-                 session_id: session.id,
-                 patient_id: patient.id,
-                 phone: phone
-               })
-    end)
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn texts, scores ->
+        # No emotion profile is fabricated for the summary prompt.
+        assert texts == [@message_text]
+        assert scores == []
+        {:ok, @summary_text}
+      end)
 
-    assert Repo.aggregate(Trend, :count) == 0
-    assert Repo.aggregate(Summary, :count) == 0
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+        end)
+
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert Repo.aggregate(Trend, :count) == 0
+      assert Repo.aggregate(Alethea.Clinical.EmotionAnalysis, :count) == 0
+      assert [%Summary{summary_text: @summary_text}] = session_summaries(patient)
+      assert [_goodbye] = goodbye_jobs()
+
+      # A switched-off capability is not reported as a failure.
+      refute log =~ "[error]"
+      refute log =~ "[warning]"
+    end
+
+    test "an unavailable analyzer records no trends and the closure still completes",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
+      Alethea.AI.EmotionAnalyzerBehaviourMock
+      |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, scores ->
+        assert scores == []
+        {:ok, @summary_text}
+      end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+        end)
+
+      assert Repo.aggregate(Trend, :count) == 0
+      assert [%Summary{}] = session_summaries(patient)
+      assert [_goodbye] = goodbye_jobs()
+
+      # The skipped step is observable: capability and reason tag only.
+      assert log =~ "capability=emotion_analyzer"
+      assert log =~ "reason=:unavailable"
+      refute log =~ @message_text
+      refute log =~ "987654321"
+      refute log =~ "test_chat_id_hash_abcdef"
+    end
+
+    test "malformed analyzer scores record no trends and the closure still completes",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
+      Alethea.AI.EmotionAnalyzerBehaviourMock
+      |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, scores ->
+        # The rejected vector never reaches the summary prompt.
+        assert scores == []
+        {:ok, @summary_text}
+      end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+        end)
+
+      assert Repo.aggregate(Trend, :count) == 0
+      assert [%Summary{}] = session_summaries(patient)
+      assert [_goodbye] = goodbye_jobs()
+      assert log =~ "reason=:invalid_emotion_scores"
+    end
+
+    test "an unavailable summary chain still sends the goodbye and records no summary",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        {:error, "LLM endpoint for the :local provider is not configured"}
+      end)
+
+      capture_log(fn ->
+        # The failure is surfaced so Oban retries the missing summary.
+        assert {:error, _reason} =
+                 perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+      end)
+
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert session_summaries(patient) == []
+      assert [goodbye] = goodbye_jobs()
+      assert goodbye.args["body"] =~ "Tu sesión de hoy ha concluido"
+      # Trends come from the analyzer, which did succeed.
+      assert Repo.aggregate(Trend, :count) == 5
+    end
+
+    test "a retry completes the missing summary without a second goodbye or duplicate trends",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores -> {:error, :timeout} end)
+      |> expect(:run, fn _texts, scores ->
+        # Trends cannot be attributed to a session, so a retry never
+        # re-runs the analyzer and never repeats them.
+        assert scores == []
+        {:ok, @summary_text}
+      end)
+
+      args = telegram_job_args(session, patient)
+
+      capture_log(fn ->
+        assert {:error, :timeout} = perform_job(SessionTimeoutWorker, args, attempt: 1)
+      end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+
+      assert [%Summary{summary_text: @summary_text}] = session_summaries(patient)
+      assert [_single_goodbye] = goodbye_jobs()
+      assert Repo.aggregate(Trend, :count) == 5
+    end
+
+    test "a retry of a finished closure repeats nothing",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 1, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      args = telegram_job_args(session, patient)
+
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 1)
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 3)
+
+      assert [_single_summary] = session_summaries(patient)
+      assert [_single_goodbye] = goodbye_jobs()
+      assert Repo.aggregate(Trend, :count) == 5
+    end
+
+    test "the goodbye of one session does not suppress the goodbye of the next",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 2, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+
+      # A session summary is matched by the session's own period, which
+      # has one-second precision. Real sessions last at least the
+      # inactivity window, so two sessions of a patient never share a
+      # period; the test spaces them explicitly instead of sleeping.
+      {:ok, next_session} = SessionManager.open_session(patient)
+
+      next_session =
+        next_session
+        |> Ecto.Changeset.change(started_at: DateTime.add(next_session.started_at, -3600))
+        |> Repo.update!()
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(next_session, patient))
+
+      assert length(goodbye_jobs()) == 2
+      assert length(session_summaries(patient)) == 2
+    end
+
+    test "accepts the summary shape returned by the real summary chain",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        {:ok, %{summary: "1. Estado\n2. Temas\n3. Cambios\n4. Alerta", tokens_used: 12}}
+      end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+
+      assert [%Summary{summary_text: "1. Estado\n2. Temas\n3. Cambios\n4. Alerta"} = summary] =
+               session_summaries(patient)
+
+      assert summary.status_level == "Alerta"
+    end
+
+    test "degraded closure leaves behaviour tags and message anchoring untouched",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, EmotionAnalyzer.Disabled)
+
+      before =
+        Repo.all(
+          from m in Alethea.Clinical.Message,
+            where: m.patient_id == ^patient.id,
+            select: {m.id, m.behavior_type, m.direction, m.session_id}
+        )
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+
+      assert [{_id, "spontaneous", "inbound", session_id}] = before
+      assert session_id == session.id
+
+      assert before ==
+               Repo.all(
+                 from m in Alethea.Clinical.Message,
+                   where: m.patient_id == ^patient.id,
+                   select: {m.id, m.behavior_type, m.direction, m.session_id}
+               )
+    end
   end
 
   # ----------------------------------------------------------------

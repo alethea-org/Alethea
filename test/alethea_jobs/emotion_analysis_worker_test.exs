@@ -202,5 +202,173 @@ defmodule AletheaJobs.EmotionAnalysisWorkerTest do
         assert Repo.aggregate(Trend, :count) == 0
       end
     end
+
+    # Issue #402 — a switched-off analyzer is a configured state, not a
+    # failure: the job that every inbound message enqueues must finish
+    # quietly and leave nothing behind.
+    test "a disabled analyzer completes without analysis, trends or log noise", %{
+      message: message,
+      professional: professional
+    } do
+      with_analyzer(Alethea.AI.EmotionAnalyzer.Disabled)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "patients:#{professional.id}")
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(EmotionAnalysisWorker, %{message_id: message.id})
+        end)
+
+      assert Repo.aggregate(EmotionAnalysis, :count) == 0
+      assert Repo.aggregate(Trend, :count) == 0
+      refute_receive {:emotion_trends_updated, _patient_id}
+      refute log =~ "EmotionAnalysisWorker"
+    end
+
+    test "an unconfigured analyzer slot completes instead of raising", %{message: message} do
+      with_analyzer(nil)
+
+      assert :ok = perform_job(EmotionAnalysisWorker, %{message_id: message.id})
+      assert Repo.aggregate(EmotionAnalysis, :count) == 0
+    end
+  end
+
+  # Sentiment regression (repo CLAUDE.md mandate: "Every AI pipeline change
+  # must include a sentiment regression test"). Issue #402 added the
+  # disabled state in front of the analyzer; these tests pin that the
+  # enabled path still turns the same sidecar response into the same
+  # persisted sentiment, through the real `Alethea.AI.EmotionAnalyzer`
+  # parsing code (`Req.Test` stands in for the sidecar). Expected values
+  # are literals taken from the stubbed response, not recomputed.
+  describe "sentiment regression — enabled analyzer (issue #402)" do
+    setup do
+      {:ok, professional} =
+        Accounts.create_professional(%{
+          email: "sentiment_regression_#{System.unique_integer([:positive])}@example.com",
+          password: "securepassword123",
+          full_name: "Sentiment Regression Tester"
+        })
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{"alias" => "Synthetic Patient", "professional_id" => professional.id},
+          kek
+        )
+
+      {:ok, _patient} = Accounts.update_patient_terms(patient, true)
+      patient = Accounts.get_patient!(patient.id)
+      {:ok, session} = Alethea.Clinical.SessionManager.open_session(patient)
+
+      {:ok, message} =
+        Clinical.save_message(
+          patient,
+          "Synthetic fixed message",
+          nil,
+          "inbound",
+          "spontaneous",
+          session.id
+        )
+
+      previous_config = Application.get_env(:alethea, Alethea.AI.EmotionAnalyzer)
+      with_analyzer(Alethea.AI.EmotionAnalyzer)
+
+      Application.put_env(:alethea, Alethea.AI.EmotionAnalyzer,
+        base_url: "http://emotion-sidecar.test",
+        connect_timeout: 100,
+        receive_timeout: 100,
+        max_batch_size: 32,
+        max_text_bytes: 4096,
+        req_options: [plug: {Req.Test, __MODULE__}]
+      )
+
+      on_exit(fn ->
+        Application.put_env(:alethea, Alethea.AI.EmotionAnalyzer, previous_config)
+      end)
+
+      %{message: message, patient: patient}
+    end
+
+    test "a sadness-dominant response persists the same scores, label and anchor", %{
+      message: message,
+      patient: patient
+    } do
+      Req.Test.expect(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "version" => "v1",
+          "results" => [
+            %{
+              "label" => "sadness",
+              "scores" => %{
+                "others" => 0.05,
+                "joy" => 0.025,
+                "sadness" => 0.75,
+                "anger" => 0.05,
+                "surprise" => 0.0,
+                "disgust" => 0.0,
+                "fear" => 0.125
+              }
+            }
+          ]
+        })
+      end)
+
+      assert Alethea.AI.enabled?(:emotion_analyzer)
+
+      assert {:ok, analysis} = perform_job(EmotionAnalysisWorker, %{message_id: message.id})
+
+      assert analysis.dominant_label == "sadness"
+      assert analysis.confidence == 0.75
+      assert analysis.joy_score == 0.025
+      assert analysis.sadness_score == 0.75
+      assert analysis.anger_score == 0.05
+      assert analysis.fear_score == 0.125
+      assert analysis.neutral_score == 0.05
+      # Source anchoring: the analysis points at the originating message.
+      assert analysis.message_id == message.id
+
+      trends =
+        Repo.all(from t in Trend, where: t.patient_id == ^patient.id)
+        |> Map.new(&{&1.indicator_name, &1.score})
+
+      assert trends == %{
+               "joy" => 0.025,
+               "sadness" => 0.75,
+               "anger" => 0.05,
+               "fear" => 0.125,
+               "neutral" => 0.05
+             }
+
+      # The behaviour tag of the analysed message is untouched.
+      assert Repo.get!(Alethea.Clinical.Message, message.id).behavior_type == "spontaneous"
+    end
+
+    test "the deterministic adapter still yields its pinned joy-dominant vector", %{
+      message: message
+    } do
+      with_analyzer(Alethea.AI.EmotionAnalyzer.Fake)
+
+      assert {:ok, analysis} = perform_job(EmotionAnalysisWorker, %{message_id: message.id})
+
+      assert {analysis.dominant_label, analysis.confidence} == {"joy", 0.8}
+
+      assert {analysis.joy_score, analysis.sadness_score, analysis.anger_score,
+              analysis.fear_score, analysis.neutral_score} == {0.8, 0.05, 0.05, 0.05, 0.05}
+    end
+  end
+
+  defp with_analyzer(adapter) do
+    original = Application.fetch_env(:alethea, :emotion_analyzer)
+
+    if adapter,
+      do: Application.put_env(:alethea, :emotion_analyzer, adapter),
+      else: Application.delete_env(:alethea, :emotion_analyzer)
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:alethea, :emotion_analyzer, value)
+        :error -> Application.delete_env(:alethea, :emotion_analyzer)
+      end
+    end)
   end
 end
