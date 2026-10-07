@@ -2408,8 +2408,6 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
-  defp validate_cited_evidence_ids(_), do: {:error, :invalid_cited_evidence_ids}
-
   defp check_cited_evidence_liveness(_patient_id, _target_behavior_id, []), do: :ok
 
   defp check_cited_evidence_liveness(patient_id, target_behavior_id, valid_uuids)
