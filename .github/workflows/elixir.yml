@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Every job only reads the repository.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -37,6 +41,13 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
+      # Warnings fail the build. This covers the application code, not the
+      # dependencies, and runs on the CI toolchain (Elixir 1.19 / OTP 28).
+      - name: Compile with warnings as errors
+        env:
+          MIX_ENV: test
+        run: mix compile --warnings-as-errors
+
       - name: Run tests
         env:
           MIX_ENV: test
@@ -65,3 +76,133 @@ jobs:
       - name: Check formatting
         run: mix format --check-formatted
 
+  # Builds the production image and smoke-tests the release it contains:
+  # migrate, Telegram bootstrap, boot, health checks, one static asset.
+  #
+  # Nothing here leaves the runner. Every value is fake and generated per run,
+  # the Telegram step only writes a database row (the webhook is never
+  # registered), every AI capability that has a switch is off, and the one
+  # mandatory LLM endpoint points at the reserved `.invalid` domain.
+  release:
+    name: Release image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: alethea_release_smoke
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      IMAGE: alethea:ci
+      # The app container uses the runner's host network on purpose. The
+      # Postgres service already publishes 5432 on the runner's localhost, so
+      # the container reaches it there and the steps below reach the app on
+      # localhost:4000, with no network to create or look up. It also keeps
+      # the requests on `localhost`, the host name the app exempts from its
+      # HTTPS redirect.
+      DOCKER_NET: host
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write the fake production environment
+        run: |
+          # The complete set config/runtime.exs requires in production.
+          # DATABASE_SSL=false is the smoke-test opt-out: the service
+          # Postgres has no TLS. It must never be set on a real deployment.
+          cat > "$RUNNER_TEMP/release.env" <<EOF
+          DATABASE_URL=ecto://postgres:postgres@localhost:5432/alethea_release_smoke
+          DATABASE_SSL=false
+          PHX_HOST=ci.invalid
+          PORT=4000
+          SECRET_KEY_BASE=$(openssl rand -base64 64 | tr -d '\n')
+          CLOAK_AES_KEY=$(openssl rand -base64 32 | tr -d '\n')
+          TELEGRAM_CHAT_ID_PEPPER=$(openssl rand -hex 32)
+          AI_PROVIDER=local
+          LOCAL_LLM_BASE_URL=http://llm.invalid
+          EMOTION_ANALYZER_ENABLED=false
+          EMBEDDINGS_ENABLED=false
+          EOF
+
+          # Shaped like the real values, obviously not real. They are only
+          # validated and stored; nothing calls Telegram with them.
+          cat > "$RUNNER_TEMP/telegram.env" <<EOF
+          TELEGRAM_BOT_TOKEN=123456:ci-fake-token-not-a-real-bot
+          TELEGRAM_WEBHOOK_SECRET=ci-fake-webhook-secret
+          TELEGRAM_BOT_USERNAME=ci_fake_bot
+          EOF
+
+      - name: Release command (migrate and Telegram bootstrap)
+        run: |
+          docker run --rm --network "$DOCKER_NET" \
+            --env-file "$RUNNER_TEMP/release.env" \
+            --env-file "$RUNNER_TEMP/telegram.env" \
+            "$IMAGE" /app/bin/release | tee "$RUNNER_TEMP/release.log"
+          grep -q "TELEGRAM_BOT_CONFIG env=prod status=created" "$RUNNER_TEMP/release.log"
+
+      - name: Release command again without the Telegram values
+        run: |
+          docker run --rm --network "$DOCKER_NET" \
+            --env-file "$RUNNER_TEMP/release.env" \
+            "$IMAGE" /app/bin/release | tee "$RUNNER_TEMP/release-again.log"
+          grep -q "TELEGRAM_BOOTSTRAP skipped" "$RUNNER_TEMP/release-again.log"
+
+      - name: Start the server
+        run: |
+          # No TELEGRAM_* here: the server reads the stored row.
+          docker run -d --name alethea --network "$DOCKER_NET" \
+            --env-file "$RUNNER_TEMP/release.env" \
+            "$IMAGE" /app/bin/server
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/health/ready || true)
+            if [ "$code" = "200" ]; then
+              echo "ready after $attempt attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "not ready after 60 s (last status: $code)" >&2
+          exit 1
+
+      - name: Check liveness, readiness body and a static asset
+        run: |
+          curl -fsS http://localhost:4000/health
+          curl -fsS http://localhost:4000/health/ready | tee "$RUNNER_TEMP/ready.json"
+          grep -q '"database":"ok"' "$RUNNER_TEMP/ready.json"
+          grep -q '"oban":"ok"' "$RUNNER_TEMP/ready.json"
+          # A committed file under priv/static, served by Plug.Static.
+          curl -fsS -o /dev/null http://localhost:4000/assets/js/app.js
+
+      - name: Container logs
+        if: failure()
+        run: docker logs alethea || true
+
+      - name: Stop the server
+        if: always()
+        run: docker rm -f alethea || true
