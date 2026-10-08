@@ -1,5 +1,20 @@
 defmodule Alethea.Telegram.WebhookInfo do
-  @moduledoc false
+  @moduledoc """
+  Read-only `getWebhookInfo` client.
+
+  `fetch/2` returns only allowlisted, non-secret fields:
+
+    * `:webhook_url` — the registered URL without userinfo, query or
+      fragment, or `""` when no webhook is registered (Telegram reports an
+      empty `url` in that case);
+    * `:pending_update_count`;
+    * `:allowed_updates` — present only when Telegram reports an explicit
+      list; its absence means the default set of update types;
+    * `:last_error_date` and `:last_error_message` when present.
+
+  The request URL embeds the bot token, so failures are reduced to fixed
+  tags and never carry the request, the response body or the exception.
+  """
 
   @base_url "https://api.telegram.org"
   @max_error_message_bytes 256
@@ -59,27 +74,36 @@ defmodule Alethea.Telegram.WebhookInfo do
     |> Kernel.++(retry: false, redirect: false)
   end
 
-  defp classify_transport_error(:timeout), do: :timeout
-  defp classify_transport_error(:nxdomain), do: :dns
-  defp classify_transport_error({:tls_alert, _alert}), do: :tls
+  @doc """
+  Reduces a `Req.TransportError` reason to a fixed tag, so that no transport
+  detail reaches a caller or a log line.
+  """
+  @spec classify_transport_error(term()) :: :timeout | :dns | :tls | :connection | :unexpected
+  def classify_transport_error(:timeout), do: :timeout
+  def classify_transport_error(:nxdomain), do: :dns
+  def classify_transport_error({:tls_alert, _alert}), do: :tls
 
-  defp classify_transport_error(reason)
-       when reason in [:closed, :econnrefused, :econnreset, :enetunreach, :ehostunreach, :notconn],
-       do: :connection
+  def classify_transport_error(reason)
+      when reason in [:closed, :econnrefused, :econnreset, :enetunreach, :ehostunreach, :notconn],
+      do: :connection
 
-  defp classify_transport_error(_reason), do: :unexpected
+  def classify_transport_error(_reason), do: :unexpected
 
   defp map_result(%{"url" => url, "pending_update_count" => count} = result)
        when is_binary(url) and is_integer(count) and count >= 0 do
     with {:ok, webhook_url} <- safe_webhook_url(url),
          {:ok, info} <-
            maybe_add_error_date(result, %{webhook_url: webhook_url, pending_update_count: count}),
-         {:ok, info} <- maybe_add_error_message(result, info) do
+         {:ok, info} <- maybe_add_error_message(result, info),
+         {:ok, info} <- maybe_add_allowed_updates(result, info) do
       {:ok, info}
     end
   end
 
   defp map_result(_result), do: {:error, :invalid_response}
+
+  # Telegram reports an empty URL while no webhook is registered.
+  defp safe_webhook_url(""), do: {:ok, ""}
 
   defp safe_webhook_url(url) do
     uri = URI.parse(url)
@@ -112,6 +136,19 @@ defmodule Alethea.Telegram.WebhookInfo do
     do: {:error, :invalid_response}
 
   defp maybe_add_error_message(_result, info), do: {:ok, info}
+
+  defp maybe_add_allowed_updates(%{"allowed_updates" => updates}, info) when is_list(updates) do
+    if Enum.all?(updates, &is_binary/1) do
+      {:ok, Map.put(info, :allowed_updates, updates)}
+    else
+      {:error, :invalid_response}
+    end
+  end
+
+  defp maybe_add_allowed_updates(%{"allowed_updates" => _value}, _info),
+    do: {:error, :invalid_response}
+
+  defp maybe_add_allowed_updates(_result, info), do: {:ok, info}
 
   defp sanitize_error_message(message) do
     message

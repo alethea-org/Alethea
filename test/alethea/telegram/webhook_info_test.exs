@@ -115,6 +115,42 @@ defmodule Alethea.Telegram.WebhookInfoTest do
              end)
   end
 
+  test "reports an unregistered webhook as an empty URL" do
+    assert {:ok, %{webhook_url: "", pending_update_count: 0} = info} =
+             WebhookInfo.fetch("test", fn _options ->
+               {:ok,
+                %Req.Response{
+                  status: 200,
+                  body: %{"ok" => true, "result" => %{"url" => "", "pending_update_count" => 0}}
+                }}
+             end)
+
+    refute Map.has_key?(info, :allowed_updates)
+  end
+
+  test "returns the explicit allowed updates list and rejects a malformed one" do
+    fetch = fn allowed_updates ->
+      WebhookInfo.fetch("test", fn _options ->
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "ok" => true,
+             "result" => %{
+               "url" => "https://example.test/webhooks/telegram",
+               "pending_update_count" => 0,
+               "allowed_updates" => allowed_updates
+             }
+           }
+         }}
+      end)
+    end
+
+    assert {:ok, %{allowed_updates: ["message"]}} = fetch.(["message"])
+    assert {:error, :invalid_response} = fetch.("message")
+    assert {:error, :invalid_response} = fetch.([1])
+  end
+
   test "formats only allowlisted fields without multiline provider text" do
     assert WebhookInfo.format(%{
              webhook_url: "https://example.test/webhooks/telegram",

@@ -131,6 +131,18 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     end
   end
 
+  describe "Telegram webhook" do
+    test "the webhook URL is the HTTPS webhook route on the public host" do
+      config = prod_config(%{"PHX_HOST" => "bot.example.test"})
+
+      assert Keyword.fetch!(config, :alethea)[:telegram_webhook_url] ==
+               "https://bot.example.test/webhooks/telegram"
+
+      assert Alethea.Telegram.WebhookRegistration.webhook_url("bot.example.test") ==
+               "https://bot.example.test/webhooks/telegram"
+    end
+  end
+
   describe "LLM provider" do
     test "AI_PROVIDER must be set explicitly to a supported value" do
       assert_raise RuntimeError, ~r/AI_PROVIDER is missing/, fn ->
