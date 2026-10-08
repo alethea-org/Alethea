@@ -11,6 +11,7 @@ defmodule Alethea.AI.PhiWorker do
   @behaviour Alethea.AI.PhiWorkerBehaviour
 
   alias Alethea.AI.Chains.GuidedConversationChain
+  alias Alethea.AI.Chains.RunningSummaryChain
   alias Alethea.AI.Sanitizer
 
   @impl true
@@ -21,4 +22,15 @@ defmodule Alethea.AI.PhiWorker do
       message_id: message_id
     })
   end
+
+  @impl true
+  def summarize(%{turns: turns} = request) do
+    RunningSummaryChain.run(%{
+      turns: Enum.map(turns, &%{role: &1.role, content: Sanitizer.sanitize(&1.content)}),
+      previous_summary: sanitize_previous(Map.get(request, :previous_summary))
+    })
+  end
+
+  defp sanitize_previous(previous) when is_binary(previous), do: Sanitizer.sanitize(previous)
+  defp sanitize_previous(_none), do: nil
 end

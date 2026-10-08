@@ -56,6 +56,44 @@ defmodule Alethea.AI.PhiWorkerTest do
     end
   end
 
+  describe "summarize/1 — sanitization at the last step before the model" do
+    test "redacts identifiers in turns and in the previous summary" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:model_request, Jason.decode!(body)})
+        Req.Test.json(conn, %{"message" => %{"content" => "Hechos que la persona relató:"}})
+      end)
+
+      assert {:ok, %{summary: "Hechos que la persona relató:", truncated: false}} =
+               PhiWorker.summarize(%{
+                 turns: [
+                   %{role: :patient, content: "Escribime a paciente@example.com"},
+                   %{role: :alethea, content: "Gracias."}
+                 ],
+                 previous_summary: "Hechos: llamar al +56 9 8765 4321 o a otro@example.com"
+               })
+
+      assert_receive {:model_request, request}
+      supplied = Enum.map_join(request["messages"], "
+", & &1["content"])
+
+      refute supplied =~ "paciente@example.com"
+      refute supplied =~ "otro@example.com"
+      refute supplied =~ "8765 4321"
+      assert supplied =~ "[REDACTED_EMAIL]"
+      assert supplied =~ "[REDACTED_PHONE]"
+    end
+
+    test "returns an opaque atom error when generation fails" do
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
+
+      assert {:error, :generation_failed} =
+               PhiWorker.summarize(%{turns: [%{role: :patient, content: "Hola"}]})
+    end
+  end
+
   defp process_capturing_request(params) do
     test_pid = self()
 
