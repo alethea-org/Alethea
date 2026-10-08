@@ -10,6 +10,7 @@ defmodule Alethea.ClinicalTest do
   use Oban.Testing, repo: Alethea.Repo
 
   import Ecto.Query
+  import Alethea.FoundationTestHelper
 
   alias Alethea.{Accounts, Clinical}
   alias Alethea.Clinical.Message
@@ -172,6 +173,129 @@ defmodule Alethea.ClinicalTest do
 
       assert Clinical.list_conversation_turns(patient, current, 10) == {:ok, []}
     end
+
+    # R8 (history hygiene, #391): a `superseded` reply was never sent —
+    # its coverage was reclaimed by a later burst or crisis reply — so
+    # it must never resurface as prior context for a new generation.
+    test "excludes a superseded reply, keeping the sent one", %{patient: patient} do
+      discarded =
+        insert_turn(patient, "outbound", "respuesta descartada", ~U[2026-02-01 10:00:00Z])
+
+      mark_delivery_state(discarded, "superseded")
+
+      sent = insert_turn(patient, "outbound", "respuesta enviada", ~U[2026-02-01 10:01:00Z])
+      mark_delivery_state(sent, "sent")
+
+      current = insert_turn(patient, "inbound", "actual", ~U[2026-02-01 10:02:00Z])
+
+      assert Clinical.list_conversation_turns(patient, current, 10) ==
+               {:ok, [%{role: :alethea, content: "respuesta enviada"}]}
+    end
+  end
+
+  defp mark_delivery_state(%Message{} = message, state) do
+    Repo.update_all(from(m in Message, where: m.id == ^message.id), set: [delivery_state: state])
+  end
+
+  # ----------------------------------------------------------------
+  # list_burst_members/1 (#391, S1 read side — R2, R10, R11)
+  # ----------------------------------------------------------------
+
+  describe "list_burst_members/1" do
+    setup do
+      legacy_professional = legacy_professional_fixture()
+      legacy_patient = legacy_patient_fixture(legacy_professional)
+
+      foundation_patient =
+        professional_fixture()
+        |> patient_fixture()
+        |> Ecto.Changeset.change(%{legacy_patient_id: legacy_patient.id})
+        |> Repo.update!()
+
+      %{foundation_patient: foundation_patient}
+    end
+
+    # R2: ordered by `telegram_message_id` as an integer, not text
+    # (lexicographic "10" < "9") and not insertion order.
+    test "orders uncovered members by telegram_message_id as an integer, regardless of insertion order",
+         %{foundation_patient: foundation_patient} do
+      for tg_id <- ["10", "9", "11"] do
+        {:ok, _inbound} =
+          Clinical.save_telegram_message(
+            foundation_patient,
+            "msg #{tg_id}",
+            "inbound",
+            "spontaneous",
+            tg_id
+          )
+      end
+
+      assert {:ok, members} = Clinical.list_burst_members(foundation_patient)
+
+      assert Enum.map(members, fn {message, _text} -> message.telegram_message_id end) == [
+               "9",
+               "10",
+               "11"
+             ]
+
+      assert Enum.map(members, fn {_message, text} -> text end) == ["msg 9", "msg 10", "msg 11"]
+    end
+
+    # R11 / design AD5: a member covered by a reply that already left
+    # "pending" (sent) stays excluded, but one covered by a still-
+    # `pending` elicited reply is absorbed back into the next burst.
+    test "excludes a member covered by a sent reply but includes one covered by a pending reply",
+         %{foundation_patient: foundation_patient} do
+      {:ok, already_sent} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "ya respondido",
+          "inbound",
+          "spontaneous",
+          "20"
+        )
+
+      {:ok, sent_reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "resp enviada",
+          "elicited",
+          already_sent.id,
+          nil
+        )
+
+      mark_delivery_state(sent_reply, "sent")
+      cover_member(already_sent, sent_reply)
+
+      {:ok, still_pending} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "en espera",
+          "inbound",
+          "spontaneous",
+          "21"
+        )
+
+      {:ok, pending_reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "resp pendiente",
+          "elicited",
+          still_pending.id,
+          nil
+        )
+
+      cover_member(still_pending, pending_reply)
+
+      assert {:ok, members} = Clinical.list_burst_members(foundation_patient)
+      assert Enum.map(members, fn {message, _text} -> message.telegram_message_id end) == ["21"]
+    end
+  end
+
+  defp cover_member(%Message{} = inbound, %Message{} = reply) do
+    Repo.update_all(from(m in Message, where: m.id == ^inbound.id),
+      set: [replied_by_message_id: reply.id]
+    )
   end
 
   defp insert_turn(patient, direction, text, timestamp) do

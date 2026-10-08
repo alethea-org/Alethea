@@ -35,6 +35,14 @@ defmodule Alethea.Clinical.Message do
     # cast). Partial unique index `messages_reply_to_message_id_unique`
     # guarantees at most one reply row per inbound.
     belongs_to(:reply_to_message, __MODULE__)
+    # Burst-reply coverage (#391): set on an INBOUND row, pointing at
+    # the OUTBOUND reply that covered it — the opposite direction from
+    # `reply_to_message`. Many inbound rows (a burst) can point at the
+    # same reply, so there is no uniqueness constraint here, unlike
+    # `reply_to_message_id`. `NULL` means "still needs a reply"; the
+    # single source of truth the burst worker scans. Set
+    # programmatically through `Alethea.Clinical` (never cast).
+    belongs_to(:replied_by_message, __MODULE__)
     has_many(:ai_diagnoses, Alethea.AI.Diagnosis)
     has_one(:emotion_analysis, Alethea.Clinical.EmotionAnalysis)
 
