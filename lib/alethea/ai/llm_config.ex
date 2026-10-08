@@ -15,7 +15,9 @@ defmodule Alethea.AI.LLMConfig do
   exists for development and tests only: in production there is no local
   default, so a chain whose provider has no configured endpoint resolves
   to `endpoint_url: nil` and `build_llm/1` returns `{:error, _}` ("not
-  configured") instead of calling localhost (issue #402).
+  configured") instead of calling localhost (issue #402). A blank endpoint
+  (empty or whitespace) is not a value: it falls through to the next
+  source, and `build_llm/1` rejects it as "not configured".
 
   ## Uso
 
@@ -118,14 +120,16 @@ defmodule Alethea.AI.LLMConfig do
           Keyword.get(global_provider_config, :api_key)
       )
 
+    # Each source goes through `resolve_endpoint_url/1` on its own, so a
+    # blank value falls through to the next source instead of masking it.
     endpoint_url =
-      Keyword.get(overrides, :endpoint_url) ||
-        Keyword.get(chain_config, :endpoint_url) ||
-        Keyword.get(chain_config, :endpoint) ||
-        Keyword.get(chain_provider_config, :endpoint_url) ||
-        Keyword.get(chain_provider_config, :endpoint) ||
-        Keyword.get(global_provider_config, :endpoint_url) ||
-        Keyword.get(global_provider_config, :endpoint) ||
+      resolve_endpoint_url(Keyword.get(overrides, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(chain_config, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(chain_config, :endpoint)) ||
+        resolve_endpoint_url(Keyword.get(chain_provider_config, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(chain_provider_config, :endpoint)) ||
+        resolve_endpoint_url(Keyword.get(global_provider_config, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(global_provider_config, :endpoint)) ||
         default_endpoint(provider)
 
     retry = build_retry_config(global_config, chain_config, overrides)
@@ -162,11 +166,17 @@ defmodule Alethea.AI.LLMConfig do
   Construye un LLM instance listo para usar.
   """
   @spec build_llm(config()) :: {:ok, OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
-  def build_llm(%Config{provider: provider, endpoint_url: nil}) do
-    {:error, "LLM endpoint for the #{inspect(provider)} provider is not configured"}
+  def build_llm(%Config{provider: provider, endpoint_url: endpoint_url} = config) do
+    # A blank endpoint is not an endpoint: the adapters would either fall
+    # back to their own localhost default or request a relative path.
+    if resolve_endpoint_url(endpoint_url) do
+      build_chat_model(config)
+    else
+      {:error, "LLM endpoint for the #{inspect(provider)} provider is not configured"}
+    end
   end
 
-  def build_llm(%Config{provider: :local} = config) do
+  defp build_chat_model(%Config{provider: :local} = config) do
     {:ok,
      OllamaChat.new!(%{
        model: config.model,
@@ -178,7 +188,7 @@ defmodule Alethea.AI.LLMConfig do
      })}
   end
 
-  def build_llm(%Config{provider: :cloud} = config) do
+  defp build_chat_model(%Config{provider: :cloud} = config) do
     if usable_api_key?(config.api_key) do
       {:ok,
        ChatOpenAI.new!(%{
@@ -252,6 +262,13 @@ defmodule Alethea.AI.LLMConfig do
 
   defp resolve_api_key({:system, env_var}) when is_binary(env_var),
     do: resolve_api_key(System.get_env(env_var))
+
+  # A blank endpoint is no endpoint: it must not pass as configured.
+  defp resolve_endpoint_url(endpoint_url) when is_binary(endpoint_url) do
+    if String.trim(endpoint_url) == "", do: nil, else: endpoint_url
+  end
+
+  defp resolve_endpoint_url(_endpoint_url), do: nil
 
   # The localhost default serves development and tests. Production has no
   # local default: an unconfigured endpoint stays `nil` ("not configured").
