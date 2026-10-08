@@ -192,6 +192,18 @@ defmodule Alethea.AI.LLMConfigTest do
       assert LLMConfig.get(:guided_conversation, provider: :cloud).api_key == nil
     end
 
+    test "a blank or unresolved chain API key does not mask the global key" do
+      Application.put_env(:alethea, LLMConfig, cloud: [api_key: "global-key"])
+
+      for masked <- ["", "   ", {:system, "ALETHEA_TEST_UNSET_LLM_API_KEY"}] do
+        Application.put_env(:alethea, GuidedConversationChain, provider: :cloud, api_key: masked)
+
+        assert LLMConfig.get(:guided_conversation).api_key == "global-key"
+
+        assert LLMConfig.get(:guided_conversation, api_key: masked).api_key == "global-key"
+      end
+    end
+
     test "a blank chain endpoint does not mask the global endpoint" do
       Application.put_env(:alethea, LLMConfig,
         local: [endpoint_url: "http://global-local.test:11434"],

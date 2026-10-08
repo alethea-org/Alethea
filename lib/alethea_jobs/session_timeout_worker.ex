@@ -201,7 +201,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   # Legacy WhatsApp timeout job scheduled before the #87 retirement. The
   # close/summary/trends pipeline is channel-independent, so we still close
   # the session and persist its summary — only the retired WhatsApp goodbye
-  # send is skipped (routed to `send_goodbye/2`'s unknown-channel backstop,
+  # send is skipped (routed to `send_goodbye/3`'s unknown-channel backstop,
   # which no-ops the send). A job matching neither the Telegram clause above
   # nor this legacy `"phone"` shape raises FunctionClauseError (fails loud +
   # Oban-visible) rather than being silently swallowed.
@@ -536,11 +536,15 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   defp goodbye_jobs(closed_session) do
     worker = inspect(TelegramOutboundWorker)
 
+    # Containment, not `->>`: it is the form the GIN index on `args` serves.
+    # The session id is a binary id, so it is always stored as a JSON string.
+    args = %{"session_id" => to_string(closed_session.id)}
+
     Alethea.Repo.all(
       from(j in Oban.Job,
         where:
           j.worker == ^worker and
-            fragment("?->>'session_id' = ?", j.args, ^to_string(closed_session.id)),
+            fragment("? @> ?", j.args, type(^args, :map)),
         order_by: [asc: j.id]
       )
     )
