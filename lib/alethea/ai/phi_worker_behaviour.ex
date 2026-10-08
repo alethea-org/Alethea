@@ -9,10 +9,19 @@ defmodule Alethea.AI.PhiWorkerBehaviour do
   @type turn :: %{role: :patient | :alethea, content: String.t()}
 
   @type request :: %{
-          message_id: binary(),
-          sanitized_content: String.t(),
-          history: [turn()]
+          required(:message_id) => binary(),
+          required(:sanitized_content) => String.t(),
+          required(:history) => [turn()],
+          optional(:summary) => String.t()
+        }
+
+  @type summarize_request :: %{
+          required(:turns) => [turn()],
+          optional(:previous_summary) => String.t()
         }
 
   @callback process(request()) :: {:ok, map()} | {:error, term()}
+
+  @callback summarize(summarize_request()) ::
+              {:ok, %{summary: String.t(), truncated: boolean()}} | {:error, term()}
 end

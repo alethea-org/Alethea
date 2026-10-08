@@ -32,6 +32,7 @@ defmodule Alethea.AI.LLMConfig do
           | :consultation_synthesis
           | :consultation_hypothesis
           | :functional_analysis_draft
+          | :running_summary
 
   @type config :: %__MODULE__.Config{
           provider: provider(),
@@ -239,6 +240,8 @@ defmodule Alethea.AI.LLMConfig do
   defp chain_module(:pattern_proposal), do: Alethea.AI.Chains.PatternProposalChain
   defp chain_module(:consultation_synthesis), do: Alethea.AI.Chains.ClinicalConsultationChain
   defp chain_module(:consultation_hypothesis), do: Alethea.AI.Chains.ClinicalHypothesisChain
+
+  defp chain_module(:running_summary), do: Alethea.AI.Chains.RunningSummaryChain
 
   defp chain_module(:functional_analysis_draft),
     do: Alethea.AI.Chains.FunctionalAnalysisDraftChain

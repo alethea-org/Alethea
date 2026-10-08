@@ -43,6 +43,10 @@ defmodule Alethea.AI.Mock.Phi do
     GenServer.call(__MODULE__, {:process, params})
   end
 
+  # Not scripted: no suite drives summarization through this mock.
+  # Tests that exercise `summarize/1` use `Alethea.AI.PhiWorkerMock` (Mox).
+  def summarize(_params), do: {:error, :no_response_configured}
+
   # Server Implementation
 
   def init(_opts) do
