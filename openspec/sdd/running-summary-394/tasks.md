@@ -32,11 +32,11 @@ Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting 
 
 ## Slice S0: Crisis-copy pure refactor (PR1)
 
-- [ ] 0.1 RED `test/alethea/alerts/crisis_copy_test.exs` (new): `reply_text/1` returns professional `crisis_message`; `""` passes through (`||` semantics kept); nil -> `:crisis_support_message` config; nil + no config -> `default_support_message/0`. Fallbacks have no existing test (F2). REQ-16. Done: tests fail (module missing).
-- [ ] 0.2 GREEN create `lib/alethea/alerts/crisis_copy.ex` (`reply_text/1`, `default_support_message/0`); body moved verbatim from the worker. REQ-16. Done: 0.1 green.
-- [ ] 0.3 Edit `lib/alethea/jobs/telegram_message_worker.ex` (~lines 906-921 only): delete private `crisis_reply_text/1` + `default_crisis_support_message/0`, call `CrisisCopy`. REQ-16. Done: existing crisis tests (`telegram_message_worker_test.exs:998,1083,1192,1575,1645`) pass with zero test-file edits; `git diff` shows no edit to that file.
-- [ ] 0.4 Single-source test in `crisis_copy_test.exs`: for one patient the worker-resolved text equals `CrisisCopy.reply_text/1`. REQ-16.
-- [ ] 0.5 Gate: `mix test` for the two files, `mix compile --warnings-as-errors`, `git diff --stat` ~100 lines, only 3 files touched.
+- [x] 0.1 RED `test/alethea/alerts/crisis_copy_test.exs` (new): `reply_text/1` returns professional `crisis_message`; `""` passes through (`||` semantics kept); nil -> `:crisis_support_message` config; nil + no config -> `default_support_message/0`. Fallbacks have no existing test (F2). REQ-16. Done: tests fail (module missing).
+- [x] 0.2 GREEN create `lib/alethea/alerts/crisis_copy.ex` (`reply_text/1`, `default_support_message/0`); body moved verbatim from the worker. REQ-16. Done: 0.1 green.
+- [x] 0.3 Edit `lib/alethea/jobs/telegram_message_worker.ex` (~lines 906-921 only): delete private `crisis_reply_text/1` + `default_crisis_support_message/0`, call `CrisisCopy`. REQ-16. Done: existing crisis tests (`telegram_message_worker_test.exs:998,1083,1192,1575,1645`) pass with zero test-file edits; `git diff` shows no edit to that file.
+- [x] 0.4 ~~Single-source test in `crisis_copy_test.exs`: for one patient the worker-resolved text equals `CrisisCopy.reply_text/1`.~~ **Replaced (user, 2026-10-08):** after the extraction the worker has no resolver of its own, so an equality test is tautological. Replaced by a worker-seam test in a separate file, `test/alethea/jobs/telegram_message_worker_crisis_copy_test.exs`, driving `TelegramMessageWorker.perform/1` with a professional whose `crisis_message` is `nil`: (a) with `:crisis_support_message` set → the crisis outbound body is the config text; (b) with no config → the body is `CrisisCopy.default_support_message/0`. Closes design finding F2 (fallback chain untested at the worker level). Characterization test: green on first run; a mutation of the fallback chain made both cases fail. REQ-16.
+- [x] 0.5 Gate: `mix test` for the two files, `mix compile --warnings-as-errors`, `git diff --stat` ~100 lines, only 3 files touched.
 
 ## Slice S1: Storage + `patient_dek/2` (PR2)
 
