@@ -5,7 +5,7 @@ defmodule AletheaWeb.Plugs.TelegramSecretToken do
   Validates the `X-Telegram-Bot-Api-Secret-Token` header against
   the value served by `Alethea.Telegram.BotToken.secret_token/0`
   (the encrypted-at-rest `BotConfig.secret_token_ciphertext` for
-  `Mix.env()`). The check runs before the body is parsed, so a
+  the configured `:alethea, :env`). The check runs before the body is parsed, so a
   spoofed or replayed webhook never reaches the controller.
 
   ## Behaviour
