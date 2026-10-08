@@ -5,6 +5,20 @@ defmodule Alethea.AI.LLMConfig do
   Elimina la duplicación de código de configuración entre chains.
   Provee defaults seguros y validación de parámetros.
 
+  ## Endpoint resolution
+
+  A chain's endpoint (and API key) comes from explicit overrides, then
+  from its own first-level options, then from its own nested
+  `<provider>: [...]` settings, then from the global
+  `config :alethea, Alethea.AI.LLMConfig, <provider>: [...]`, then from a
+  provider default. The `:local` default (`http://localhost:11434`)
+  exists for development and tests only: in production there is no local
+  default, so a chain whose provider has no configured endpoint resolves
+  to `endpoint_url: nil` and `build_llm/1` returns `{:error, _}` ("not
+  configured") instead of calling localhost (issue #402). A blank endpoint
+  (empty or whitespace) is not a value: it falls through to the next
+  source, and `build_llm/1` rejects it as "not configured".
+
   ## Uso
 
       alias Alethea.AI.LLMConfig
@@ -37,7 +51,7 @@ defmodule Alethea.AI.LLMConfig do
           provider: provider(),
           model: String.t(),
           api_key: String.t() | nil,
-          endpoint_url: String.t(),
+          endpoint_url: String.t() | nil,
           temperature: float(),
           max_tokens: pos_integer(),
           timeout: pos_integer(),
@@ -64,7 +78,7 @@ defmodule Alethea.AI.LLMConfig do
             provider: Alethea.AI.LLMConfig.provider(),
             model: String.t(),
             api_key: String.t() | nil,
-            endpoint_url: String.t(),
+            endpoint_url: String.t() | nil,
             temperature: float(),
             max_tokens: pos_integer(),
             timeout: pos_integer(),
@@ -89,25 +103,31 @@ defmodule Alethea.AI.LLMConfig do
         Keyword.get(chain_config, :provider) ||
         Keyword.get(global_config, :provider, :local)
 
-    provider_config =
-      Keyword.get(global_config, provider, []) ++
-        Keyword.get(chain_config, provider, [])
+    # The chain's nested provider settings are consulted before the global
+    # ones. They are kept apart rather than concatenated: `Keyword.get/2`
+    # returns the first match, and an endpoint may be spelled `:endpoint_url`
+    # on one side and `:endpoint` on the other.
+    chain_provider_config = Keyword.get(chain_config, provider, [])
+    global_provider_config = Keyword.get(global_config, provider, [])
 
     defaults = Keyword.get(global_config, :defaults, [])
 
+    # Each source goes through its resolver on its own, so a blank or
+    # unresolved value falls through to the next source instead of masking it.
     api_key =
-      resolve_api_key(
-        Keyword.get(overrides, :api_key) ||
-          Keyword.get(chain_config, :api_key) ||
-          Keyword.get(provider_config, :api_key)
-      )
+      resolve_api_key(Keyword.get(overrides, :api_key)) ||
+        resolve_api_key(Keyword.get(chain_config, :api_key)) ||
+        resolve_api_key(Keyword.get(chain_provider_config, :api_key)) ||
+        resolve_api_key(Keyword.get(global_provider_config, :api_key))
 
     endpoint_url =
-      Keyword.get(overrides, :endpoint_url) ||
-        Keyword.get(chain_config, :endpoint_url) ||
-        Keyword.get(chain_config, :endpoint) ||
-        Keyword.get(provider_config, :endpoint_url) ||
-        Keyword.get(provider_config, :endpoint) ||
+      resolve_endpoint_url(Keyword.get(overrides, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(chain_config, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(chain_config, :endpoint)) ||
+        resolve_endpoint_url(Keyword.get(chain_provider_config, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(chain_provider_config, :endpoint)) ||
+        resolve_endpoint_url(Keyword.get(global_provider_config, :endpoint_url)) ||
+        resolve_endpoint_url(Keyword.get(global_provider_config, :endpoint)) ||
         default_endpoint(provider)
 
     retry = build_retry_config(global_config, chain_config, overrides)
@@ -144,7 +164,17 @@ defmodule Alethea.AI.LLMConfig do
   Construye un LLM instance listo para usar.
   """
   @spec build_llm(config()) :: {:ok, OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
-  def build_llm(%Config{provider: :local} = config) do
+  def build_llm(%Config{provider: provider, endpoint_url: endpoint_url} = config) do
+    # A blank endpoint is not an endpoint: the adapters would either fall
+    # back to their own localhost default or request a relative path.
+    if resolve_endpoint_url(endpoint_url) do
+      build_chat_model(config)
+    else
+      {:error, "LLM endpoint for the #{inspect(provider)} provider is not configured"}
+    end
+  end
+
+  defp build_chat_model(%Config{provider: :local} = config) do
     {:ok,
      OllamaChat.new!(%{
        model: config.model,
@@ -156,22 +186,20 @@ defmodule Alethea.AI.LLMConfig do
      })}
   end
 
-  def build_llm(%Config{provider: :cloud} = config) do
-    case config.api_key do
-      nil ->
-        {:error, "API key required for cloud provider"}
-
-      api_key when is_binary(api_key) ->
-        {:ok,
-         ChatOpenAI.new!(%{
-           model: config.model,
-           api_key: api_key,
-           endpoint: config.endpoint_url,
-           temperature: config.temperature,
-           max_tokens: config.max_tokens,
-           stream: config.stream,
-           receive_timeout: config.timeout
-         })}
+  defp build_chat_model(%Config{provider: :cloud} = config) do
+    if usable_api_key?(config.api_key) do
+      {:ok,
+       ChatOpenAI.new!(%{
+         model: config.model,
+         api_key: config.api_key,
+         endpoint: config.endpoint_url,
+         temperature: config.temperature,
+         max_tokens: config.max_tokens,
+         stream: config.stream,
+         receive_timeout: config.timeout
+       })}
+    else
+      {:error, "API key required for cloud provider"}
     end
   end
 
@@ -220,13 +248,32 @@ defmodule Alethea.AI.LLMConfig do
   # Private
   # ─────────────────────────────────────────────────────────────────
 
+  # An empty or blank string is not a credential.
+  defp usable_api_key?(api_key), do: is_binary(api_key) and String.trim(api_key) != ""
+
   defp resolve_api_key(nil), do: nil
-  defp resolve_api_key(api_key) when is_binary(api_key), do: api_key
+
+  # A blank key is no key: it must not pass as a credential.
+  defp resolve_api_key(api_key) when is_binary(api_key) do
+    if String.trim(api_key) == "", do: nil, else: api_key
+  end
 
   defp resolve_api_key({:system, env_var}) when is_binary(env_var),
-    do: System.get_env(env_var)
+    do: resolve_api_key(System.get_env(env_var))
 
-  defp default_endpoint(:local), do: "http://localhost:11434"
+  # A blank endpoint is no endpoint: it must not pass as configured.
+  defp resolve_endpoint_url(endpoint_url) when is_binary(endpoint_url) do
+    if String.trim(endpoint_url) == "", do: nil, else: endpoint_url
+  end
+
+  defp resolve_endpoint_url(_endpoint_url), do: nil
+
+  # The localhost default serves development and tests. Production has no
+  # local default: an unconfigured endpoint stays `nil` ("not configured").
+  defp default_endpoint(:local) do
+    if Application.get_env(:alethea, :env) == :prod, do: nil, else: "http://localhost:11434"
+  end
+
   defp default_endpoint(:cloud), do: "https://api.openai.com/v1/"
 
   defp default_model(:local), do: "phi4-mini"

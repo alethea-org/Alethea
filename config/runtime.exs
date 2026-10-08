@@ -46,7 +46,6 @@ end
 
 if config_env() in [:dev, :prod] do
   config :alethea, Alethea.AI.EmotionAnalyzer,
-    base_url: System.get_env("EMOTION_SIDECAR_URL", "http://127.0.0.1:8080"),
     connect_timeout:
       String.to_integer(System.get_env("EMOTION_SIDECAR_CONNECT_TIMEOUT_MS", "2000")),
     receive_timeout:
@@ -55,16 +54,21 @@ if config_env() in [:dev, :prod] do
     max_text_bytes: String.to_integer(System.get_env("EMOTION_SIDECAR_MAX_TEXT_BYTES", "4096"))
 end
 
-# Issue #198 — the emotion analyzer is a development-only capability.
-# The :emotion_analyzer discovery slot is intentionally NOT wired in
-# :prod; `Alethea.AI.emotion_analyzer/0` raises in that environment to
-# make the development-only contract loud rather than silent. The
-# dev-sidecar HTTP defaults above remain in place for the local :dev
-# workflow that still uses the real adapter.
-#
-# In :prod deployments that need to wire a non-dev analyzer, set the
-# :emotion_analyzer key explicitly via a release-time config injector.
-# That decision is out of scope for issue #198.
+# The loopback sidecar default exists only for the local :dev workflow
+# (`docker compose up -d emotion-sidecar`). Production has no default
+# endpoint: the :prod block below either requires EMOTION_SIDECAR_URL or
+# wires the explicit `Disabled` adapter (issue #402).
+if config_env() == :dev do
+  config :alethea, Alethea.AI.EmotionAnalyzer,
+    base_url: System.get_env("EMOTION_SIDECAR_URL", "http://127.0.0.1:8080")
+end
+
+# Issue #198 — the emotion analyzer is a development-only capability with
+# no clinical-validity claim. Issue #402 makes its production state
+# explicit: the :prod block below wires the :emotion_analyzer slot either
+# to the sidecar adapter (EMOTION_ANALYZER_ENABLED=true plus its endpoint)
+# or to `Alethea.AI.EmotionAnalyzer.Disabled`. Whether a deployment enables
+# it is a product decision, not a default.
 
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
@@ -112,6 +116,46 @@ Si estás en peligro inmediato, llama al 131 (SAMU).
 """
 
 if config_env() == :prod do
+  # Environment readers for the production contract (issue #402). A blank
+  # value counts as missing, and no error message echoes a value: these
+  # variables carry credentials.
+  optional_env = fn name ->
+    case System.get_env(name) do
+      nil -> nil
+      value -> if String.trim(value) == "", do: nil, else: value
+    end
+  end
+
+  required_env = fn name, hint ->
+    optional_env.(name) || raise "environment variable #{name} is missing or empty. #{hint}"
+  end
+
+  positive_integer_env = fn name, default ->
+    case Integer.parse(System.get_env(name, default)) do
+      {value, ""} when value > 0 -> value
+      _other -> raise "environment variable #{name} must be a positive integer."
+    end
+  end
+
+  # An AI capability is never enabled or disabled by omission: the switch
+  # must be present and must be exactly `true` or `false`.
+  capability_switch = fn name ->
+    case System.get_env(name) do
+      "true" ->
+        true
+
+      "false" ->
+        false
+
+      nil ->
+        raise "environment variable #{name} is missing. " <>
+                "Set it explicitly to true or false."
+
+      _other ->
+        raise "environment variable #{name} must be exactly true or false."
+    end
+  end
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """
@@ -121,10 +165,45 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  # Database TLS is on by default and verified. Postgrex merges a keyword
+  # `:ssl` over its own defaults (`verify: :verify_peer` plus the HTTPS
+  # hostname check) and derives SNI from the hostname, so passing the OS
+  # trust store is the whole configuration. Ecto ignores `sslmode=` in the
+  # URL, so the URL cannot turn this off.
+  #
+  # DATABASE_SSL=false is the only opt-out and exists for a local release
+  # smoke test against a Postgres without TLS. Only that exact literal
+  # disables it; any other value, including a typo, keeps TLS on.
+  database_ssl =
+    case System.get_env("DATABASE_SSL") do
+      "false" -> false
+      _on -> [cacerts: :public_key.cacerts_get()]
+    end
+
+  # Connect and handshake share one budget: a suspended Neon compute needs
+  # a few hundred milliseconds to resume, and Neon recommends 10-15 s.
+  database_connect_timeout = positive_integer_env.("DATABASE_CONNECT_TIMEOUT_MS", "15000")
+
   config :alethea, Alethea.Repo,
-    # ssl: true,
+    ssl: database_ssl,
     url: database_url,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    # Neon's direct (non-pooler) host has a small connection budget and
+    # every Machine opens its own pool, so the default stays small.
+    pool_size: positive_integer_env.("POOL_SIZE", "5"),
+    # Postgrex: TCP connect and TLS/authentication handshake timeouts.
+    connect_timeout: database_connect_timeout,
+    handshake_timeout: database_connect_timeout,
+    # DBConnection: callers may wait up to `queue_target` for a connection
+    # before the pool starts shedding load, measured over `queue_interval`.
+    # The 50 ms default would drop requests while the pool reconnects after
+    # a compute suspend.
+    queue_target: positive_integer_env.("DATABASE_QUEUE_TARGET_MS", "2000"),
+    queue_interval: positive_integer_env.("DATABASE_QUEUE_INTERVAL_MS", "10000"),
+    # DBConnection: reconnect with randomized exponential backoff, capped
+    # well below the 30 s default so a resumed compute is picked up quickly.
+    backoff_type: :rand_exp,
+    backoff_min: 500,
+    backoff_max: 10_000,
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,
     socket_options: maybe_ipv6
@@ -141,12 +220,27 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  # The public host has no default: URL generation, HSTS redirects and the
+  # LiveView origin check all depend on it.
+  host = required_env.("PHX_HOST", "Set it to the public host name, for example app.example.org.")
+
+  if String.contains?(host, ["/", ":"]) do
+    raise "environment variable PHX_HOST must be a bare host name, without scheme, port or path."
+  end
+
+  # Extra allowed origins (for example a custom domain in front of the
+  # platform host), as a comma-separated list of full origins.
+  extra_origins =
+    System.get_env("PHX_EXTRA_ORIGINS", "")
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
 
   config :alethea, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :alethea, AletheaWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
+    check_origin: ["https://" <> host | extra_origins],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
@@ -165,24 +259,114 @@ if config_env() == :prod do
 
   config :alethea, Alethea.Encryption.Vault, aes_key: cloak_aes_key
 
+  # ## LLM provider (issue #402)
+  #
+  # AI_PROVIDER selects the provider of the guided conversation chain and
+  # must be set explicitly. It does not move any other chain: those keep
+  # the provider they are pinned to (`:local` unless configured otherwise),
+  # so clinical narrative is never rerouted to a hosted model by this
+  # variable.
   ai_provider =
-    System.get_env("AI_PROVIDER", "local")
-    |> String.downcase()
-    |> case do
-      "cloud" -> :cloud
-      _ -> :local
+    case System.get_env("AI_PROVIDER") do
+      "local" ->
+        :local
+
+      "cloud" ->
+        :cloud
+
+      nil ->
+        raise "environment variable AI_PROVIDER is missing. Set it explicitly to local or cloud."
+
+      _other ->
+        raise "environment variable AI_PROVIDER has an unsupported value. " <>
+                "Supported values: local, cloud."
     end
 
-  # Configuración compartida para chains de LangChain
-  config :alethea, Alethea.AI.Chains.GuidedConversationChain,
-    provider: ai_provider,
-    cloud: [
-      endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-      api_key: System.get_env("OPENAI_API_KEY", "")
-    ],
-    local: [
-      endpoint_url: System.get_env("LOCAL_LLM_BASE_URL", "http://localhost:11434")
-    ]
+  local_llm_base_url = optional_env.("LOCAL_LLM_BASE_URL")
+  openai_api_key = optional_env.("OPENAI_API_KEY")
+  llm_model = optional_env.("LLM_MODEL")
+
+  if ai_provider == :local and is_nil(local_llm_base_url) do
+    raise "environment variable LOCAL_LLM_BASE_URL is missing or empty. " <>
+            "It is required while AI_PROVIDER=local."
+  end
+
+  if ai_provider == :cloud and is_nil(openai_api_key) do
+    raise "environment variable OPENAI_API_KEY is missing or empty. " <>
+            "It is required while AI_PROVIDER=cloud."
+  end
+
+  # The compiled default model is a local model name; a hosted provider
+  # must name its own.
+  if ai_provider == :cloud and is_nil(llm_model) do
+    raise "environment variable LLM_MODEL is missing or empty. " <>
+            "It is required while AI_PROVIDER=cloud."
+  end
+
+  # Global endpoints, shared by every chain through `Alethea.AI.LLMConfig`.
+  # A provider without an endpoint or key stays absent here, and
+  # `LLMConfig` resolves it to "not configured" in production instead of a
+  # localhost default.
+  config :alethea, Alethea.AI.LLMConfig,
+    local: if(local_llm_base_url, do: [endpoint_url: local_llm_base_url], else: []),
+    cloud:
+      [endpoint_url: optional_env.("OPENAI_BASE_URL") || "https://api.openai.com/v1"] ++
+        if(openai_api_key, do: [api_key: openai_api_key], else: [])
+
+  config :alethea,
+         Alethea.AI.Chains.GuidedConversationChain,
+         [provider: ai_provider] ++ if(llm_model, do: [model: llm_model], else: [])
+
+  # ## AI capability switches (issue #402)
+  #
+  # Each discovery slot of `Alethea.AI` is either enabled with its endpoint
+  # or wired to its `Disabled` adapter. No slot is left unset and no Fake
+  # adapter is selectable here.
+  if capability_switch.("EMOTION_ANALYZER_ENABLED") do
+    config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
+
+    config :alethea, Alethea.AI.EmotionAnalyzer,
+      base_url:
+        required_env.(
+          "EMOTION_SIDECAR_URL",
+          "It is required while EMOTION_ANALYZER_ENABLED=true."
+        )
+  else
+    config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Disabled
+    # Clears the loopback default compiled in from config/config.exs.
+    config :alethea, Alethea.AI.EmotionAnalyzer, base_url: nil
+  end
+
+  if capability_switch.("EMBEDDINGS_ENABLED") do
+    embeddings_endpoint =
+      [
+        endpoint_url:
+          required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true.")
+      ]
+
+    # The adapter's own default model (bge-m3) applies unless overridden.
+    embeddings_model =
+      if model = optional_env.("EMBEDDINGS_MODEL"), do: [model: model], else: []
+
+    config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Ollama
+    config :alethea, Alethea.AI.Embeddings.Ollama, embeddings_endpoint ++ embeddings_model
+  else
+    config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Disabled
+  end
+
+  # Transcription has no production adapter yet (only the Fake exists), so
+  # it is always disabled and asking for it fails the boot.
+  case System.get_env("WHISPER_ENABLED") do
+    value when value in [nil, "false"] ->
+      config :alethea, :ai_whisper, Alethea.AI.Whisper.Disabled
+
+    "true" ->
+      raise "environment variable WHISPER_ENABLED cannot be true: " <>
+              "no production transcription adapter exists yet. Unset it or set it to false."
+
+    _other ->
+      raise "environment variable WHISPER_ENABLED must be exactly true or false."
+  end
 
   # ## SSL Support
   #
