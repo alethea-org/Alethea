@@ -56,13 +56,13 @@ Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting 
 
 ## Slice S2: AI generation, uncalled (PR3)
 
-- [ ] 2.1 RED `test/alethea/ai/running_summary_validator_test.exs`: over 1200 chars; each heading missing; third heading; reordered headings; non-bullet line; `JournalingOutputGuard` block; crisis copy at three levels (professional, config, default); single copied line >=20 chars rejected; empty line and line <20 chars NOT rejected; blank copy skipped. REQ-04, REQ-05.
-- [ ] 2.2 GREEN `lib/alethea/ai/running_summary_validator.ex`: `validate/2` with `@min_crisis_line_length 20`, normalization via `ClinicalSafetyPatterns.normalize/1`. REQ-04, REQ-05.
-- [ ] 2.3 RED `test/alethea/ai/running_summary_prompt_test.exs`: names exactly the two sections; forbids diagnosis, clinical labels, inferred emotion, clinician-only info, crisis protocols/risk assessments/referrals; restricts to patient facts and Alethea questions; static. REQ-05, REQ-20.
-- [ ] 2.4 GREEN `lib/alethea/ai/running_summary_prompt.ex` (`system_prompt/0`, static Spanish). REQ-05, REQ-20.
-- [ ] 2.5 RED `test/alethea/ai/chains/running_summary_chain_test.exs` (Req.Test plug): messages `[system, user(block)]` with data delimiters; `status == :length` -> truncated; telemetry has lengths/duration/success only and never `inspect(reason)`. Plus `PhiWorker.summarize/1` re-sanitizes turns and `previous_summary` (email/phone -> placeholders). REQ-20, REQ-12.
-- [ ] 2.6 GREEN `lib/alethea/ai/chains/running_summary_chain.ex`; `lib/alethea/ai/llm_config.ex` (`:running_summary` in `chain_name` and `chain_module/1`); `phi_worker_behaviour.ex` (`summarize/1` callback, `summarize_request`, `optional(:summary)` in `request`); `phi_worker.ex` (`summarize/1`); `test/support/mocks/phi_mock.ex` stub (F3). REQ-10, REQ-20. Done: no compile warnings.
-- [ ] 2.7 Gate: focused tests, `--warnings-as-errors`, diff ~400 lines.
+- [x] 2.1 RED `test/alethea/ai/running_summary_validator_test.exs`: over 1200 chars; each heading missing; third heading; reordered headings; non-bullet line; `JournalingOutputGuard` block; crisis copy at three levels (professional, config, default); single copied line >=20 chars rejected; empty line and line <20 chars NOT rejected; blank copy skipped. REQ-04, REQ-05.
+- [x] 2.2 GREEN `lib/alethea/ai/running_summary_validator.ex`: `validate/2` with `@min_crisis_line_length 20`, normalization via `ClinicalSafetyPatterns.normalize/1`. REQ-04, REQ-05.
+- [x] 2.3 RED `test/alethea/ai/running_summary_prompt_test.exs`: names exactly the two sections; forbids diagnosis, clinical labels, inferred emotion, clinician-only info, crisis protocols/risk assessments/referrals; restricts to patient facts and Alethea questions; static. REQ-05, REQ-20.
+- [x] 2.4 GREEN `lib/alethea/ai/running_summary_prompt.ex` (`system_prompt/0`, static Spanish). REQ-05, REQ-20.
+- [x] 2.5 RED `test/alethea/ai/chains/running_summary_chain_test.exs` (Req.Test plug): messages `[system, user(block)]` with data delimiters; `status == :length` -> truncated; telemetry has lengths/duration/success only and never `inspect(reason)`. Plus `PhiWorker.summarize/1` re-sanitizes turns and `previous_summary` (email/phone -> placeholders). REQ-20, REQ-12.
+- [x] 2.6 GREEN `lib/alethea/ai/chains/running_summary_chain.ex`; `lib/alethea/ai/llm_config.ex` (`:running_summary` in `chain_name` and `chain_module/1`); `phi_worker_behaviour.ex` (`summarize/1` callback, `summarize_request`, `optional(:summary)` in `request`); `phi_worker.ex` (`summarize/1`); `test/support/mocks/phi_mock.ex` stub (F3). REQ-10, REQ-20. Done: no compile warnings.
+- [x] 2.7 Gate: focused tests, `--warnings-as-errors`, diff ~400 lines. (Measured 657 changed lines: prod 262, tests 395; over budget from tests only, flagged to orchestrator; see apply-progress.)
 
 ## Slice S3: Worker + scheduling (PR4)
 
