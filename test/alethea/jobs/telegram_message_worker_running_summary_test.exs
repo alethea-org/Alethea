@@ -97,6 +97,40 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
       assert String.ends_with?(payload.sanitized_content, "mensaje 11")
     end
 
+    test "a multi-message burst reply carries the summary and loads it exactly once", ctx do
+      inbound(1..10)
+      drain_summary(ok_summary())
+      before = audit_reasons(ctx)
+
+      test_pid = self()
+
+      expect(PhiWorkerMock, :process, fn payload ->
+        send(test_pid, {:ai_worker_payload, payload})
+
+        {:ok,
+         %{
+           response: "Gracias por contarlo. ¿Cómo lo viviste?",
+           source_message_id: payload.message_id,
+           model_version: "phi-4-mini",
+           behavior_type: :elicited
+         }}
+      end)
+
+      assert :ok = perform("mensaje 11", 11)
+      assert :ok = perform("mensaje 12", 12)
+
+      assert [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args})
+      assert_receive {:ai_worker_payload, payload}
+
+      assert payload.summary == valid_summary()
+      assert payload.sanitized_content =~ "mensaje 11"
+      assert String.ends_with?(payload.sanitized_content, "mensaje 12")
+
+      added = audit_reasons(ctx) -- before
+      assert Enum.count(added, &(&1 == "running_summary_loading")) == 1
+    end
+
     test "a failed generation still delivers the reply with the previous summary intact" do
       inbound(1..10)
       drain_summary(ok_summary())
