@@ -102,3 +102,35 @@ Deviations / flags:
 - Evidence: RED `mix test test/alethea/ai/chains/running_summary_chain_test.exs` -> 8 tests, 1 failure (forged `Alethea:` line). GREEN -> 8 tests, 0 failures. `mix test test/alethea/ai/ test/alethea/jobs/telegram_message_worker_guardrails_test.exs` -> 298 tests, 0 failures.
 - Size after fix: 679 insertions / 3 deletions (code + tests); production ~268, tests ~414. Overrun is tests → `size:exception` per the user's size rule.
 - Known consequence (documented, accepted): the 20-character minimum also applies to the whole crisis copy, so a crisis copy shorter than 20 normalized characters is never matched by the validator.
+
+## S3 (PR4): Worker + scheduling, trigger not wired
+
+Tasks: 3.1-3.11 done (incl. 3.7a). Mode: Strict TDD. `TelegramMessageWorker` untouched.
+
+Files:
+- `lib/alethea_jobs/running_summary_worker.ex` (new): queue `:running_summary`, `max_attempts: 3`, unique `keys: [:patient_id]`, `period: :infinity`, states `[:available, :scheduled, :retryable]`. Flow: `plan/1` -> (reset: CAS delete, replan without previous text) -> `patient_dek(patient, "running_summary_generation")` -> `window_turns/3` + previous summary decrypt -> `Sanitizer` -> `summarize/1` (rescue/catch to atom) -> `RunningSummaryValidator` vs `CrisisCopy.reply_text/1` -> `PatientVault.encrypt` under the same DEK -> `RunningSummary.write/3` (ciphertext). Returns `:ok | {:cancel, :stale} | {:error, :generation_failed | :invalid_summary | :persist_failed}`; truncated -> `:invalid_summary`. Success calls `schedule_if_due/2` (backlog chain).
+- `lib/alethea/clinical/running_summary.ex`: `schedule_if_due/2` (never raises; logs atom + 8-char chat prefix only), `plan/1` (counts only, no decrypt), `window_turns/3`, private `assess/decide/target_plan/window_messages`. Plan type extended with optional `lower_bound`, `anchor_ciphertext`. CRLF preserved.
+- `config/config.exs`: Oban queue `running_summary: 1` with the global-limit comment. `config/test.exs` already `testing: :manual`; `Oban.drain_queue(queue: :running_summary)` works.
+- Tests: `test/alethea/clinical/running_summary_schedule_test.exs` (9), `test/alethea_jobs/running_summary_worker_test.exs` (16), helper `test/support/running_summary_helper.ex`.
+
+TDD evidence:
+| Tasks | RED | GREEN |
+|---|---|---|
+| 3.1-3.7a / 3.8-3.10 | `mix test test/alethea_jobs/running_summary_worker_test.exs test/alethea/clinical/running_summary_schedule_test.exs` -> 24 tests, 24 failures (worker module and `schedule_if_due`/`plan` undefined) | same command -> 25 tests, 0 failures (the 25th is the superseded-reply test added after the coordinator correction, written after the first RED run; its RED is the mutation below) |
+
+Mutation check: deleting the `delivery_state != "superseded"` predicate from the window query -> 16 worker tests, 1 failure (superseded test); restored.
+
+Verification:
+- `mix test ... running_summary_worker_test.exs running_summary_schedule_test.exs running_summary_test.exs` -> 45 tests, 0 failures.
+- `mix test test/alethea/clinical/ test/alethea/ai/ test/alethea/jobs/ test/alethea_jobs/` -> 4 doctests, 557 tests, 2 failures, both in `clinical_record_outbox_worker_test.exs` (`column "audio_start_seconds" of relation "clinical_record_rag_chunks" does not exist`): pre-existing test-DB schema drift unrelated to S3 (untouched code path).
+- `mix compile --warnings-as-errors --force` -> ok (only the environmental Windows symlink :eperm warning).
+- `mix format` applied to the 4 LF new files and to `running_summary.ex` (converted to LF, formatted, restored to CRLF). `config.exs` edited in place, CRLF kept.
+
+`git diff --stat` (new files via `git add -N`, then reset): 6 files, 827 insertions(+), 5 deletions(-) = 832 changed lines. Production 313 (running_summary.ex 158 incl. rewritten lines, worker 148, config 7); tests 519 (worker test 337, schedule test 134, helper 48). Forecast ~650 (prod ~250, tests ~400). Production is ABOVE the ~300 stop line and above 250 x 1.3 = 325? No: 313 < 325, but > 300. Flagged to the orchestrator per the size rule; not self-authorized.
+
+Deviations / flags:
+- Coordinator correction applied: the window query mirrors `turns_before/3` exactly (patient scope + `is_nil(delivery_state) or != "superseded"` + `(timestamp, direction, id)` order), bound inclusive of the target inbound. Test: a `superseded` reply is withheld, `sent`/`pending` replies are supplied. Cadence counts inbound rows only (unaffected).
+- "Never raises when `Oban.insert` raises/errors" is tested with a malformed patient id (real `Ecto.Query.CastError` rescued) and an unknown patient; `Oban.insert` itself is not stubbed.
+- DEK unwrap or window/previous-summary decrypt failures map to `:generation_failed`; encrypt and DB write failures to `:persist_failed`.
+- Worker catches exceptions from `summarize/1` into `:generation_failed` so exception messages never reach `oban_jobs.errors`.
+- Extra production vs design: `Repo.get_by` anchor lookup returns `{:reset, covered}` when the anchor message is gone (race), consistent with AD4.
