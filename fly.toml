@@ -1,0 +1,87 @@
+# Fly.io configuration for the Alethea production app (issue #402, milestone 1).
+#
+# Operator guide: docs/deployment/fly-neon.md
+# Reference:      https://fly.io/docs/reference/configuration/
+#
+# This file holds no secret. DATABASE_URL, SECRET_KEY_BASE, CLOAK_AES_KEY,
+# TELEGRAM_CHAT_ID_PEPPER and the rest are set with `fly secrets set`.
+
+# The app name is a default. It is the one line to change for another app;
+# PHX_HOST below must follow it (or the custom domain that replaces it).
+app = "alethea-prod"
+
+# São Paulo, next to the Neon project in AWS sa-east-1.
+primary_region = "gru"
+
+# The BEAM shuts down in order on SIGTERM; Fly's default is SIGINT.
+kill_signal = "SIGTERM"
+
+# Seconds between the signal and a forced kill. Shutdown stops the endpoint
+# first (Phoenix drains connections for up to 15 s) and then Oban, whose
+# `shutdown_grace_period` is not configured and therefore defaults to 15 s
+# (deps/oban/lib/oban/config.ex) for executing jobs to finish. 15 + 15 plus a
+# margin; Fly's default of 5 s would kill jobs mid-run.
+kill_timeout = 40
+
+[deploy]
+  # Runs once per deploy in a temporary Machine built from the new image, with
+  # the app's env and secrets, before any Machine is replaced. A non-zero exit
+  # aborts the deploy. It migrates, then writes the Telegram BotConfig row when
+  # TELEGRAM_BOT_TOKEN is present. It never registers the webhook.
+  release_command = "/app/bin/release"
+
+[env]
+  # Public host name: URL generation, the LiveView origin check and the
+  # Telegram webhook URL derive from it. Bare host, no scheme or port.
+  PHX_HOST = "alethea-prod.fly.dev"
+  # Must equal http_service.internal_port. The image also defaults to 4000.
+  PORT = "4000"
+
+  # Deliberately absent, because they are pending product decisions:
+  # AI_PROVIDER, EMOTION_ANALYZER_ENABLED and EMBEDDINGS_ENABLED. They are
+  # required by config/runtime.exs, so the release command (and the deploy)
+  # fails fast with a message naming the missing variable until the operator
+  # sets them. See "AI capabilities" in the operator guide.
+  #
+  # Deliberately absent, because the single Machine reaches Neon over the
+  # public internet and is not clustered: ECTO_IPV6 and DNS_CLUSTER_QUERY.
+  # Never set DATABASE_SSL here: it exists only for local smoke tests.
+
+[http_service]
+  internal_port = 4000
+  # Fly's proxy redirects HTTP to HTTPS; the app's own force_ssl does the same
+  # for anything that reaches it with `x-forwarded-proto: http`.
+  force_https = true
+  # Always on. Oban queues and its cron run with no HTTP traffic, so the
+  # Machine must never be stopped for being idle.
+  auto_stop_machines = "off"
+  # Lets the proxy start the Machine again if it was stopped by hand.
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    # LiveView holds one long-lived WebSocket per open page, so the proxy
+    # balances on connections, not requests. Limits are a starting point for
+    # one small Machine, not a measured capacity.
+    type = "connections"
+    soft_limit = 800
+    hard_limit = 1000
+
+  [[http_service.checks]]
+    # Readiness: 503 while the database or Oban is unavailable. The check
+    # reaches the internal port over plain HTTP; the app excludes /health and
+    # /health/ready from its force_ssl redirect, so no `X-Forwarded-Proto`
+    # header is needed here.
+    method = "GET"
+    path = "/health/ready"
+    # Time allowed for the release to boot and open its database pool,
+    # including a Neon compute resume, before a failing check counts.
+    grace_period = "30s"
+    interval = "15s"
+    timeout = "5s"
+
+[[vm]]
+  # Modest default. Capacity is a pending decision: revisit after observing
+  # memory under the synthetic-data run.
+  size = "shared-cpu-1x"
+  memory = "1gb"

@@ -26,9 +26,10 @@ tmp
 # Generated static cache (digests are not committed)
 priv/static/cache
 
-# Docker and local orchestration files
+# Docker, deployment and local orchestration files
 .dockerignore
 Dockerfile*
+fly.toml
 docker-compose*
 .docker
 entrypoint.sh

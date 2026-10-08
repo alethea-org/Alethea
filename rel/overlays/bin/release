@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+# The single deploy release command (fly.toml: [deploy] release_command).
+#
+#   1. bin/migrate              always
+#   2. bin/telegram_bootstrap   only when TELEGRAM_BOT_TOKEN is set and non-empty
+#
+# Migrations run from here and nowhere else: migration 20260618234145 disables
+# the migration lock, so two concurrent runners are not protected against each
+# other.
+#
+# The bootstrap writes the sealed BotConfig row, which the server needs before
+# it can boot. It touches the database only. Skipping it when the token is
+# absent lets the TELEGRAM_* values be either permanent secrets (the row is
+# re-checked on every deploy) or secrets set for one deploy and removed
+# afterwards (later deploys keep the stored row).
+#
+# The webhook is never registered from here: that calls the Telegram Bot API
+# and only runs when an operator asks for it by name
+# (`bin/telegram_bootstrap register-webhook`).
+
+cd -P -- "$(dirname -- "$0")"
+
+./migrate
+
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+  ./telegram_bootstrap
+else
+  echo "TELEGRAM_BOOTSTRAP skipped: TELEGRAM_BOT_TOKEN is not set; the stored BotConfig row is left as it is"
+fi
