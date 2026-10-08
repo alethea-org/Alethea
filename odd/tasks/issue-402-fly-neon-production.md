@@ -3,7 +3,8 @@
 - Issue: https://github.com/alethea-org/Alethea/issues/402
 - Branch: `chore/402-fly-neon-production` (from `main` at `8e3cbac`)
 - Engram mirror: `odd/issue-402-fly-neon-production/tasks`
-- Status: in progress — T1–T6 committed and reviewed; T7 and T8 next
+- Status: repository work for milestone 1 complete (T1–T8 committed and
+  reviewed); remote evidence pending user authorization
 - Engram mirror status: PENDING resync (save refused on 2026-10-07: multiple
   active runtime sessions); this file is authoritative.
 
@@ -116,13 +117,13 @@ Route per task is recorded with its trigger evidence.
   verified through `getWebhookInfo`; `Client.Fake` not started in production.
   Route: delegated.
   Checks: Req.Test-backed tests; existing bootstrap task test stays green.
-- [ ] **T7 — Fly configuration and deployment doc.** `fly.toml` (HTTPS, port,
+- [x] **T7 — Fly configuration and deployment doc.** `fly.toml` (HTTPS, port,
   checks on `/health/ready`, always-on Machine, `release_command`), plus a
   deployment document covering the Neon connection scheme (direct host, pool,
   migrations, Oban `LISTEN/NOTIFY`), secrets inventory and the AI inventory.
   Route: delegated or inline, decided at execution.
   Blocked on: app name and primary region (pending decision in the issue).
-- [ ] **T8 — CI.** Build the image and smoke-test the release (migrate, boot,
+- [x] **T8 — CI.** Build the image and smoke-test the release (migrate, boot,
   `/health/ready`) in GitHub Actions; compile with `--warnings-as-errors`.
   Route: inline candidate (one workflow file).
   Checks: workflow syntax; result observable only after push.
@@ -260,3 +261,54 @@ then T6.
 - `docker build` and image boot (Docker daemon not running locally).
 - `bin/server` serving `/health/ready` from the release.
 - Behaviour under the CI toolchain (Elixir 1.19 / OTP 28).
+
+## Evidence for T7 and T8
+
+- T7 `db1a46e`, delegated: `fly.toml` (app `alethea-prod`, region `gru`, one
+  always-on Machine, `release_command = "/app/bin/release"`, check on
+  `/health/ready`, `kill_timeout = 40`), `rel/overlays/bin/release`, and
+  `docs/deployment/fly-neon.md`. Release smoke on a throwaway database:
+  `bin/release` migrates and bootstraps, and skips the bootstrap without
+  `TELEGRAM_BOT_TOKEN`. Full server boot from the release: `/health/ready` 200,
+  `/health` 200, `/assets/js/app.js` 200, clean exit on SIGTERM.
+- T8 `7b32188`, delegated: `release` job in `.github/workflows/elixir.yml`
+  (image build plus release smoke test) and `--warnings-as-errors` in the test
+  job. YAML parses; the job has never run.
+- Follow-up `f87018b`: `?ssl=false` in `DATABASE_URL` overrode the verified TLS
+  (reproduced through `Ecto.Repo.Supervisor.init_config/4`); production now
+  refuses to boot when the URL carries an `ssl` parameter. Config tests RED
+  29/31 then GREEN 31 (parent re-run 31 passed). `mix precommit` 2020 passed,
+  5 skipped.
+- Native review, `6c41e7d..f87018b`: high (executable mode on
+  `rel/overlays/bin/release`, shell in the workflow); consent granted; four
+  lenses; approved and acknowledged. Eleven advisory findings, locations only;
+  warnings at `.github/workflows/elixir.yml:160-164` and `:168-171`.
+  Reviewed boundary is now `f87018b`.
+
+## Final slice map (stacked-to-main)
+
+| PR | Branch | Tip | Contents |
+| --- | --- | --- | --- |
+| 1 | `chore/402-fly-neon-production` | `dc13b79` | T1, T2, T3, migration and clause fixes |
+| 2 | `chore/402-prod-config` | `f0c1892` | T4 |
+| 3 | `chore/402-ai-degradation` | `89af743` | T5 |
+| 4 | `chore/402-telegram-bootstrap` | `6c41e7d` | T6 |
+| 5 | `chore/402-fly-ci` | this document's last commit | T7, T8, `ssl` URL guard |
+
+Nothing is pushed and no pull request exists.
+
+## Still unverified
+
+- `docker build` and image boot (Docker daemon not running locally).
+- The CI `release` job, and `--warnings-as-errors` under Elixir 1.19 / OTP 28.
+- `fly config validate` (flyctl not installed).
+- Guide commands marked "verify before running", notably whether
+  `fly ssh console -C` carries the app secrets.
+- Everything under "Not achievable from the repository alone".
+
+## Next step
+
+User decisions: AI capability values for launch, Telegram secret policy,
+capacity. Then, with explicit authorization per destination: push and open the
+five pull requests, create the Neon project, deploy, register the webhook, and
+run the verification checklist in `docs/deployment/fly-neon.md`.
