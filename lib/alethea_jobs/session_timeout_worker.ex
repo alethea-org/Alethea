@@ -222,7 +222,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
       {:error, reason} ->
         log_failure(session, reason)
-        {:error, reason}
+        {:error, job_reason(reason)}
     end
   end
 
@@ -288,7 +288,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
   defp record_summary(_patient, closed_session, {:error, reason}, _emotion_scores) do
     log_failure(closed_session, reason)
-    {:error, reason}
+    {:error, job_reason(reason)}
   end
 
   defp record_summary(patient, closed_session, {:ok, texts}, emotion_scores) do
@@ -310,7 +310,7 @@ defmodule AletheaJobs.SessionTimeoutWorker do
       else
         {:error, reason} ->
           log_failure(closed_session, reason)
-          {:error, reason}
+          {:error, job_reason(reason)}
       end
     end
   end
@@ -337,6 +337,21 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   defp summary_text(text) when is_binary(text), do: {:ok, text}
   defp summary_text(%{summary: text}) when is_binary(text), do: {:ok, text}
   defp summary_text(_other), do: {:error, :invalid_summary}
+
+  # The job result is persisted by Oban in `oban_jobs.errors` and printed
+  # in its logs, outside the patient-level encryption, so it must be a
+  # small tagged term (issue #402). Atoms and the chain's own tagged
+  # reason (`Alethea.AI.Chains.SafeRun`) carry no content by shape. A
+  # changeset would carry `changes.summary_text`, so only the keys of the
+  # failed fields are kept. Any other shape is not trusted and collapses
+  # to a fixed tag; the log line still explains it through `SafeReason`.
+  defp job_reason(reason) when is_atom(reason), do: reason
+  defp job_reason({:llm_run_failed, _type} = reason), do: reason
+
+  defp job_reason(%Ecto.Changeset{} = changeset),
+    do: {:invalid_changeset, Keyword.keys(changeset.errors)}
+
+  defp job_reason(_other), do: :closure_step_failed
 
   # PHI-safe error rendering (R2 #86 PR-1 fix). Bare `inspect(reason)`
   # would embed `Ecto.Changeset.changes` — which carries `summary_text`

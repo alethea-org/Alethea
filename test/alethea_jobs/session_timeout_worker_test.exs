@@ -569,6 +569,129 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   # site; this test pins the contract.
   # ----------------------------------------------------------------
 
+  # ----------------------------------------------------------------
+  # Issue #402 — a real model failure during the summary.
+  #
+  # The REAL `SessionSummaryChain` runs here (not the Mox mock), against
+  # `Req.Test` standing in for Ollama, and the job is executed by Oban
+  # itself so what Oban persists in `oban_jobs.errors` is observable.
+  # ----------------------------------------------------------------
+
+  describe "a real summary chain failure (issue #402)" do
+    # A recognisable synthetic stand-in for a patient's message.
+    @marker "marcador-sintetico-zzqx-cierre"
+
+    setup %{patient: patient, session: session} do
+      Application.put_env(
+        :alethea,
+        :session_summary_chain,
+        Alethea.AI.Chains.SessionSummaryChain
+      )
+
+      Application.put_env(:alethea, :ollama_chat_req_options, plug: {Req.Test, __MODULE__})
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock)
+        Application.delete_env(:alethea, :ollama_chat_req_options)
+      end)
+
+      {:ok, _message} =
+        Alethea.Clinical.save_message(patient, @marker, nil, "inbound", "spontaneous", session.id)
+
+      :ok
+    end
+
+    defp printed(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
+
+    test "the failure is retried by Oban, the goodbye is enqueued and no session text is stored or logged",
+         %{patient: patient, session: session} do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:model_request, body})
+        Plug.Conn.send_resp(conn, 500, "")
+      end)
+
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:alethea, :ai, :chain, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:chain_stop, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      job = Oban.insert!(SessionTimeoutWorker.new(telegram_job_args(session, patient)))
+
+      log =
+        capture_log(fn ->
+          assert %{failure: 1, success: 0} = Oban.drain_queue(queue: :sessions)
+        end)
+
+      # The marker really was in the prompt the model received.
+      assert_received {:model_request, request_body}
+      assert request_body =~ @marker
+
+      # Oban keeps the job for another attempt, with a small tagged error.
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "retryable"
+      assert [%{"error" => error}] = job.errors
+      assert error =~ "{:llm_run_failed, :untyped}"
+      refute error =~ "CaseClauseError"
+
+      assert_received {:chain_stop, %{chain: :session_summary} = metadata}
+
+      refute printed(job.errors) =~ @marker
+      refute printed(metadata) =~ @marker
+      refute log =~ @marker
+
+      # The closure went on: session closed, goodbye enqueued, no summary.
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert [goodbye] = goodbye_jobs()
+      assert goodbye.args["body"] =~ "Tu sesión de hoy ha concluido"
+      assert session_summaries(patient) == []
+    end
+
+    test "a summary that fails validation is stored in the job errors by field key only",
+         %{patient: patient, session: session} do
+      # A summary is clinical content too. The failing changeset is built
+      # with the real `Summary.changeset/2` and carries the text in its
+      # `changes`; the mock hands it over the way `save_summary/1` would.
+      Application.put_env(:alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock)
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        failing_changeset =
+          Summary.changeset(%Summary{}, %{
+            period_start: DateTime.utc_now(),
+            period_end: DateTime.utc_now(),
+            summary_text: @marker,
+            status_level: nil,
+            type: "session",
+            patient_id: patient.id
+          })
+
+        {:error, failing_changeset}
+      end)
+
+      job = Oban.insert!(SessionTimeoutWorker.new(telegram_job_args(session, patient)))
+
+      capture_log(fn ->
+        assert %{failure: 1, success: 0} = Oban.drain_queue(queue: :sessions)
+      end)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert [%{"error" => error}] = job.errors
+      assert error =~ "{:invalid_changeset, [:status_level]}"
+      refute printed(job.errors) =~ @marker
+    end
+  end
+
   describe "PHI-safe error rendering (R2 #86 PR-1 fix)" do
     # The sentinel is the value we inject into the failing Changeset's
     # `changes` map. After the worker logs the error, we assert this
