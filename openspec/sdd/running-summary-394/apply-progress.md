@@ -134,3 +134,40 @@ Deviations / flags:
 - DEK unwrap or window/previous-summary decrypt failures map to `:generation_failed`; encrypt and DB write failures to `:persist_failed`.
 - Worker catches exceptions from `summarize/1` into `:generation_failed` so exception messages never reach `oban_jobs.errors`.
 - Extra production vs design: `Repo.get_by` anchor lookup returns `{:reset, covered}` when the anchor message is gone (race), consistent with AD4.
+
+## S4 (PR5): Integration — pre-apply gate (task 4.9, design AD11)
+
+### Manual phi4-mini smoke test
+
+Script: `tmp/smoke_394_phi4.exs` (gitignored, synthetic data, no DB writes). It captures the exact HTTP payload sent to Ollama *after* LangChain/`OllamaChat` build it (Req plug proxy) and runs each case once at the configured temperature (0.0) and 3 times at 0.7, in two layouts: `two_system` (summary as a second system message) and `appended` (A5: summary block appended to the single system message). Model `phi4-mini`, endpoint `http://localhost:11434`, chain temperature 0.0, `max_tokens` 160.
+
+**Run 1** (`tmp/smoke_394_run1.log`, 2026-10-08, branch `feat/394-s4-integration`):
+
+| Case | two_system | appended (A5) |
+|---|---|---|
+| Payload: summary block present where the layout says | 16/16 | 16/16 |
+| 1 · normal summary (no clinical words, ≤1 question) | 4/4 | 4/4 |
+| 2 · injected instruction — runs that obey it | 0/4 | 0/4 |
+| 3 · direct recall question ("marzo") | 2/4 (both at 0.7) | 0/4 (1 run mentioned the adoption without "marzo") |
+| 4 · natural summary-only reference ("Toby"/"marzo") | 4/4 | 3/4 (0.7 sample 2 missed) |
+
+**Run 2** (`tmp/smoke_394_run2.log`): pending — log not yet provided. Per the user, case 4 inverts between runs; record the run 2 table here when the log is available.
+
+Notes:
+- Case 3 is discarded as a test: `JournalingPrompt` is a journaling companion, not a Q&A assistant, so it reflects on the current message instead of answering recall questions. The case also leaked summary facts (Toby, plaza) into the current message (test-design flaw).
+- At temperature 0.0 both layouts produced word-for-word identical replies in cases 1 and 2; the captured payloads prove the block was present in both, so the summary simply did not change those replies.
+
+### Decision (user, 2026-10-08): A5 — summary block appended to the single system message
+
+Rationale: design rule AD11 (any failure or doubt in `two_system` → A5) and portability across models (a second system message is model/template-dependent; one system message is not). `JournalingPrompt` stays static; the block is appended at runtime inside the chain.
+
+Also in S4 scope (user, 2026-10-08): `:running_summary` reads the same `LLM_MODEL` as `GuidedConversationChain` (default `phi4-mini`), so replies and summaries never run on different models.
+
+### Observations (out of scope, not filed)
+
+Journaling prompt (#392), seen during the smoke test:
+1. **Recall questions.** Asked "¿te acordás…?", the bot sidesteps and reflects on the current message. With A5, 0/4 runs used the summary-only fact. Once the summary exists, this may read as a lack of memory to the patient.
+2. **Two questions in one reply.** One run at temperature 0.7 (appended layout, case 3 sample 2) asked two questions. Config uses 0.0; `JournalingOutputGuard` does not check question count.
+3. **"tú" vs. voseo.** `JournalingPrompt` says "Trata a la persona de 'tú'", so voseo patients ("¿te acordás?") get "tú" replies. May be deliberate.
+
+Environment (not #392): `docker-compose.yml:33` defaults `LLM_MODEL` to `phi-4-mini` (hyphen) while the Ollama tag and code defaults are `phi4-mini`.
