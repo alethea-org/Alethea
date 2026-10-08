@@ -179,7 +179,7 @@ Also in S4 scope (user, 2026-10-08): `:running_summary` reads the same `LLM_MODE
 
 Journaling prompt (#392), seen during the smoke test:
 1. **Recall questions.** Asked "¿te acordás…?", the bot sidesteps and reflects on the current message. With A5, 0/4 runs used the summary-only fact. Once the summary exists, this may read as a lack of memory to the patient.
-2. **Two questions in one reply.** One run at temperature 0.7 (appended layout, case 3 sample 2) asked two questions. Config uses 0.0; `JournalingOutputGuard` does not check question count.
+2. **Two questions in one reply.** It appeared in both runs at temperature 0.7 (case 3, sample 2, both times with A5 — two occurrences are not enough to attribute it to the layout). `JournalingOutputGuard` does not validate the number of questions, so if the temperature is raised nothing stops it; the config currently uses 0.0. Out of scope for #394.
 3. **"tú" vs. voseo.** `JournalingPrompt` says "Trata a la persona de 'tú'", so voseo patients ("¿te acordás?") get "tú" replies. May be deliberate.
 
 Environment (not #392): `docker-compose.yml:33` defaults `LLM_MODEL` to `phi-4-mini` (hyphen) while the Ollama tag and code defaults are `phi4-mini`.
