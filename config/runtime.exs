@@ -316,7 +316,7 @@ if config_env() == :prod do
   config :alethea, Alethea.AI.LLMConfig,
     local: if(local_llm_base_url, do: [endpoint_url: local_llm_base_url], else: []),
     cloud:
-      [endpoint_url: System.get_env("OPENAI_BASE_URL", "https://api.openai.com/v1")] ++
+      [endpoint_url: optional_env.("OPENAI_BASE_URL") || "https://api.openai.com/v1"] ++
         if(openai_api_key, do: [api_key: openai_api_key], else: [])
 
   config :alethea,
