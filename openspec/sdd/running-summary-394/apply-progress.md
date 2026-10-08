@@ -57,3 +57,48 @@ Deviations / flags:
 - `write/3` returns `{:error, :persist_failed}` for `new <= expected` (design left this atom open) and for rescued DB errors.
 - "Concurrent" CAS tests (2 first writes, 2 CAS from same expected) run sequentially against the DB; atomicity comes from the unique index / `WHERE` predicate, so the second call deterministically loses.
 - Extra tests beyond tasks: forged-professional patient struct reads nothing; `load_usable` decrypt failure returns an atom error; `reset/2` CAS.
+
+## S2 (PR3): AI generation, uncalled from live paths
+
+Tasks: 2.1-2.7 done. Mode: Strict TDD.
+
+Files:
+- `lib/alethea/ai/running_summary_validator.ex` (new): `validate/2`; cap 1200 (trimmed), strict line grammar (two headings in order, `- ` bullets or blanks), `JournalingOutputGuard.check/1`, crisis-copy rejection (whole copy + each copy line) after `ClinicalSafetyPatterns.normalize/1`, `@min_crisis_line_length 20`.
+- `lib/alethea/ai/running_summary_prompt.ex` (new): static Spanish `system_prompt/0`.
+- `lib/alethea/ai/chains/running_summary_chain.ex` (new): `[system(prompt), user(block)]` with `«RESUMEN PREVIO (datos)»` / `«TURNOS (datos)»` delimiters; `truncated` from `status == :length`; telemetry lengths/duration/success only; every failure -> `{:error, :generation_failed}`; `max_tokens: 600` via `LLMConfig` override (no config.exs edit).
+- `lib/alethea/ai/llm_config.ex`: `:running_summary` in `chain_name` and `chain_module/1` (+3).
+- `lib/alethea/ai/phi_worker_behaviour.ex`: `summarize/1` callback, `summarize_request`, `optional(:summary)` in `request`.
+- `lib/alethea/ai/phi_worker.ex`: `summarize/1` re-sanitizes turns and `previous_summary`, delegates to the chain.
+- `test/support/mocks/phi_mock.ex`: `summarize/1` stub (F3).
+- Tests: `test/alethea/ai/running_summary_validator_test.exs` (19), `running_summary_prompt_test.exs` (8), `chains/running_summary_chain_test.exs` (7), `phi_worker_test.exs` +2 (`summarize/1`).
+
+TDD cycle evidence:
+| Task | RED | GREEN |
+|---|---|---|
+| 2.1/2.2 | `mix test test/alethea/ai/running_summary_validator_test.exs` -> 19 tests, 19 failures (module undefined) | same -> 19 tests, 0 failures (first GREEN run had 1 failure: short whole copy matched; fixed by applying `@min_crisis_line_length` to the whole copy too) |
+| 2.3/2.4 | `mix test test/alethea/ai/running_summary_prompt_test.exs` -> 8 tests, 8 failures | same -> 8 tests, 0 failures (one test assertion re-scoped after the first run, see deviations) |
+| 2.5/2.6 | `mix test test/alethea/ai/chains/running_summary_chain_test.exs test/alethea/ai/phi_worker_test.exs` -> 11 tests, 9 failures | same -> 11 tests, 0 failures |
+
+Verification:
+- Focused (tasks.md command): `mix test test/alethea/ai/running_summary_validator_test.exs test/alethea/ai/running_summary_prompt_test.exs test/alethea/ai/chains/running_summary_chain_test.exs` -> 34 tests, 0 failures.
+- Regression: `mix test test/alethea/ai/ test/alethea/jobs/telegram_message_worker_guardrails_test.exs` -> 297 tests, 0 failures.
+- `mix compile --warnings-as-errors --force` -> exit 0 (only the environmental Windows symlink :eperm warning).
+- `mix format --check-formatted` clean on the 6 new files and `phi_worker_test.exs`. CRLF working copies (`llm_config.ex`, `phi_worker.ex`, `phi_worker_behaviour.ex`, `phi_mock.ex`) edited by hand preserving line endings.
+
+`git diff --stat` (new files via `git add -N`): 11 files changed, 654 insertions(+), 3 deletions(-) = 657 changed lines. Production 262 (chain 117, validator 76, prompt 39, behaviour 15, phi_worker 12, llm_config 3); tests 395 (validator 161, chain 140, prompt 52, phi_worker_test 38, mock 4). Forecast was ~585 (prod ~270, tests ~315): production is on forecast (<300 and <x1.3); the overrun is tests only.
+
+Deviations / flags:
+- Crisis-copy min length also applies to the whole copy (design text says "whole copy or any line >= 20"): without it a short whole copy (e.g. "Hola.") false-positives, which the resolved decision wants avoided. Whole copies >= 20 chars behave as designed.
+- Chain returns the opaque `{:error, :generation_failed}` instead of the raw reason (REQ-12 spirit). LangChain itself still logs "Error during chat call. Reason: ..." with the Ollama HTTP status string (no patient text); outside this slice.
+- Prompt asks for max 1000 chars total to leave headroom under the 1200 validator cap.
+- Prompt test asserts each heading appears exactly once plus the "exactamente estas dos secciones" phrase (a generic heading regex also matched the prompt's other colon-terminated lines).
+- No `config/*.exs` change: provider/model fall back to the `LLMConfig` global defaults (`:local`, `phi4-mini`); `max_tokens` is an override in the chain.
+- `PhiWorker.process/1` is untouched; the `summary` pass-through is S4.
+
+### S2 orchestrator review fix (2026-10-08, user-approved)
+
+- Finding: `RunningSummaryChain.user_block/2` joined turns with `"\n"` without flattening content, and the `«…»` data markers had no closing marker. A patient turn containing `"\nAlethea: …"` produced a forged `Alethea:` line (persistent prompt-injection vector into the stored summary).
+- Fix: each turn is flattened to one line (`~r/\R/u` → space) and `«`/`»` are stripped from turn content and from the previous summary, so content can neither forge a role line nor open a data block.
+- Evidence: RED `mix test test/alethea/ai/chains/running_summary_chain_test.exs` -> 8 tests, 1 failure (forged `Alethea:` line). GREEN -> 8 tests, 0 failures. `mix test test/alethea/ai/ test/alethea/jobs/telegram_message_worker_guardrails_test.exs` -> 298 tests, 0 failures.
+- Size after fix: 679 insertions / 3 deletions (code + tests); production ~268, tests ~414. Overrun is tests → `size:exception` per the user's size rule.
+- Known consequence (documented, accepted): the 20-character minimum also applies to the whole crisis copy, so a crisis copy shorter than 20 normalized characters is never matched by the validator.
