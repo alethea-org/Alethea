@@ -387,3 +387,28 @@ confirmed three findings, each verified by the parent against the code.
 Tips: `chore/402-prod-config` `629807c`, `chore/402-ai-degradation` `d6515c2`,
 `chore/402-telegram-bootstrap` `0a23f38`, `chore/402-fly-ci` at this
 document's last commit.
+
+## Third advisory review follow-up (2026-10-08)
+
+Route: direct inline (two small, already-understood fixes verified against the
+code before the first write).
+
+| Finding | Branch | Commit | Evidence |
+| --- | --- | --- | --- |
+| Blank or unresolved API key masked the global key | `chore/402-prod-config` | `472a99a` | RED 24/25 then GREEN; `test/alethea/ai` 259 passed |
+| Goodbye lookup could not use the `args` GIN index | `chore/402-ai-degradation` | `f53f2fb` | Session worker suites 35 passed; `EXPLAIN` with `enable_seqscan = off`: containment uses `oban_jobs_args_index`, `->>` stays a sequential scan |
+
+- The API key fix also covers a `{:system, "VAR"}` tuple whose variable is
+  unset, which masked the global key the same way.
+- Containment is equivalent here because `Session` uses a binary id, so
+  `session_id` is always stored as a JSON string.
+- `f53f2fb` also corrects the stale `send_goodbye/2` arity in a comment.
+- Forward merges `ccc2a83`, `430781b`; no conflicts.
+- `mix precommit` at `430781b`: 2078 passed, 5 skipped.
+- Native assessment, `37f80fa..430781b`: medium, 36 changed lines,
+  `under_budget`; no review due.
+- Not pushed.
+
+Tips: `chore/402-prod-config` `472a99a`, `chore/402-ai-degradation` `f53f2fb`,
+`chore/402-telegram-bootstrap` `ccc2a83`, `chore/402-fly-ci` at this
+document's last commit.
