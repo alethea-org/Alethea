@@ -358,3 +358,32 @@ Open after the fixes:
 Tips: `chore/402-prod-config` `ea18ae0`, `chore/402-ai-degradation` `3083f3d`,
 `chore/402-telegram-bootstrap` `4d3cf76`, `chore/402-fly-ci` at this
 document's last commit.
+
+## Second advisory review follow-up (2026-10-08)
+
+A second advisory pass over pull requests 406–409 approved 407 and 408 and
+confirmed three findings, each verified by the parent against the code.
+
+| Finding | Branch | Commit | Checks observed |
+| --- | --- | --- | --- |
+| Blank LLM endpoint passed as configured | `chore/402-prod-config` | `629807c` | RED 49/53 then GREEN 53 |
+| Release command succeeded with no bot configuration | `chore/402-fly-ci` | `fe61ccd` | RED 24/31 then GREEN 35; release smoke in all three branches |
+| Operator secrets file not ignored | `chore/402-fly-ci` | `188746c` | `git check-ignore` matches `*.secrets`, `*.key`, `*.pem` |
+
+- A blank endpoint falls through to the next source in the precedence chain;
+  `OPENAI_BASE_URL` set to an empty string now resolves to the default. With
+  `""`, the local adapter used to fall back silently to `localhost:11434`.
+- `bin/telegram_bootstrap check` decrypts the stored row; `bin/release` calls
+  it when `TELEGRAM_BOT_TOKEN` is absent and exits non-zero when the row is
+  missing or unreadable, before the new version starts.
+- Forward merges `d6515c2`, `0a23f38`, `fd6998d`; no conflicts.
+- `mix precommit` at `188746c`: 2077 passed, 5 skipped. Parent re-run of the
+  touched suites: 92 passed.
+- Native review, `386598d..188746c`: high (shell in the workflow); consent
+  granted; four lenses; approved and acknowledged. Warnings, locations only:
+  `release.ex:123`, `telegram/bootstrap.ex:149-150`,
+  `rel/overlays/bin/release:38-40`.
+
+Tips: `chore/402-prod-config` `629807c`, `chore/402-ai-degradation` `d6515c2`,
+`chore/402-telegram-bootstrap` `0a23f38`, `chore/402-fly-ci` at this
+document's last commit.
