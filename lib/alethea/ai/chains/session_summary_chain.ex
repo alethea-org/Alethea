@@ -3,6 +3,7 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
   @behaviour Alethea.AI.Chains.ChainBehaviour
 
   alias Alethea.AI.LLMConfig
+  alias Alethea.AI.Chains.SafeRun
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
@@ -55,7 +56,7 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
       |> LLMChain.new!()
       |> LLMChain.add_message(Message.new_system!(suggested_system_prompt()))
       |> LLMChain.add_message(Message.new_user!(content))
-      |> LLMChain.run()
+      |> SafeRun.run()
 
     duration = System.monotonic_time(:millisecond) - start_time
 
