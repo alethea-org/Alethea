@@ -69,7 +69,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   require Logger
 
   alias Alethea.{Accounts, Clinical, Repo}
-  alias Alethea.Alerts.CrisisMonitor
+  alias Alethea.Alerts.{CrisisCopy, CrisisMonitor}
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
@@ -757,7 +757,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
          triggers,
          session_id
        ) do
-    crisis_text = crisis_reply_text(legacy_patient)
+    crisis_text = CrisisCopy.reply_text(legacy_patient)
 
     # PR #86 PR-2 (crisis-path transactional atomicity): steps 1, 2,
     # and 4 — `update_patient`, `save_ai_diagnosis`, and the crisis
@@ -901,23 +901,6 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
         :ok
     end
-  end
-
-  # Resolve the crisis-bypass reply text. The psychologist preconfigures
-  # a per-professional `crisis_message` (the patient-facing reply the
-  # system sends when a `:crisis` classification lands). If unset, fall
-  # back to a system default.
-  defp crisis_reply_text(legacy_patient) do
-    legacy_patient.professional.crisis_message ||
-      Application.get_env(
-        :alethea,
-        :crisis_support_message,
-        default_crisis_support_message()
-      )
-  end
-
-  defp default_crisis_support_message do
-    "Entiendo que estás pasando por algo muy difícil. Lo que sientes importa."
   end
 
   # ----------------------------------------------------------------
