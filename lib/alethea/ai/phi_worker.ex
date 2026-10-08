@@ -15,12 +15,14 @@ defmodule Alethea.AI.PhiWorker do
   alias Alethea.AI.Sanitizer
 
   @impl true
-  def process(%{message_id: message_id, sanitized_content: content, history: history}) do
-    GuidedConversationChain.run(%{
+  def process(%{message_id: message_id, sanitized_content: content, history: history} = request) do
+    params = %{
       sanitized_content: Sanitizer.sanitize(content),
       history: Enum.map(history, &%{role: &1.role, content: Sanitizer.sanitize(&1.content)}),
       message_id: message_id
-    })
+    }
+
+    GuidedConversationChain.run(put_summary(params, Map.get(request, :summary)))
   end
 
   @impl true
@@ -30,6 +32,11 @@ defmodule Alethea.AI.PhiWorker do
       previous_summary: sanitize_previous(Map.get(request, :previous_summary))
     })
   end
+
+  defp put_summary(params, summary) when is_binary(summary),
+    do: Map.put(params, :summary, Sanitizer.sanitize(summary))
+
+  defp put_summary(params, _none), do: params
 
   defp sanitize_previous(previous) when is_binary(previous), do: Sanitizer.sanitize(previous)
   defp sanitize_previous(_none), do: nil

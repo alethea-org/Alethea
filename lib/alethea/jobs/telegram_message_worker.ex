@@ -71,7 +71,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   alias Alethea.{Accounts, Clinical, Repo}
   alias Alethea.Alerts.{CrisisCopy, CrisisMonitor}
-  alias Alethea.Clinical.{Message, SessionManager}
+  alias Alethea.Clinical.{Message, RunningSummary, SessionManager}
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor}
@@ -182,6 +182,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       schedule_session_reminder(legacy_patient, chat_id, chat_id_hash)
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
+
+      # #394: schedule the running-summary job when due. Never raises and
+      # carries only the patient id, so it cannot affect the reply path.
+      RunningSummary.schedule_if_due(legacy_patient.id, hash_prefix)
 
       # The reply belongs to the session its inbound was recorded in; a
       # resumed execution may observe a newer open session.

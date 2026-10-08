@@ -240,6 +240,26 @@ defmodule Alethea.AI.LLMConfigTest do
       assert reason =~ "not configured"
     end
 
+    test "running summary reads the same LLM_MODEL setting as the guided conversation" do
+      guided = Application.get_env(:alethea, GuidedConversationChain)
+      summary = Application.get_env(:alethea, Alethea.AI.Chains.RunningSummaryChain, [])
+
+      assert Keyword.fetch!(summary, :model) == Keyword.fetch!(guided, :model)
+      assert LLMConfig.get(:running_summary).model == LLMConfig.get(:guided_conversation).model
+    end
+
+    test "running summary model follows its configured value" do
+      original = Application.get_env(:alethea, Alethea.AI.Chains.RunningSummaryChain)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, Alethea.AI.Chains.RunningSummaryChain, original || [])
+      end)
+
+      Application.put_env(:alethea, Alethea.AI.Chains.RunningSummaryChain, model: "otro:modelo")
+
+      assert LLMConfig.get(:running_summary).model == "otro:modelo"
+    end
+
     test "defaults to :local provider" do
       config = LLMConfig.get(:guided_conversation)
       assert config.provider == :local
