@@ -247,6 +247,22 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       refute Keyword.has_key?(llm, :provider)
     end
 
+    test "an empty hosted endpoint override resolves to the documented default" do
+      for blank <- ["", "   "] do
+        config = prod_config(cloud_env(%{"OPENAI_BASE_URL" => blank}))
+
+        assert alethea(config, LLMConfig)[:cloud][:endpoint_url] == "https://api.openai.com/v1"
+      end
+    end
+
+    test "a hosted endpoint override is honoured" do
+      config =
+        prod_config(cloud_env(%{"OPENAI_BASE_URL" => "https://llm-gateway.example.test/v1"}))
+
+      assert alethea(config, LLMConfig)[:cloud][:endpoint_url] ==
+               "https://llm-gateway.example.test/v1"
+    end
+
     test "boot errors never echo the secret values" do
       error =
         assert_raise RuntimeError, fn ->
