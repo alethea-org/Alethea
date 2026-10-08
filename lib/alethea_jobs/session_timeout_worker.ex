@@ -246,10 +246,30 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   # Runs every step after the close. The steps are independent: each one
   # reports its own outcome and none of them stops the next. The job result
   # is the summary result, the only step a retry can still complete.
-  defp finish_closure(closed_session, patient, opts, mode) do
+  defp finish_closure(closed_session, patient, opts, :first_run) do
     texts = sanitized_texts(patient, closed_session)
-    emotion_scores = record_trends(patient, closed_session, texts, mode)
+    emotion_scores = record_trends(patient, closed_session, texts, :first_run)
     summary_result = record_summary(patient, closed_session, texts, emotion_scores)
+
+    send_goodbye(closed_session, opts, @goodbye_message)
+
+    summary_result
+  end
+
+  # A retry never re-runs the trends, so the session history is needed
+  # only to write a missing summary. When the summary is already stored
+  # only the goodbye can be pending: the patient's messages are not
+  # loaded or decrypted, and a history that can no longer be read does not
+  # fail a closure that has nothing left to read it for.
+  defp finish_closure(closed_session, patient, opts, :resume) do
+    summary_result =
+      if session_summary_recorded?(patient, closed_session) do
+        :ok
+      else
+        texts = sanitized_texts(patient, closed_session)
+        emotion_scores = record_trends(patient, closed_session, texts, :resume)
+        record_summary(patient, closed_session, texts, emotion_scores)
+      end
 
     send_goodbye(closed_session, opts, @goodbye_message)
 

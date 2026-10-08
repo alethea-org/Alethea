@@ -811,6 +811,82 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # Issue #402 — a retry whose summary is already stored.
+  #
+  # Only the goodbye can still be missing then, so the patient's messages
+  # must not be loaded and decrypted again for nothing.
+  # ----------------------------------------------------------------
+
+  describe "retry with the summary already recorded (issue #402)" do
+    # Reports every query the Repo runs against the messages table.
+    defp watch_message_queries do
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:alethea, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:source] == "messages", do: send(test_pid, :messages_queried)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
+
+    test "the history is not loaded again and the goodbye is still handled",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 1, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      args = telegram_job_args(session, patient)
+
+      watch_message_queries()
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 1)
+      # The first run does read the history: the probe works.
+      assert_received :messages_queried
+
+      # The goodbye of the first attempt is lost, as if the attempt had
+      # died right after storing the summary.
+      Repo.delete_all(
+        from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker"
+      )
+
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+
+      refute_received :messages_queried
+      assert [_single_summary] = session_summaries(patient)
+      assert [goodbye] = goodbye_jobs()
+      assert goodbye.args["session_id"] == session.id
+    end
+
+    test "a history that can no longer be decrypted does not fail the retry",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 1, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      args = telegram_job_args(session, patient)
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 1)
+
+      # The stored content becomes undecryptable between the attempts.
+      Repo.update_all(
+        from(m in Alethea.Clinical.Message, where: m.session_id == ^session.id),
+        set: [encrypted_content: <<0, 1, 2, 3>>]
+      )
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+        end)
+
+      refute log =~ "SessionTimeoutWorker failed"
+      assert [_single_summary] = session_summaries(patient)
+      assert [_single_goodbye] = goodbye_jobs()
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Issue #402 — a real model failure during the summary.
   #
   # The REAL `SessionSummaryChain` runs here (not the Mox mock), against
