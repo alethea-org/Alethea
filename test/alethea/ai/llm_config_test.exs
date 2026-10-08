@@ -192,6 +192,42 @@ defmodule Alethea.AI.LLMConfigTest do
       assert LLMConfig.get(:guided_conversation, provider: :cloud).api_key == nil
     end
 
+    test "a blank chain endpoint does not mask the global endpoint" do
+      Application.put_env(:alethea, LLMConfig,
+        local: [endpoint_url: "http://global-local.test:11434"],
+        cloud: [endpoint_url: "https://global-cloud.test/v1/", api_key: "global-key"]
+      )
+
+      for blank <- ["", "   "] do
+        Application.put_env(:alethea, GuidedConversationChain,
+          endpoint_url: blank,
+          local: [endpoint: blank],
+          cloud: [endpoint_url: blank]
+        )
+
+        assert LLMConfig.get(:guided_conversation, provider: :local).endpoint_url ==
+                 "http://global-local.test:11434"
+
+        assert LLMConfig.get(:guided_conversation, provider: :cloud).endpoint_url ==
+                 "https://global-cloud.test/v1/"
+
+        assert LLMConfig.get(:guided_conversation, provider: :local, endpoint_url: blank).endpoint_url ==
+                 "http://global-local.test:11434"
+      end
+    end
+
+    test "a blank endpoint in every source resolves to not configured in production" do
+      Application.put_env(:alethea, :env, :prod)
+      Application.put_env(:alethea, LLMConfig, local: [endpoint_url: "  "])
+      Application.delete_env(:alethea, GuidedConversationChain)
+
+      config = LLMConfig.get(:guided_conversation, provider: :local)
+
+      assert config.endpoint_url == nil
+      assert {:error, reason} = LLMConfig.build_llm(config)
+      assert reason =~ "not configured"
+    end
+
     test "defaults to :local provider" do
       config = LLMConfig.get(:guided_conversation)
       assert config.provider == :local
@@ -248,6 +284,23 @@ defmodule Alethea.AI.LLMConfigTest do
 
       assert {:error, "LLM endpoint for the :local provider is not configured"} =
                LLMConfig.build_llm(config)
+    end
+  end
+
+  describe "build_llm/1 — blank endpoint" do
+    test "a blank endpoint is not configured, for both providers" do
+      for provider <- [:local, :cloud], endpoint_url <- ["", "   ", "\n\t"] do
+        config = %LLMConfig.Config{
+          provider: provider,
+          model: "synthetic-model",
+          api_key: "synthetic-api-key",
+          endpoint_url: endpoint_url
+        }
+
+        expected = "LLM endpoint for the #{inspect(provider)} provider is not configured"
+
+        assert {:error, ^expected} = LLMConfig.build_llm(config)
+      end
     end
   end
 
