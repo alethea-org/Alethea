@@ -40,16 +40,16 @@ Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting 
 
 ## Slice S1: Storage + `patient_dek/2` (PR2)
 
-- [ ] 1.1 Run `mix ecto.gen.migration create_running_summaries`; body per design "Migration" (unique index `patients(id, professional_id)`; table with composite FK `MATCH FULL`, `ON DELETE CASCADE`, `ON UPDATE NO ACTION` per Resolved Decisions; `encrypted_summary :binary`; unique `patient_id`; CHECK `covered_inbound_count > 0`; nilify FK to messages). Files: `priv/repo/migrations/*_create_running_summaries.exs`. REQ-08, REQ-21. Done: migrate -> rollback -> migrate green.
-- [ ] 1.2 RED `test/alethea/clinical_patient_dek_test.exs`: `patient_dek/1` audits `"clinical_context_loading"`; `patient_dek/2` audits the given reason. REQ-13.
-- [ ] 1.3 GREEN `lib/alethea/clinical.ex`: `patient_dek(patient, reason \\ "clinical_context_loading") when is_binary(reason)`; only `details: %{reason: reason}` changes. REQ-13.
-- [ ] 1.4 RED `test/alethea/clinical/running_summary_test.exs` (storage): raw `SELECT encrypted_summary` has no plaintext fragment; round trip under journaling `"patient"` DEK with `encryption_version` 1; patient delete cascades the row; `Inspect` hides `summary`/`encrypted_summary`. REQ-08, REQ-12.
-- [ ] 1.5 RED same file (CAS): stale expected -> `{:error, :stale}`, row unchanged; `new <= expected` rejected; two first writes -> 1 row; two CAS from same expected -> exactly one lands. REQ-06.
-- [ ] 1.6 RED same file (tenant): `insert_all` with another professional's id raises on the composite FK; `exists?/1` and `load_usable/1` for B never return A's row; direct update of `patients.professional_id` with a summary row present is rejected (fail-closed test); after `delete_for_patient/1` the update succeeds. REQ-21.
-- [ ] 1.7 RED same file: creating/refreshing a row enqueues no Outbox job; `Retention` has no registration for the table. REQ-15.
-- [ ] 1.8 GREEN create `lib/alethea/clinical/running_summary/snapshot.ex` (schema, redacted virtual `summary`, no cast of `patient_id`/`professional_id`) and `lib/alethea/clinical/running_summary.ex` (`exists?/1`, `load_usable/1` read+decrypt only, `write/3` via `insert_all`/`update_all` CAS, `reset/2`, `delete_for_patient/1`). REQ-06, REQ-08, REQ-21.
-- [ ] 1.9 Verify only: `openspec/UBIQUITOUS_LANGUAGE.md` already defines "Resumen conversacional" (code `RunningSummary`), distinct from "Resumen de brecha". REQ-19. Done: both terms present; no edit unless missing.
-- [ ] 1.10 Gate: focused tests, `mix compile --warnings-as-errors`, diff ~380 lines.
+- [x] 1.1 Run `mix ecto.gen.migration create_running_summaries`; body per design "Migration" (unique index `patients(id, professional_id)`; table with composite FK `MATCH FULL`, `ON DELETE CASCADE`, `ON UPDATE NO ACTION` per Resolved Decisions; `encrypted_summary :binary`; unique `patient_id`; CHECK `covered_inbound_count > 0`; nilify FK to messages). Files: `priv/repo/migrations/*_create_running_summaries.exs`. REQ-08, REQ-21. Done: migrate -> rollback -> migrate green.
+- [x] 1.2 RED `test/alethea/clinical_patient_dek_test.exs`: `patient_dek/1` audits `"clinical_context_loading"`; `patient_dek/2` audits the given reason. REQ-13.
+- [x] 1.3 GREEN `lib/alethea/clinical.ex`: `patient_dek(patient, reason \\ "clinical_context_loading") when is_binary(reason)`; only `details: %{reason: reason}` changes. REQ-13.
+- [x] 1.4 RED `test/alethea/clinical/running_summary_test.exs` (storage): raw `SELECT encrypted_summary` has no plaintext fragment; round trip under journaling `"patient"` DEK with `encryption_version` 1; patient delete cascades the row; `Inspect` hides `summary`/`encrypted_summary`. REQ-08, REQ-12.
+- [x] 1.5 RED same file (CAS): stale expected -> `{:error, :stale}`, row unchanged; `new <= expected` rejected; two first writes -> 1 row; two CAS from same expected -> exactly one lands. REQ-06.
+- [x] 1.6 RED same file (tenant): `insert_all` with another professional's id raises on the composite FK; `exists?/1` and `load_usable/1` for B never return A's row; direct update of `patients.professional_id` with a summary row present is rejected (fail-closed test); after `delete_for_patient/1` the update succeeds. REQ-21.
+- [x] 1.7 RED same file: creating/refreshing a row enqueues no Outbox job; `Retention` has no registration for the table. REQ-15.
+- [x] 1.8 GREEN create `lib/alethea/clinical/running_summary/snapshot.ex` (schema, redacted virtual `summary`, no cast of `patient_id`/`professional_id`) and `lib/alethea/clinical/running_summary.ex` (`exists?/1`, `load_usable/1` read+decrypt only, `write/3` via `insert_all`/`update_all` CAS, `reset/2`, `delete_for_patient/1`). REQ-06, REQ-08, REQ-21.
+- [x] 1.9 Verify only: `openspec/UBIQUITOUS_LANGUAGE.md` already defines "Resumen conversacional" (code `RunningSummary`), distinct from "Resumen de brecha". REQ-19. Done: both terms present; no edit unless missing.
+- [x] 1.10 Gate: focused tests, `mix compile --warnings-as-errors`, diff ~380 lines. (Measured 578 changed lines: over budget, flagged to orchestrator; see apply-progress.)
 
 ## Slice S2: AI generation, uncalled (PR3)
 
@@ -70,6 +70,7 @@ Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting 
 - [ ] 3.5 RED same file (audit): job unwrap audits exactly `"running_summary_generation"` per run. REQ-13.
 - [ ] 3.6 RED same file (A6): covered 20, only 12 inbounds -> row reset via CAS, `summarize/1` gets no `previous_summary`, new row covers current count; no old-summary text in input. REQ-17.
 - [ ] 3.7 RED same file (A1/backlog): worker declares finite `max_attempts: 3` and unique states `[:available, :scheduled, :retryable]`; backlog >=20 chains next batch; discarded job + pending >=10 -> next trigger enqueues a new job; no Outbox/RAG job. REQ-09, REQ-15.
+- [ ] 3.7a RED same file (storage opacity at the write path, user 2026-10-08): after a successful worker run, read `running_summaries.encrypted_summary` raw via `Repo.query!/2` (bypassing the schema) and assert it does not contain the plaintext summary nor any of its section headings or fragments, and that it decrypts back to the plaintext only under the patient's journaling DEK. Guards that the worker encrypts before `RunningSummary.write/3` (which takes ciphertext). REQ-08, REQ-12.
 - [ ] 3.8 GREEN `lib/alethea/clinical/running_summary.ex`: `schedule_if_due/2` (try/rescue/catch -> `:ok`), `plan/1` (no decrypt), `window_turns/3`, inbound count. REQ-01, REQ-03, REQ-07.
 - [ ] 3.9 GREEN `lib/alethea_jobs/running_summary_worker.ex` (queue `:running_summary`, per design AD9/AD10; DEK stays in memory). REQ-04, REQ-09, REQ-12, REQ-13, REQ-14, REQ-17.
 - [ ] 3.10 `config/config.exs`: add Oban queue `running_summary: 1` with code comment: the limit is global across patients and can be raised because uniqueness is per patient and writes are CAS-guarded; it limits LLM load, not correctness. AD8.
