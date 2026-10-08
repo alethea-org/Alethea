@@ -95,6 +95,44 @@ defmodule Alethea.ReleaseTest do
     end
   end
 
+  describe "telegram_check/0" do
+    setup :telegram_environment
+
+    test "succeeds on the stored row without the variables and without writing" do
+      capture_io(fn -> Release.telegram_bootstrap() end)
+      Enum.each(@telegram_vars, fn {name, _value} -> System.delete_env(name) end)
+
+      {output, log} =
+        with_log(fn -> capture_io(fn -> assert Release.telegram_check() == :ok end) end)
+
+      assert output == "TELEGRAM_BOT_CONFIG env=test status=kept username=#{@bot_username}\n"
+
+      for text <- [output, log] do
+        refute text =~ @bot_token
+        refute text =~ @secret_token
+      end
+
+      assert Repo.aggregate(BotConfig, :count) == 1
+    end
+
+    test "raises a fixed line naming the variables when no row is stored" do
+      Enum.each(@telegram_vars, fn {name, _value} -> System.delete_env(name) end)
+
+      error =
+        assert_raise RuntimeError, fn ->
+          capture_io(fn -> Release.telegram_check() end)
+        end
+
+      assert error.message =~ ~r/\ATELEGRAM_BOT_CONFIG_MISSING env=test reason=/
+
+      for name <- ~w(TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET TELEGRAM_BOT_USERNAME) do
+        assert error.message =~ name
+      end
+
+      assert Repo.aggregate(BotConfig, :count) == 0
+    end
+  end
+
   describe "telegram_register_webhook/0" do
     setup :telegram_environment
 
@@ -194,7 +232,7 @@ defmodule Alethea.ReleaseTest do
   end
 
   describe "release overlays" do
-    for script <- ~w(server migrate telegram_bootstrap) do
+    for script <- ~w(server migrate release telegram_bootstrap) do
       test "rel/overlays/bin/#{script} is an executable POSIX sh script" do
         path = Path.join("rel/overlays/bin", unquote(script))
         %File.Stat{mode: mode} = File.stat!(path)
@@ -218,11 +256,85 @@ defmodule Alethea.ReleaseTest do
       assert run_with_stub_release(["register-webhook"]) ==
                {"eval Alethea.Release.telegram_register_webhook\n", 0}
 
-      for args <- [["register"], ["--register-webhook"], ["register-webhook", "extra"], [""]] do
+      assert run_with_stub_release(["check"]) == {"eval Alethea.Release.telegram_check\n", 0}
+
+      for args <- [
+            ["register"],
+            ["--register-webhook"],
+            ["register-webhook", "extra"],
+            ["check", "register-webhook"],
+            [""]
+          ] do
         assert {output, 64} = run_with_stub_release(args)
-        assert output =~ "usage: telegram_bootstrap [register-webhook]"
+        assert output =~ "usage: telegram_bootstrap [check|register-webhook]"
         refute output =~ "eval"
       end
+    end
+
+    test "bin/release bootstraps when the token is set" do
+      assert run_release_with_stubs(%{"TELEGRAM_BOT_TOKEN" => @bot_token}, 0) ==
+               {"migrate\ntelegram_bootstrap\n", 0}
+    end
+
+    test "bin/release keeps the stored row when the token is absent or empty" do
+      for env <- [%{}, %{"TELEGRAM_BOT_TOKEN" => ""}] do
+        assert {output, 0} = run_release_with_stubs(env, 0)
+
+        assert output ==
+                 "migrate\ntelegram_bootstrap check\n" <>
+                   "TELEGRAM_BOOTSTRAP skipped: TELEGRAM_BOT_TOKEN is not set; " <>
+                   "the stored BotConfig row is kept\n"
+      end
+    end
+
+    test "bin/release fails after migrating when no usable row is stored" do
+      assert {output, 1} = run_release_with_stubs(%{}, 1)
+
+      assert String.starts_with?(output, "migrate\ntelegram_bootstrap check\nRELEASE_FAILED: ")
+
+      for name <- ~w(TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET TELEGRAM_BOT_USERNAME) do
+        assert output =~ name
+      end
+
+      refute output =~ "register-webhook"
+      refute output =~ "skipped"
+    end
+  end
+
+  # Runs a copy of `bin/release` next to stubs of the two scripts it calls.
+  # Each stub prints its own name and arguments; the `telegram_bootstrap`
+  # stub exits with `check_status` for the `check` argument.
+  defp run_release_with_stubs(env, check_status) do
+    dir = Path.join(System.tmp_dir!(), "alethea-release-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+
+    try do
+      script = Path.join(dir, "release")
+      File.cp!("rel/overlays/bin/release", script)
+
+      stubs = %{
+        "migrate" => "#!/bin/sh\necho migrate\n",
+        "telegram_bootstrap" => """
+        #!/bin/sh
+        echo "telegram_bootstrap${1:+ $1}"
+        if [ "${1:-}" = "check" ]; then exit #{check_status}; fi
+        """
+      }
+
+      for {name, body} <- stubs do
+        path = Path.join(dir, name)
+        File.write!(path, body)
+        File.chmod!(path, 0o755)
+      end
+
+      # `env -i` gives the script exactly the variables in `env`.
+      assignments = Enum.map(env, fn {name, value} -> "#{name}=#{value}" end)
+
+      System.cmd("/usr/bin/env", ["-i"] ++ assignments ++ ["/bin/sh", script],
+        stderr_to_stdout: true
+      )
+    after
+      File.rm_rf!(dir)
     end
   end
 

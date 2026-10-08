@@ -81,6 +81,8 @@ Built from `config/runtime.exs`. "Secret" means `fly secrets`; "plain" means `[e
 
 The three `TELEGRAM_*` values are stored encrypted in the database by the release command. The running server reads the stored row, not these variables. Whether they stay as permanent secrets or are removed after the first deploy is an [open decision](#open-decisions); both work.
 
+A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command still verifies the stored row (`/app/bin/telegram_bootstrap check`). If the database has no row, or a row the current `CLOAK_AES_KEY` cannot decrypt, the release command fails with `TELEGRAM_BOT_CONFIG_MISSING` and the deploy stops before the new version starts. Stage the three `TELEGRAM_*` values and deploy again.
+
 ### Optional
 
 | Name | Default | Purpose |
@@ -149,11 +151,20 @@ Run from the repository root. `fly.toml` names the app `alethea-prod`; change th
    fly deploy --ha=false
    ```
 
-   The release command `/app/bin/release` runs first, in a temporary Machine: it migrates the empty database and writes the Telegram bot row. The server cannot boot without that row, which is why the `TELEGRAM_*` values must be staged before this step. Expect these lines in the deploy output:
+   The release command `/app/bin/release` runs first, in a temporary Machine: it migrates the empty database and writes the Telegram bot row. The server cannot boot without that row, which is why the `TELEGRAM_*` values must be staged before this step. Expect this line in the deploy output:
 
    ```text
    TELEGRAM_BOT_CONFIG env=prod status=created username=<bot>
    ```
+
+   If the `TELEGRAM_*` values were not staged, the release command fails after migrating and no Machine is started:
+
+   ```text
+   TELEGRAM_BOT_CONFIG_MISSING env=prod reason=no Telegram bot configuration is stored for this environment; ...
+   RELEASE_FAILED: TELEGRAM_BOT_TOKEN is not set and no usable BotConfig row is stored.
+   ```
+
+   Stage them and run `fly deploy --ha=false` again; the migrations are already applied and are not repeated. Later deploys without the values print `TELEGRAM_BOT_CONFIG env=prod status=kept username=<bot>`.
 
 4. **Check it is up.**
 

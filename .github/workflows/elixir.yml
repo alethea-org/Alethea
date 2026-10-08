@@ -155,6 +155,23 @@ jobs:
           TELEGRAM_BOT_USERNAME=ci_fake_bot
           EOF
 
+      - name: Release command on an empty database without the Telegram values
+        run: |
+          # No bot configuration is stored yet and none is supplied: the
+          # release command must fail, so a deploy stops before it starts a
+          # server that cannot boot. Any other failure does not print the
+          # two lines checked below.
+          if docker run --rm --network "$DOCKER_NET" \
+            --env-file "$RUNNER_TEMP/release.env" \
+            "$IMAGE" /app/bin/release > "$RUNNER_TEMP/release-empty.log" 2>&1; then
+            cat "$RUNNER_TEMP/release-empty.log"
+            echo "the release command succeeded without any bot configuration" >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/release-empty.log"
+          grep -q "TELEGRAM_BOT_CONFIG_MISSING env=prod" "$RUNNER_TEMP/release-empty.log"
+          grep -q "RELEASE_FAILED" "$RUNNER_TEMP/release-empty.log"
+
       - name: Release command (migrate and Telegram bootstrap)
         run: |
           docker run --rm --network "$DOCKER_NET" \
@@ -168,6 +185,8 @@ jobs:
           docker run --rm --network "$DOCKER_NET" \
             --env-file "$RUNNER_TEMP/release.env" \
             "$IMAGE" /app/bin/release | tee "$RUNNER_TEMP/release-again.log"
+          # The stored row is verified and kept; nothing is written.
+          grep -q "TELEGRAM_BOT_CONFIG env=prod status=kept" "$RUNNER_TEMP/release-again.log"
           grep -q "TELEGRAM_BOOTSTRAP skipped" "$RUNNER_TEMP/release-again.log"
 
       - name: Start the server

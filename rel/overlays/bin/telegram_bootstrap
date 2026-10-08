@@ -4,12 +4,16 @@ set -eu
 # Telegram production bootstrap.
 #
 #   bin/telegram_bootstrap                    write the sealed BotConfig row
+#   bin/telegram_bootstrap check              verify the stored row, write nothing
 #   bin/telegram_bootstrap register-webhook   call setWebhook and verify it
 #
 # With no argument it only writes to the database, so it is safe inside a
 # deploy release command, after bin/migrate and before the server boots.
+# `check` does not read the TELEGRAM_* variables: it exits non-zero when
+# no row the server can boot from is stored, and is what bin/release runs on
+# a deploy that carries no TELEGRAM_BOT_TOKEN.
 # Registering the webhook calls the Telegram Bot API and therefore only runs
-# when asked for by name: it is never a side effect of the default action.
+# when asked for by name: it is never a side effect of the other two.
 
 cd -P -- "$(dirname -- "$0")"
 
@@ -21,5 +25,9 @@ if [ "$#" -eq 1 ] && [ "$1" = "register-webhook" ]; then
   exec ./alethea eval Alethea.Release.telegram_register_webhook
 fi
 
-echo "usage: telegram_bootstrap [register-webhook]" >&2
+if [ "$#" -eq 1 ] && [ "$1" = "check" ]; then
+  exec ./alethea eval Alethea.Release.telegram_check
+fi
+
+echo "usage: telegram_bootstrap [check|register-webhook]" >&2
 exit 64

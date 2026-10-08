@@ -25,8 +25,11 @@ defmodule Alethea.Release do
       bin/alethea eval "Alethea.Release.telegram_bootstrap"
       bin/alethea eval "Alethea.Release.telegram_register_webhook"
 
-  `bin/telegram_bootstrap` wraps both: with no argument it runs the first,
-  and with the explicit `register-webhook` argument it runs the second.
+      bin/alethea eval "Alethea.Release.telegram_check"
+
+  `bin/telegram_bootstrap` wraps all three: with no argument it runs the
+  first, with the explicit `register-webhook` argument the second, and with
+  `check` the third.
 
   `telegram_bootstrap/0` writes the sealed `BotConfig` row for this build's
   environment from `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` and
@@ -39,8 +42,14 @@ defmodule Alethea.Release do
   `:telegram_webhook_url`. It is an external side effect, so nothing runs it
   implicitly: not `migrate/0`, not `telegram_bootstrap/0`, not the server.
 
-  Both start only the repo, the encryption vault and, for the registration,
-  the HTTP client; the endpoint and Oban never start. Both raise on failure,
+  `telegram_check/0` writes nothing and calls nothing: it verifies that the
+  stored row is one the server can boot from (present, and decryptable with
+  the current `CLOAK_AES_KEY`). `bin/release` runs it on a deploy that carries
+  no `TELEGRAM_BOT_TOKEN`, so a database without a usable row fails the
+  release command instead of crash-looping the new server.
+
+  All start only the repo, the encryption vault and, for the registration,
+  the HTTP client; the endpoint and Oban never start. All raise on failure,
   which makes `bin/alethea eval` exit non-zero, and the raised message is a
   fixed line without the token or the secret.
   """
@@ -92,6 +101,26 @@ defmodule Alethea.Release do
 
       {:error, reason} ->
         raise "TELEGRAM_BOOTSTRAP_FAILED env=#{env} reason=#{bootstrap_failure(reason)}"
+    end
+  end
+
+  @doc """
+  Verifies, without writing, that a usable Telegram `BotConfig` row is stored
+  for this build's environment.
+
+  Prints one non-secret line and returns `:ok`; raises on failure.
+  """
+  @spec telegram_check() :: :ok
+  def telegram_check do
+    load_app()
+    env = build_env()
+
+    case with_services([], fn -> Bootstrap.verify_stored(env) end) do
+      {:ok, %{status: status, bot_username: bot_username}} ->
+        IO.puts("TELEGRAM_BOT_CONFIG env=#{env} status=#{status} username=#{bot_username}")
+
+      {:error, reason} ->
+        raise "TELEGRAM_BOT_CONFIG_MISSING env=#{env} reason=#{bootstrap_failure(reason)}"
     end
   end
 

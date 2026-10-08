@@ -3,18 +3,24 @@ set -eu
 
 # The single deploy release command (fly.toml: [deploy] release_command).
 #
-#   1. bin/migrate              always
-#   2. bin/telegram_bootstrap   only when TELEGRAM_BOT_TOKEN is set and non-empty
+#   1. bin/migrate                    always
+#   2. bin/telegram_bootstrap         when TELEGRAM_BOT_TOKEN is set and non-empty
+#      bin/telegram_bootstrap check   otherwise
 #
 # Migrations run from here and nowhere else: migration 20260618234145 disables
 # the migration lock, so two concurrent runners are not protected against each
 # other.
 #
 # The bootstrap writes the sealed BotConfig row, which the server needs before
-# it can boot. It touches the database only. Skipping it when the token is
-# absent lets the TELEGRAM_* values be either permanent secrets (the row is
-# re-checked on every deploy) or secrets set for one deploy and removed
-# afterwards (later deploys keep the stored row).
+# it can boot. It touches the database only. The TELEGRAM_* values can be
+# either permanent secrets (the row is re-checked on every deploy) or secrets
+# set for one deploy and removed afterwards (later deploys keep the stored
+# row).
+#
+# Without the token nothing is written, but the stored row is still verified:
+# a database with no usable row (a first deploy without the TELEGRAM_* values,
+# or a row sealed under a different CLOAK_AES_KEY) fails this command, so the
+# deploy stops here instead of starting a server that cannot boot.
 #
 # The webhook is never registered from here: that calls the Telegram Bot API
 # and only runs when an operator asks for it by name
@@ -26,6 +32,10 @@ cd -P -- "$(dirname -- "$0")"
 
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
   ./telegram_bootstrap
+elif ./telegram_bootstrap check; then
+  echo "TELEGRAM_BOOTSTRAP skipped: TELEGRAM_BOT_TOKEN is not set; the stored BotConfig row is kept"
 else
-  echo "TELEGRAM_BOOTSTRAP skipped: TELEGRAM_BOT_TOKEN is not set; the stored BotConfig row is left as it is"
+  echo "RELEASE_FAILED: TELEGRAM_BOT_TOKEN is not set and no usable BotConfig row is stored." >&2
+  echo "Set TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET and TELEGRAM_BOT_USERNAME and deploy again, or run bin/telegram_bootstrap with them set." >&2
+  exit 1
 fi
