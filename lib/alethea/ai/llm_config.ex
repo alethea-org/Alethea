@@ -112,16 +112,14 @@ defmodule Alethea.AI.LLMConfig do
 
     defaults = Keyword.get(global_config, :defaults, [])
 
+    # Each source goes through its resolver on its own, so a blank or
+    # unresolved value falls through to the next source instead of masking it.
     api_key =
-      resolve_api_key(
-        Keyword.get(overrides, :api_key) ||
-          Keyword.get(chain_config, :api_key) ||
-          Keyword.get(chain_provider_config, :api_key) ||
-          Keyword.get(global_provider_config, :api_key)
-      )
+      resolve_api_key(Keyword.get(overrides, :api_key)) ||
+        resolve_api_key(Keyword.get(chain_config, :api_key)) ||
+        resolve_api_key(Keyword.get(chain_provider_config, :api_key)) ||
+        resolve_api_key(Keyword.get(global_provider_config, :api_key))
 
-    # Each source goes through `resolve_endpoint_url/1` on its own, so a
-    # blank value falls through to the next source instead of masking it.
     endpoint_url =
       resolve_endpoint_url(Keyword.get(overrides, :endpoint_url)) ||
         resolve_endpoint_url(Keyword.get(chain_config, :endpoint_url)) ||
