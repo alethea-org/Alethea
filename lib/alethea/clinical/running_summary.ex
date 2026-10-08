@@ -11,20 +11,76 @@ defmodule Alethea.Clinical.RunningSummary do
 
   import Ecto.Query
 
+  require Logger
+
   alias Alethea.Accounts.Patient
   alias Alethea.Clinical
+  alias Alethea.Clinical.Message
   alias Alethea.Clinical.RunningSummary.Snapshot
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
+  alias Alethea.Telegram.LogRedactor
+  alias AletheaJobs.RunningSummaryWorker
 
   @loading_reason "running_summary_loading"
+  @batch 10
+  @window_cap 40
 
   @type plan :: %{
-          mode: :first | :incremental,
-          expected: non_neg_integer(),
-          target_count: pos_integer(),
-          target: %{id: Ecto.UUID.t()}
+          required(:mode) => :first | :incremental,
+          required(:expected) => non_neg_integer(),
+          required(:target_count) => pos_integer(),
+          required(:target) => %{id: Ecto.UUID.t()},
+          optional(:lower_bound) => DateTime.t() | nil,
+          optional(:anchor_ciphertext) => binary() | nil
         }
+
+  @doc """
+  Enqueues a `RunningSummaryWorker` job when the patient's persisted inbound
+  count is at least #{@batch} ahead of the stored row (or the row must be
+  reset). Never raises: any failure is logged as an atom and swallowed so the
+  inbound pipeline is unaffected.
+  """
+  @spec schedule_if_due(Ecto.UUID.t(), String.t()) :: :ok
+  def schedule_if_due(patient_id, hash_prefix) do
+    with %Patient{} = patient <- Repo.get(Patient, patient_id),
+         {decision, _count, _row} when decision != :not_due <- assess(patient),
+         {:error, _} <- Oban.insert(RunningSummaryWorker.new(%{"patient_id" => patient.id})) do
+      warn(:enqueue_failed, hash_prefix)
+    end
+
+    :ok
+  rescue
+    error -> warn(error.__struct__, hash_prefix)
+  catch
+    kind, _ -> warn(kind, hash_prefix)
+  end
+
+  @doc "Decides the next step from persisted counts only; nothing is decrypted."
+  @spec plan(Patient.t()) :: :not_due | {:reset, pos_integer()} | {:build, plan()}
+  def plan(%Patient{} = patient) do
+    {decision, count, row} = assess(patient)
+    build_plan(decision, patient, count, row)
+  end
+
+  @doc """
+  Decrypted window for `plan`: same population and `(timestamp, direction, id)`
+  order as `Clinical.list_conversation_turns/3` (superseded replies excluded),
+  up to and including the target inbound, newest #{@window_cap} turns, oldest
+  first. Incremental plans start at the anchor's (closed) second.
+  """
+  @spec window_turns(Patient.t(), plan(), binary()) ::
+          {:ok, [Clinical.conversation_turn()]} | {:error, :decrypt_failed}
+  def window_turns(%Patient{id: patient_id}, %{target: target} = plan, dek) do
+    patient_id
+    |> window_messages(target, Map.get(plan, :lower_bound))
+    |> Enum.reduce_while({:ok, []}, fn message, {:ok, turns} ->
+      case Clinical.decrypt_message_content(message, dek) do
+        {:ok, content} -> {:cont, {:ok, [%{role: role(message), content: content} | turns]}}
+        _ -> {:halt, {:error, :decrypt_failed}}
+      end
+    end)
+  end
 
   @doc "True when a row exists for exactly this patient and professional. No decrypt."
   @spec exists?(Patient.t()) :: boolean()
@@ -81,6 +137,100 @@ defmodule Alethea.Clinical.RunningSummary do
   @spec delete_for_patient(Patient.t()) :: :ok
   def delete_for_patient(%Patient{} = patient) do
     {_, _} = Repo.delete_all(scoped(patient))
+    :ok
+  end
+
+  defp assess(patient) do
+    count =
+      Repo.aggregate(
+        from(m in Message, where: m.patient_id == ^patient.id and m.direction == "inbound"),
+        :count
+      )
+
+    row =
+      patient
+      |> scoped()
+      |> select(
+        [s],
+        map(s, [:covered_inbound_count, :covered_through_message_id, :encrypted_summary])
+      )
+      |> Repo.one()
+
+    {decide(count, row), count, row}
+  end
+
+  defp decide(count, nil) when count >= @batch, do: :first
+  defp decide(_count, nil), do: :not_due
+  defp decide(count, %{covered_inbound_count: covered}) when count < covered, do: :reset
+  defp decide(_count, %{covered_through_message_id: nil}), do: :reset
+  defp decide(count, %{covered_inbound_count: c}) when count - c >= @batch, do: :incremental
+  defp decide(_count, _row), do: :not_due
+
+  defp build_plan(:not_due, _patient, _count, _row), do: :not_due
+  defp build_plan(:reset, _patient, _count, row), do: {:reset, row.covered_inbound_count}
+
+  defp build_plan(:first, patient, count, _row) do
+    target_plan(patient, %{mode: :first, expected: 0, target_count: div(count, @batch) * @batch})
+  end
+
+  defp build_plan(:incremental, patient, _count, row) do
+    anchor = Repo.get_by(Message, id: row.covered_through_message_id, patient_id: patient.id)
+    covered = row.covered_inbound_count
+
+    if anchor do
+      target_plan(patient, %{
+        mode: :incremental,
+        expected: covered,
+        target_count: covered + @batch,
+        lower_bound: anchor.timestamp,
+        anchor_ciphertext: row.encrypted_summary
+      })
+    else
+      {:reset, covered}
+    end
+  end
+
+  defp target_plan(patient, plan) do
+    target =
+      Message
+      |> where([m], m.patient_id == ^patient.id and m.direction == "inbound")
+      |> order_by([m], asc: m.timestamp, asc: m.id)
+      |> offset(^(plan.target_count - 1))
+      |> limit(1)
+      |> Repo.one()
+
+    if target, do: {:build, Map.put(plan, :target, target)}, else: :not_due
+  end
+
+  # Mirrors `Clinical.turns_before/3` (patient scope, superseded replies
+  # excluded, same tuple order) with the bound inclusive of the target.
+  defp window_messages(patient_id, target, lower_bound) do
+    Message
+    |> where([m], m.patient_id == ^patient_id)
+    |> where([m], is_nil(m.delivery_state) or m.delivery_state != "superseded")
+    |> where(
+      [m],
+      m.timestamp < ^target.timestamp or
+        (m.timestamp == ^target.timestamp and m.direction < ^target.direction) or
+        (m.timestamp == ^target.timestamp and m.direction == ^target.direction and
+           m.id <= ^target.id)
+    )
+    |> then(fn q -> if lower_bound, do: where(q, [m], m.timestamp >= ^lower_bound), else: q end)
+    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
+    |> limit(^@window_cap)
+    |> Repo.all()
+  end
+
+  defp role(%Message{direction: "inbound"}), do: :patient
+  defp role(%Message{direction: "outbound"}), do: :alethea
+
+  # Atoms and the redacted chat prefix only: never message text or reasons.
+  defp warn(reason, hash_prefix) do
+    Logger.warning(
+      "RunningSummary: schedule_if_due failed (reason=#{inspect(reason)}, " <>
+        "chat=#{LogRedactor.prefix(hash_prefix)})"
+    )
+
     :ok
   end
 
