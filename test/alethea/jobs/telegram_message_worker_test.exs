@@ -37,6 +37,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   import Mox
 
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
+  alias Alethea.Clinical
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Repo
   alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
@@ -1194,6 +1195,70 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       inbound = Repo.one(from m in Message, where: m.direction == "inbound")
       diagnosis = Repo.one(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
       assert diagnosis.ai_response == "Custom reply from Dr. Test"
+    end
+  end
+
+  describe "perform/1 — crisis branch — burst supersession (#391, R5)" do
+    setup :setup_bound_patient
+
+    test "a pending ordinary reply is superseded, uncovered inbound plus the crisis inbound are covered by the crisis reply, and the model is never asked to generate",
+         ctx do
+      foundation_patient = ctx.foundation_patient
+
+      {:ok, a} =
+        Clinical.save_telegram_message(foundation_patient, "a", "inbound", "spontaneous", "900")
+
+      {:ok, b} =
+        Clinical.save_telegram_message(foundation_patient, "b", "inbound", "spontaneous", "901")
+
+      {:ok, pending_reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "respuesta pendiente",
+          "elicited",
+          b.id,
+          nil
+        )
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, 0, fn _ -> flunk("must not generate during a crisis") end)
+
+      args =
+        build_args("me voy a quitar la vida", telegram_message_id: 902, telegram_update_id: 190)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      crisis_inbound = Repo.one!(from m in Message, where: m.telegram_message_id == "902")
+
+      crisis_reply =
+        Repo.one!(
+          from m in Message,
+            where: m.direction == "outbound" and m.behavior_type == "crisis_bypass"
+        )
+
+      assert Repo.get!(Message, pending_reply.id).delivery_state == "superseded"
+      assert Repo.get!(Message, a.id).replied_by_message_id == crisis_reply.id
+      assert Repo.get!(Message, b.id).replied_by_message_id == crisis_reply.id
+      assert crisis_inbound.replied_by_message_id == crisis_reply.id
+
+      assert [%Oban.Job{queue: "telegram_outbound_crisis"}] =
+               all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "after the crisis, a later ordinary inbound starts uncovered (a new burst)", ctx do
+      _ = ctx
+
+      crisis_args =
+        build_args("me voy a quitar la vida", telegram_message_id: 910, telegram_update_id: 191)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: crisis_args})
+
+      later_args = build_args("hola de nuevo", telegram_message_id: 911, telegram_update_id: 192)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: later_args})
+
+      later = Repo.one!(from m in Message, where: m.telegram_message_id == "911")
+      assert is_nil(later.replied_by_message_id)
     end
   end
 
