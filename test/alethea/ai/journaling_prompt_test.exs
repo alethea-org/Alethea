@@ -18,7 +18,7 @@ defmodule Alethea.AI.JournalingPromptTest do
     test "is organized in explicit sections" do
       headings =
         JournalingPrompt.system_prompt()
-        |> String.split("\n")
+        |> String.split(~r/\r?\n/)
         |> Enum.filter(&String.starts_with?(&1, "# "))
 
       assert headings == [

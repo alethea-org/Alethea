@@ -1644,8 +1644,10 @@ defmodule Alethea.ClinicalRecord do
   version. The caller must present its exact lock version and a nonblank
   change note (at most 500 graphemes). The TargetBehavior row is locked in
   the same transaction used by draft writes, serializing revision checks and
-  per-target numbering. The already-encrypted draft body is copied verbatim;
-  only the trimmed note is encrypted here.
+  per-target numbering. Repeating a registration for the same saved draft
+  revision returns its original immutable version, even if the valid note or
+  live evidence has since changed. The already-encrypted draft body is copied
+  verbatim; only the trimmed note is encrypted here.
   """
   @spec register_functional_analysis_version(
           Professional.t(),
@@ -1739,71 +1741,99 @@ defmodule Alethea.ClinicalRecord do
         if draft.lock_version != expected_lock_version do
           {:error, :conflict}
         else
-          # Decrypt/re-encrypt before consuming a sequence number so a
-          # failure leaves no version row and no gap.
-          live_evidence_ids =
-            ConsultationEvidence
-            |> where(
-              [e],
-              e.patient_id == ^patient.id and e.target_behavior_id == ^target_behavior_id
-            )
-            |> where(
-              [e],
-              fragment(
-                "NOT EXISTS (SELECT 1 FROM clinical_record_tombstones t WHERE t.resource_type = 'consultation_evidence' AND t.resource_id = ?)",
-                e.id
+          case Repo.get_by(FunctionalAnalysisVersion,
+                 draft_id: draft.id,
+                 source_draft_lock_version: draft.lock_version
+               ) do
+            %FunctionalAnalysisVersion{} = existing ->
+              existing
+
+            nil ->
+              create_functional_analysis_version(
+                professional,
+                patient,
+                target_behavior_id,
+                draft,
+                change_note,
+                keyring
               )
-            )
-            |> order_by([e], asc: e.occurred_at, asc: e.id)
-            |> select([e], e.id)
-            |> Repo.all()
-
-          serialized_baseline = Jason.encode!(live_evidence_ids)
-
-          with {:ok, encrypted_body} <- version_body_for(draft, keyring),
-               {:ok, encrypted_note} <-
-                 PatientVault.encrypt(change_note, keyring.clinical_record_dek),
-               {:ok, encrypted_baseline} <-
-                 PatientVault.encrypt(serialized_baseline, keyring.clinical_record_dek),
-               {:ok, version_number} <-
-                 increment_functional_analysis_version_sequence(target_behavior_id) do
-            changeset =
-              FunctionalAnalysisVersion.changeset(%FunctionalAnalysisVersion{}, %{
-                encrypted_body: encrypted_body,
-                encrypted_change_note: encrypted_note,
-                encrypted_cited_evidence_baseline: encrypted_baseline,
-                encryption_version: 2,
-                version_number: version_number,
-                draft_id: draft.id,
-                patient_id: patient.id,
-                professional_id: professional.id,
-                target_behavior_id: target_behavior_id
-              })
-
-            Ecto.Multi.new()
-            |> Ecto.Multi.insert(:record, changeset)
-            |> Ecto.Multi.insert(:audit, fn %{record: record} ->
-              Audit.changeset(%Audit{
-                professional_id: professional.id,
-                action: "functional_analysis_version_registered",
-                resource_type: "functional_analysis_version",
-                resource_id: record.id,
-                outcome: "success"
-              })
-            end)
-            |> Oban.insert(:outbox_event, fn %{record: record} ->
-              Outbox.event("functional_analysis_version_registered", record)
-            end)
-            |> Repo.transaction()
-            |> case do
-              {:ok, %{record: record}} -> record
-              {:error, _step, reason, _changes} -> Repo.rollback(reason)
-            end
           end
         end
 
       %FunctionalAnalysisDraft{} ->
         {:error, :conflict}
+    end
+  end
+
+  defp create_functional_analysis_version(
+         professional,
+         patient,
+         target_behavior_id,
+         draft,
+         change_note,
+         keyring
+       ) do
+    # Decrypt/re-encrypt before consuming a sequence number so a
+    # failure leaves no version row and no gap.
+    live_evidence_ids =
+      ConsultationEvidence
+      |> where(
+        [e],
+        e.patient_id == ^patient.id and e.target_behavior_id == ^target_behavior_id
+      )
+      |> where(
+        [e],
+        fragment(
+          "NOT EXISTS (SELECT 1 FROM clinical_record_tombstones t WHERE t.resource_type = 'consultation_evidence' AND t.resource_id = ?)",
+          e.id
+        )
+      )
+      |> order_by([e], asc: e.occurred_at, asc: e.id)
+      |> select([e], e.id)
+      |> Repo.all()
+
+    serialized_baseline = Jason.encode!(live_evidence_ids)
+
+    with {:ok, encrypted_body} <- version_body_for(draft, keyring),
+         {:ok, encrypted_note} <-
+           PatientVault.encrypt(change_note, keyring.clinical_record_dek),
+         {:ok, encrypted_baseline} <-
+           PatientVault.encrypt(serialized_baseline, keyring.clinical_record_dek),
+         {:ok, version_number} <-
+           increment_functional_analysis_version_sequence(target_behavior_id) do
+      changeset =
+        FunctionalAnalysisVersion.changeset(%FunctionalAnalysisVersion{}, %{
+          encrypted_body: encrypted_body,
+          encrypted_change_note: encrypted_note,
+          encrypted_cited_evidence_baseline: encrypted_baseline,
+          encryption_version: 2,
+          version_number: version_number,
+          draft_id: draft.id,
+          source_draft_lock_version: draft.lock_version,
+          patient_id: patient.id,
+          professional_id: professional.id,
+          target_behavior_id: target_behavior_id
+        })
+
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(:record, changeset)
+      |> Ecto.Multi.insert(:audit, fn %{record: record} ->
+        Audit.changeset(%Audit{
+          professional_id: professional.id,
+          action: "functional_analysis_version_registered",
+          resource_type: "functional_analysis_version",
+          resource_id: record.id,
+          outcome: "success"
+        })
+      end)
+      |> Oban.insert(:outbox_event, fn %{record: record} ->
+        Outbox.event("functional_analysis_version_registered", record)
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{record: record}} -> record
+        {:error, _step, reason, _changes} -> Repo.rollback(reason)
+      end
     end
   end
 

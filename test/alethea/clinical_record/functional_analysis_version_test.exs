@@ -98,6 +98,65 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
     assert %FunctionalAnalysisDraft{} = Repo.get(FunctionalAnalysisDraft, draft.id)
   end
 
+  test "retries for one saved draft revision return the original immutable version" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        target.id,
+        "Persisted revision"
+      )
+
+    assert {:ok, first} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft.lock_version,
+               "First note"
+             )
+
+    _new_live_evidence =
+      add_evidence!(professional, patient, target, "Changed after registration")
+
+    assert {:ok, retry} =
+             ClinicalRecord.register_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               draft.lock_version,
+               "Different valid note"
+             )
+
+    assert retry.id == first.id
+    assert retry.version_number == first.version_number
+    assert retry.encrypted_body == first.encrypted_body
+
+    assert {:ok, loaded_retry} =
+             ClinicalRecord.get_functional_analysis_version(
+               professional,
+               patient.id,
+               target.id,
+               retry.id
+             )
+
+    assert loaded_retry.body == "Persisted revision"
+    assert retry.encrypted_change_note == first.encrypted_change_note
+    assert retry.encrypted_cited_evidence_baseline == first.encrypted_cited_evidence_baseline
+    assert retry.source_draft_lock_version == draft.lock_version
+    assert Repo.aggregate(FunctionalAnalysisVersion, :count) == 1
+    assert Repo.aggregate(from(a in AuditLog, where: a.resource_id == ^first.id), :count) == 1
+
+    assert Repo.aggregate(
+             from(j in Job, where: fragment("?->>'resource_id' = ?", j.args, ^first.id)),
+             :count
+           ) == 1
+  end
+
   test "rejects blank, oversized, stale, and absent draft registrations" do
     professional = create_professional!()
     patient = create_patient!(professional)
@@ -188,6 +247,11 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
              )
 
     assert second.version_number == first.version_number + 1
+    assert second.id != first.id
+    assert second_draft.id == first_draft.id
+    assert second_draft.lock_version > first_draft.lock_version
+    assert first.source_draft_lock_version == first_draft.lock_version
+    assert second.source_draft_lock_version == second_draft.lock_version
 
     assert {:ok, [listed_first, listed_second]} =
              ClinicalRecord.list_functional_analysis_versions(professional, patient.id, target.id)
@@ -215,6 +279,10 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
              )
 
     assert independent_version.version_number == 1
+    assert independent_draft.lock_version == first_draft.lock_version
+    assert independent_draft.id != first_draft.id
+    assert independent_version.id != first.id
+    assert independent_version.source_draft_lock_version == first.source_draft_lock_version
 
     other = create_professional!()
 
@@ -301,7 +369,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
     refute inspect(job.args) =~ "Third approved"
   end
 
-  test "concurrent registrations serialize into unique monotonic numbers" do
+  test "concurrent retries for one saved revision return one immutable version" do
     {professional, patient, target, draft} =
       Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
         professional = create_professional!()
@@ -370,11 +438,97 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersionTest do
     results = Enum.map(tasks, &Task.await(&1, 30_000))
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 2
+    version_ids = Enum.map(results, fn {:ok, version} -> version.id end)
+    assert Enum.uniq(version_ids) |> length() == 1
+    assert Repo.aggregate(FunctionalAnalysisVersion, :count) == 1
 
-    assert Enum.map(results, fn {:ok, version} -> version.version_number end) |> Enum.sort() == [
-             1,
-             2
-           ]
+    assert Repo.aggregate(
+             from(a in AuditLog, where: a.resource_id == ^hd(version_ids)),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(j in Job, where: fragment("?->>'resource_id' = ?", j.args, ^hd(version_ids))),
+             :count
+           ) == 1
+
+    assert Repo.get!(Alethea.ClinicalRecord.TargetBehavior, target.id)
+           |> Map.fetch!(:functional_analysis_version_sequence) == 1
+  end
+
+  test "the database enforces draft revision identity while preserving NULL historical identities" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+    {:ok, target} = ClinicalRecord.create_target_behavior(professional, patient.id, "Conducta")
+
+    {:ok, draft} =
+      ClinicalRecord.upsert_functional_analysis_draft(
+        professional,
+        patient.id,
+        target.id,
+        "Persistida"
+      )
+
+    {:ok, version} =
+      ClinicalRecord.register_functional_analysis_version(
+        professional,
+        patient.id,
+        target.id,
+        draft.lock_version,
+        "Nota"
+      )
+
+    duplicate_identity =
+      FunctionalAnalysisVersion.changeset(%FunctionalAnalysisVersion{}, %{
+        encrypted_body: version.encrypted_body,
+        encrypted_change_note: version.encrypted_change_note,
+        encrypted_cited_evidence_baseline: version.encrypted_cited_evidence_baseline,
+        encryption_version: version.encryption_version,
+        version_number: version.version_number + 1,
+        draft_id: draft.id,
+        source_draft_lock_version: draft.lock_version,
+        patient_id: patient.id,
+        professional_id: professional.id,
+        target_behavior_id: target.id
+      })
+
+    assert {:error, changeset} = Repo.insert(duplicate_identity)
+    assert Keyword.has_key?(changeset.errors, :draft_id)
+
+    historical_attrs = %{
+      encrypted_body: version.encrypted_body,
+      encrypted_change_note: version.encrypted_change_note,
+      encrypted_cited_evidence_baseline: version.encrypted_cited_evidence_baseline,
+      encryption_version: version.encryption_version,
+      version_number: version.version_number + 1,
+      draft_id: draft.id,
+      source_draft_lock_version: nil,
+      patient_id: patient.id,
+      professional_id: professional.id,
+      target_behavior_id: target.id
+    }
+
+    assert {:ok, historical_one} =
+             Repo.insert(
+               FunctionalAnalysisVersion.changeset(
+                 %FunctionalAnalysisVersion{},
+                 historical_attrs
+               )
+             )
+
+    assert {:ok, historical_two} =
+             Repo.insert(
+               FunctionalAnalysisVersion.changeset(
+                 %FunctionalAnalysisVersion{},
+                 %{historical_attrs | version_number: version.version_number + 2}
+               )
+             )
+
+    assert is_nil(historical_one.source_draft_lock_version)
+    assert is_nil(historical_two.source_draft_lock_version)
+
+    assert Repo.get!(FunctionalAnalysisVersion, version.id).source_draft_lock_version ==
+             draft.lock_version
   end
 
   test "the database rejects every version update but permits legal deletion" do
