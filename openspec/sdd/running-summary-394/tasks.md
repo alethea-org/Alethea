@@ -4,8 +4,11 @@
 
 | Field | Value |
 |---|---|
-| Estimated changed lines | S0 ~100 / S1 ~380 / S2 ~400 / S3 ~400 / S4 ~330 / Total ~1,610 |
-| 400-line budget risk | High (total); S1-S3 sit at or near the ceiling |
+| Estimated changed lines (original) | S0 ~100 / S1 ~380 / S2 ~400 / S3 ~400 / S4 ~330 / Total ~1,610 |
+| Actuals | S0 236 (prod ~51, tests ~185; PR #410) / S1 578 (prod ~224, tests ~352; PR #412, `size:exception`) |
+| Re-estimate (2026-10-08) | Calibrated on S1 actual vs forecast: production ×1.18 (224/190), tests ×1.85 (352/190). S2: prod 230→~270, tests 170→~315, **~585**. S3: prod 210→~250, tests 190+~25 (task 3.7a)→~400, **~650**. S4: prod 70→~85, tests 260→~480, **~565**. Remaining total ~1,800; overall ~2,600 |
+| 400-line budget risk | High: every remaining slice is forecast over 400, driven mainly by tests |
+| Size rule (user, 2026-10-08) | If a slice's overrun is **mostly tests** and the slice cannot be split coherently → `size:exception` with the justification in the PR body. If the overrun is **production code** (production alone > ~300 lines, or production > forecast ×1.3) → stop and ask the user before opening the PR |
 | Chained PRs recommended | Yes |
 | Suggested split | One PR per slice: S0 -> S1 -> S2 -> S3 -> S4 (each green on its own) |
 | Delivery strategy | ask-on-risk (5-slice chain already approved by user) |
@@ -16,7 +19,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting only on touched `.ex/.exs` files that contain no HEEx, via `mix format --check-formatted <file>`. Migrations via `mix ecto.gen.migration`. No `Process.sleep`; processes via `start_supervised!`; Mox `verify_on_exit!`. If a slice measures above 400 changed lines, flag to the orchestrator; do not self-authorize `size:exception`.
+Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting only on touched `.ex/.exs` files that contain no HEEx, via `mix format --check-formatted <file>`. Migrations via `mix ecto.gen.migration`. No `Process.sleep`; processes via `start_supervised!`; Mox `verify_on_exit!`. If a slice measures above 400 changed lines, flag to the orchestrator with the production/test split; do not self-authorize `size:exception` (the orchestrator applies the size rule above).
 
 ### PR boundaries
 
