@@ -163,13 +163,30 @@ if config_env() == :prod do
       For example: ecto://USER:PASS@HOST/DATABASE
       """
 
+  # Ecto merges the options it parses from the URL over the Repo
+  # configuration, and `ssl` is one of them: `?ssl=false` would replace the
+  # verified TLS setting below. The parameter is refused in any letter case
+  # and with any value, so DATABASE_SSL is the only switch. The message
+  # never includes the URL, which holds the password.
+  database_url_parameters =
+    case URI.parse(database_url).query do
+      nil -> []
+      query -> query |> URI.query_decoder() |> Enum.map(fn {name, _value} -> name end)
+    end
+
+  if Enum.any?(database_url_parameters, &(String.downcase(&1) == "ssl")) do
+    raise "environment variable DATABASE_URL must not carry an `ssl` query parameter. " <>
+            "Remove it: database TLS is controlled only by the DATABASE_SSL variable."
+  end
+
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
   # Database TLS is on by default and verified. Postgrex merges a keyword
   # `:ssl` over its own defaults (`verify: :verify_peer` plus the HTTPS
   # hostname check) and derives SNI from the hostname, so passing the OS
-  # trust store is the whole configuration. Ecto ignores `sslmode=` in the
-  # URL, so the URL cannot turn this off.
+  # trust store is the whole configuration. Ecto passes `sslmode=` and
+  # `channel_binding=` from the URL through without effect, and the `ssl`
+  # parameter, the one URL option that would override this, is refused above.
   #
   # DATABASE_SSL=false is the only opt-out and exists for a local release
   # smoke test against a Postgres without TLS. Only that exact literal

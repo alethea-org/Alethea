@@ -25,8 +25,17 @@ defmodule Alethea.Telegram.Bootstrap do
 
   No function here logs, the query log is silenced around the write (Ecto
   would otherwise print the plaintext parameters at `:debug`), and no return
-  value or message carries the token or the webhook secret. Failures are fixed tags (a database exception is reduced
-  to its module name); `message/1` turns a tag into a fixed sentence.
+  value or message carries the token or the webhook secret. Failures are
+  fixed tags (a database exception is reduced to its module name); `message/1` turns a tag into a fixed sentence.
+
+  ## Checking without writing
+
+  `verify_stored/1` answers the question a deploy asks when it carries no
+  `TELEGRAM_*` values: can the server boot from the row already stored? It
+  decrypts the row instead of only counting it, because
+  `Alethea.Telegram.BotToken` refuses to start on a row it cannot decrypt
+  (a different `CLOAK_AES_KEY`) just as it does on a missing one. The
+  plaintext never leaves the function.
 
   The caller owns the runtime: `Alethea.Repo` and `Alethea.Encryption.Vault`
   must be running.
@@ -46,12 +55,16 @@ defmodule Alethea.Telegram.Bootstrap do
   @type attrs :: %{bot_token: String.t(), secret_token: String.t(), bot_username: String.t()}
   @type status :: :created | :updated | :unchanged
   @type result :: %{status: status(), env: String.t(), bot_username: String.t()}
+  @type stored :: %{status: :kept, env: String.t(), bot_username: String.t()}
   @type reason ::
           {:missing, String.t()}
           | {:invalid, String.t()}
           | :invalid_env
           | :write_failed
           | {:database_error, module()}
+          | :not_configured
+          | :unreadable
+          | {:read_failed, module()}
 
   @doc """
   Validates `vars` and writes the row for `env` (`"dev"`, `"test"` or
@@ -108,6 +121,39 @@ defmodule Alethea.Telegram.Bootstrap do
 
   def write(_env, _attrs), do: {:error, :invalid_env}
 
+  @doc """
+  Checks, without writing, that the row stored for `env` is one the server
+  can boot from: present and decryptable with the running vault.
+
+  Returns `{:error, :not_configured}` when no row exists for `env` and
+  `{:error, :unreadable}` when one exists but does not decrypt.
+  """
+  @spec verify_stored(String.t()) :: {:ok, stored()} | {:error, reason()}
+  def verify_stored(env) when env in @valid_envs do
+    case BotConfig.for_env(env, log: false) do
+      {:ok, %BotConfig{bot_token: bot_token, secret_token: secret_token, bot_username: username}}
+      when is_binary(bot_token) and is_binary(secret_token) and is_binary(username) ->
+        {:ok, %{status: :kept, env: env, bot_username: username}}
+
+      # A failed authenticated decryption loads as a non-binary field.
+      {:ok, %BotConfig{}} ->
+        {:error, :unreadable}
+
+      :not_found ->
+        {:error, :not_configured}
+    end
+  rescue
+    # Ecto raises this when a sealed column cannot be loaded at all (no
+    # cipher in the vault matches it). The message renders the ciphertext
+    # and is dropped.
+    ArgumentError -> {:error, :unreadable}
+    exception -> {:error, {:read_failed, exception.__struct__}}
+  catch
+    :exit, _reason -> {:error, {:read_failed, :exit}}
+  end
+
+  def verify_stored(_env), do: {:error, :invalid_env}
+
   @doc "Turns a failure tag into a fixed sentence that carries no input value."
   @spec message(reason()) :: String.t()
   def message({:missing, name}) when name in [@token_var, @secret_var, @username_var],
@@ -128,6 +174,21 @@ defmodule Alethea.Telegram.Bootstrap do
 
   def message({:database_error, module}) when is_atom(module),
     do: "Telegram bot configuration could not be written (#{inspect(module)})"
+
+  def message(:not_configured),
+    do:
+      "no Telegram bot configuration is stored for this environment; set #{@token_var}, " <>
+        "#{@secret_var} and #{@username_var} and deploy again, or run bin/telegram_bootstrap " <>
+        "with them set"
+
+  def message(:unreadable),
+    do:
+      "the stored Telegram bot configuration cannot be decrypted with the current " <>
+        "CLOAK_AES_KEY; restore the key it was written with, or set #{@token_var}, " <>
+        "#{@secret_var} and #{@username_var} and run bin/telegram_bootstrap to rewrite it"
+
+  def message({:read_failed, module}) when is_atom(module),
+    do: "Telegram bot configuration could not be read (#{inspect(module)})"
 
   def message(_reason), do: "Telegram bot configuration failed"
 

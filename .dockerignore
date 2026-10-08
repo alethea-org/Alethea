@@ -17,6 +17,13 @@ erl_crash.dump
 .env.*
 *.local
 
+# Secrets files and key material, at any depth: the operator's
+# `fly secrets import` input, private keys and certificates. The build reads
+# none of them, so they must never reach the build context.
+**/*.secrets
+**/*.key
+**/*.pem
+
 # Tests and test artifacts
 test
 cover
@@ -26,9 +33,10 @@ tmp
 # Generated static cache (digests are not committed)
 priv/static/cache
 
-# Docker and local orchestration files
+# Docker, deployment and local orchestration files
 .dockerignore
 Dockerfile*
+fly.toml
 docker-compose*
 .docker
 entrypoint.sh

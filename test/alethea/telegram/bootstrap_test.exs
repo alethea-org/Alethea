@@ -141,6 +141,61 @@ defmodule Alethea.Telegram.BootstrapTest do
     end
   end
 
+  describe "verify_stored/1" do
+    test "reports the stored row without writing" do
+      assert {:ok, %{status: :created}} = Bootstrap.run("test", @vars)
+      before = Repo.one!(BotConfig)
+
+      assert Bootstrap.verify_stored("test") ==
+               {:ok, %{status: :kept, env: "test", bot_username: @bot_username}}
+
+      assert Repo.one!(BotConfig).updated_at == before.updated_at
+      assert Repo.aggregate(BotConfig, :count) == 1
+    end
+
+    test "a database with no row for the environment is not configured" do
+      assert Bootstrap.verify_stored("test") == {:error, :not_configured}
+
+      # A row for another environment does not count.
+      assert {:ok, _result} = Bootstrap.run("dev", @vars)
+      assert Bootstrap.verify_stored("test") == {:error, :not_configured}
+      assert Bootstrap.verify_stored("staging") == {:error, :invalid_env}
+    end
+
+    test "a row the vault cannot decrypt is unreadable, which the server could not boot from" do
+      assert {:ok, _result} = Bootstrap.run("test", @vars)
+
+      # Flips the last byte of the sealed token: authenticated decryption
+      # fails exactly as it would under a different CLOAK_AES_KEY.
+      Repo.query!("""
+      UPDATE foundation_bot_configs
+      SET token_ciphertext =
+        set_byte(
+          token_ciphertext,
+          octet_length(token_ciphertext) - 1,
+          (get_byte(token_ciphertext, octet_length(token_ciphertext) - 1) + 1) % 256
+        )
+      WHERE env = 'test'
+      """)
+
+      assert Bootstrap.verify_stored("test") == {:error, :unreadable}
+    end
+
+    test "every check failure maps to a fixed message naming what to set" do
+      message = Bootstrap.message(:not_configured)
+
+      for name <- ~w(TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET TELEGRAM_BOT_USERNAME) do
+        assert message =~ name
+      end
+
+      assert message =~ "bin/telegram_bootstrap"
+      assert Bootstrap.message(:unreadable) =~ "CLOAK_AES_KEY"
+
+      assert Bootstrap.message({:read_failed, DBConnection.ConnectionError}) ==
+               "Telegram bot configuration could not be read (DBConnection.ConnectionError)"
+    end
+  end
+
   describe "secrets hygiene" do
     setup do
       previous_level = Logger.level()
@@ -160,7 +215,8 @@ defmodule Alethea.Telegram.BootstrapTest do
             ),
             Bootstrap.run("test", Map.put(@vars, "TELEGRAM_BOT_USERNAME", "alethea_other_bot")),
             Bootstrap.run("test", Map.put(@vars, "TELEGRAM_BOT_TOKEN", "#{@bot_token} broken")),
-            Bootstrap.run("test", Map.put(@vars, "TELEGRAM_WEBHOOK_SECRET", "#{@secret_token}!"))
+            Bootstrap.run("test", Map.put(@vars, "TELEGRAM_WEBHOOK_SECRET", "#{@secret_token}!")),
+            Bootstrap.verify_stored("test")
           ]
         end)
 
@@ -170,7 +226,8 @@ defmodule Alethea.Telegram.BootstrapTest do
                {:ok, %{status: :updated}},
                {:ok, %{status: :updated}},
                {:error, {:invalid, "TELEGRAM_BOT_TOKEN"}},
-               {:error, {:invalid, "TELEGRAM_WEBHOOK_SECRET"}}
+               {:error, {:invalid, "TELEGRAM_WEBHOOK_SECRET"}},
+               {:ok, %{status: :kept}}
              ] = results
 
       # The level is :debug here, so the read of the row is in the log; the
