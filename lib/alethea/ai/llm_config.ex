@@ -7,9 +7,11 @@ defmodule Alethea.AI.LLMConfig do
 
   ## Endpoint resolution
 
-  A chain's endpoint comes from its own configuration, then from the
-  global `config :alethea, Alethea.AI.LLMConfig, <provider>: [...]`, then
-  from a provider default. The `:local` default (`http://localhost:11434`)
+  A chain's endpoint (and API key) comes from explicit overrides, then
+  from its own first-level options, then from its own nested
+  `<provider>: [...]` settings, then from the global
+  `config :alethea, Alethea.AI.LLMConfig, <provider>: [...]`, then from a
+  provider default. The `:local` default (`http://localhost:11434`)
   exists for development and tests only: in production there is no local
   default, so a chain whose provider has no configured endpoint resolves
   to `endpoint_url: nil` and `build_llm/1` returns `{:error, _}` ("not
@@ -99,9 +101,12 @@ defmodule Alethea.AI.LLMConfig do
         Keyword.get(chain_config, :provider) ||
         Keyword.get(global_config, :provider, :local)
 
-    provider_config =
-      Keyword.get(global_config, provider, []) ++
-        Keyword.get(chain_config, provider, [])
+    # The chain's nested provider settings are consulted before the global
+    # ones. They are kept apart rather than concatenated: `Keyword.get/2`
+    # returns the first match, and an endpoint may be spelled `:endpoint_url`
+    # on one side and `:endpoint` on the other.
+    chain_provider_config = Keyword.get(chain_config, provider, [])
+    global_provider_config = Keyword.get(global_config, provider, [])
 
     defaults = Keyword.get(global_config, :defaults, [])
 
@@ -109,15 +114,18 @@ defmodule Alethea.AI.LLMConfig do
       resolve_api_key(
         Keyword.get(overrides, :api_key) ||
           Keyword.get(chain_config, :api_key) ||
-          Keyword.get(provider_config, :api_key)
+          Keyword.get(chain_provider_config, :api_key) ||
+          Keyword.get(global_provider_config, :api_key)
       )
 
     endpoint_url =
       Keyword.get(overrides, :endpoint_url) ||
         Keyword.get(chain_config, :endpoint_url) ||
         Keyword.get(chain_config, :endpoint) ||
-        Keyword.get(provider_config, :endpoint_url) ||
-        Keyword.get(provider_config, :endpoint) ||
+        Keyword.get(chain_provider_config, :endpoint_url) ||
+        Keyword.get(chain_provider_config, :endpoint) ||
+        Keyword.get(global_provider_config, :endpoint_url) ||
+        Keyword.get(global_provider_config, :endpoint) ||
         default_endpoint(provider)
 
     retry = build_retry_config(global_config, chain_config, overrides)

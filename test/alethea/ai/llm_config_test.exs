@@ -68,6 +68,101 @@ defmodule Alethea.AI.LLMConfigTest do
       end
     end
 
+    test "a chain's nested provider settings override the global ones" do
+      Application.put_env(:alethea, LLMConfig,
+        local: [endpoint_url: "http://global-local.test:11434"],
+        cloud: [endpoint: "https://global-cloud.test/v1/", api_key: "global-key"]
+      )
+
+      Application.put_env(:alethea, GuidedConversationChain,
+        local: [endpoint_url: "http://chain-local.test:11434"],
+        cloud: [endpoint: "https://chain-cloud.test/v1/", api_key: "chain-key"]
+      )
+
+      local = LLMConfig.get(:guided_conversation, provider: :local)
+      assert local.endpoint_url == "http://chain-local.test:11434"
+
+      cloud = LLMConfig.get(:guided_conversation, provider: :cloud)
+      assert cloud.endpoint_url == "https://chain-cloud.test/v1/"
+      assert cloud.api_key == "chain-key"
+    end
+
+    test "a chain's nested endpoint wins whichever key name each side uses" do
+      Application.put_env(:alethea, LLMConfig,
+        local: [endpoint_url: "http://global-local.test:11434"],
+        cloud: [endpoint_url: "https://global-cloud.test/v1/"]
+      )
+
+      Application.put_env(:alethea, GuidedConversationChain,
+        local: [endpoint: "http://chain-local.test:11434"],
+        cloud: [endpoint: "https://chain-cloud.test/v1/"]
+      )
+
+      assert LLMConfig.get(:guided_conversation, provider: :local).endpoint_url ==
+               "http://chain-local.test:11434"
+
+      assert LLMConfig.get(:guided_conversation, provider: :cloud).endpoint_url ==
+               "https://chain-cloud.test/v1/"
+    end
+
+    test "the global provider settings remain the fallback for missing chain ones" do
+      Application.put_env(:alethea, LLMConfig,
+        local: [endpoint_url: "http://global-local.test:11434"],
+        cloud: [endpoint: "https://global-cloud.test/v1/", api_key: "global-key"]
+      )
+
+      # The chain sets only its cloud endpoint: the key and the local
+      # endpoint still come from the global provider settings.
+      Application.put_env(:alethea, GuidedConversationChain,
+        local: [],
+        cloud: [endpoint: "https://chain-cloud.test/v1/"]
+      )
+
+      local = LLMConfig.get(:guided_conversation, provider: :local)
+      assert local.endpoint_url == "http://global-local.test:11434"
+
+      cloud = LLMConfig.get(:guided_conversation, provider: :cloud)
+      assert cloud.endpoint_url == "https://chain-cloud.test/v1/"
+      assert cloud.api_key == "global-key"
+    end
+
+    test "explicit overrides win over chain and global provider settings" do
+      Application.put_env(:alethea, LLMConfig,
+        cloud: [endpoint: "https://global-cloud.test/v1/", api_key: "global-key"]
+      )
+
+      Application.put_env(:alethea, GuidedConversationChain,
+        cloud: [endpoint: "https://chain-cloud.test/v1/", api_key: "chain-key"]
+      )
+
+      config =
+        LLMConfig.get(:guided_conversation,
+          provider: :cloud,
+          endpoint_url: "https://override.test/v1/",
+          api_key: "override-key"
+        )
+
+      assert config.endpoint_url == "https://override.test/v1/"
+      assert config.api_key == "override-key"
+    end
+
+    test "first-level chain options win over nested provider settings" do
+      Application.put_env(:alethea, LLMConfig,
+        cloud: [endpoint: "https://global-cloud.test/v1/", api_key: "global-key"]
+      )
+
+      Application.put_env(:alethea, GuidedConversationChain,
+        endpoint_url: "https://chain-top.test/v1/",
+        api_key: "chain-top-key",
+        cloud: [endpoint: "https://chain-cloud.test/v1/", api_key: "chain-key"]
+      )
+
+      config = LLMConfig.get(:guided_conversation, provider: :cloud)
+
+      assert config.endpoint_url == "https://chain-top.test/v1/"
+      assert config.api_key == "chain-top-key"
+    end
+
     test "development keeps the local Ollama default endpoint" do
       Application.delete_env(:alethea, LLMConfig)
 
