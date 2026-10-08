@@ -312,3 +312,49 @@ User decisions: AI capability values for launch, Telegram secret policy,
 capacity. Then, with explicit authorization per destination: push and open the
 five pull requests, create the Neon project, deploy, register the webhook, and
 run the verification checklist in `docs/deployment/fly-neon.md`.
+
+## Advisory review follow-up (2026-10-08)
+
+An advisory multi-agent review of pull requests 405–409 confirmed four
+findings; the parent verified each against the code and the user asked for all
+four to be fixed. Fixes are new commits on the owning branch, carried forward
+with merge commits (`21f0b93`, `4d3cf76`, `fda1a08`); no history was rewritten.
+
+| Finding | Branch | Commit | Checks observed |
+| --- | --- | --- | --- |
+| Chain provider settings lost to global ones | `chore/402-prod-config` | `ea18ae0` | RED 45/48 then GREEN 48 |
+| LangChain three-element error broke closure and carried patient text | `chore/402-ai-degradation` | `3ab8dd2` | real chains RED (`CaseClauseError`), GREEN 131 |
+| Discarded goodbye could not be recovered | `chore/402-ai-degradation` | `727365c` | RED 20/24 then GREEN 24 |
+| Retry decrypted the history although the summary existed | `chore/402-ai-degradation` | `3083f3d` | RED 24/26 then GREEN 26 |
+
+- All seven chains now run through `Alethea.AI.Chains.SafeRun.run/1`, which
+  returns `{:error, {:llm_run_failed, type}}` and never keeps the chain, the
+  error message or the provider payload. Six chains had the crash.
+- The timeout worker no longer returns a changeset as its job result; that put
+  `summary_text` into `oban_jobs.errors`.
+- Goodbye jobs record `meta["send_started"]` just before the client call. A
+  discarded goodbye without the marker is revived with `Oban.retry_job/1`; one
+  with the marker, or a cancelled one, is never re-sent and is reported through
+  `[:alethea, :session_timeout, :goodbye_unresolved]`.
+- `mix precommit` at `fda1a08`: 2062 passed, 5 skipped. Parent re-run of the
+  touched suites: 210 passed.
+- Native review, `87adddc..fda1a08`: medium; consent granted; one reliability
+  lens; approved and acknowledged. Warnings, locations only:
+  `session_timeout_worker.ex:492-496`, `safe_run.ex:57-63`,
+  `telegram_outbound_worker_test.exs:133`.
+
+Open after the fixes:
+
+- LangChain and `ChatOpenAI` log the provider's error text themselves; with
+  the cloud provider that can still reach the logs (needs a Logger filter).
+- A goodbye discarded before sending is revived only when the timeout job
+  retries, which happens only if the summary failed (needs a reschedule on
+  Pacer unavailability, or a sweep job).
+- `TelegramOutboundWorker` ignores `{:error, :pacer_timeout}` and sends anyway
+  (pre-existing).
+- Whether a cancelled goodbye that never ran should be re-sent is undecided.
+- `OllamaChat` errors carry no type, so local failures read as `:untyped`.
+
+Tips: `chore/402-prod-config` `ea18ae0`, `chore/402-ai-degradation` `3083f3d`,
+`chore/402-telegram-bootstrap` `4d3cf76`, `chore/402-fly-ci` at this
+document's last commit.
