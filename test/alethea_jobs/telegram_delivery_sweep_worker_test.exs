@@ -212,6 +212,16 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
     {:ok, reply} =
       Clinical.save_telegram_reply(foundation_patient, @reply, "elicited", inbound.id, nil)
 
+    # #391: production never has an uncovered inbound at claim time for a
+    # genuine reply — the burst/crisis save transaction covers its
+    # members atomically with the reply. This fixture bypasses that
+    # transaction, so it must cover the inbound itself or the dispatch
+    # claim (design AD7) would see an uncovered row for this patient and
+    # supersede instead of claiming.
+    Repo.update_all(from(m in Message, where: m.id == ^inbound.id),
+      set: [replied_by_message_id: reply.id]
+    )
+
     reply
   end
 

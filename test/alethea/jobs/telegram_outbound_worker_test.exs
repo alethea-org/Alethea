@@ -23,7 +23,9 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   use Alethea.DataCase, async: false
   use Oban.Testing, repo: Alethea.Repo
 
-  alias Alethea.Jobs.TelegramOutboundWorker
+  alias Alethea.Clinical
+  alias Alethea.Clinical.Message
+  alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Repo
   alias Alethea.Telegram.{Pacer, Client.Fake}
@@ -606,6 +608,169 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     end
   end
 
+  # ----------------------------------------------------------------
+  # Dispatch-time staleness (#391, R4, AD7)
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — dispatch-time staleness (#391, R4, AD7)" do
+    for attempt <- [1, 2] do
+      test "a pending reply with a newer uncovered inbound is superseded, not sent, releases coverage, and re-arms (attempt #{attempt})" do
+        attempt = unquote(attempt)
+        patient = bind_patient("r4#{attempt}" |> String.pad_trailing(64, "0"))
+
+        {:ok, member} =
+          Clinical.save_telegram_message(
+            patient.foundation_patient,
+            "primero",
+            "inbound",
+            "spontaneous",
+            "#{attempt}0"
+          )
+
+        {:ok, reply} =
+          Clinical.save_telegram_reply(
+            patient.foundation_patient,
+            @body,
+            "elicited",
+            member.id,
+            nil
+          )
+
+        Repo.update_all(from(m in Message, where: m.id == ^member.id),
+          set: [replied_by_message_id: reply.id]
+        )
+
+        {:ok, newer} =
+          Clinical.save_telegram_message(
+            patient.foundation_patient,
+            "segundo",
+            "inbound",
+            "spontaneous",
+            "#{attempt}1"
+          )
+
+        args =
+          build_args(
+            chat_id: patient.chat_id,
+            chat_id_hash: patient.chat_id_hash,
+            message_id: reply.id,
+            patient_id: patient.foundation_patient.id,
+            attempt: attempt
+          )
+
+        assert :ok = perform(args)
+
+        assert Fake.sends() == []
+        assert Repo.get!(Message, reply.id).delivery_state == "superseded"
+        refute Repo.get!(Message, member.id).replied_by_message_id
+        refute Repo.get!(Message, newer.id).replied_by_message_id
+
+        assert [_rearmed] =
+                 Repo.all(
+                   from j in Oban.Job,
+                     where: j.worker == "Alethea.Jobs.TelegramBurstReplyWorker"
+                 )
+      end
+    end
+
+    test "a pending reply with no newer uncovered inbound claims normally and sends" do
+      patient = bind_patient("r4claim" |> String.pad_trailing(64, "0"))
+
+      {:ok, member} =
+        Clinical.save_telegram_message(
+          patient.foundation_patient,
+          "unico",
+          "inbound",
+          "spontaneous",
+          "900"
+        )
+
+      {:ok, reply} =
+        Clinical.save_telegram_reply(
+          patient.foundation_patient,
+          @body,
+          "elicited",
+          member.id,
+          nil
+        )
+
+      Repo.update_all(from(m in Message, where: m.id == ^member.id),
+        set: [replied_by_message_id: reply.id]
+      )
+
+      args =
+        build_args(
+          chat_id: patient.chat_id,
+          chat_id_hash: patient.chat_id_hash,
+          message_id: reply.id,
+          patient_id: patient.foundation_patient.id
+        )
+
+      assert :ok = perform(args)
+
+      assert [%{chat_id: chat_id, text: @body}] = Fake.sends()
+      assert chat_id == patient.chat_id
+      assert Repo.get!(Message, reply.id).delivery_state == "sent"
+
+      refute_enqueued(worker: TelegramBurstReplyWorker)
+    end
+
+    test "a dispatch claim racing a burst absorb update resolve to exactly one winner (R6, R11)" do
+      patient = bind_patient("r4race" |> String.pad_trailing(64, "0"))
+
+      {:ok, member} =
+        Clinical.save_telegram_message(
+          patient.foundation_patient,
+          "unico",
+          "inbound",
+          "spontaneous",
+          "950"
+        )
+
+      {:ok, reply} =
+        Clinical.save_telegram_reply(
+          patient.foundation_patient,
+          @body,
+          "elicited",
+          member.id,
+          nil
+        )
+
+      Repo.update_all(from(m in Message, where: m.id == ^member.id),
+        set: [replied_by_message_id: reply.id]
+      )
+
+      # A newer uncovered inbound makes the dispatch claim resolve to
+      # supersede regardless of race order — it is a separately
+      # committed row, not part of the race itself.
+      {:ok, _newer} =
+        Clinical.save_telegram_message(
+          patient.foundation_patient,
+          "segundo",
+          "inbound",
+          "spontaneous",
+          "951"
+        )
+
+      claim_task = Task.async(fn -> Clinical.claim_telegram_delivery(reply.id) end)
+      absorb_task = Task.async(fn -> Clinical.supersede_absorbed([reply.id]) end)
+
+      [claim_result, absorb_result] = Task.await_many([claim_task, absorb_task], 5_000)
+
+      moved =
+        Enum.count(
+          [claim_result in [:claimed, :superseded], absorb_result == 1],
+          & &1
+        )
+
+      assert moved == 1,
+             "exactly one of the two concurrent updates must actually move the row " <>
+               "(claim=#{inspect(claim_result)}, absorb=#{inspect(absorb_result)})"
+
+      assert Repo.get!(Message, reply.id).delivery_state == "superseded"
+    end
+  end
+
   describe "config :telegram_outbound_crisis queue (REQ-C7-crisis-priority-lane)" do
     # REQ-C7-crisis-priority-lane contract, post Judgment Day Round 1:
     #
@@ -689,7 +854,33 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       "_attempt" => Keyword.get(opts, :attempt, 1),
       "lane" => Keyword.get(opts, :lane, :safe),
       "priority" => Keyword.get(opts, :priority, 0),
-      "patient_id" => Keyword.get(opts, :patient_id)
+      "patient_id" => Keyword.get(opts, :patient_id),
+      "message_id" => Keyword.get(opts, :message_id)
+    }
+  end
+
+  # #391: a legacy patient linked to a foundation patient, for the R4
+  # dispatch-staleness tests — `Clinical.save_telegram_message/5` and
+  # `save_telegram_reply/5` resolve the legacy patient through this
+  # link, matching `telegram_burst_reply_worker_test.exs`'s fixture.
+  defp bind_patient(chat_id_hash) do
+    legacy_professional = legacy_professional_fixture()
+    legacy_patient = legacy_patient_fixture(legacy_professional)
+
+    foundation_patient =
+      professional_fixture()
+      |> patient_fixture()
+      |> Ecto.Changeset.change(%{
+        telegram_chat_id_hash: chat_id_hash,
+        legacy_patient_id: legacy_patient.id
+      })
+      |> Repo.update!()
+
+    %{
+      foundation_patient: foundation_patient,
+      legacy_patient: legacy_patient,
+      chat_id: @chat_id,
+      chat_id_hash: chat_id_hash
     }
   end
 

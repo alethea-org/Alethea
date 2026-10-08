@@ -27,12 +27,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        safe path only**; the `:crisis` branch (`:telegram_outbound_crisis`
        lane, PubSub `:crisis_detected`, `urgent_intervention: true`)
        lands in PR #3b.
-    7. Route the reply through `Alethea.Telegram.JournalingReply.generate/3` (sanitized role-structured history, output guard with fallback), then anchor an `ai_diagnosis` to the inbound message before enqueueing the outbound (REQ-C5-llm-reply-on-safe).
-    8. Persist outbound `Message` via `Clinical.save_telegram_message/7`
-       with `direction: "outbound"`, `source: "elicited"` (REQ-C5-persist-outbound-reply).
-    9. Enqueue `TelegramOutboundWorker` on `:telegram_outbound` with
-       `chat_id_hash`, `message_id`, `body`, `lane: :safe`
-       (REQ-C3-worker-emits-outbound-job).
+    7. (#391) Arm the patient's debounced burst-reply job
+       (`Alethea.Jobs.TelegramBurstReplyWorker.arm/1`, ~45s) instead of
+       generating synchronously. One reply covers every uncovered
+       inbound of the burst; see that worker's moduledoc for the save
+       transaction (`Alethea.Telegram.JournalingReply.generate_burst/2`,
+       output guard with fallback, `ai_diagnosis` anchor, and the
+       `:telegram_outbound` enqueue, all inside one transaction).
 
   ## Queue + uniqueness (REQ-C3-idempotent-by-update-id)
 
@@ -73,8 +74,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
-  alias Alethea.Telegram.{ChatIdHash, JournalingReply, LogRedactor}
-  alias Alethea.Jobs.TelegramOutboundWorker
+  alias Alethea.Telegram.{ChatIdHash, LogRedactor}
+  alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
 
   alias AletheaJobs.{
     EmotionAnalysisWorker,
@@ -193,15 +194,18 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
           # the persisted reply's delivery is re-established instead.
           case Clinical.get_telegram_reply(inbound.id) do
             nil ->
-              handle_safe_path(
-                foundation_patient,
-                chat_id,
-                chat_id_hash,
-                hash_prefix,
-                inbound,
-                text,
-                reply_session_id
-              )
+              # #391: the safe path no longer generates synchronously.
+              # It arms (or renews) the patient's single debounced burst
+              # job — `TelegramBurstReplyWorker.arm/1` — which replies
+              # once for every uncovered inbound after ~45s of
+              # inactivity (R1). `reply_session_id` is not needed here:
+              # the burst job resolves its own session when it saves
+              # the reply.
+              TelegramBurstReplyWorker.arm(%{
+                patient_id: foundation_patient.id,
+                chat_id: chat_id,
+                chat_id_hash: chat_id_hash
+              })
 
             %Message{} = reply ->
               resume_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, reply)
@@ -220,113 +224,6 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
             reply_session_id
           )
       end
-    end
-  end
-
-  defp handle_safe_path(
-         foundation_patient,
-         chat_id,
-         chat_id_hash,
-         hash_prefix,
-         inbound,
-         text,
-         session_id
-       ) do
-    case JournalingReply.generate(foundation_patient, inbound, text) do
-      {:ok, chain_result} ->
-        persist_and_enqueue_outbound(
-          foundation_patient,
-          chat_id,
-          chat_id_hash,
-          hash_prefix,
-          chain_result,
-          inbound.id,
-          session_id
-        )
-
-      {:error, :empty_response} ->
-        raise "TelegramMessageWorker: PhiWorker returned empty response " <>
-                "(hash_prefix=#{hash_prefix})"
-
-      {:error, reason} ->
-        raise "TelegramMessageWorker: PhiWorker error: #{inspect(reason)} " <>
-                "(hash_prefix=#{hash_prefix})"
-    end
-  end
-
-  defp persist_and_enqueue_outbound(
-         foundation_patient,
-         chat_id,
-         chat_id_hash,
-         hash_prefix,
-         chain_result,
-         inbound_message_id,
-         session_id
-       ) do
-    reply = chain_result.response
-
-    # Both inserts run inside a single Repo.transaction (Round 2
-    # SEVERE fix — atomicity): the outbound Message row and the
-    # ai_diagnosis anchor either both commit or neither does. Without
-    # this, a diagnosis-save failure after the outbound insert already
-    # committed would leave a fabricated "elicited" Message row
-    # persisted (a reply the patient never actually received, because
-    # the job raises and the caller never reaches `enqueue_outbound/6`).
-    # `Repo.rollback/1` unwinds the outbound insert too, so a retry
-    # starts from a clean slate — no orphaned clinical record.
-    #
-    # #390: the reply row records the inbound that caused it under a
-    # unique index. The reply insert runs FIRST, so an execution that
-    # loses a concurrent race fails there and rolls back before writing
-    # a second diagnosis.
-    transaction_result =
-      Repo.transaction(fn ->
-        with {:ok, outbound} <-
-               Clinical.save_telegram_reply(
-                 foundation_patient,
-                 reply,
-                 "elicited",
-                 inbound_message_id,
-                 session_id
-               ),
-             {:ok, _diagnosis} <-
-               Clinical.save_ai_diagnosis(inbound_message_id, chain_result) do
-          outbound
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    case transaction_result do
-      {:ok, outbound} ->
-        # The enqueue is outside the transaction. A crash right here
-        # leaves a persisted reply without a delivery job; the retry
-        # finds the reply and re-establishes delivery (`resume_reply/5`).
-        deliver_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, outbound, reply)
-
-      {:error, :reply_already_exists} ->
-        # A concurrent execution of this same inbound won the race. Its
-        # reply is the logical reply: the text generated here is
-        # discarded, never persisted or delivered.
-        resume_reply(
-          foundation_patient,
-          chat_id,
-          chat_id_hash,
-          hash_prefix,
-          fetch_winning_reply!(inbound_message_id, hash_prefix)
-        )
-
-      {:error, reason} ->
-        # PHI hygiene (Round 2 SEVERE fix): never embed the full
-        # changeset in the raised message. `inspect(%Ecto.Changeset{})`
-        # includes `changes` — which, for the diagnosis changeset,
-        # carries the plaintext `ai_response`. Report only the failed
-        # field keys (or the raw reason for non-changeset errors).
-        # `SafeReason.for_log/1` (AletheaJobs.SafeReason — shared with
-        # `SessionTimeoutWorker`) is the per-call helper that scrubs
-        # Changeset `changes`; see its @moduledoc for the rationale.
-        raise "TelegramMessageWorker: failed to persist AI reply/diagnosis " <>
-                "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
     end
   end
 
@@ -356,7 +253,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # Only a delivery that is still pending is re-established. A reply
   # that is sent, in flight, ambiguous, or failed already has its
   # outcome; enqueueing it again could only produce a second
-  # patient-visible message or repeat a decided failure.
+  # patient-visible message or repeat a decided failure. #391: a
+  # `superseded` reply's coverage was reclaimed by a later burst or
+  # crisis reply before it was dispatched — it is never sent, resumed
+  # or not.
   defp resume_reply(
          _foundation_patient,
          _chat_id,
@@ -364,7 +264,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
          hash_prefix,
          %Message{delivery_state: state}
        )
-       when state in ["sending", "sent", "ambiguous", "failed"] do
+       when state in ["sending", "sent", "ambiguous", "failed", "superseded"] do
     Logger.info(
       "TelegramMessageWorker: reply already has a delivery outcome, not re-enqueued " <>
         "(hash_prefix=#{hash_prefix}, delivery_state=#{state})"
@@ -788,7 +688,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     persisted =
       case Clinical.get_telegram_reply(inbound.id) do
         %Message{} = existing ->
-          {:resumed, existing}
+          {:resumed, existing, 0}
 
         nil ->
           Repo.transaction(fn ->
@@ -807,18 +707,38 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
                      "crisis_bypass",
                      inbound.id,
                      session_id
-                   ) do
-              outbound
+                   ),
+                 # #391, R5 (design's crisis steps 1-5, AD6): a crisis
+                 # reply pre-empts every still-pending ordinary reply and
+                 # claims coverage of every uncovered (or about-to-be-
+                 # superseded) inbound up to and including this one. The
+                 # lock serializes this against a concurrently-committing
+                 # burst save (AD6's lock-order rationale: patient, then
+                 # outbound, then inbound rows — the same order the
+                 # dispatch claim takes, so neither transaction can
+                 # deadlock the other).
+                 :ok <- Clinical.lock_patient_conversation!(legacy_patient.id),
+                 pending_ids <- Clinical.pending_reply_ids(legacy_patient.id),
+                 candidate_ids <-
+                   Clinical.crisis_cover_candidates(
+                     legacy_patient.id,
+                     inbound.telegram_message_id,
+                     pending_ids
+                   ),
+                 _superseded <- Clinical.supersede_absorbed(pending_ids),
+                 _covered <- Clinical.cover_members(candidate_ids, outbound.id, pending_ids),
+                 released <- Clinical.release_coverage(pending_ids) do
+              {outbound, released}
             else
               {:error, reason} -> Repo.rollback(reason)
             end
           end)
           |> case do
-            {:ok, outbound} ->
-              {:created, outbound}
+            {:ok, {outbound, released}} ->
+              {:created, outbound, released}
 
             {:error, :reply_already_exists} ->
-              {:resumed, fetch_winning_reply!(inbound.id, hash_prefix)}
+              {:resumed, fetch_winning_reply!(inbound.id, hash_prefix), 0}
 
             {:error, reason} ->
               {:error, reason}
@@ -838,7 +758,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         raise "TelegramMessageWorker: failed to persist crisis path " <>
                 "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
 
-      {origin, outbound} ->
+      {origin, outbound, released} ->
         # POST-COMMIT. The `:crisis_detected` broadcast carries the
         # operator-visible `patient_id` (foundation UUID,
         # WARNING-5) and the `chat_id_hash` correlation token — a
@@ -898,6 +818,22 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
           "TelegramMessageWorker: crisis branch (hash_prefix=#{hash_prefix}, " <>
             "level=#{level}, triggers=#{length(triggers)})"
         )
+
+        # #391, design's crisis step 6 (AD4): a release means some
+        # member of the just-superseded reply postdated this crisis
+        # message (processed out of order) and is now uncovered again.
+        # Re-arming after commit — never inside the transaction, so the
+        # scheduled job can only ever see the committed release — keeps
+        # invariant I (every uncovered row has an armed job). A resumed
+        # execution never releases anything (`released` is always `0`),
+        # so it never re-arms a second time for the same crisis.
+        if released > 0 do
+          TelegramBurstReplyWorker.arm(%{
+            patient_id: foundation_patient.id,
+            chat_id: chat_id,
+            chat_id_hash: chat_id_hash
+          })
+        end
 
         :ok
     end
