@@ -238,6 +238,12 @@ if config_env() == :prod do
 
   config :alethea, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # The URL Telegram delivers updates to. It is only ever sent to Telegram by
+  # the explicit `bin/telegram_bootstrap register-webhook` operation; booting
+  # or migrating never registers it. The path is the webhook route in
+  # `AletheaWeb.Router` (`Alethea.Telegram.WebhookRegistration.webhook_path/0`).
+  config :alethea, :telegram_webhook_url, "https://" <> host <> "/webhooks/telegram"
+
   config :alethea, AletheaWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     check_origin: ["https://" <> host | extra_origins],

@@ -3,7 +3,7 @@
 - Issue: https://github.com/alethea-org/Alethea/issues/402
 - Branch: `chore/402-fly-neon-production` (from `main` at `8e3cbac`)
 - Engram mirror: `odd/issue-402-fly-neon-production/tasks`
-- Status: in progress — T1–T5 committed and reviewed; T6 next
+- Status: in progress — T1–T6 committed and reviewed; T7 and T8 next
 - Engram mirror status: PENDING resync (save refused on 2026-10-07: multiple
   active runtime sessions); this file is authoritative.
 
@@ -111,7 +111,7 @@ Route per task is recorded with its trigger evidence.
   Route: delegated (workers plus `Alethea.AI` plus tests).
   Checks: RED/GREEN in `test/alethea_jobs/session_timeout_worker_test.exs` and
   `emotion_analysis_worker_test.exs`; sentiment regression test.
-- [ ] **T6 — Telegram production bootstrap.** Release-callable, idempotent
+- [x] **T6 — Telegram production bootstrap.** Release-callable, idempotent
   `BotConfig` bootstrap and `setWebhook` registration with `secret_token`,
   verified through `getWebhookInfo`; `Client.Fake` not started in production.
   Route: delegated.
@@ -191,6 +191,29 @@ then T6.
   reliability lens; approved and acknowledged. Advisory, locations only:
   warnings at `session_timeout_worker.ex:235-236`, `:389-394`, `:417-427`.
   Reviewed boundary is now `492bee2`.
+- T6, `89af743..c14721f`: high (executable mode on
+  `rel/overlays/bin/telegram_bootstrap`, security in `webhook_info.ex`);
+  consent granted; four lenses; approved and acknowledged. Ten advisory
+  findings, locations only; warnings at `telegram/bootstrap.ex:18-22`,
+  `:100-104`, `release.ex:186-195`, `mix/tasks/alethea.telegram.bootstrap.ex:50`.
+  Reviewed boundary is now `c14721f`.
+
+## Evidence for T6
+
+- `37142d2` and `c14721f`, delegated: new tests RED 0/26 then GREEN 26 (parent
+  re-run with the application test: 34 passed); release smoke on a throwaway
+  database: `bin/telegram_bootstrap` created, unchanged, updated; token column
+  is ciphertext; `mix precommit` 2017 passed, 5 skipped.
+- Not verified: full application boot from the release; webhook registration
+  against the real Telegram API (stubs only).
+- Decisions for T7: Fly app `alethea-prod` (default chosen by the agent, one
+  line to change), primary region `gru` with Neon in AWS `sa-east-1` (user
+  choice, 2026-10-07).
+- Gap for the user: whether `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` and
+  `TELEGRAM_BOT_USERNAME` remain permanent deploy secrets or are supplied once.
+- Outside the surface: `BotConfig.upsert` should pass `log: false` itself; the
+  debug query log prints the plaintext token before Cloak encrypts it, and
+  only the new bootstrap caller guards against it.
 
 ## Evidence for T4 and T5
 
