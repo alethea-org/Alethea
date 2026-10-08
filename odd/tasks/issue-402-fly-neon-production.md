@@ -3,7 +3,9 @@
 - Issue: https://github.com/alethea-org/Alethea/issues/402
 - Branch: `chore/402-fly-neon-production` (from `main` at `8e3cbac`)
 - Engram mirror: `odd/issue-402-fly-neon-production/tasks`
-- Status: in progress — slice 1 (T1–T3) committed; T4 next
+- Status: in progress — T1–T5 committed and reviewed; T6 next
+- Engram mirror status: PENDING resync (save refused on 2026-10-07: multiple
+  active runtime sessions); this file is authoritative.
 
 ## Objective
 
@@ -97,13 +99,13 @@ Route per task is recorded with its trigger evidence.
   excluded from the `force_ssl` redirect.
   Route: inline candidate (one file plus its test) — confirm at execution.
   Checks: RED/GREEN in `test/alethea_web/health_controller_test.exs`.
-- [ ] **T4 — Production configuration.** Verified TLS for the Repo, required
+- [x] **T4 — Production configuration.** Verified TLS for the Repo, required
   `PHX_HOST`, `check_origin`, pool and queue settings for Neon, no `localhost`
   AI defaults in production, explicit capability switches.
   Route: delegated (config plus config tests plus `LLMConfig`).
   Checks: `Config.Reader.read!(path, env: :prod)` tests, following
   `test/config/telegram_client_config_test.exs`.
-- [ ] **T5 — AI capability degradation.** A disabled or failing AI capability
+- [x] **T5 — AI capability degradation.** A disabled or failing AI capability
   no longer leaves session closure incomplete; `EmotionAnalysisWorker` does not
   raise per inbound message when the analyzer is disabled.
   Route: delegated (workers plus `Alethea.AI` plus tests).
@@ -155,7 +157,7 @@ These issue items need the authorized remote environment and stay open here:
   2026-10-07).
 - Slices: (1) T1, T2, T3 on `chore/402-fly-neon-production`; (2) T4, T5, T6;
   (3) T7, T8. Each later slice branches from the previous one.
-- Running count: 647 changed lines in slice 1 (17 paths, native assessment).
+- Running count (native assessment): slice 1 647 lines, T4 951, T5 733.
 
 ## Progress and evidence
 
@@ -181,6 +183,41 @@ then T6.
   warnings: this document 83-86, the migration 130-141, `Dockerfile:13-15`,
   `clinical_record.ex:2408`, `release_test.exs:17-20`,
   `health_controller.ex:84-87`). Reviewed boundary is now `2caeb19`.
+- T4, `dc13b79..f0c1892`: medium, slice budget reached; consent granted; one
+  reliability lens; approved and acknowledged (lineage
+  `review-9730ad3f909df59e`). Advisory, locations only: warnings at
+  `config/runtime.exs:171-172`, `:310-314`, `llm_config.ex:250-252`.
+- T5, `f0c1892..492bee2`: medium, slice budget reached; consent granted; one
+  reliability lens; approved and acknowledged. Advisory, locations only:
+  warnings at `session_timeout_worker.ex:235-236`, `:389-394`, `:417-427`.
+  Reviewed boundary is now `492bee2`.
+
+## Evidence for T4 and T5
+
+- T4 `f0c1892`, delegated: `mix test test/config` RED 5/27 then GREEN 27
+  (parent re-run 27 passed); release `eval` with a complete fake env prints
+  `ok`, and raises clearly without `PHX_HOST` or with
+  `EMOTION_ANALYZER_ENABLED=true` and no endpoint.
+- T5 `492bee2`, delegated: worker tests RED 19/28 then GREEN 28; sentiment
+  regression 2 passed; `mix precommit` 1971 passed, 5 skipped.
+
+## Open gaps handed to the user (not decided here)
+
+- With `AI_PROVIDER=cloud` and no `LOCAL_LLM_BASE_URL`, every chain except
+  guided conversation is "not configured": summaries fail and retry, and
+  consultations and reports return errors. Letting those chains use the hosted
+  provider is a privacy decision.
+- There is no "LLM disabled" mode, only `local` or `cloud`.
+- Enabling the emotion analyzer in production conflicts with its
+  development-only posture from issue 198.
+- Trends are not resumable after a crash between close and save (needs a
+  session reference column).
+- Goodbye idempotency relies on `oban_jobs` rows persisting (no Pruner today).
+- Outside the delegated surface: `telegram_message_worker.ex:411` still
+  enqueues a no-op emotion job per message when the analyzer is off;
+  `clinical_record/rag/indexer.ex:296` retries and fails per event when
+  embeddings are off; `SessionSummaryChain` returns a map while its behaviour
+  documents a string; `.env.example` and README lack the new variables.
 
 ## Accepted changes during slice 1
 

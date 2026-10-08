@@ -310,51 +310,246 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
     end
   end
 
-  test "unavailable emotion analysis creates no trends or summary", %{
-    patient: patient,
-    session: session,
-    phone: phone
-  } do
-    # Issue #198 — swap to the inline Mox mock to drive the failure shape.
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+  # ----------------------------------------------------------------
+  # Issue #402 — AI capability degradation.
+  #
+  # Emotion trends are an optional step of the closure. The session
+  # summary and the goodbye do not depend on them, so a disabled or
+  # failing analyzer must not leave the closure half-done, and nothing
+  # may be recorded from a capability that produced no valid result.
+  # ----------------------------------------------------------------
 
-    Alethea.AI.EmotionAnalyzerBehaviourMock
-    |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
+  describe "AI capability degradation (issue #402)" do
+    @summary_text "1. Estado: alegre\n2. Temas: trabajo\n3. Cambios: mejora\n4. Estable"
+    @message_text "Me siento bien hoy"
 
-    capture_log(fn ->
-      assert {:error, :unavailable} =
-               perform_job(SessionTimeoutWorker, %{
-                 session_id: session.id,
-                 patient_id: patient.id,
-                 phone: phone
-               })
-    end)
+    defp telegram_job_args(session, patient) do
+      %{
+        session_id: session.id,
+        patient_id: patient.id,
+        channel: "telegram",
+        chat_id: 987_654_321,
+        chat_id_hash: "test_chat_id_hash_abcdef"
+      }
+    end
 
-    assert Repo.aggregate(Trend, :count) == 0
-    assert Repo.aggregate(Summary, :count) == 0
-  end
+    defp goodbye_jobs do
+      Repo.all(from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker")
+    end
 
-  test "malformed emotion analysis creates no trends or summary", %{
-    patient: patient,
-    session: session,
-    phone: phone
-  } do
-    Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+    defp session_summaries(patient) do
+      Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))
+    end
 
-    Alethea.AI.EmotionAnalyzerBehaviourMock
-    |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
+    test "a disabled analyzer is not an error: summary and goodbye complete, no trends recorded",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, EmotionAnalyzer.Disabled)
 
-    capture_log(fn ->
-      assert {:error, :invalid_emotion_scores} =
-               perform_job(SessionTimeoutWorker, %{
-                 session_id: session.id,
-                 patient_id: patient.id,
-                 phone: phone
-               })
-    end)
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn texts, scores ->
+        # No emotion profile is fabricated for the summary prompt.
+        assert texts == [@message_text]
+        assert scores == []
+        {:ok, @summary_text}
+      end)
 
-    assert Repo.aggregate(Trend, :count) == 0
-    assert Repo.aggregate(Summary, :count) == 0
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+        end)
+
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert Repo.aggregate(Trend, :count) == 0
+      assert Repo.aggregate(Alethea.Clinical.EmotionAnalysis, :count) == 0
+      assert [%Summary{summary_text: @summary_text}] = session_summaries(patient)
+      assert [_goodbye] = goodbye_jobs()
+
+      # A switched-off capability is not reported as a failure.
+      refute log =~ "[error]"
+      refute log =~ "[warning]"
+    end
+
+    test "an unavailable analyzer records no trends and the closure still completes",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
+      Alethea.AI.EmotionAnalyzerBehaviourMock
+      |> expect(:analyze_batch, fn _texts -> {:error, :unavailable} end)
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, scores ->
+        assert scores == []
+        {:ok, @summary_text}
+      end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+        end)
+
+      assert Repo.aggregate(Trend, :count) == 0
+      assert [%Summary{}] = session_summaries(patient)
+      assert [_goodbye] = goodbye_jobs()
+
+      # The skipped step is observable: capability and reason tag only.
+      assert log =~ "capability=emotion_analyzer"
+      assert log =~ "reason=:unavailable"
+      refute log =~ @message_text
+      refute log =~ "987654321"
+      refute log =~ "test_chat_id_hash_abcdef"
+    end
+
+    test "malformed analyzer scores record no trends and the closure still completes",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzerBehaviourMock)
+
+      Alethea.AI.EmotionAnalyzerBehaviourMock
+      |> expect(:analyze_batch, fn _texts -> {:ok, [%{label: "joy", score: 0.8}]} end)
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, scores ->
+        # The rejected vector never reaches the summary prompt.
+        assert scores == []
+        {:ok, @summary_text}
+      end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+        end)
+
+      assert Repo.aggregate(Trend, :count) == 0
+      assert [%Summary{}] = session_summaries(patient)
+      assert [_goodbye] = goodbye_jobs()
+      assert log =~ "reason=:invalid_emotion_scores"
+    end
+
+    test "an unavailable summary chain still sends the goodbye and records no summary",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        {:error, "LLM endpoint for the :local provider is not configured"}
+      end)
+
+      capture_log(fn ->
+        # The failure is surfaced so Oban retries the missing summary.
+        assert {:error, _reason} =
+                 perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+      end)
+
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert session_summaries(patient) == []
+      assert [goodbye] = goodbye_jobs()
+      assert goodbye.args["body"] =~ "Tu sesión de hoy ha concluido"
+      # Trends come from the analyzer, which did succeed.
+      assert Repo.aggregate(Trend, :count) == 5
+    end
+
+    test "a retry completes the missing summary without a second goodbye or duplicate trends",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores -> {:error, :timeout} end)
+      |> expect(:run, fn _texts, scores ->
+        # Trends cannot be attributed to a session, so a retry never
+        # re-runs the analyzer and never repeats them.
+        assert scores == []
+        {:ok, @summary_text}
+      end)
+
+      args = telegram_job_args(session, patient)
+
+      capture_log(fn ->
+        assert {:error, :timeout} = perform_job(SessionTimeoutWorker, args, attempt: 1)
+      end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+
+      assert [%Summary{summary_text: @summary_text}] = session_summaries(patient)
+      assert [_single_goodbye] = goodbye_jobs()
+      assert Repo.aggregate(Trend, :count) == 5
+    end
+
+    test "a retry of a finished closure repeats nothing",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 1, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      args = telegram_job_args(session, patient)
+
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 1)
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 3)
+
+      assert [_single_summary] = session_summaries(patient)
+      assert [_single_goodbye] = goodbye_jobs()
+      assert Repo.aggregate(Trend, :count) == 5
+    end
+
+    test "the goodbye of one session does not suppress the goodbye of the next",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 2, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+
+      # A session summary is matched by the session's own period, which
+      # has one-second precision. Real sessions last at least the
+      # inactivity window, so two sessions of a patient never share a
+      # period; the test spaces them explicitly instead of sleeping.
+      {:ok, next_session} = SessionManager.open_session(patient)
+
+      next_session =
+        next_session
+        |> Ecto.Changeset.change(started_at: DateTime.add(next_session.started_at, -3600))
+        |> Repo.update!()
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(next_session, patient))
+
+      assert length(goodbye_jobs()) == 2
+      assert length(session_summaries(patient)) == 2
+    end
+
+    test "accepts the summary shape returned by the real summary chain",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        {:ok, %{summary: "1. Estado\n2. Temas\n3. Cambios\n4. Alerta", tokens_used: 12}}
+      end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+
+      assert [%Summary{summary_text: "1. Estado\n2. Temas\n3. Cambios\n4. Alerta"} = summary] =
+               session_summaries(patient)
+
+      assert summary.status_level == "Alerta"
+    end
+
+    test "degraded closure leaves behaviour tags and message anchoring untouched",
+         %{patient: patient, session: session} do
+      Application.put_env(:alethea, :emotion_analyzer, EmotionAnalyzer.Disabled)
+
+      before =
+        Repo.all(
+          from m in Alethea.Clinical.Message,
+            where: m.patient_id == ^patient.id,
+            select: {m.id, m.behavior_type, m.direction, m.session_id}
+        )
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      assert :ok = perform_job(SessionTimeoutWorker, telegram_job_args(session, patient))
+
+      assert [{_id, "spontaneous", "inbound", session_id}] = before
+      assert session_id == session.id
+
+      assert before ==
+               Repo.all(
+                 from m in Alethea.Clinical.Message,
+                   where: m.patient_id == ^patient.id,
+                   select: {m.id, m.behavior_type, m.direction, m.session_id}
+               )
+    end
   end
 
   # ----------------------------------------------------------------
@@ -373,6 +568,446 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   # applies `AletheaJobs.SafeReason.for_log/1` at the Logger.error
   # site; this test pins the contract.
   # ----------------------------------------------------------------
+
+  # ----------------------------------------------------------------
+  # Issue #402 — a goodbye job that ended without delivering.
+  #
+  # The goodbye is unique per session across every job state, so a dead
+  # goodbye job still blocks a new one. A retried closure must tell a
+  # goodbye that is pending or done from one that died, and re-send only
+  # when the dead job provably never reached the Telegram client.
+  # ----------------------------------------------------------------
+
+  describe "goodbye recovery (issue #402)" do
+    alias Alethea.Telegram.Client.Fake
+    alias Alethea.Telegram.Pacer
+
+    @chat_id 987_654_321
+    @chat_id_hash String.duplicate("c", 64)
+
+    setup do
+      previous_client = Application.get_env(:alethea, :telegram_client)
+      Application.put_env(:alethea, :telegram_client, Fake)
+
+      on_exit(fn ->
+        if previous_client do
+          Application.put_env(:alethea, :telegram_client, previous_client)
+        else
+          Application.delete_env(:alethea, :telegram_client)
+        end
+      end)
+
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:alethea, :session_timeout, :goodbye_recovered],
+          [:alethea, :session_timeout, :goodbye_unresolved]
+        ],
+        fn [_, _, event], _measurements, metadata, _config ->
+          send(test_pid, {event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    defp recovery_args(session, patient) do
+      %{
+        session_id: session.id,
+        patient_id: patient.id,
+        channel: "telegram",
+        chat_id: @chat_id,
+        chat_id_hash: @chat_id_hash
+      }
+    end
+
+    # First attempt of the closure: the summary fails, the goodbye is
+    # enqueued. The second attempt will complete the summary.
+    defp close_with_failed_summary(session, patient) do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores -> {:error, :timeout} end)
+      |> expect(:run, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      capture_log(fn ->
+        assert {:error, :timeout} =
+                 perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 1)
+      end)
+
+      assert [goodbye] = goodbye_jobs()
+      goodbye
+    end
+
+    defp run_goodbye_queue do
+      capture_log(fn -> Oban.drain_queue(queue: :telegram_outbound) end)
+    end
+
+    defp goodbye_sends do
+      Enum.filter(Fake.sends(), &(&1.chat_id == @chat_id))
+    end
+
+    test "a goodbye discarded before the send is recovered exactly once",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      goodbye = close_with_failed_summary(session, patient)
+
+      # The Pacer is not running: the outbound job dies before it reaches
+      # the Telegram client, and its single attempt leaves it discarded.
+      run_goodbye_queue()
+      assert Repo.get!(Oban.Job, goodbye.id).state == "discarded"
+      assert goodbye_sends() == []
+
+      start_supervised!(Pacer)
+
+      # The retried closure completes the summary and revives the goodbye.
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+
+      assert [%Oban.Job{id: recovered_id, state: "available"}] = goodbye_jobs()
+      assert recovered_id == goodbye.id
+      session_id = session.id
+      assert_received {:goodbye_recovered, %{session_id: ^session_id}}
+
+      run_goodbye_queue()
+      assert [%{text: text}] = goodbye_sends()
+      assert text =~ "Tu sesión de hoy ha concluido"
+      assert [%Oban.Job{state: "completed"}] = goodbye_jobs()
+
+      # A further retry finds a delivered goodbye and sends nothing more.
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 3)
+      run_goodbye_queue()
+
+      assert [_single_send] = goodbye_sends()
+      assert [%Oban.Job{state: "completed"}] = goodbye_jobs()
+      refute_received {:goodbye_recovered, _metadata}
+      refute_received {:goodbye_unresolved, _metadata}
+    end
+
+    test "a completed goodbye followed by a retry is not sent again",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      start_supervised!(Pacer)
+      close_with_failed_summary(session, patient)
+
+      run_goodbye_queue()
+      assert [_sent] = goodbye_sends()
+
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+      run_goodbye_queue()
+
+      assert [_single_send] = goodbye_sends()
+      assert [%Oban.Job{state: "completed"}] = goodbye_jobs()
+      refute_received {:goodbye_recovered, _metadata}
+      refute_received {:goodbye_unresolved, _metadata}
+    end
+
+    test "a pending goodbye followed by a retry is neither duplicated nor touched",
+         %{patient: patient, session: session} do
+      goodbye = close_with_failed_summary(session, patient)
+
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+
+      assert [%Oban.Job{id: id, state: "available", attempt: 0}] = goodbye_jobs()
+      assert id == goodbye.id
+      refute_received {:goodbye_recovered, _metadata}
+      refute_received {:goodbye_unresolved, _metadata}
+    end
+
+    test "a goodbye that died after the send started is not re-sent and is reported unresolved",
+         %{patient: patient, session: session} do
+      start_supervised!(Pacer)
+      goodbye = close_with_failed_summary(session, patient)
+
+      # The Telegram client is unreachable: the job dies inside the send
+      # call, after the worker recorded that the send was starting. Nobody
+      # can tell whether a request left, so this is an ambiguous failure.
+      run_goodbye_queue()
+      assert %Oban.Job{state: "discarded", meta: meta} = Repo.get!(Oban.Job, goodbye.id)
+      assert meta["send_started"] == true
+
+      start_supervised!(Fake)
+
+      log =
+        capture_log(fn ->
+          # The summary is the job's result: an unresolved goodbye does
+          # not make the closure retry, because a retry cannot learn more.
+          assert :ok =
+                   perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+        end)
+
+      run_goodbye_queue()
+      assert goodbye_sends() == []
+      assert [%Oban.Job{state: "discarded"}] = goodbye_jobs()
+
+      session_id = session.id
+
+      assert_received {:goodbye_unresolved,
+                       %{session_id: ^session_id, reason: :send_may_have_started} = metadata}
+
+      assert Map.keys(metadata) |> Enum.sort() == [:reason, :session_id]
+      refute_received {:goodbye_recovered, _metadata}
+
+      assert log =~ "goodbye unresolved for session #{session.id}"
+      assert log =~ "reason=send_may_have_started"
+      refute log =~ Integer.to_string(@chat_id)
+      refute log =~ @chat_id_hash
+      refute log =~ "Tu sesión de hoy ha concluido"
+    end
+
+    test "a cancelled goodbye is not re-sent and is reported unresolved",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      start_supervised!(Pacer)
+      goodbye = close_with_failed_summary(session, patient)
+
+      # Cancelling is somebody's decision, not a delivery failure the
+      # worker may undo on its own.
+      :ok = Oban.cancel_job(goodbye.id)
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+        end)
+
+      run_goodbye_queue()
+      assert goodbye_sends() == []
+      assert [%Oban.Job{state: "cancelled"}] = goodbye_jobs()
+
+      session_id = session.id
+      assert_received {:goodbye_unresolved, %{session_id: ^session_id, reason: :cancelled}}
+      assert log =~ "reason=cancelled"
+    end
+
+    test "a discarded retry of the outbound job is recovered, not its completed predecessor",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      start_supervised!(Pacer)
+      close_with_failed_summary(session, patient)
+
+      # The first send is rejected before delivery, so the outbound worker
+      # completes its job and schedules a retry job of its own.
+      Fake.queue_responses([{:error, :network}])
+      run_goodbye_queue()
+
+      assert [%Oban.Job{state: "completed"}, %Oban.Job{state: "scheduled"} = retry] =
+               Enum.sort_by(goodbye_jobs(), & &1.id)
+
+      # That retry then dies before the send: the Pacer is gone.
+      stop_supervised!(Pacer)
+      capture_log(fn -> Oban.drain_queue(queue: :telegram_outbound, with_scheduled: true) end)
+      assert Repo.get!(Oban.Job, retry.id).state == "discarded"
+
+      start_supervised!(Pacer)
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+
+      assert Repo.get!(Oban.Job, retry.id).state == "available"
+      run_goodbye_queue()
+      assert [_single_send] = goodbye_sends()
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Issue #402 — a retry whose summary is already stored.
+  #
+  # Only the goodbye can still be missing then, so the patient's messages
+  # must not be loaded and decrypted again for nothing.
+  # ----------------------------------------------------------------
+
+  describe "retry with the summary already recorded (issue #402)" do
+    # Reports every query the Repo runs against the messages table.
+    defp watch_message_queries do
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:alethea, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:source] == "messages", do: send(test_pid, :messages_queried)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
+
+    test "the history is not loaded again and the goodbye is still handled",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 1, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      args = telegram_job_args(session, patient)
+
+      watch_message_queries()
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 1)
+      # The first run does read the history: the probe works.
+      assert_received :messages_queried
+
+      # The goodbye of the first attempt is lost, as if the attempt had
+      # died right after storing the summary.
+      Repo.delete_all(
+        from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker"
+      )
+
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+
+      refute_received :messages_queried
+      assert [_single_summary] = session_summaries(patient)
+      assert [goodbye] = goodbye_jobs()
+      assert goodbye.args["session_id"] == session.id
+    end
+
+    test "a history that can no longer be decrypted does not fail the retry",
+         %{patient: patient, session: session} do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, 1, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      args = telegram_job_args(session, patient)
+      assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 1)
+
+      # The stored content becomes undecryptable between the attempts.
+      Repo.update_all(
+        from(m in Alethea.Clinical.Message, where: m.session_id == ^session.id),
+        set: [encrypted_content: <<0, 1, 2, 3>>]
+      )
+
+      log =
+        capture_log(fn ->
+          assert :ok = perform_job(SessionTimeoutWorker, args, attempt: 2)
+        end)
+
+      refute log =~ "SessionTimeoutWorker failed"
+      assert [_single_summary] = session_summaries(patient)
+      assert [_single_goodbye] = goodbye_jobs()
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Issue #402 — a real model failure during the summary.
+  #
+  # The REAL `SessionSummaryChain` runs here (not the Mox mock), against
+  # `Req.Test` standing in for Ollama, and the job is executed by Oban
+  # itself so what Oban persists in `oban_jobs.errors` is observable.
+  # ----------------------------------------------------------------
+
+  describe "a real summary chain failure (issue #402)" do
+    # A recognisable synthetic stand-in for a patient's message.
+    @marker "marcador-sintetico-zzqx-cierre"
+
+    setup %{patient: patient, session: session} do
+      Application.put_env(
+        :alethea,
+        :session_summary_chain,
+        Alethea.AI.Chains.SessionSummaryChain
+      )
+
+      Application.put_env(:alethea, :ollama_chat_req_options, plug: {Req.Test, __MODULE__})
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock)
+        Application.delete_env(:alethea, :ollama_chat_req_options)
+      end)
+
+      {:ok, _message} =
+        Alethea.Clinical.save_message(patient, @marker, nil, "inbound", "spontaneous", session.id)
+
+      :ok
+    end
+
+    defp printed(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
+
+    test "the failure is retried by Oban, the goodbye is enqueued and no session text is stored or logged",
+         %{patient: patient, session: session} do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:model_request, body})
+        Plug.Conn.send_resp(conn, 500, "")
+      end)
+
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:alethea, :ai, :chain, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:chain_stop, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      job = Oban.insert!(SessionTimeoutWorker.new(telegram_job_args(session, patient)))
+
+      log =
+        capture_log(fn ->
+          assert %{failure: 1, success: 0} = Oban.drain_queue(queue: :sessions)
+        end)
+
+      # The marker really was in the prompt the model received.
+      assert_received {:model_request, request_body}
+      assert request_body =~ @marker
+
+      # Oban keeps the job for another attempt, with a small tagged error.
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "retryable"
+      assert [%{"error" => error}] = job.errors
+      assert error =~ "{:llm_run_failed, :untyped}"
+      refute error =~ "CaseClauseError"
+
+      assert_received {:chain_stop, %{chain: :session_summary} = metadata}
+
+      refute printed(job.errors) =~ @marker
+      refute printed(metadata) =~ @marker
+      refute log =~ @marker
+
+      # The closure went on: session closed, goodbye enqueued, no summary.
+      assert Repo.get!(Session, session.id).status == "closed"
+      assert [goodbye] = goodbye_jobs()
+      assert goodbye.args["body"] =~ "Tu sesión de hoy ha concluido"
+      assert session_summaries(patient) == []
+    end
+
+    test "a summary that fails validation is stored in the job errors by field key only",
+         %{patient: patient, session: session} do
+      # A summary is clinical content too. The failing changeset is built
+      # with the real `Summary.changeset/2` and carries the text in its
+      # `changes`; the mock hands it over the way `save_summary/1` would.
+      Application.put_env(:alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock)
+
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores ->
+        failing_changeset =
+          Summary.changeset(%Summary{}, %{
+            period_start: DateTime.utc_now(),
+            period_end: DateTime.utc_now(),
+            summary_text: @marker,
+            status_level: nil,
+            type: "session",
+            patient_id: patient.id
+          })
+
+        {:error, failing_changeset}
+      end)
+
+      job = Oban.insert!(SessionTimeoutWorker.new(telegram_job_args(session, patient)))
+
+      capture_log(fn ->
+        assert %{failure: 1, success: 0} = Oban.drain_queue(queue: :sessions)
+      end)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert [%{"error" => error}] = job.errors
+      assert error =~ "{:invalid_changeset, [:status_level]}"
+      refute printed(job.errors) =~ @marker
+    end
+  end
 
   describe "PHI-safe error rendering (R2 #86 PR-1 fix)" do
     # The sentinel is the value we inject into the failing Changeset's

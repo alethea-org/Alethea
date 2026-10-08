@@ -63,6 +63,25 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   acknowledged crisis reply is not sent again by a repeated job) and
   `failed` on dead-letter.
 
+  ## Send-start marker for session goodbyes (issue #402)
+
+  A goodbye has no reply row to hold a delivery state, and it is unique
+  per session across every job state (`AletheaJobs.SessionTimeoutWorker`),
+  so a goodbye job that ends `discarded` blocks any new one. To let the
+  closure recover it without ever sending twice, a job whose args carry a
+  `session_id` writes `"send_started" => true` into its own `meta`
+  immediately before it invokes the Telegram client.
+
+  The marker is the evidence the closure reads through `send_started?/1`:
+
+    * absent on a dead job → the execution stopped before the client was
+      invoked (Pacer unavailable, malformed args, marker write failed), so
+      nothing was sent and re-running the job is safe;
+    * present on a dead job → the send was at least attempted and nobody
+      knows whether a request left; it is never re-sent automatically.
+
+  It costs one `UPDATE` per goodbye and is not written for any other job.
+
   ## Why `max_attempts: 1` on the worker
 
   Oban's built-in retry would stack on top of the worker's own
@@ -92,6 +111,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   use Oban.Worker, queue: :telegram_outbound, max_attempts: 1
 
+  import Ecto.Query, only: [from: 2]
+
   require Logger
 
   alias Alethea.Clinical
@@ -104,9 +125,10 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   @base_backoff_ms 1_000
   @max_backoff_ms 300_000
   @jitter_ratio 0.25
+  @send_started_key "send_started"
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args, attempt: _oban_attempt, priority: oban_priority}) do
+  def perform(%Oban.Job{id: job_id, args: args, attempt: _oban_attempt, priority: oban_priority}) do
     chat_id = Map.fetch!(args, "chat_id")
     chat_id_hash = Map.fetch!(args, "chat_id_hash")
     body = Map.fetch!(args, "body")
@@ -154,7 +176,10 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         :ok
 
       delivery ->
-        # 3. Send.
+        # 3. Send. A session goodbye first records that the send is
+        #    starting (see "Send-start marker" in the moduledoc).
+        mark_send_started(job_id, args)
+
         case telegram_client().send_message(chat_id, body) do
           {:ok, telegram_message_id} ->
             record_delivery(delivery, message_id, {:sent, telegram_message_id})
@@ -174,6 +199,38 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         end
     end
   end
+
+  # Writes the send-start marker of a session goodbye job. It must be
+  # stored before the client is invoked: if the write fails this raises,
+  # nothing is sent, and the job ends without the marker, which is exactly
+  # what its absence is read as. Jobs without a `session_id`, and job
+  # structs built by hand (no id), are left alone.
+  defp mark_send_started(job_id, %{"session_id" => _session_id}) when is_integer(job_id) do
+    {1, _} =
+      Repo.update_all(
+        from(j in Oban.Job,
+          where: j.id == ^job_id,
+          update: [
+            set: [
+              meta: fragment("? || ?", j.meta, type(^%{@send_started_key => true}, :map))
+            ]
+          ]
+        ),
+        []
+      )
+
+    :ok
+  end
+
+  defp mark_send_started(_job_id, _args), do: :ok
+
+  @doc """
+  Whether `job` recorded that its send was starting (see "Send-start
+  marker" in the moduledoc). `false` on a terminally failed session
+  goodbye job means its execution never reached the Telegram client.
+  """
+  @spec send_started?(Oban.Job.t()) :: boolean()
+  def send_started?(%Oban.Job{meta: meta}), do: Map.get(meta || %{}, @send_started_key) == true
 
   # A claimed journaling reply whose error does not prove non-delivery:
   # the request may have reached Telegram. Record it and stop — no

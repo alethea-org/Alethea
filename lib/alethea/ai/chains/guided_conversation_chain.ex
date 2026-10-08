@@ -23,6 +23,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias Alethea.AI.JournalingPrompt
   alias Alethea.AI.LLMConfig
   alias Alethea.AI.ChatModels.OllamaChat
+  alias Alethea.AI.Chains.SafeRun
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
@@ -128,11 +129,11 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     %{llm: llm, verbose: false}
     |> LLMChain.new!()
     |> LLMChain.add_messages(messages)
-    |> LLMChain.run()
+    |> SafeRun.run()
     |> case do
       {:ok, chain} -> {:ok, chain.last_message}
-      # LangChain reports a failed run as `{:error, chain, reason}`.
-      {:error, _chain, reason} -> {:error, reason}
+      # A tagged reason without the chain, its messages or the provider's
+      # error text (see `SafeRun`).
       {:error, reason} -> {:error, reason}
     end
   end

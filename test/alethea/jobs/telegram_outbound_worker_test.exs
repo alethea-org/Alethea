@@ -92,6 +92,88 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # Send-start marker of session goodbyes (issue #402)
+  # ----------------------------------------------------------------
+
+  describe "send-start marker (issue #402)" do
+    @session_id "5f0c0f4e-3f0a-4a52-9d3e-0e6a5f1f8a11"
+
+    defp insert_job(args) do
+      args |> TelegramOutboundWorker.new() |> Oban.insert!()
+    end
+
+    defp run_queue do
+      ExUnit.CaptureLog.capture_log(fn -> Oban.drain_queue(queue: :telegram_outbound) end)
+    end
+
+    test "a session goodbye records the marker and is sent once" do
+      job = insert_job(Map.put(build_args(), "session_id", @session_id))
+      refute TelegramOutboundWorker.send_started?(job)
+
+      run_queue()
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "completed"
+      assert TelegramOutboundWorker.send_started?(job)
+      assert [%{text: @body}] = Fake.sends()
+    end
+
+    test "the marker keeps whatever the job meta already held" do
+      job =
+        build_args()
+        |> Map.put("session_id", @session_id)
+        |> TelegramOutboundWorker.new(meta: %{"origin" => "closure"})
+        |> Oban.insert!()
+
+      run_queue()
+
+      assert %{"origin" => "closure", "send_started" => true} = Repo.get!(Oban.Job, job.id).meta
+    end
+
+    test "a goodbye that dies before the client is invoked has no marker" do
+      # No Pacer: the execution stops before it reaches the client.
+      GenServer.stop(Process.whereis(Pacer))
+      job = insert_job(Map.put(build_args(), "session_id", @session_id))
+
+      run_queue()
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "discarded"
+      refute TelegramOutboundWorker.send_started?(job)
+      assert Fake.sends() == []
+    end
+
+    test "a goodbye that dies inside the client call keeps the marker" do
+      job = insert_job(Map.put(build_args(), "session_id", @session_id))
+
+      # The client is unreachable: the job dies in the send call itself.
+      stop_supervised!(Fake)
+      run_queue()
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "discarded"
+      assert TelegramOutboundWorker.send_started?(job)
+    end
+
+    test "a job without a session id writes no marker" do
+      job = insert_job(build_args())
+
+      run_queue()
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "completed"
+      refute TelegramOutboundWorker.send_started?(job)
+      assert job.meta == %{}
+      assert [_sent] = Fake.sends()
+    end
+
+    test "a job struct without an id still sends" do
+      assert :ok = perform(Map.put(build_args(), "session_id", @session_id))
+      assert [_sent] = Fake.sends()
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Happy path (REQ-C7-pacer-* + happy send)
   # ----------------------------------------------------------------
 
