@@ -25,7 +25,7 @@ defmodule Alethea.Migrations.BurstCoverageTest do
   import Alethea.FoundationTestHelper
 
   alias Alethea.Clinical
-  alias Alethea.Clinical.BurstBackfill
+  alias Alethea.Clinical.{BurstBackfill, BurstRepair, Message}
 
   setup do
     legacy_professional = legacy_professional_fixture()
@@ -66,5 +66,82 @@ defmodule Alethea.Migrations.BurstCoverageTest do
 
     assert {:ok, [{member, "nuevo"}]} = Clinical.list_burst_members(foundation_patient)
     assert member.id == inbound.id
+  end
+
+  # #391, design AD2 "S3 adds a repair pass": rows saved between S1's
+  # backfill and S3's activation of the burst worker (R10).
+  describe "BurstRepair.sql/0 (S3 repair pass)" do
+    test "a row with an existing reply (#390's reply_to_message_id) is linked to that reply, not self-referenced",
+         %{foundation_patient: foundation_patient} do
+      {:ok, inbound} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "pregunta del gap",
+          "inbound",
+          "spontaneous",
+          "200"
+        )
+
+      {:ok, reply} =
+        Clinical.save_telegram_reply(
+          foundation_patient,
+          "respuesta del gap",
+          "elicited",
+          inbound.id,
+          nil
+        )
+
+      # The old synchronous safe path already dispatched this reply
+      # (delivery_state moves past "pending" once sent) — it left
+      # coverage NULL (it never set `replied_by_message_id`; only
+      # `arm/1`'s callers do, and nothing armed anything until S3).
+      Repo.update_all(from(m in Message, where: m.id == ^reply.id),
+        set: [delivery_state: "sent"]
+      )
+
+      Repo.query!(BurstRepair.sql())
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == reply.id
+      assert Clinical.list_burst_members(foundation_patient) == {:ok, []}
+    end
+
+    test "a row with no reply at all gets the same self-reference marker as the original backfill",
+         %{foundation_patient: foundation_patient} do
+      {:ok, inbound} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "nunca respondido",
+          "inbound",
+          "spontaneous",
+          "201"
+        )
+
+      Repo.query!(BurstRepair.sql())
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == inbound.id
+      assert Clinical.list_burst_members(foundation_patient) == {:ok, []}
+    end
+
+    test "an already-covered row is left untouched", %{foundation_patient: foundation_patient} do
+      {:ok, inbound} =
+        Clinical.save_telegram_message(
+          foundation_patient,
+          "ya cubierto",
+          "inbound",
+          "spontaneous",
+          "202"
+        )
+
+      {:ok, reply} =
+        Clinical.save_telegram_reply(foundation_patient, "r", "elicited", inbound.id, nil)
+
+      Repo.update_all(from(m in Message, where: m.id == ^inbound.id),
+        set: [replied_by_message_id: reply.id]
+      )
+
+      Repo.query!(BurstRepair.sql())
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == reply.id
+    end
   end
 end
