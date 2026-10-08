@@ -1035,7 +1035,7 @@ defmodule Alethea.Clinical do
   def get_dek(_patient, dek) when is_binary(dek) and byte_size(dek) == 32, do: {:ok, dek}
   def get_dek(patient, _), do: patient_dek(patient)
 
-  def patient_dek(patient) do
+  def patient_dek(patient, reason \\ "clinical_context_loading") when is_binary(reason) do
     patient = Repo.preload(patient, :professional)
 
     with %Alethea.Accounts.Professional{} = professional <- patient.professional,
@@ -1048,7 +1048,7 @@ defmodule Alethea.Clinical do
         action: "PII_DECRYPT",
         resource_type: "Patient",
         resource_id: patient.id,
-        details: %{reason: "clinical_context_loading"}
+        details: %{reason: reason}
       })
 
       {:ok, dek}
