@@ -58,6 +58,51 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       end
     end
 
+    test "an ssl parameter in DATABASE_URL is rejected" do
+      # Ecto merges URL parameters over the Repo configuration, so
+      # `?ssl=false` would silently turn the verified TLS off.
+      base = @complete_env["DATABASE_URL"]
+
+      for query <- [
+            "ssl=false",
+            "ssl=true",
+            "SSL=false",
+            "Ssl=FALSE",
+            "sslmode=require&ssl=false"
+          ] do
+        error =
+          assert_raise RuntimeError, fn ->
+            prod_config(%{"DATABASE_URL" => base <> "?" <> query})
+          end
+
+        assert error.message =~ "DATABASE_URL"
+        assert error.message =~ "`ssl`"
+        assert error.message =~ "DATABASE_SSL"
+
+        # The URL holds the password: no part of it may reach the message.
+        for fragment <- ["synthetic", "db.example.test", "alethea_prod", query] do
+          refute error.message =~ fragment, "the error must not echo #{inspect(fragment)}"
+        end
+      end
+    end
+
+    test "the ssl parameter is rejected even with DATABASE_SSL=false" do
+      url = @complete_env["DATABASE_URL"] <> "?ssl=false"
+
+      assert_raise RuntimeError, ~r/DATABASE_URL must not carry an `ssl` query parameter/, fn ->
+        prod_config(%{"DATABASE_URL" => url, "DATABASE_SSL" => "false"})
+      end
+    end
+
+    test "other query parameters are accepted and TLS stays verified" do
+      url = @complete_env["DATABASE_URL"] <> "?sslmode=require&channel_binding=require"
+      repo = prod_config(%{"DATABASE_URL" => url}) |> alethea(Alethea.Repo)
+
+      assert [cacerts: cacerts] = repo[:ssl]
+      assert is_list(cacerts) and cacerts != []
+      assert repo[:url] == url
+    end
+
     test "uses connection settings that tolerate a resuming compute" do
       repo = prod_config() |> alethea(Alethea.Repo)
 

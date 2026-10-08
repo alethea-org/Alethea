@@ -46,7 +46,7 @@ Reconnection uses randomized exponential backoff between 500 ms and 10 s (not co
 - [ ] PostgreSQL 16, the version CI runs with pgvector (`pgvector/pgvector:pg16`). Another major version is untested here.
 - [ ] Create the application role and database **through the Neon console**. Console-created roles may run `CREATE EXTENSION vector`, which the migrations do; a role created with plain SQL may not.
 - [ ] Copy the connection string with connection pooling **turned off**, so the host has no `-pooler` suffix.
-- [ ] Remove the whole query string (`?sslmode=...`) before storing it as `DATABASE_URL`. TLS is already verified by the application, and a `ssl=false` parameter in the URL would override that (see [Known limitations](#known-limitations-and-gaps)).
+- [ ] Store it as `DATABASE_URL`. Neon's `sslmode=require` and `channel_binding=require` parameters may stay: they have no effect, because the application always verifies TLS itself. An `ssl` parameter (any value) is refused: the release command stops with a message naming `DATABASE_URL`, so remove it.
 - [ ] Never reuse development credentials, and never point a development machine at this project.
 
 ## Secrets and environment inventory
@@ -214,6 +214,8 @@ Every deploy migrates, so the normal path is `fly deploy`. Without a deploy:
 fly ssh console -a alethea-prod -C "/app/bin/migrate"
 ```
 
+**Verify before running:** that the SSH session carries the app's secrets (the command needs `DATABASE_URL`); the same unconfirmed assumption as the webhook step.
+
 Never run it while a deploy is in progress: that would be two migration runners at once.
 
 ## Verification checklist (not yet executed)
@@ -232,7 +234,7 @@ Never run it while a deploy is in progress: that would be two migration runners 
 
 ## Known limitations and gaps
 
-- **`ssl=false` in `DATABASE_URL` disables database TLS.** Ecto merges URL parameters over the application's verified TLS setting. Store the URL without a query string.
+- **`DATABASE_URL` must not carry an `ssl` query parameter.** Ecto would let `?ssl=false` override the verified TLS setting, so the application refuses to boot with one. `DATABASE_SSL=false` is the only switch, and it is for local and CI smoke tests only.
 - **Single Machine.** A deploy or a host failure is a short outage; there is no high availability.
 - **Oban dashboard, login abuse protection, MFA, log filtering, retention and key custody** are milestone 2.
 - **Trends are not resumable** after a crash between session close and save.
