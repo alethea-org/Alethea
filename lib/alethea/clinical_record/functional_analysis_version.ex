@@ -22,6 +22,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersion do
     field :encrypted_cited_evidence_baseline, :binary
     field :encryption_version, :integer
     field :version_number, :integer
+    field :source_draft_lock_version, :integer
     field :body, :string, virtual: true, redact: true
     field :change_note, :string, virtual: true, redact: true
     field :cited_evidence_baseline_ids, {:array, :string}, virtual: true, redact: true
@@ -43,6 +44,7 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersion do
       :encrypted_cited_evidence_baseline,
       :encryption_version,
       :version_number,
+      :source_draft_lock_version,
       :draft_id,
       :patient_id,
       :professional_id,
@@ -60,7 +62,11 @@ defmodule Alethea.ClinicalRecord.FunctionalAnalysisVersion do
     ])
     |> validate_number(:version_number, greater_than: 0)
     |> validate_number(:encryption_version, greater_than: 0)
+    |> validate_number(:source_draft_lock_version, greater_than: 0)
     |> unique_constraint([:target_behavior_id, :version_number])
+    |> unique_constraint([:draft_id, :source_draft_lock_version],
+      name: :functional_analysis_versions_draft_revision_index
+    )
     |> foreign_key_constraint(:draft_id, name: :functional_analysis_versions_draft_owner_fkey)
     |> foreign_key_constraint(:target_behavior_id,
       name: :functional_analysis_versions_target_owner_fkey
