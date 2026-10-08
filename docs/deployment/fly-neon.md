@@ -137,13 +137,18 @@ Run from the repository root. `fly.toml` names the app `alethea-prod`; change th
    fly apps create alethea-prod --org <your-org>
    ```
 
-2. **Stage the secrets.** `--stage` stores them without deploying. `fly secrets import` reads `NAME=VALUE` lines from stdin, which keeps values out of shell history:
+2. **Stage the secrets.** `--stage` stores them without deploying. `fly secrets import` reads `NAME=VALUE` lines from stdin, which keeps values out of shell history. Keep the file **outside the repository**: it holds `CLOAK_AES_KEY` and the database connection string, and a file inside the repository directory can be sent to the image builder or committed by accident.
 
    ```sh
-   fly secrets import --stage -a alethea-prod < production.secrets
+   fly secrets import --stage -a alethea-prod < ~/alethea-production.secrets
+   rm ~/alethea-production.secrets
    ```
 
-   The file needs every required secret, the three AI variables with the values that were decided, and the three `TELEGRAM_*` values. Keep it out of the repository and delete it afterwards. `fly secrets set --stage -a alethea-prod NAME=VALUE ...` is the inline equivalent.
+   Better still, write no file and pipe the lines from a password manager (`<your password manager's print command> | fly secrets import --stage -a alethea-prod`).
+
+   The input needs every required secret, the three AI variables with the values that were decided, and the three `TELEGRAM_*` values. Delete the file as soon as the import succeeds. `fly secrets set --stage -a alethea-prod NAME=VALUE ...` is the inline equivalent, but it leaves the values in shell history.
+
+   As a second line of defence, `.gitignore` and `.dockerignore` exclude `*.secrets`, `*.key` and `*.pem`, so a file with one of those names left in the repository is neither committed nor sent to the build. Do not rely on it: a file named differently is not covered.
 
 3. **Deploy one Machine.** `--ha=false` matters on the first deploy: the default creates a spare Machine, and this app runs as exactly one.
 

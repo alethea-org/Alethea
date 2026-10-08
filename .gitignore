@@ -34,6 +34,13 @@ alethea-*.tar
 .env.*
 !.env.example
 
+# Secrets files and key material (for example the `fly secrets import`
+# input described in docs/deployment/fly-neon.md). Keep them outside the
+# repository; these patterns are a second line of defence.
+*.secrets
+*.key
+*.pem
+
 # macOS
 .DS_Store
 
