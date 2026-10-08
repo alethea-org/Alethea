@@ -30,6 +30,13 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   inserted as a unique job keyed by the session id, so neither can
   happen twice. A closed session on a first attempt is still a no-op.
 
+  When the goodbye job already exists the retry checks what became of it
+  (`settle_existing_goodbye/1`): a goodbye that died before reaching the
+  Telegram client is made available again; one that may have been sent,
+  or that was cancelled, is never re-sent and is reported through the
+  `[:alethea, :session_timeout, :goodbye_unresolved]` telemetry event
+  and an error log line, without failing the job.
+
   Known limit: trends carry no session reference, so a retry cannot tell
   whether they were saved and never re-runs the analyzer. Trends are lost
   for a session only when the first attempt dies between closing the
@@ -384,31 +391,37 @@ defmodule AletheaJobs.SessionTimeoutWorker do
   #     @moduledoc "PHI at rest — chat_id in oban_jobs.args").
   #
   # The job is unique per session (issue #402): `session_id` rides in the
-  # args only as the uniqueness key, across every job state and with no
-  # time window, so a retried closure can ask for the goodbye again and
-  # still deliver it once. A later session has another id and gets its own.
+  # args as the uniqueness key, across every job state and with no time
+  # window, so a retried closure can ask for the goodbye again and still
+  # deliver it once. A later session has another id and gets its own. It
+  # also tells the outbound worker to record its send-start marker.
   defp send_goodbye(closed_session, opts, body) when is_list(opts) do
     case Keyword.fetch!(opts, :channel) do
       "telegram" ->
         chat_id = Keyword.fetch!(opts, :chat_id)
         chat_id_hash = Keyword.fetch!(opts, :chat_id_hash)
 
-        TelegramOutboundWorker.new(
-          %{
-            chat_id: chat_id,
-            chat_id_hash: chat_id_hash,
-            body: body,
-            patient_id: nil,
-            session_id: closed_session.id
-          },
-          unique: [
-            fields: [:worker, :args],
-            keys: [:session_id],
-            period: :infinity,
-            states: :all
-          ]
-        )
-        |> Oban.insert!()
+        job =
+          TelegramOutboundWorker.new(
+            %{
+              chat_id: chat_id,
+              chat_id_hash: chat_id_hash,
+              body: body,
+              patient_id: nil,
+              session_id: closed_session.id
+            },
+            unique: [
+              fields: [:worker, :args],
+              keys: [:session_id],
+              period: :infinity,
+              states: :all
+            ]
+          )
+          |> Oban.insert!()
+
+        # A conflict means a goodbye job for this session already exists,
+        # in any state: find out whether it still stands for a delivery.
+        if job.conflict?, do: settle_existing_goodbye(closed_session)
 
         :ok
 
@@ -422,6 +435,95 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
         :ok
     end
+  end
+
+  # A goodbye job already exists for this session. Uniqueness spans every
+  # job state, so the existing job may be dead, and a dead job delivers
+  # nothing. The outbound worker reschedules a failed send as a new job
+  # with the same `session_id`, so the session's goodbye is a chain of
+  # jobs and its state is that of the newest one:
+  #
+  #   * any job still pending or in flight → it will run; nothing to do;
+  #   * newest `completed` → sent, or dead-lettered by the outbound
+  #     worker, which reports that itself; nothing to do;
+  #   * newest `discarded` without the send-start marker → the execution
+  #     never reached the Telegram client (see `TelegramOutboundWorker`,
+  #     "Send-start marker"): the same job is made available again.
+  #     Reviving the row, rather than inserting a replacement, keeps one
+  #     job per attempt chain, so two closures cannot enqueue two sends;
+  #   * newest `discarded` with the marker → the send may have happened.
+  #     A patient must not receive two goodbyes, so it is not re-sent;
+  #   * newest `cancelled` → somebody or something cancelled it on
+  #     purpose; the worker does not undo that.
+  #
+  # The last two are reported as unresolved and left for an operator.
+  @pending_goodbye_states ~w(available scheduled executing retryable)
+
+  defp settle_existing_goodbye(closed_session) do
+    jobs = goodbye_jobs(closed_session)
+
+    if Enum.any?(jobs, &(&1.state in @pending_goodbye_states)) do
+      :ok
+    else
+      settle_newest_goodbye(List.last(jobs), closed_session)
+    end
+  end
+
+  defp settle_newest_goodbye(%Oban.Job{state: "discarded"} = job, closed_session) do
+    if TelegramOutboundWorker.send_started?(job) do
+      report_unresolved_goodbye(closed_session, :send_may_have_started)
+    else
+      :ok = Oban.retry_job(job.id)
+
+      :telemetry.execute(
+        [:alethea, :session_timeout, :goodbye_recovered],
+        %{count: 1},
+        %{session_id: closed_session.id}
+      )
+
+      Logger.warning(
+        "SessionTimeoutWorker: goodbye recovered for session #{closed_session.id} " <>
+          "(reason=failed_before_send)"
+      )
+    end
+  end
+
+  defp settle_newest_goodbye(%Oban.Job{state: "cancelled"}, closed_session),
+    do: report_unresolved_goodbye(closed_session, :cancelled)
+
+  # `completed`, a state this worker does not know, or no job left to
+  # inspect: never a reason to send.
+  defp settle_newest_goodbye(_job, _closed_session), do: :ok
+
+  # An unresolved goodbye does not change the job result. The result is
+  # the summary's, the only step a retry can still complete; retrying
+  # because of the goodbye would find the same dead job and the same
+  # evidence every time. Session id and reason tag only: never the chat
+  # identifiers or the text.
+  defp report_unresolved_goodbye(closed_session, reason) do
+    :telemetry.execute(
+      [:alethea, :session_timeout, :goodbye_unresolved],
+      %{count: 1},
+      %{session_id: closed_session.id, reason: reason}
+    )
+
+    Logger.error(
+      "SessionTimeoutWorker: goodbye unresolved for session #{closed_session.id} " <>
+        "(reason=#{reason})"
+    )
+  end
+
+  defp goodbye_jobs(closed_session) do
+    worker = inspect(TelegramOutboundWorker)
+
+    Alethea.Repo.all(
+      from(j in Oban.Job,
+        where:
+          j.worker == ^worker and
+            fragment("?->>'session_id' = ?", j.args, ^to_string(closed_session.id)),
+        order_by: [asc: j.id]
+      )
+    )
   end
 
   defp decrypt_messages(patient, messages) do

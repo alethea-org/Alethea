@@ -570,6 +570,247 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   # ----------------------------------------------------------------
 
   # ----------------------------------------------------------------
+  # Issue #402 — a goodbye job that ended without delivering.
+  #
+  # The goodbye is unique per session across every job state, so a dead
+  # goodbye job still blocks a new one. A retried closure must tell a
+  # goodbye that is pending or done from one that died, and re-send only
+  # when the dead job provably never reached the Telegram client.
+  # ----------------------------------------------------------------
+
+  describe "goodbye recovery (issue #402)" do
+    alias Alethea.Telegram.Client.Fake
+    alias Alethea.Telegram.Pacer
+
+    @chat_id 987_654_321
+    @chat_id_hash String.duplicate("c", 64)
+
+    setup do
+      previous_client = Application.get_env(:alethea, :telegram_client)
+      Application.put_env(:alethea, :telegram_client, Fake)
+
+      on_exit(fn ->
+        if previous_client do
+          Application.put_env(:alethea, :telegram_client, previous_client)
+        else
+          Application.delete_env(:alethea, :telegram_client)
+        end
+      end)
+
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:alethea, :session_timeout, :goodbye_recovered],
+          [:alethea, :session_timeout, :goodbye_unresolved]
+        ],
+        fn [_, _, event], _measurements, metadata, _config ->
+          send(test_pid, {event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    defp recovery_args(session, patient) do
+      %{
+        session_id: session.id,
+        patient_id: patient.id,
+        channel: "telegram",
+        chat_id: @chat_id,
+        chat_id_hash: @chat_id_hash
+      }
+    end
+
+    # First attempt of the closure: the summary fails, the goodbye is
+    # enqueued. The second attempt will complete the summary.
+    defp close_with_failed_summary(session, patient) do
+      Alethea.AI.SessionSummaryChainMock
+      |> expect(:run, fn _texts, _scores -> {:error, :timeout} end)
+      |> expect(:run, fn _texts, _scores -> {:ok, @summary_text} end)
+
+      capture_log(fn ->
+        assert {:error, :timeout} =
+                 perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 1)
+      end)
+
+      assert [goodbye] = goodbye_jobs()
+      goodbye
+    end
+
+    defp run_goodbye_queue do
+      capture_log(fn -> Oban.drain_queue(queue: :telegram_outbound) end)
+    end
+
+    defp goodbye_sends do
+      Enum.filter(Fake.sends(), &(&1.chat_id == @chat_id))
+    end
+
+    test "a goodbye discarded before the send is recovered exactly once",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      goodbye = close_with_failed_summary(session, patient)
+
+      # The Pacer is not running: the outbound job dies before it reaches
+      # the Telegram client, and its single attempt leaves it discarded.
+      run_goodbye_queue()
+      assert Repo.get!(Oban.Job, goodbye.id).state == "discarded"
+      assert goodbye_sends() == []
+
+      start_supervised!(Pacer)
+
+      # The retried closure completes the summary and revives the goodbye.
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+
+      assert [%Oban.Job{id: recovered_id, state: "available"}] = goodbye_jobs()
+      assert recovered_id == goodbye.id
+      session_id = session.id
+      assert_received {:goodbye_recovered, %{session_id: ^session_id}}
+
+      run_goodbye_queue()
+      assert [%{text: text}] = goodbye_sends()
+      assert text =~ "Tu sesión de hoy ha concluido"
+      assert [%Oban.Job{state: "completed"}] = goodbye_jobs()
+
+      # A further retry finds a delivered goodbye and sends nothing more.
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 3)
+      run_goodbye_queue()
+
+      assert [_single_send] = goodbye_sends()
+      assert [%Oban.Job{state: "completed"}] = goodbye_jobs()
+      refute_received {:goodbye_recovered, _metadata}
+      refute_received {:goodbye_unresolved, _metadata}
+    end
+
+    test "a completed goodbye followed by a retry is not sent again",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      start_supervised!(Pacer)
+      close_with_failed_summary(session, patient)
+
+      run_goodbye_queue()
+      assert [_sent] = goodbye_sends()
+
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+      run_goodbye_queue()
+
+      assert [_single_send] = goodbye_sends()
+      assert [%Oban.Job{state: "completed"}] = goodbye_jobs()
+      refute_received {:goodbye_recovered, _metadata}
+      refute_received {:goodbye_unresolved, _metadata}
+    end
+
+    test "a pending goodbye followed by a retry is neither duplicated nor touched",
+         %{patient: patient, session: session} do
+      goodbye = close_with_failed_summary(session, patient)
+
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+
+      assert [%Oban.Job{id: id, state: "available", attempt: 0}] = goodbye_jobs()
+      assert id == goodbye.id
+      refute_received {:goodbye_recovered, _metadata}
+      refute_received {:goodbye_unresolved, _metadata}
+    end
+
+    test "a goodbye that died after the send started is not re-sent and is reported unresolved",
+         %{patient: patient, session: session} do
+      start_supervised!(Pacer)
+      goodbye = close_with_failed_summary(session, patient)
+
+      # The Telegram client is unreachable: the job dies inside the send
+      # call, after the worker recorded that the send was starting. Nobody
+      # can tell whether a request left, so this is an ambiguous failure.
+      run_goodbye_queue()
+      assert %Oban.Job{state: "discarded", meta: meta} = Repo.get!(Oban.Job, goodbye.id)
+      assert meta["send_started"] == true
+
+      start_supervised!(Fake)
+
+      log =
+        capture_log(fn ->
+          # The summary is the job's result: an unresolved goodbye does
+          # not make the closure retry, because a retry cannot learn more.
+          assert :ok =
+                   perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+        end)
+
+      run_goodbye_queue()
+      assert goodbye_sends() == []
+      assert [%Oban.Job{state: "discarded"}] = goodbye_jobs()
+
+      session_id = session.id
+
+      assert_received {:goodbye_unresolved,
+                       %{session_id: ^session_id, reason: :send_may_have_started} = metadata}
+
+      assert Map.keys(metadata) |> Enum.sort() == [:reason, :session_id]
+      refute_received {:goodbye_recovered, _metadata}
+
+      assert log =~ "goodbye unresolved for session #{session.id}"
+      assert log =~ "reason=send_may_have_started"
+      refute log =~ Integer.to_string(@chat_id)
+      refute log =~ @chat_id_hash
+      refute log =~ "Tu sesión de hoy ha concluido"
+    end
+
+    test "a cancelled goodbye is not re-sent and is reported unresolved",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      start_supervised!(Pacer)
+      goodbye = close_with_failed_summary(session, patient)
+
+      # Cancelling is somebody's decision, not a delivery failure the
+      # worker may undo on its own.
+      :ok = Oban.cancel_job(goodbye.id)
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+        end)
+
+      run_goodbye_queue()
+      assert goodbye_sends() == []
+      assert [%Oban.Job{state: "cancelled"}] = goodbye_jobs()
+
+      session_id = session.id
+      assert_received {:goodbye_unresolved, %{session_id: ^session_id, reason: :cancelled}}
+      assert log =~ "reason=cancelled"
+    end
+
+    test "a discarded retry of the outbound job is recovered, not its completed predecessor",
+         %{patient: patient, session: session} do
+      start_supervised!(Fake)
+      start_supervised!(Pacer)
+      close_with_failed_summary(session, patient)
+
+      # The first send is rejected before delivery, so the outbound worker
+      # completes its job and schedules a retry job of its own.
+      Fake.queue_responses([{:error, :network}])
+      run_goodbye_queue()
+
+      assert [%Oban.Job{state: "completed"}, %Oban.Job{state: "scheduled"} = retry] =
+               Enum.sort_by(goodbye_jobs(), & &1.id)
+
+      # That retry then dies before the send: the Pacer is gone.
+      stop_supervised!(Pacer)
+      capture_log(fn -> Oban.drain_queue(queue: :telegram_outbound, with_scheduled: true) end)
+      assert Repo.get!(Oban.Job, retry.id).state == "discarded"
+
+      start_supervised!(Pacer)
+      assert :ok = perform_job(SessionTimeoutWorker, recovery_args(session, patient), attempt: 2)
+
+      assert Repo.get!(Oban.Job, retry.id).state == "available"
+      run_goodbye_queue()
+      assert [_single_send] = goodbye_sends()
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Issue #402 — a real model failure during the summary.
   #
   # The REAL `SessionSummaryChain` runs here (not the Mox mock), against
