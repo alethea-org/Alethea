@@ -180,11 +180,6 @@ config :alethea, Alethea.AI.Chains.GuidedConversationChain,
   temperature: 0.0,
   max_tokens: 160
 
-# Running summary (#394) uses the same model as the replies it informs,
-# so a single `LLM_MODEL` switches both and they never diverge.
-config :alethea, Alethea.AI.Chains.RunningSummaryChain,
-  model: System.get_env("LLM_MODEL", "phi4-mini")
-
 # Grounded clinical consultation synthesis (#226b). Pinned to `:local`
 # so a `:cloud` provider is structurally impossible (D2 / AD5) —
 # decrypted clinical narrative must never leave the box.

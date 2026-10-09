@@ -3,6 +3,7 @@ defmodule Alethea.Clinical.RunningSummaryScheduleTest do
   use Oban.Testing, repo: Alethea.Repo
 
   import Alethea.FoundationTestHelper
+  import ExUnit.CaptureLog
   import Alethea.RunningSummaryHelper
 
   alias Alethea.Accounts
@@ -111,6 +112,57 @@ defmodule Alethea.Clinical.RunningSummaryScheduleTest do
       assert :ok = RunningSummary.schedule_if_due("not-a-uuid", "abcd1234")
       assert :ok = RunningSummary.schedule_if_due(Ecto.UUID.generate(), "abcd1234")
       assert jobs() == []
+    end
+  end
+
+  describe "enabled?/0 (#394 provider pin)" do
+    test "is true when the local endpoint resolves" do
+      assert RunningSummary.enabled?()
+    end
+
+    test "is false without a local endpoint, whatever the guided provider" do
+      disable_local_endpoint()
+      Application.put_env(:alethea, Alethea.AI.Chains.GuidedConversationChain, provider: :cloud)
+
+      refute RunningSummary.enabled?()
+    end
+
+    test "is false for a blank local endpoint" do
+      disable_local_endpoint()
+      Application.put_env(:alethea, Alethea.AI.LLMConfig, local: [endpoint_url: "   "])
+
+      refute RunningSummary.enabled?()
+    end
+
+    test "disabled: ten inbounds enqueue nothing and the call still returns :ok", ctx do
+      seed(ctx.patient, ctx.dek, 1..10)
+      disable_local_endpoint()
+
+      assert :ok = RunningSummary.schedule_if_due(ctx.patient.id, "abcd1234")
+      assert jobs() == []
+
+      # The same ten inbounds do enqueue once the endpoint is back.
+      Application.put_env(:alethea, :env, :test)
+      assert :ok = RunningSummary.schedule_if_due(ctx.patient.id, "abcd1234")
+      assert [_one] = jobs()
+    end
+  end
+
+  describe "log_boot_status/0 (#394 provider pin)" do
+    test "logs once that the summary is disabled, naming no patient data" do
+      disable_local_endpoint()
+
+      log = capture_log(fn -> assert :ok = RunningSummary.log_boot_status() end)
+
+      assert log =~ "running summary disabled"
+      assert log =~ "no local LLM endpoint"
+      assert length(String.split(log, "running summary disabled")) == 2
+    end
+
+    test "logs nothing while the local endpoint resolves" do
+      log = capture_log(fn -> assert :ok = RunningSummary.log_boot_status() end)
+
+      refute log =~ "running summary"
     end
   end
 

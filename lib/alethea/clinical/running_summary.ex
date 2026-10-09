@@ -14,6 +14,7 @@ defmodule Alethea.Clinical.RunningSummary do
   require Logger
 
   alias Alethea.Accounts.Patient
+  alias Alethea.AI.LLMConfig
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
   alias Alethea.Clinical.RunningSummary.Snapshot
@@ -36,14 +37,44 @@ defmodule Alethea.Clinical.RunningSummary do
         }
 
   @doc """
+  True iff the running summary can run: its chain is pinned to the local
+  provider, so it needs a non-blank local LLM endpoint
+  (`LOCAL_LLM_BASE_URL`). Production has no localhost default.
+  """
+  @spec enabled?() :: boolean()
+  def enabled? do
+    case LLMConfig.get(:running_summary).endpoint_url do
+      url when is_binary(url) -> String.trim(url) != ""
+      _ -> false
+    end
+  end
+
+  @doc """
+  Logs once, at boot, that the summary is disabled for lack of a local LLM
+  endpoint. Logs nothing while it is enabled; carries no patient data.
+  """
+  @spec log_boot_status() :: :ok
+  def log_boot_status do
+    if not enabled?() do
+      Logger.warning(
+        "RunningSummary: running summary disabled, no local LLM endpoint is configured " <>
+          "(set LOCAL_LLM_BASE_URL); no summary jobs will be enqueued"
+      )
+    end
+
+    :ok
+  end
+
+  @doc """
   Enqueues a `RunningSummaryWorker` job when the patient's persisted inbound
   count is at least #{@batch} ahead of the stored row (or the row must be
-  reset). Never raises: any failure is logged as an atom and swallowed so the
-  inbound pipeline is unaffected.
+  reset), and only while `enabled?/0`. Never raises: any failure is logged as
+  an atom and swallowed so the inbound pipeline is unaffected.
   """
   @spec schedule_if_due(Ecto.UUID.t(), String.t()) :: :ok
   def schedule_if_due(patient_id, hash_prefix) do
-    with %Patient{} = patient <- Repo.get(Patient, patient_id),
+    with true <- enabled?(),
+         %Patient{} = patient <- Repo.get(Patient, patient_id),
          {decision, _count, _row} when decision != :not_due <- assess(patient),
          {:error, _} <- Oban.insert(RunningSummaryWorker.new(%{"patient_id" => patient.id})) do
       warn(:enqueue_failed, hash_prefix)

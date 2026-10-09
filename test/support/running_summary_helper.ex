@@ -11,6 +11,34 @@ defmodule Alethea.RunningSummaryHelper do
   @base ~U[2026-01-01 00:00:00Z]
 
   @doc """
+  Resolves the running summary to "no local LLM endpoint" the way production
+  does (no localhost default, no configured endpoint) until the test exits.
+  """
+  def disable_local_endpoint do
+    keys = [
+      :env,
+      Alethea.AI.LLMConfig,
+      Alethea.AI.Chains.GuidedConversationChain,
+      Alethea.AI.Chains.RunningSummaryChain
+    ]
+
+    previous = Map.new(keys, &{&1, Application.fetch_env(:alethea, &1)})
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:alethea, key, value)
+        {key, :error} -> Application.delete_env(:alethea, key)
+      end)
+    end)
+
+    llm = Application.get_env(:alethea, Alethea.AI.LLMConfig, [])
+    Application.put_env(:alethea, :env, :prod)
+    Application.put_env(:alethea, Alethea.AI.LLMConfig, Keyword.put(llm, :local, []))
+    Application.delete_env(:alethea, Alethea.AI.Chains.RunningSummaryChain)
+    :ok
+  end
+
+  @doc """
   Saves inbound turns `range` (content `"paciente N"`), each followed one
   second later by an outbound `"alethea N"` reply. Returns the inbounds.
   """

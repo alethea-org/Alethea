@@ -9,7 +9,12 @@ defmodule Alethea.ProductionRuntimeConfigTest do
 
   use ExUnit.Case, async: false
 
-  alias Alethea.AI.Chains.{ClinicalConsultationChain, GuidedConversationChain}
+  alias Alethea.AI.Chains.{
+    ClinicalConsultationChain,
+    GuidedConversationChain,
+    RunningSummaryChain
+  }
+
   alias Alethea.AI.{Embeddings, EmotionAnalyzer, LLMConfig, Whisper}
 
   @managed_env ~w(
@@ -273,6 +278,58 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     end
   end
 
+  describe "running summary provider pin (#394)" do
+    test "with a local provider it shares the guided provider, model and endpoint" do
+      config = prod_config(%{"LLM_MODEL" => "synthetic-local-model"})
+
+      summary = alethea(config, RunningSummaryChain)
+      guided = alethea(config, GuidedConversationChain)
+
+      assert summary[:provider] == :local
+      assert summary[:model] == "synthetic-local-model"
+      assert summary[:provider] == guided[:provider]
+      assert summary[:model] == guided[:model]
+      assert resolved(config, :running_summary).endpoint_url == "http://llm.internal.test:11434"
+    end
+
+    test "with a local provider and no LLM_MODEL it keeps the compiled local default" do
+      summary = prod_config() |> alethea(RunningSummaryChain)
+
+      assert summary[:provider] == :local
+      refute Keyword.has_key?(summary, :model)
+    end
+
+    test "with the hosted provider it stays on the local provider and local model" do
+      config =
+        prod_config(cloud_env(%{"LOCAL_LLM_BASE_URL" => "http://llm.internal.test:11434"}))
+
+      assert alethea(config, GuidedConversationChain)[:provider] == :cloud
+
+      summary = alethea(config, RunningSummaryChain)
+      assert summary[:provider] == :local
+      refute Keyword.has_key?(summary, :model)
+
+      resolved = resolved(config, :running_summary)
+      assert resolved.provider == :local
+      assert resolved.model == "phi4-mini"
+      refute resolved.model == "synthetic-hosted-model"
+      assert resolved.endpoint_url == "http://llm.internal.test:11434"
+      assert resolved.api_key == nil
+    end
+
+    test "with the hosted provider and no local endpoint it resolves to not configured" do
+      config = prod_config(cloud_env())
+
+      assert alethea(config, RunningSummaryChain)[:provider] == :local
+
+      resolved = resolved(config, :running_summary)
+      assert resolved.provider == :local
+      assert resolved.endpoint_url == nil
+      assert {:error, reason} = LLMConfig.build_llm(resolved)
+      assert reason =~ "not configured"
+    end
+  end
+
   describe "capability switches" do
     test "each switch must be set explicitly to true or false" do
       for name <- ["EMOTION_ANALYZER_ENABLED", "EMBEDDINGS_ENABLED"] do
@@ -444,6 +501,32 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       Enum.each(original, fn
         {key, nil} -> System.delete_env(key)
         {key, value} -> System.put_env(key, value)
+      end)
+    end
+  end
+
+  # What `LLMConfig` resolves for `chain` from the evaluated prod config, as a
+  # booted release would see it (production has no localhost default).
+  defp resolved(config, chain) do
+    alethea = Keyword.fetch!(config, :alethea)
+    keys = [:env, LLMConfig, GuidedConversationChain, RunningSummaryChain]
+    previous = Map.new(keys, &{&1, Application.fetch_env(:alethea, &1)})
+
+    try do
+      Application.put_env(:alethea, :env, :prod)
+
+      for key <- tl(keys) do
+        case Keyword.fetch(alethea, key) do
+          {:ok, value} -> Application.put_env(:alethea, key, value)
+          :error -> Application.delete_env(:alethea, key)
+        end
+      end
+
+      LLMConfig.get(chain)
+    after
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:alethea, key, value)
+        {key, :error} -> Application.delete_env(:alethea, key)
       end)
     end
   end

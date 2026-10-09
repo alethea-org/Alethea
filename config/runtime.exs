@@ -16,6 +16,13 @@ if config_env() == :dev do
   config :alethea, Alethea.Repo, url: dev_db_url
   config :alethea, :dev_database_source, dev_db_source
 
+  # The running summary (#394) follows the guided chain's local model
+  # (LLM_MODEL) and the local endpoint set in config/dev.exs.
+  config :alethea,
+         Alethea.AI.Chains.RunningSummaryChain,
+         [provider: :local] ++
+           if(model = System.get_env("LLM_MODEL"), do: [model: model], else: [])
+
   telegram_client =
     case System.get_env("TELEGRAM_CLIENT_ADAPTER") do
       "req" -> Alethea.Telegram.Client.Req
@@ -339,6 +346,17 @@ if config_env() == :prod do
   config :alethea,
          Alethea.AI.Chains.GuidedConversationChain,
          [provider: ai_provider] ++ if(llm_model, do: [model: llm_model], else: [])
+
+  # The running summary (#394) is pinned to the local provider whatever
+  # AI_PROVIDER says, so clinical narrative never reaches a hosted model. It
+  # shares the guided model only while that chain is local too; otherwise it
+  # keeps the compiled local default, never the hosted model name. Without
+  # LOCAL_LLM_BASE_URL it has no endpoint and stays disabled
+  # (`Alethea.Clinical.RunningSummary.enabled?/0`).
+  config :alethea,
+         Alethea.AI.Chains.RunningSummaryChain,
+         [provider: :local] ++
+           if(ai_provider == :local and llm_model, do: [model: llm_model], else: [])
 
   # ## AI capability switches (issue #402)
   #

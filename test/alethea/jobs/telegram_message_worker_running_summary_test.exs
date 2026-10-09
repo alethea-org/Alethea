@@ -15,7 +15,9 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
   import Ecto.Query
   import ExUnit.CaptureLog
   import Alethea.FoundationTestHelper
-  import Alethea.RunningSummaryHelper, only: [valid_summary: 0, put_row: 7]
+
+  import Alethea.RunningSummaryHelper,
+    only: [valid_summary: 0, put_row: 7, disable_local_endpoint: 0]
 
   alias Alethea.Accounts.AuditLog
   alias Alethea.AI.PhiWorkerMock
@@ -76,6 +78,15 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
       assert log =~ "RunningSummary: schedule_if_due failed"
       assert all_enqueued(worker: RunningSummaryWorker) == []
       assert Repo.aggregate(inbounds(ctx), :count) == 10
+    end
+
+    test "the tenth inbound enqueues nothing while the summary is disabled (no local endpoint)" do
+      inbound(1..9)
+      disable_local_endpoint()
+
+      assert :ok = perform("mensaje 10", 10)
+
+      assert all_enqueued(worker: RunningSummaryWorker) == []
     end
 
     test "the summary produces no delivery job of its own" do
