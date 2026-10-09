@@ -16,6 +16,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
   }
 
   alias Alethea.AI.{Embeddings, EmotionAnalyzer, LLMConfig, Whisper}
+  alias Alethea.Clinical.RunningSummary
 
   @managed_env ~w(
     DATABASE_URL DATABASE_SSL POOL_SIZE ECTO_IPV6
@@ -317,6 +318,16 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       assert resolved.api_key == nil
     end
 
+    test "the summary is enabled only while replies use the local provider (REQ-22)" do
+      local = prod_config()
+      hosted = prod_config(cloud_env(%{"LOCAL_LLM_BASE_URL" => "http://llm.internal.test:11434"}))
+      hosted_no_local = prod_config(cloud_env())
+
+      assert under_config(local, &RunningSummary.enabled?/0)
+      refute under_config(hosted, &RunningSummary.enabled?/0)
+      refute under_config(hosted_no_local, &RunningSummary.enabled?/0)
+    end
+
     test "with the hosted provider and no local endpoint it resolves to not configured" do
       config = prod_config(cloud_env())
 
@@ -507,7 +518,10 @@ defmodule Alethea.ProductionRuntimeConfigTest do
 
   # What `LLMConfig` resolves for `chain` from the evaluated prod config, as a
   # booted release would see it (production has no localhost default).
-  defp resolved(config, chain) do
+  defp resolved(config, chain), do: under_config(config, fn -> LLMConfig.get(chain) end)
+
+  # Runs `fun` with the evaluated prod config applied to the application env.
+  defp under_config(config, fun) do
     alethea = Keyword.fetch!(config, :alethea)
     keys = [:env, LLMConfig, GuidedConversationChain, RunningSummaryChain]
     previous = Map.new(keys, &{&1, Application.fetch_env(:alethea, &1)})
@@ -522,7 +536,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
         end
       end
 
-      LLMConfig.get(chain)
+      fun.()
     after
       Enum.each(previous, fn
         {key, {:ok, value}} -> Application.put_env(:alethea, key, value)

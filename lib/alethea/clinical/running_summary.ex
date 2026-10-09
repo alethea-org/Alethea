@@ -37,33 +37,51 @@ defmodule Alethea.Clinical.RunningSummary do
         }
 
   @doc """
-  True iff the running summary can run: its chain is pinned to the local
-  provider, so it needs a non-blank local LLM endpoint
-  (`LOCAL_LLM_BASE_URL`). Production has no localhost default.
+  True iff the running summary can run and may be used: its chain is pinned
+  to the local provider, so it needs a non-blank local LLM endpoint
+  (`LOCAL_LLM_BASE_URL`; production has no localhost default), and the
+  guided (reply) chain must also resolve to the local provider. With a hosted
+  reply provider the stored summary would travel to the hosted model inside
+  the reply request, so it is neither generated nor attached (REQ-22).
   """
   @spec enabled?() :: boolean()
-  def enabled? do
+  def enabled?, do: local_endpoint?() and local_replies?()
+
+  @doc """
+  Logs once, at boot, that the summary is disabled and why: no local LLM
+  endpoint, or replies using a hosted provider. Logs nothing while it is
+  enabled; carries no patient data.
+  """
+  @spec log_boot_status() :: :ok
+  def log_boot_status do
+    cond do
+      not local_endpoint?() ->
+        Logger.warning(
+          "RunningSummary: running summary disabled, no local LLM endpoint is configured " <>
+            "(set LOCAL_LLM_BASE_URL); no summary jobs will be enqueued"
+        )
+
+      not local_replies?() ->
+        Logger.warning(
+          "RunningSummary: running summary disabled, replies use a hosted provider " <>
+            "(AI_PROVIDER=cloud); no summary jobs will be enqueued"
+        )
+
+      true ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp local_endpoint? do
     case LLMConfig.get(:running_summary).endpoint_url do
       url when is_binary(url) -> String.trim(url) != ""
       _ -> false
     end
   end
 
-  @doc """
-  Logs once, at boot, that the summary is disabled for lack of a local LLM
-  endpoint. Logs nothing while it is enabled; carries no patient data.
-  """
-  @spec log_boot_status() :: :ok
-  def log_boot_status do
-    if not enabled?() do
-      Logger.warning(
-        "RunningSummary: running summary disabled, no local LLM endpoint is configured " <>
-          "(set LOCAL_LLM_BASE_URL); no summary jobs will be enqueued"
-      )
-    end
-
-    :ok
-  end
+  defp local_replies?, do: LLMConfig.get(:guided_conversation).provider == :local
 
   @doc """
   Enqueues a `RunningSummaryWorker` job when the patient's persisted inbound

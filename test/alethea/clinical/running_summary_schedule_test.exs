@@ -120,6 +120,21 @@ defmodule Alethea.Clinical.RunningSummaryScheduleTest do
       assert RunningSummary.enabled?()
     end
 
+    test "is false while replies use the hosted provider, even with a local endpoint" do
+      use_hosted_replies()
+
+      assert is_binary(Alethea.AI.LLMConfig.get(:running_summary).endpoint_url)
+      refute RunningSummary.enabled?()
+    end
+
+    test "hosted replies: ten inbounds enqueue nothing", ctx do
+      seed(ctx.patient, ctx.dek, 1..10)
+      use_hosted_replies()
+
+      assert :ok = RunningSummary.schedule_if_due(ctx.patient.id, "abcd1234")
+      assert jobs() == []
+    end
+
     test "is false without a local endpoint, whatever the guided provider" do
       disable_local_endpoint()
       Application.put_env(:alethea, Alethea.AI.Chains.GuidedConversationChain, provider: :cloud)
@@ -156,7 +171,18 @@ defmodule Alethea.Clinical.RunningSummaryScheduleTest do
 
       assert log =~ "running summary disabled"
       assert log =~ "no local LLM endpoint"
+      refute log =~ "hosted provider"
       assert length(String.split(log, "running summary disabled")) == 2
+    end
+
+    test "names the hosted reply provider as the reason when a local endpoint exists" do
+      use_hosted_replies()
+
+      log = capture_log(fn -> assert :ok = RunningSummary.log_boot_status() end)
+
+      assert log =~ "running summary disabled"
+      assert log =~ "replies use a hosted provider"
+      refute log =~ "no local LLM endpoint"
     end
 
     test "logs nothing while the local endpoint resolves" do

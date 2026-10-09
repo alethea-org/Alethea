@@ -17,7 +17,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
   import Alethea.FoundationTestHelper
 
   import Alethea.RunningSummaryHelper,
-    only: [valid_summary: 0, put_row: 7, disable_local_endpoint: 0]
+    only: [valid_summary: 0, put_row: 7, disable_local_endpoint: 0, use_hosted_replies: 0]
 
   alias Alethea.Accounts.AuditLog
   alias Alethea.AI.PhiWorkerMock
@@ -244,6 +244,36 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
       {:ok, dek} = Clinical.patient_dek(ctx.legacy_patient)
       refute inspect(payload) =~ Base.encode64(dek)
       refute inspect(job.args) =~ Base.encode64(dek)
+    end
+  end
+
+  describe "hosted reply mode (REQ-22)" do
+    test "a stored summary is never sent to the hosted model, never decrypted, never audited",
+         ctx do
+      store_row(ctx, valid_summary())
+      use_hosted_replies()
+      before = audit_reasons(ctx)
+
+      payload = reply_payload("mensaje 1", 1)
+
+      assert payload |> Map.keys() |> Enum.sort() == [:history, :message_id, :sanitized_content]
+      refute "running_summary_loading" in (audit_reasons(ctx) -- before)
+    end
+
+    test "ten inbounds enqueue no summary job while replies use the hosted model" do
+      use_hosted_replies()
+
+      inbound(1..10)
+
+      assert all_enqueued(worker: RunningSummaryWorker) == []
+    end
+
+    test "the same stored summary is attached once replies are local again", ctx do
+      store_row(ctx, valid_summary())
+
+      payload = reply_payload("mensaje 1", 1)
+
+      assert payload.summary == valid_summary()
     end
   end
 

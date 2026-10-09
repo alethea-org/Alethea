@@ -39,6 +39,25 @@ defmodule Alethea.RunningSummaryHelper do
   end
 
   @doc """
+  Makes the guided (reply) chain resolve to the hosted provider, leaving the
+  local endpoint untouched, until the test exits.
+  """
+  def use_hosted_replies do
+    key = Alethea.AI.Chains.GuidedConversationChain
+    previous = Application.fetch_env(:alethea, key)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:alethea, key, value)
+        :error -> Application.delete_env(:alethea, key)
+      end
+    end)
+
+    Application.put_env(:alethea, key, provider: :cloud)
+    :ok
+  end
+
+  @doc """
   Saves inbound turns `range` (content `"paciente N"`), each followed one
   second later by an outbound `"alethea N"` reply. Returns the inbounds.
   """
