@@ -152,4 +152,13 @@ defmodule Alethea.AI.JournalingPromptTest do
       end
     end
   end
+
+  # #393 S2: only the constants are added in this slice (S4 rewrites the
+  # prompt text itself), so `markers/0`'s contract is the sole addition
+  # under test here.
+  describe "markers/0" do
+    test "exposes the new-situation and same-situation markers" do
+      assert JournalingPrompt.markers() == %{new: "<<NUEVO>>", same: "<<SIGUE>>"}
+    end
+  end
 end

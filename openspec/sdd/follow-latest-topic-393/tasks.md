@@ -41,14 +41,16 @@ Per-slice trim lever (apply BEFORE requesting size exception): table-drive repet
 
 ## Phase 2: S2 Pure rules + fallback (Marker Signal, Question Limit, Post-Closing)
 
-- [ ] 2.1 Branch `-pr2` from S1; re-verify design anchors (`clinical.ex`, `journaling_fallback.ex`) vs branch state.
-- [ ] 2.2 `journaling_prompt.ex`: add `@new_marker`/`@same_marker` + `markers/0` only (no prompt text change).
-- [ ] 2.3 RED `journaling_fallback_test.exs`: closing/ack copy passes `JournalingOutputGuard`, no `?`/`¿`; `variants/0` still 4.
-- [ ] 2.4 GREEN `@closing_invitations`, `@acknowledgements`, `closing_for_inbound/1`, `acknowledgement_for_inbound/1` (`:erlang.phash2`).
-- [ ] 2.5 RED `topic_exploration_test.exs`: `parse_marker/1` cases (leading, same-line, own-line, lowercase, spaced, misplaced, malformed, unclosed, missing, marker-only "").
-- [ ] 2.6 GREEN `lib/alethea/telegram/topic_exploration.ex` `parse_marker/1` per design §1 regexes.
-- [ ] 2.7 RED `mode/1` + `enforce/4` table (design §3 four rows, `model_version` swap, `:exploration` map); GREEN implement.
-- [ ] 2.8 Trim lever: table-drive 2.5/2.7; `mix precommit`.
+- [x] 2.1 Branch `-pr2` from S1; re-verify design anchors (`clinical.ex`, `journaling_fallback.ex`) vs branch state.
+- [x] 2.2 `journaling_prompt.ex`: add `@new_marker`/`@same_marker` + `markers/0` only (no prompt text change).
+- [x] 2.3 RED `journaling_fallback_test.exs`: closing/ack copy passes `JournalingOutputGuard`, no `?`/`¿`; `variants/0` still 4.
+- [x] 2.4 GREEN `@closing_invitations`, `@acknowledgements`, `closing_for_inbound/1`, `acknowledgement_for_inbound/1` (`:erlang.phash2`).
+- [x] 2.5 RED `topic_exploration_test.exs`: `parse_marker/1` cases (leading, same-line, own-line, lowercase, spaced, misplaced, malformed, unclosed, missing, marker-only "").
+- [x] 2.6 GREEN `lib/alethea/telegram/topic_exploration.ex` `parse_marker/1` per design §1 regexes.
+- [x] 2.7 RED `mode/1` + `enforce/4` table (design §3 four rows, `model_version` swap, `:exploration` map); GREEN implement.
+- [x] 2.8 Trim lever: table-drive 2.5/2.7; `mix precommit`.
+
+**S2 status (2026-10-09): all 8 tasks done.** Focused suites green: `topic_exploration_test.exs` (22), `journaling_fallback_test.exs` (10), `journaling_prompt_test.exs` (16) — 48 total. Broader regression (`test/alethea/telegram/ test/alethea/ai/journaling_prompt_test.exs test/alethea/ai/journaling_output_guard_test.exs test/alethea/jobs/`) → 400 passed, 0 failures — confirms zero observable behavior change (nothing in production code calls `TopicExploration` or the new fallback/marker functions yet). `mix compile --warnings-as-errors` clean. `mix format --check-formatted` clean. Diff vs `feat/393-follow-latest-topic` (S1's branch) for S2's own code (excluding the pre-existing untracked `.gga`): 6 files, +435/-0 — ~35 lines (~9%) over the 400-line guard after the table-drive trim lever was applied; flagged to the orchestrator rather than self-granted as `size:exception`. Not committed — left staged-free in the working tree for the orchestrator.
 
 ## Phase 3: S3 Wiring (Marker Signal, Request Contract, Limit)
 
