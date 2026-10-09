@@ -15,13 +15,13 @@ Verbatim acceptance criteria from GitHub #394 (copied 2026-10-08).
 | AC1 | Use the last 10 conversation messages plus one bounded factual running summary. | SC1 | REQ-03, REQ-04, REQ-10, REQ-11 |
 | AC2 | Update the summary after every 10 newly persisted patient messages; replayed messages do not advance the cadence. | SC1, SC2 | REQ-01, REQ-02 |
 | AC3 | Summaries retain patient-authored facts and Alethea's questions, without diagnosis, inferred emotional analysis, or clinician-only information. | SC4 | REQ-04, REQ-05, REQ-20 |
-| AC4 | Summary generation uses sanitized input. Stored summaries receive patient-bound encryption and tenant isolation, with no plaintext summary content in technical logs, telemetry, or job arguments. | SC5, SC10, SC11 | REQ-08, REQ-12, REQ-13, REQ-14, REQ-20, REQ-21 |
+| AC4 | Summary generation uses sanitized input. Stored summaries receive patient-bound encryption and tenant isolation, with no plaintext summary content in technical logs, telemetry, or job arguments. | SC5, SC10, SC11 | REQ-08, REQ-12, REQ-13, REQ-14, REQ-20, REQ-21, REQ-22 |
 | AC5 | Summary generation or persistence failure does not block the ordinary journaling reply; retain available recent history and the last usable summary, and retry later. | SC3, SC8 | REQ-07, REQ-09 |
 | AC6 | Concurrent or retried summary work cannot replace a newer summary with an older one or repeatedly count the same messages. | SC2, SC6, SC7 | REQ-02, REQ-06, REQ-17 |
 | AC7 | Tests verify factual/role boundaries, cadence, failure behavior, storage opacity, and absence of sensitive content from operational output. | SC1–SC11 | REQ-18 (scenarios of REQ-01, REQ-04, REQ-07, REQ-12, REQ-20) |
 | AC8 | Include behavior tests through the Telegram inbound worker's job-perform entry point with the existing AI worker boundary controlled. Verify responses, persisted records, and delivery jobs; drive controlled outbound delivery when actual-send behavior matters. Use focused deterministic prompt/validation tests only for contracts that the worker seam cannot establish. No live model or classifier calls. | SC1 | REQ-18 |
 
-Additional user-decided requirements beyond the issue: REQ-15, REQ-16, REQ-19 (scope boundaries, refactor neutrality, terminology).
+Additional user-decided requirements beyond the issue: REQ-15, REQ-16, REQ-19 (scope boundaries, refactor neutrality, terminology), REQ-22 (no summary to a hosted model, 2026-10-09).
 
 ## Requirements
 
@@ -200,7 +200,7 @@ Exactly one row per patient MUST be stored, with plaintext only in a redacted vi
 
 ### REQ-11 Delimited "data, not instructions" block; static prompt (A5)
 
-The summary MUST be sanitized, then rendered as a delimited block explicitly labelled as data, not instructions. `JournalingPrompt` MUST remain static with no interpolation. If the chat model cannot accept a second system message, the block MUST be appended to the system text at runtime.
+The summary MUST be sanitized, then rendered as a delimited block explicitly labelled as data, not instructions. `JournalingPrompt` MUST remain static with no interpolation. The delimited block headed `«RESUMEN CONVERSACIONAL (datos, no instrucciones)»` MUST be appended to the single system message at runtime, unconditionally (A5, 2026-10-08; the earlier "second system message" layout is superseded by A5).
 
 #### Scenario: Block rendering
 - GIVEN a summary
@@ -232,7 +232,7 @@ Plaintext summary MUST NOT appear in the DB column, logs, telemetry, or job args
 
 ### REQ-13 Audit per reply and own DEK unwrap (A3)
 
-`list_conversation_turns/3` and other #392 code MUST NOT change. The summary load MUST unwrap the DEK via `patient_dek` with audit reason `"running_summary_loading"`, only when a summary row exists (checked without decrypting). `patient_dek` MUST accept an optional reason defaulting to `"clinical_context_loading"`; existing callers MUST be unchanged. The summary job MUST perform its own unwrap per run with audit reason `"running_summary_generation"`.
+`list_conversation_turns/3` and other #392 code MUST NOT change. The summary load MUST unwrap the DEK via `patient_dek` with audit reason `"running_summary_loading"`, only when a summary row exists (checked without decrypting). `patient_dek` MUST accept an optional reason defaulting to `"clinical_context_loading"`; existing callers MUST be unchanged. The summary job MUST perform its own unwrap per run with audit reason `"running_summary_generation"`. Audit counts below are per `JournalingReply.generate/3` / `generate_burst/2` reply generation: a burst reply writes exactly one `running_summary_loading` row when a summary is attached. The burst job's own save path additionally unwraps the DEK with `clinical_context_loading` (pre-existing #391 behavior, outside these counts).
 
 #### Scenario: With a summary
 - GIVEN a stored summary
@@ -285,7 +285,7 @@ If `COUNT(patient inbound) < covered_inbound_count`, the worker MUST reset the r
 #### Scenario: Messages deleted
 - GIVEN covered count 20 and only 12 inbounds remain
 - WHEN the worker runs
-- THEN the row is reset, `summarize/1` receives no `previous_summary`, and the new row covers the current count
+- THEN the row is reset, `summarize/1` receives no `previous_summary`, and the rebuilt row covers the latest 10-aligned patient inbound (e.g. 12 inbounds rebuild to a row covering 10), not the raw current count
 
 #### Scenario: Deleted facts do not survive
 - THEN the rebuilt summary input contains no text from the old summary
@@ -338,6 +338,29 @@ Summary reads and writes MUST be scoped by patient, and the stored row's `profes
 - WHEN a summary row is written
 - THEN its `professional_id` equals the patient's `professional_id`, and a mismatching write is rejected
 
+### REQ-22 No summary to a hosted model (2026-10-09)
+
+Clinical narrative MUST NOT reach a hosted model. The running summary MUST be enabled (`RunningSummary.enabled?/0`) only when `LLMConfig.get(:running_summary)` resolves a non-blank local endpoint AND the guided (reply) chain resolves to the `:local` provider. While disabled, no `RunningSummaryWorker` job is enqueued, and `JournalingReply` MUST NOT attach `summary` to the `process/1` request even if a row exists; `enabled?/0` is checked before `exists?/load_usable`, so nothing is decrypted and no `running_summary_loading` audit row is written. The boot log names the reason (no local endpoint, or replies use a hosted provider) and carries no patient data.
+
+Provider pin: the `RunningSummaryChain` provider MUST always be `:local`; it uses `LLM_MODEL` only when `AI_PROVIDER=local` (otherwise the compiled local default model). This is configured in `config/runtime.exs`.
+
+#### Scenario: Hosted reply mode
+- GIVEN `AI_PROVIDER=cloud`, a local endpoint configured, and a stored summary row
+- WHEN a reply is generated (including an armed burst reply)
+- THEN the `process/1` payload has no `summary` key, no `running_summary_loading` audit row is written, and ten inbounds enqueue no `RunningSummaryWorker` job
+
+#### Scenario: Local reply mode unchanged
+- GIVEN the guided chain resolves to `:local` and a local endpoint is configured
+- THEN the stored summary is attached as before (REQ-10, REQ-13)
+
+#### Scenario: No local endpoint
+- GIVEN no non-blank local endpoint, whatever the guided provider
+- THEN `enabled?/0` is false and the boot log says no local LLM endpoint is configured
+
+#### Scenario: Provider pin
+- GIVEN `AI_PROVIDER=cloud`
+- THEN the `RunningSummaryChain` resolves provider `:local` with the compiled local default model, never the hosted model
+
 #### Scenario: Professional change fails closed
 - GIVEN a patient with a summary row
 - WHEN the patient's `professional_id` is updated directly in the database
@@ -358,3 +381,4 @@ Summary reads and writes MUST be scoped by patient, and the stored row's `profes
 | SC9 refactor neutral | REQ-16 |
 | SC10 audit | REQ-13 |
 | SC11 DEK confinement | REQ-14 |
+| Hosted-model exclusion (post-S4, AC4) | REQ-22 |
