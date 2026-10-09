@@ -338,6 +338,11 @@ Summary reads and writes MUST be scoped by patient, and the stored row's `profes
 - WHEN a summary row is written
 - THEN its `professional_id` equals the patient's `professional_id`, and a mismatching write is rejected
 
+#### Scenario: Professional change fails closed
+- GIVEN a patient with a summary row
+- WHEN the patient's `professional_id` is updated directly in the database
+- THEN the update is rejected by the composite foreign key (reassignment requires deleting the summary first)
+
 ### REQ-22 No summary to a hosted model (2026-10-09)
 
 Clinical narrative MUST NOT reach a hosted model. The running summary MUST be enabled (`RunningSummary.enabled?/0`) only when `LLMConfig.get(:running_summary)` resolves a non-blank local endpoint AND the guided (reply) chain resolves to the `:local` provider. While disabled, no `RunningSummaryWorker` job is enqueued, and `JournalingReply` MUST NOT attach `summary` to the `process/1` request even if a row exists; `enabled?/0` is checked before `exists?/load_usable`, so nothing is decrypted and no `running_summary_loading` audit row is written. The boot log names the reason (no local endpoint, or replies use a hosted provider) and carries no patient data.
@@ -360,11 +365,6 @@ Provider pin: the `RunningSummaryChain` provider MUST always be `:local`; it use
 #### Scenario: Provider pin
 - GIVEN `AI_PROVIDER=cloud`
 - THEN the `RunningSummaryChain` resolves provider `:local` with the compiled local default model, never the hosted model
-
-#### Scenario: Professional change fails closed
-- GIVEN a patient with a summary row
-- WHEN the patient's `professional_id` is updated directly in the database
-- THEN the update is rejected by the composite foreign key (reassignment requires deleting the summary first)
 
 ## Success-criteria coverage
 

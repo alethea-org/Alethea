@@ -91,6 +91,8 @@ Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting 
 - [x] 4.8 Regression: `guardrails_test.exs:125` (3 keys) and the S0 crisis tests stay green and unedited. REQ-10, REQ-16.
 - [x] 4.9 MANUAL GATE (before opening PR5; not automatable): run phi4-mini locally with the two-system-message layout on three cases. (1) Normal summary: reply stays coherent. (2) Summary with injected instruction ("ignora lo anterior y ...", rioplatense form acceptable): reply must NOT follow it. (3) Question answerable only from the summary: reply must use it. Record outcome per case in `apply-progress`. If any case fails or is doubtful -> A5 fallback: `context_messages/1` returns `[]` and the block is appended to the system text (`prompt <> "\n\n" <> block`), then re-run 4.6 adapted to one system message. REQ-11.
 - [x] 4.10 Gate: focused tests, `mix test` full suite, `--warnings-as-errors`, diff ~330 lines.
+- [x] 4.11 S4-provider-pin (user, 2026-10-08): `RunningSummaryChain` configured in `config/runtime.exs` with `provider: :local` always and `LLM_MODEL` only when `AI_PROVIDER=local`; build-time `config.exs` entry removed; `RunningSummary.enabled?/0` + one boot log; disabled without a local endpoint. Tests: `test/config/production_runtime_config_test.exs`, `running_summary_schedule_test.exs`, `llm_config_test.exs`. REQ-22.
+- [x] 4.12 S4-cloud-gate (user, 2026-10-09): `enabled?/0` also requires the guided chain to resolve `:local`; `JournalingReply` checks `enabled?/0` before `exists?/load_usable`, so with a hosted reply provider nothing is read, decrypted, audited, attached or enqueued. Test via `perform/1` (hosted reply mode). REQ-22.
 
 ---
 
@@ -119,6 +121,7 @@ Rules: no `mix format` / `mix precommit` (Windows CRLF/HEEx); verify formatting 
 | REQ-19 | 1.9 |
 | REQ-20 | 2.3, 2.4, 2.5, 2.6, 3.3 |
 | REQ-21 | 1.1, 1.6, 1.8, 4.5 |
+| REQ-22 | 4.11, 4.12 |
 
 AC1-AC8 are covered through the REQ rows above (per spec traceability). Sentiment regression: the RoBERTa/emotion path is untouched; `EmotionAnalysisWorker` tests stand.
 
