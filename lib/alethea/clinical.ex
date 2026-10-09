@@ -301,9 +301,17 @@ defmodule Alethea.Clinical do
           String.t(),
           String.t(),
           binary(),
-          binary() | nil
+          binary() | nil,
+          %{exploration_questions: 0..3, closing_invitation_sent: boolean()} | nil
         ) :: {:ok, Message.t()} | {:error, :reply_already_exists} | {:error, term()}
-  def save_telegram_reply(foundation_patient, text, behavior_type, inbound_message_id, session_id) do
+  def save_telegram_reply(
+        foundation_patient,
+        text,
+        behavior_type,
+        inbound_message_id,
+        session_id,
+        exploration \\ nil
+      ) do
     with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
          {:ok, changeset} <-
            encrypted_message_changeset(
@@ -318,6 +326,7 @@ defmodule Alethea.Clinical do
       changeset
       |> Ecto.Changeset.put_change(:reply_to_message_id, inbound_message_id)
       |> Ecto.Changeset.put_change(:delivery_state, "pending")
+      |> put_exploration(exploration)
       |> Repo.insert()
       |> case do
         {:ok, reply} ->
@@ -329,6 +338,23 @@ defmodule Alethea.Clinical do
             else: error
       end
     end
+  end
+
+  # #393 S1: `exploration` is `nil` for every caller today (the crisis
+  # path at `telegram_message_worker.ex:704-710` passes nothing and
+  # keeps writing NULL into both columns). S3 wires the real value from
+  # `TopicExploration.enforce/4`'s `:exploration` map, which also
+  # carries `:new_situation` — pattern-matching only the two stored
+  # keys below lets that extra key pass through untouched.
+  defp put_exploration(changeset, nil), do: changeset
+
+  defp put_exploration(changeset, %{
+         exploration_questions: exploration_questions,
+         closing_invitation_sent: closing_invitation_sent
+       }) do
+    changeset
+    |> Ecto.Changeset.put_change(:exploration_questions, exploration_questions)
+    |> Ecto.Changeset.put_change(:closing_invitation_sent, closing_invitation_sent)
   end
 
   @doc """
@@ -881,6 +907,18 @@ defmodule Alethea.Clinical do
   # chronological order.
   defp turns_before(patient_id, %Message{} = current, limit) do
     Message
+    |> before_snapshot(patient_id, current)
+    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  # #393 S1: the where-clauses shared by `turns_before/3` and
+  # `exploration_state/3` — bounded strictly before `current` (by
+  # timestamp, then direction, then id) and excluding `superseded`
+  # rows. Pure refactor, no behavior change (design §2).
+  defp before_snapshot(query, patient_id, %Message{} = current) do
+    query
     |> where([m], m.patient_id == ^patient_id)
     |> where([m], is_nil(m.delivery_state) or m.delivery_state != "superseded")
     |> where(
@@ -890,13 +928,70 @@ defmodule Alethea.Clinical do
         (m.timestamp == ^current.timestamp and m.direction == ^current.direction and
            m.id < ^current.id)
     )
-    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
-    |> limit(^limit)
-    |> Repo.all()
   end
 
   defp turn_role(%Message{direction: "inbound"}), do: :patient
   defp turn_role(%Message{direction: "outbound"}), do: :alethea
+
+  @doc """
+  Reads the exploration stretch state for the reply about to be
+  generated (#393 S1, design §2). `current` is the earliest member of
+  the burst being answered — the same bound `before_snapshot/3` already
+  gives `turns_before/3` — and `current_session_id` is the session the
+  reply is being generated in (`anchor.session_id`).
+
+  Resets to a fresh `%{questions: 0, closing_invitation_sent: false}`
+  when: there is no prior ordinary outbound reply in the snapshot; the
+  newest one is a `crisis_bypass` reply; its `session_id` differs from
+  `current_session_id` (or `current_session_id` is `nil`); or it
+  predates this migration (`exploration_questions` is `nil`). Otherwise
+  returns that reply's stored counters.
+
+  Reads no encrypted content and needs no DEK — only non-PHI metadata
+  columns.
+  """
+  @spec exploration_state(Alethea.Accounts.Patient.t(), Message.t(), binary() | nil) ::
+          %{questions: 0..3, closing_invitation_sent: boolean()}
+  def exploration_state(
+        %Alethea.Accounts.Patient{} = patient,
+        %Message{} = current,
+        current_session_id
+      ) do
+    patient.id
+    |> newest_outbound_before(current)
+    |> exploration_state_from_row(current_session_id)
+  end
+
+  defp newest_outbound_before(patient_id, %Message{} = current) do
+    Message
+    |> before_snapshot(patient_id, current)
+    |> where([m], m.direction == "outbound")
+    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp exploration_state_from_row(nil, _current_session_id), do: fresh_exploration_state()
+
+  defp exploration_state_from_row(%Message{behavior_type: "crisis_bypass"}, _current_session_id),
+    do: fresh_exploration_state()
+
+  defp exploration_state_from_row(%Message{exploration_questions: nil}, _current_session_id),
+    do: fresh_exploration_state()
+
+  defp exploration_state_from_row(%Message{session_id: row_session_id}, current_session_id)
+       when is_nil(current_session_id) or row_session_id != current_session_id do
+    fresh_exploration_state()
+  end
+
+  defp exploration_state_from_row(%Message{} = row, _current_session_id) do
+    %{
+      questions: row.exploration_questions,
+      closing_invitation_sent: row.closing_invitation_sent || false
+    }
+  end
+
+  defp fresh_exploration_state, do: %{questions: 0, closing_invitation_sent: false}
 
   @spec save_ai_diagnosis(binary(), map()) :: {:ok, Diagnosis.t()} | {:error, term()}
   def save_ai_diagnosis(message_id, chain_result) do

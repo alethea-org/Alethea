@@ -29,13 +29,15 @@ Per-slice trim lever (apply BEFORE requesting size exception): table-drive repet
 
 ## Phase 1: S1 Data layer (Stretch State, Retry Stability, Storage Contract)
 
-- [ ] 1.1 Create branch `feat/393-follow-latest-topic` from main; commit `openspec/sdd/follow-latest-topic-393/*.md` (`docs:`) before code.
-- [ ] 1.2 `mix ecto.gen.migration add_exploration_state_to_messages`; add 2 nullable columns + `messages_exploration_questions_check` (design §2 SQL); verify rollback.
-- [ ] 1.3 `message.ex`: add `exploration_questions :integer`, `closing_invitation_sent :boolean`, comment block; never cast.
-- [ ] 1.4 RED `test/alethea/clinical/exploration_state_test.exs`: none, crisis reset, session reset, nil session, legacy nil, superseded skipped, failed/ambiguous counted, bounded at earliest, stored values.
-- [ ] 1.5 GREEN `clinical.ex`: extract `before_snapshot/3` from `turns_before/3` (no behavior change); add `exploration_state/3` (newest outbound, `limit 1`, no decrypt).
-- [ ] 1.6 RED+GREEN `save_telegram_reply/6` `exploration \\ nil` → `put_change` both columns; nil writes NULL.
-- [ ] 1.7 Trim lever: table-drive 1.4 reset rows; `mix precommit`; diff ≤400 else exception note.
+- [x] 1.1 Create branch `feat/393-follow-latest-topic` from main; commit `openspec/sdd/follow-latest-topic-393/*.md` (`docs:`) before code.
+- [x] 1.2 `mix ecto.gen.migration add_exploration_state_to_messages`; add 2 nullable columns + `messages_exploration_questions_check` (design §2 SQL); verify rollback.
+- [x] 1.3 `message.ex`: add `exploration_questions :integer`, `closing_invitation_sent :boolean`, comment block; never cast.
+- [x] 1.4 RED `test/alethea/clinical/exploration_state_test.exs`: none, crisis reset, session reset, nil session, legacy nil, superseded skipped, failed/ambiguous counted, bounded at earliest, stored values.
+- [x] 1.5 GREEN `clinical.ex`: extract `before_snapshot/3` from `turns_before/3` (no behavior change); add `exploration_state/3` (newest outbound, `limit 1`, no decrypt).
+- [x] 1.6 RED+GREEN `save_telegram_reply/6` `exploration \\ nil` → `put_change` both columns; nil writes NULL.
+- [x] 1.7 Trim lever: table-drive 1.4 reset rows; `mix precommit`; diff ≤400 else exception note.
+
+**S1 status (2026-10-09): all 7 tasks done.** Focused + regression suites green (318 tests across `exploration_state_test.exs` + `clinical_test.exs` + every caller of `save_telegram_reply`/`save_message`/`Message` schema), `mix compile --warnings-as-errors` clean (own app, 198 files; pre-existing dep warnings in bandit/phoenix/cloak_ecto and one pre-existing `outbox_test.exs` type warning — verified unrelated by reproducing on stashed main), `mix format --check-formatted` clean. Migration rollback verified. Diff vs `origin/main` for S1's own code (excluding the already-committed SDD docs and the pre-existing untracked `.gga`): `clinical.ex` +105/-5, `message.ex` +10, migration +33, `exploration_state_test.exs` +204 ≈ 352 lines, under the 400-line budget — no `size:exception` needed. Inert: no production caller invokes `exploration_state/3` or passes a 6th argument to `save_telegram_reply/6` yet.
 
 ## Phase 2: S2 Pure rules + fallback (Marker Signal, Question Limit, Post-Closing)
 
