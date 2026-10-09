@@ -23,6 +23,16 @@ defmodule Alethea.Clinical.Message do
     field(:delivery_state, :string)
     # The id Telegram returned for the delivered message.
     field(:delivered_telegram_message_id, :string)
+    # Exploration stretch state carried on an outbound Telegram reply
+    # (#393 S1): how many questions have been asked about the current
+    # situation (0-3, DB-checked) and whether the closing invitation
+    # has already been sent for it. `NULL` for untracked rows and for
+    # rows written before this migration (read as fresh by
+    # `Alethea.Clinical.exploration_state/3`). Non-sensitive metadata —
+    # never the situation's text. Set programmatically through
+    # `Alethea.Clinical` (never cast).
+    field(:exploration_questions, :integer)
+    field(:closing_invitation_sent, :boolean)
     field(:encrypted_content, :binary)
     field(:encryption_version, :integer, default: 1)
     field(:synced_to_graph, :boolean, default: false)
