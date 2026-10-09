@@ -247,6 +247,11 @@ defmodule AletheaJobs.RunningSummaryWorkerTest do
       end
 
       refute log =~ ~r/\b[0-9a-f]{64}\b/
+
+      # The failure is correlated through `oban_jobs` (job id + atom error),
+      # so the log carries the reason only, never the patient identifier.
+      assert log =~ "RunningSummaryWorker: failed (reason=generation_failed)"
+      refute log =~ to_string(ctx.patient.id)
     end
   end
 

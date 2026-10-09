@@ -81,8 +81,11 @@ defmodule AletheaJobs.RunningSummaryWorker do
 
   defp finish({:error, :stale}, _patient), do: {:cancel, :stale}
 
-  defp finish({:error, reason}, patient) when is_atom(reason) do
-    Logger.warning("RunningSummaryWorker: failed (reason=#{reason}, patient_id=#{patient.id})")
+  # The reason only: Oban records the atom error against the job id in
+  # `oban_jobs`, which is the correlation path, so the log never carries the
+  # patient identifier.
+  defp finish({:error, reason}, _patient) when is_atom(reason) do
+    Logger.warning("RunningSummaryWorker: failed (reason=#{reason})")
     {:error, reason}
   end
 
