@@ -81,7 +81,7 @@ Test counts above are from the verify pass and were not re-run at archive time.
   - two-question replies at temperature 0.7
   - tú vs voseo register
   - docker-compose `phi-4-mini` hyphen
-- Verify suggestions S-2 through S-6 (non-reproducible smoke run 2 log; tasks forecast lacks actuals; REQ-14 success-path log cleanliness; `config/runtime.exs` dev block untested; `RunningSummaryWorker` logs patient UUID on failure at `running_summary_worker.ex:85`). Their status after e2510ee is not recorded in the final-state facts; treat as open unless the PRs say otherwise.
+- Verify suggestions S-2 through S-6 (non-reproducible smoke run 2 log; tasks forecast lacks actuals; REQ-14 success-path log cleanliness; `config/runtime.exs` dev block untested; `RunningSummaryWorker` logged the patient UUID on failure at `running_summary_worker.ex:85` — **fixed after archive in 50fe7ac**: the warning now carries the reason only, with a test asserting the patient id is absent). Their status after e2510ee is not recorded in the final-state facts; treat as open unless the PRs say otherwise.
 
 ## Archive Integrity Note
 
