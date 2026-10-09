@@ -31,14 +31,18 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
   @impl true
   def run(%{sanitized_content: content, history: history, message_id: msg_id} = params) do
-    # #393 S3: read now (default `:open`) so the key is observable
-    # end-to-end; S4 selects `JournalingPrompt.system_prompt/1` with
-    # it, so this binding is deliberately unused until then.
-    _exploration_mode = Map.get(params, :exploration_mode, :open)
+    # #393 S4: selects which static `JournalingPrompt.system_prompt/1`
+    # variant is sent as the system message. Defaults to `:open` so a
+    # caller that does not pass the key (every existing test) behaves
+    # exactly as before.
+    exploration_mode = Map.get(params, :exploration_mode, :open)
 
     case LLMConfig.get_and_build(:guided_conversation) do
-      {:ok, _config, llm} -> do_run(llm, content, history, msg_id, Map.get(params, :summary))
-      {:error, reason} -> {:error, reason}
+      {:ok, _config, llm} ->
+        do_run(llm, content, history, msg_id, Map.get(params, :summary), exploration_mode)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -64,7 +68,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   @spec truncated?(Message.t()) :: boolean()
   def truncated?(%Message{status: status}), do: status == :length
 
-  defp do_run(%OllamaChat{} = llm, content, history, msg_id, summary) do
+  defp do_run(%OllamaChat{} = llm, content, history, msg_id, summary, exploration_mode) do
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
       %{
@@ -75,7 +79,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     )
 
     start_time = System.monotonic_time(:millisecond)
-    result = do_chain_run(llm, history, content, summary)
+    result = do_chain_run(llm, history, content, summary, exploration_mode)
     duration = System.monotonic_time(:millisecond) - start_time
 
     metadata =
@@ -102,7 +106,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     result |> wrap_result(msg_id)
   end
 
-  defp do_run(llm, content, history, msg_id, summary) do
+  defp do_run(llm, content, history, msg_id, summary, exploration_mode) do
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
       %{
@@ -113,7 +117,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     )
 
     start_time = System.monotonic_time(:millisecond)
-    result = do_chain_run(llm, history, content, summary)
+    result = do_chain_run(llm, history, content, summary, exploration_mode)
     duration = System.monotonic_time(:millisecond) - start_time
 
     :telemetry.execute([:alethea, :ai, :chain, :stop], %{duration_ms: duration}, %{
@@ -133,9 +137,9 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   # delimited data block is appended to the single one, so the
   # instructions stay static and the behavior does not depend on a model
   # accepting several system roles.
-  defp do_chain_run(llm, history, content, summary) do
+  defp do_chain_run(llm, history, content, summary, exploration_mode) do
     messages =
-      [Message.new_system!(system_text(summary))] ++
+      [Message.new_system!(system_text(summary, exploration_mode))] ++
         Enum.map(history, &turn_message/1) ++ [Message.new_user!(content)]
 
     %{llm: llm, verbose: false}
@@ -150,12 +154,12 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
     end
   end
 
-  defp system_text(summary) when is_binary(summary) and summary != "" do
-    JournalingPrompt.system_prompt() <>
+  defp system_text(summary, exploration_mode) when is_binary(summary) and summary != "" do
+    JournalingPrompt.system_prompt(exploration_mode) <>
       "\n\n" <> @summary_header <> "\n" <> strip_delimiters(summary)
   end
 
-  defp system_text(_none), do: JournalingPrompt.system_prompt()
+  defp system_text(_none, exploration_mode), do: JournalingPrompt.system_prompt(exploration_mode)
 
   # The summary is data: it must not be able to open or close a block.
   defp strip_delimiters(text), do: String.replace(text, ["«", "»"], "")
