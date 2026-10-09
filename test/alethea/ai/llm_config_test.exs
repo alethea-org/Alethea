@@ -7,7 +7,7 @@ defmodule Alethea.AI.LLMConfigTest do
   setup do
     originals =
       Map.new(
-        [GuidedConversationChain, LLMConfig, :env],
+        [GuidedConversationChain, Alethea.AI.Chains.RunningSummaryChain, LLMConfig, :env],
         &{&1, Application.fetch_env(:alethea, &1)}
       )
 
@@ -238,6 +238,39 @@ defmodule Alethea.AI.LLMConfigTest do
       assert config.endpoint_url == nil
       assert {:error, reason} = LLMConfig.build_llm(config)
       assert reason =~ "not configured"
+    end
+
+    test "running summary is pinned local with the compiled local default model" do
+      # Neither the provider nor the model is compiled into config.exs:
+      # `config/runtime.exs` pins the provider and only forwards LLM_MODEL
+      # while the guided provider is local (see ProductionRuntimeConfigTest).
+      refute Keyword.has_key?(
+               Application.get_env(:alethea, Alethea.AI.Chains.RunningSummaryChain, []),
+               :model
+             )
+
+      Application.put_env(:alethea, GuidedConversationChain,
+        provider: :cloud,
+        model: "gpt-hosted"
+      )
+
+      summary = LLMConfig.get(:running_summary)
+
+      assert summary.provider == :local
+      assert summary.model == "phi4-mini"
+      assert LLMConfig.get(:guided_conversation).model == "gpt-hosted"
+    end
+
+    test "running summary model follows its configured value" do
+      original = Application.get_env(:alethea, Alethea.AI.Chains.RunningSummaryChain)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, Alethea.AI.Chains.RunningSummaryChain, original || [])
+      end)
+
+      Application.put_env(:alethea, Alethea.AI.Chains.RunningSummaryChain, model: "otro:modelo")
+
+      assert LLMConfig.get(:running_summary).model == "otro:modelo"
     end
 
     test "defaults to :local provider" do

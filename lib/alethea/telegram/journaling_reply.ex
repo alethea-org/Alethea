@@ -37,9 +37,11 @@ defmodule Alethea.Telegram.JournalingReply do
 
   require Logger
 
-  alias Alethea.AI.{JournalingOutputGuard, Sanitizer}
+  alias Alethea.Accounts
+  alias Alethea.AI.{JournalingOutputGuard, RunningSummaryValidator, Sanitizer}
+  alias Alethea.Alerts.CrisisCopy
   alias Alethea.Clinical
-  alias Alethea.Clinical.Message
+  alias Alethea.Clinical.{Message, RunningSummary}
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.JournalingFallback
 
@@ -101,6 +103,8 @@ defmodule Alethea.Telegram.JournalingReply do
       history: sanitized_history(foundation_patient, earliest)
     }
 
+    request = maybe_put_summary(request, foundation_patient, anchor)
+
     case ai_worker().process(request) do
       {:ok, %{response: reply} = chain_result} when is_binary(reply) and reply != "" ->
         {:ok, guard(chain_result, anchor)}
@@ -158,6 +162,44 @@ defmodule Alethea.Telegram.JournalingReply do
         )
 
         []
+    end
+  end
+
+  # The running summary (#394) is attached only when a usable one exists:
+  # a missing row stays silent (and unaudited), a rejected or unreadable
+  # one degrades to a reply without it. It is validated against the
+  # current crisis copy and sanitized like every other supplied text.
+  defp maybe_put_summary(request, foundation_patient, anchor) do
+    case load_summary(foundation_patient) do
+      {:ok, summary} ->
+        Map.put(request, :summary, Sanitizer.sanitize(summary))
+
+      :none ->
+        request
+
+      :error ->
+        Logger.warning(
+          "JournalingReply: running summary unavailable, replying without it " <>
+            "(message_id=#{anchor.id})"
+        )
+
+        request
+    end
+  end
+
+  defp load_summary(foundation_patient) do
+    # Checked first: with a hosted reply provider the summary must not even
+    # be read, let alone sent to the model (REQ-22).
+    with true <- RunningSummary.enabled?() || :none,
+         {:ok, legacy_patient} <- FoundationAccounts.legacy_patient(foundation_patient),
+         %{} = patient <- Accounts.get_patient_with_professional(legacy_patient.id),
+         true <- RunningSummary.exists?(patient) || :none,
+         {:ok, summary} <- RunningSummary.load_usable(patient),
+         :ok <- RunningSummaryValidator.validate(summary, CrisisCopy.reply_text(patient)) do
+      {:ok, summary}
+    else
+      :none -> :none
+      _unusable -> :error
     end
   end
 

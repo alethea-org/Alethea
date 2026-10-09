@@ -44,6 +44,9 @@ Texto de la grabación, generado por Whisper. Entra al RAG del paciente.
 ### Resumen de brecha
 Documento generado **antes de cada sesión** con todo lo registrado por el paciente y por el sistema desde la última sesión. Es lo que el psicólogo lee para llegar a la sesión preparado.
 
+### Resumen conversacional
+Resumen factual y acotado del journaling interactivo de un paciente, que el sistema genera y actualiza cada 10 mensajes del paciente (código: `RunningSummary`). Solo contiene hechos relatados por el paciente y las preguntas que hizo Alethea, sin diagnóstico ni análisis emocional. Es **contexto para el bot**, no un documento clínico: el psicólogo no lo lee y no reemplaza al *Resumen de brecha*. Se guarda cifrado con la clave del paciente.
+
 ### RAG
 Índice vectorial del paciente, consultable en lenguaje natural. **Es la historia clínica navegable del paciente.** Contiene: journaling interactivo, etiquetas de análisis emocional, transcripciones, métricas inferidas, resúmenes de brecha, eventos de crisis, notas clínicas, configuración de triggers, medicación, diagnósticos (vía notas), datos futuros de wearables. Ver `adr/003-rag-historia-clinica-navegable.md`.
 
