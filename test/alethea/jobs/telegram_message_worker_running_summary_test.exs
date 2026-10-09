@@ -156,10 +156,15 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
       assert [_] = all_enqueued(worker: TelegramOutboundWorker)
     end
 
-    test "without a row the request keeps exactly the three original keys" do
+    test "without a row the request keeps exactly the four original keys" do
       payload = reply_payload("primer mensaje", 1)
 
-      assert payload |> Map.keys() |> Enum.sort() == [:history, :message_id, :sanitized_content]
+      assert payload |> Map.keys() |> Enum.sort() == [
+               :exploration_mode,
+               :history,
+               :message_id,
+               :sanitized_content
+             ]
     end
 
     test "a stored summary that carries the current crisis copy is not attached", ctx do
@@ -167,7 +172,12 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
 
       payload = reply_payload("mensaje", 1)
 
-      assert payload |> Map.keys() |> Enum.sort() == [:history, :message_id, :sanitized_content]
+      assert payload |> Map.keys() |> Enum.sort() == [
+               :exploration_mode,
+               :history,
+               :message_id,
+               :sanitized_content
+             ]
     end
 
     test "a malformed stored summary is not attached", ctx do
@@ -256,7 +266,13 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
 
       payload = reply_payload("mensaje 1", 1)
 
-      assert payload |> Map.keys() |> Enum.sort() == [:history, :message_id, :sanitized_content]
+      assert payload |> Map.keys() |> Enum.sort() == [
+               :exploration_mode,
+               :history,
+               :message_id,
+               :sanitized_content
+             ]
+
       refute "running_summary_loading" in (audit_reasons(ctx) -- before)
     end
 

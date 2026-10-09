@@ -12,7 +12,8 @@ defmodule Alethea.AI.PhiWorkerBehaviour do
           required(:message_id) => binary(),
           required(:sanitized_content) => String.t(),
           required(:history) => [turn()],
-          optional(:summary) => String.t()
+          optional(:summary) => String.t(),
+          optional(:exploration_mode) => :open | :closing
         }
 
   @type summarize_request :: %{

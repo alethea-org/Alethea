@@ -31,6 +31,11 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
   @impl true
   def run(%{sanitized_content: content, history: history, message_id: msg_id} = params) do
+    # #393 S3: read now (default `:open`) so the key is observable
+    # end-to-end; S4 selects `JournalingPrompt.system_prompt/1` with
+    # it, so this binding is deliberately unused until then.
+    _exploration_mode = Map.get(params, :exploration_mode, :open)
+
     case LLMConfig.get_and_build(:guided_conversation) do
       {:ok, _config, llm} -> do_run(llm, content, history, msg_id, Map.get(params, :summary))
       {:error, reason} -> {:error, reason}

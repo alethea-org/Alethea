@@ -129,7 +129,13 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
 
       payload = perform_capturing_payload("Hoy me siento parecido.", 8)
 
-      assert payload |> Map.keys() |> Enum.sort() == [:history, :message_id, :sanitized_content]
+      assert payload |> Map.keys() |> Enum.sort() == [
+               :exploration_mode,
+               :history,
+               :message_id,
+               :sanitized_content
+             ]
+
       assert Enum.all?(payload.history, &(Map.keys(&1) |> Enum.sort() == [:content, :role]))
     end
   end

@@ -19,7 +19,10 @@ defmodule Alethea.AI.PhiWorker do
     params = %{
       sanitized_content: Sanitizer.sanitize(content),
       history: Enum.map(history, &%{role: &1.role, content: Sanitizer.sanitize(&1.content)}),
-      message_id: message_id
+      message_id: message_id,
+      # #393 S3: forwarded to the chain as-is (no patient data); S4
+      # wires it to `JournalingPrompt.system_prompt/1`.
+      exploration_mode: Map.get(request, :exploration_mode, :open)
     }
 
     GuidedConversationChain.run(put_summary(params, Map.get(request, :summary)))
