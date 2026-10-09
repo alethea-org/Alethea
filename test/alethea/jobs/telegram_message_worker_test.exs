@@ -40,7 +40,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   alias Alethea.Clinical
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Repo
-  alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
+  alias Alethea.Telegram.{ChatIdHash, Client.Fake, GenerationFailureNotice, Pacer}
   alias AletheaJobs.{ClinicalRecordOutboxWorker, EmotionAnalysisWorker}
 
   import Alethea.FoundationTestHelper
@@ -911,6 +911,179 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       refute error.message =~ sentinel_reply,
              "the raised error message must not embed the plaintext AI reply " <>
                "(the full changeset `changes` map would leak it via inspect/1)"
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Generation retry exhaustion (#395)
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — generation retry exhaustion (#395)" do
+    setup :setup_bound_patient
+
+    test "exhausted generation persists one fixed service-unavailable notice and enqueues its delivery",
+         ctx do
+      args =
+        build_args("me siento muy solo hoy", telegram_message_id: 900, telegram_update_id: 900)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      assert :ok = run_burst_reply_exhausted()
+
+      [inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+      [notice] = Repo.all(from m in Message, where: m.direction == "outbound")
+
+      assert notice.behavior_type == "elicited"
+      assert notice.reply_to_message_id == inbound.id
+      assert notice.delivery_state == "pending"
+      assert notice.patient_id == ctx.legacy_patient.id
+
+      assert decrypted_outbound_body(notice) == GenerationFailureNotice.text(recorded?: true)
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == notice.id
+
+      assert_enqueued(
+        worker: TelegramOutboundWorker,
+        args: %{
+          message_id: notice.id,
+          body: GenerationFailureNotice.text(recorded?: true),
+          lane: :safe
+        }
+      )
+
+      assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
+    end
+
+    test "a generation failure before the budget is exhausted raises and sends no notice", ctx do
+      _ = ctx
+
+      args = build_args("hola", telegram_message_id: 901, telegram_update_id: 901)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+
+      assert_raise RuntimeError, ~r/PhiWorker error/, fn ->
+        TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args, attempt: 1, max_attempts: 3})
+      end
+
+      assert [] == Repo.all(from m in Message, where: m.direction == "outbound")
+      refute_enqueued(worker: TelegramOutboundWorker)
+      assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
+    end
+
+    test "a re-execution after exhaustion reuses the persisted notice and never generates again",
+         ctx do
+      test_pid = self()
+
+      args = build_args("hola", telegram_message_id: 902, telegram_update_id: 902)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ ->
+        send(test_pid, :generated)
+        {:error, :service_unavailable}
+      end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = run_burst_reply_exhausted()
+      assert_received :generated
+
+      # The same burst job re-executed (Oban replay / manual recovery)
+      # must reuse the persisted logical outcome — no second generation,
+      # reply, diagnosis, or delivery job.
+      assert :ok = run_burst_reply_exhausted()
+      refute_received :generated
+
+      [inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+      [notice] = Repo.all(from m in Message, where: m.direction == "outbound")
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == notice.id
+      assert [_one_delivery_job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      assert [_one_diagnosis] =
+               Repo.all(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+    end
+
+    test "a newer inbound invalidates an undelivered failure notice at the delivery boundary",
+         ctx do
+      _ = ctx
+
+      first_args = build_args("primer mensaje", telegram_message_id: 910, telegram_update_id: 910)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: first_args})
+      assert :ok = run_burst_reply_exhausted()
+
+      [first_inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+      [notice] = Repo.all(from m in Message, where: m.direction == "outbound")
+      assert notice.delivery_state == "pending"
+
+      # A newer inbound arrives while the notice is still undelivered.
+      second_args =
+        build_args("segundo mensaje", telegram_message_id: 911, telegram_update_id: 911)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
+
+      # The notice's delivery job runs under the same claim rules as a
+      # generated reply: a newer uncovered inbound supersedes it, its
+      # coverage is released, and nothing is sent.
+      assert :ok = run_outbound_delivery()
+
+      assert Repo.get!(Message, notice.id).delivery_state == "superseded"
+      assert Repo.get!(Message, first_inbound.id).replied_by_message_id == nil
+      assert Fake.sends() == []
+
+      # The released members are picked up by a re-armed burst job.
+      assert [_rearmed] = all_enqueued(worker: TelegramBurstReplyWorker)
+    end
+
+    test "the exhaustion path records PHI-safe failure metadata and writes no dead-letter", ctx do
+      _ = ctx
+
+      sentinel = "SENTINEL-PHI-#{unique_int()}-mi terapeuta me dijo que..."
+      args = build_args(sentinel, telegram_message_id: 920, telegram_update_id: 920)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert :ok = run_burst_reply_exhausted()
+        end)
+
+      refute log =~ sentinel
+
+      [inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+
+      assert [diagnosis] =
+               Repo.all(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+
+      assert diagnosis.model_version == "generation-unavailable"
+      assert diagnosis.ai_response == GenerationFailureNotice.text(recorded?: true)
+
+      assert diagnosis.extracted_emotions["outcome"] == "generation_unavailable"
+      assert diagnosis.extracted_emotions["reason"] == ":service_unavailable"
+      assert diagnosis.extracted_emotions["covered_messages"] == 1
+      assert diagnosis.extracted_emotions["attempts"] == 3
+      refute inspect(diagnosis.extracted_emotions) =~ sentinel
+
+      assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
+    end
+
+    test "the unrecorded notice variant never claims the message was recorded" do
+      assert GenerationFailureNotice.text(recorded?: true) =~ "quedó registrado"
+      refute GenerationFailureNotice.text(recorded?: false) =~ "quedó registrado"
+      refute GenerationFailureNotice.text() =~ "quedó registrado"
     end
   end
 
@@ -1850,6 +2023,19 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   defp run_burst_reply do
     [job] = all_enqueued(worker: TelegramBurstReplyWorker)
     TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args})
+  end
+
+  # #395: executes the armed burst job as its FINAL Oban attempt, which
+  # is when generation retry exhaustion must produce the failure notice.
+  defp run_burst_reply_exhausted do
+    [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+    TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args, attempt: 3, max_attempts: 3})
+  end
+
+  # Executes the single enqueued outbound delivery job (journaling lane).
+  defp run_outbound_delivery do
+    [job] = all_enqueued(worker: TelegramOutboundWorker)
+    TelegramOutboundWorker.perform(%Oban.Job{args: job.args})
   end
 
   defp setup_bound_patient(_ctx) do
