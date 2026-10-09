@@ -182,7 +182,8 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
                chain_result.response,
                "elicited",
                anchor.id,
-               session_id
+               session_id,
+               Map.get(chain_result, :exploration)
              ),
            :ok <-
              assert_count(

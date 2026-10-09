@@ -43,7 +43,7 @@ defmodule Alethea.Telegram.JournalingReply do
   alias Alethea.Clinical
   alias Alethea.Clinical.{Message, RunningSummary}
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
-  alias Alethea.Telegram.JournalingFallback
+  alias Alethea.Telegram.{JournalingFallback, TopicExploration}
 
   @history_limit 10
   @fallback_model_version "journaling-fallback"
@@ -92,6 +92,12 @@ defmodule Alethea.Telegram.JournalingReply do
     {earliest, _text} = List.first(members)
     {anchor, _text} = List.last(members)
 
+    # #393 S3 (design §2, "legacy patient resolved once"): shared by
+    # the history read and the exploration-state read below, instead
+    # of each resolving it independently.
+    legacy_patient = resolve_legacy_patient(foundation_patient)
+    state = read_exploration_state(legacy_patient, earliest, anchor.session_id)
+
     sanitized_content =
       members
       |> Enum.map(fn {_message, text} -> Sanitizer.sanitize(text) end)
@@ -100,20 +106,46 @@ defmodule Alethea.Telegram.JournalingReply do
     request = %{
       message_id: anchor.id,
       sanitized_content: sanitized_content,
-      history: sanitized_history(foundation_patient, earliest)
+      history: sanitized_history(legacy_patient, earliest),
+      exploration_mode: TopicExploration.mode(state)
     }
 
     request = maybe_put_summary(request, foundation_patient, anchor)
 
     case ai_worker().process(request) do
       {:ok, %{response: reply} = chain_result} when is_binary(reply) and reply != "" ->
-        {:ok, guard(chain_result, anchor)}
+        finish_reply(chain_result, reply, state, anchor)
 
       {:ok, %{response: _empty}} ->
         {:error, :empty_response}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # #393 S3 (design pipeline steps 6-8): the model's leading marker is
+  # parsed and stripped BEFORE the guard ever sees the text — the
+  # guard and persistence must never observe marker syntax (design
+  # §1, AD2). A marker-only reply strips to `""` and is treated like
+  # any other empty response. `TopicExploration.enforce/4` runs after
+  # the guard (AD3): the guard's clinical-wording concern stays
+  # separate from the exploration-count concern, so a guard fallback
+  # can itself be substituted again by closing/acknowledgement copy.
+  defp finish_reply(chain_result, raw_reply, state, anchor) do
+    {new_situation, text} = TopicExploration.parse_marker(raw_reply)
+
+    case text do
+      "" ->
+        {:error, :empty_response}
+
+      _non_empty ->
+        guarded =
+          chain_result
+          |> Map.put(:response, text)
+          |> guard(anchor)
+
+        {:ok, TopicExploration.enforce(guarded, state, new_situation, anchor.id)}
     end
   end
 
@@ -150,12 +182,14 @@ defmodule Alethea.Telegram.JournalingReply do
   # A history that cannot be loaded or decrypted degrades to an empty
   # one: the patient still gets a reply to the current turn, and nothing
   # undecryptable or unsanitized is supplied to the model.
-  defp sanitized_history(foundation_patient, inbound) do
-    with {:ok, legacy_patient} <- FoundationAccounts.legacy_patient(foundation_patient),
-         {:ok, turns} <- Clinical.list_conversation_turns(legacy_patient, inbound, @history_limit) do
-      Enum.map(turns, &%{role: &1.role, content: Sanitizer.sanitize(&1.content)})
-    else
-      _unavailable ->
+  defp sanitized_history(nil, _inbound), do: []
+
+  defp sanitized_history(legacy_patient, inbound) do
+    case Clinical.list_conversation_turns(legacy_patient, inbound, @history_limit) do
+      {:ok, turns} ->
+        Enum.map(turns, &%{role: &1.role, content: Sanitizer.sanitize(&1.content)})
+
+      {:error, _reason} ->
         Logger.warning(
           "JournalingReply: conversation history unavailable, replying without it " <>
             "(message_id=#{inbound.id})"
@@ -164,6 +198,30 @@ defmodule Alethea.Telegram.JournalingReply do
         []
     end
   end
+
+  # #393 S3: resolved once, shared by `sanitized_history/2` and
+  # `read_exploration_state/3`. `nil` when the foundation patient is
+  # not linked, degrading both the same way `sanitized_history/2`
+  # already degraded on its own lookup failure.
+  defp resolve_legacy_patient(foundation_patient) do
+    case FoundationAccounts.legacy_patient(foundation_patient) do
+      {:ok, legacy_patient} ->
+        legacy_patient
+
+      _unavailable ->
+        Logger.warning("JournalingReply: legacy patient unavailable, replying without history")
+        nil
+    end
+  end
+
+  # A `nil` legacy patient (unlinked foundation patient) degrades to a
+  # fresh stretch, the same default `Alethea.Clinical.exploration_state/3`
+  # itself falls back to when it has nothing to read.
+  defp read_exploration_state(nil, _current, _session_id),
+    do: %{questions: 0, closing_invitation_sent: false}
+
+  defp read_exploration_state(legacy_patient, current, session_id),
+    do: Clinical.exploration_state(legacy_patient, current, session_id)
 
   # The running summary (#394) is attached only when a usable one exists:
   # a missing row stays silent (and unaudited), a rejected or unreadable
