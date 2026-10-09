@@ -225,3 +225,28 @@ Deviations / flags:
 - "schedule_if_due failure" is forced by renaming `running_summaries` inside the test sandbox transaction (rolled back); the failure is a real undefined-table error rescued by `schedule_if_due/2`.
 - Pre-existing, left untouched: `.env.example` has an uncommitted local `SECRET_KEY_BASE` value; not part of S4 and must not be staged.
 - Config pins only `model` for `:running_summary` (provider and temperature fall back to the `LLMConfig` defaults).
+
+## S4-provider-pin (scoped correction inside S4, PR #418)
+
+Mode: Strict TDD. Decision (user, 2026-10-08): pin the running summary to the local provider per the #402 policy in `docs/deployment/fly-neon.md`. Provider is `:local` in every environment, regardless of `AI_PROVIDER`; model is `LLM_MODEL` only while the guided provider is `:local`, else the compiled local default (`phi4-mini`); endpoint is `LOCAL_LLM_BASE_URL` via the global `LLMConfig` `local:` settings. Without that endpoint the summary is disabled.
+
+Files (production): `config/config.exs` (RunningSummaryChain entry removed), `config/runtime.exs` (prod entry next to GuidedConversationChain; dev entry `provider: :local` + `LLM_MODEL`), `lib/alethea/clinical/running_summary.ex` (`enabled?/0`, `log_boot_status/0`, `schedule_if_due/2` gated on `enabled?/0`), `lib/alethea/application.ex` (one `log_boot_status/0` call in `start/2`).
+Files (tests): `test/config/production_runtime_config_test.exs` (+4), `test/alethea/ai/llm_config_test.exs` (2 S4 tests replaced by 1), `test/alethea/clinical/running_summary_schedule_test.exs` (+6), `test/alethea/jobs/telegram_message_worker_running_summary_test.exs` (+1), `test/support/running_summary_helper.ex` (`disable_local_endpoint/0`).
+Docs: `docs/deployment/fly-neon.md` capabilities table row; `design.md` Resolved Decisions line. `spec.md` unchanged: it states no model/provider rule.
+
+TDD evidence:
+| Step | Command | Result |
+|---|---|---|
+| Safety net | `mix test test/config/production_runtime_config_test.exs test/alethea/ai/llm_config_test.exs test/alethea/clinical/running_summary_schedule_test.exs test/alethea/jobs/telegram_message_worker_running_summary_test.exs` | 81 tests, 0 failures |
+| RED | same 4 files after adding tests | 92 tests, 12 failures (4 config pin, 1 llm_config, 1 worker disabled, 6 schedule: `enabled?/0` / `log_boot_status/0` undefined, disabled still enqueued) |
+| GREEN | same 4 files | 92 tests, 0 failures |
+| After fixing a test-env leak (helper now restores the guided chain env) | `mix test test/config test/alethea/clinical/running_summary_schedule_test.exs test/alethea/jobs/telegram_message_worker_running_summary_test.exs test/alethea/ai/llm_config_test.exs` | 97 tests, 0 failures |
+| Suite | `mix test test/alethea/ test/alethea_jobs/ test/config/` (seeds 986523, 197475, 5) | 6 doctests, 1796 tests, 8 failures, all the pre-existing Windows-only `Alethea.ReleaseTest` |
+
+Triangulation: local vs hosted provider vs hosted without local endpoint (config); enabled/disabled/blank endpoint and disabled-then-re-enabled (schedule); disabled/enabled boot log. Refactor: none needed.
+
+Checks: `mix compile --warnings-as-errors` exit 0 (only the environmental Windows symlink warning); formatting verified on LF copies, CRLF preserved; `.env*` untouched.
+
+Diff stat vs HEAD (11 files, +252/-17): production 63 changed lines (config 23, application 3, running_summary 37); tests 203 changed lines (llm_config 25, schedule 52, worker 13, production config 85, helper 28); docs/design 3.
+
+Flags: the dev block in `runtime.exs` keeps the dev workflow reading `LLM_MODEL` at runtime (after `.env` load); guided in dev still reads it at compile time in `config.exs`. Jobs already enqueued before a deployment loses its endpoint fail and retry through the existing worker error path.
