@@ -66,10 +66,12 @@ Per-slice trim lever (apply BEFORE requesting size exception): table-drive repet
 
 ## Phase 4: S4 Prompt + reset tests (Multi-Topic, Stretch resets) — HARD GATE
 
-- [ ] 4.1 BLOCKER: confirm `parse_marker` stripping is live on `-pr3` and S3 merged into chain before S4 merges; S4 never reaches main ahead of S3.
-- [ ] 4.2 Branch `-pr4` from S3; re-verify `journaling_prompt.ex` anchors.
-- [ ] 4.3 RED `journaling_prompt_test.exs`: `system_prompt(:open|:closing)`, new headings, closing section only in `:closing`, examples render `Alethea: <<MARKER>> text`, `:follow_up`, `:multi_topic`.
-- [ ] 4.4 GREEN prompt: sections, two `@` variants, `system_prompt/0` → `:open`.
-- [ ] 4.5 RED+GREEN worker-entry: NUEVO resets after closing, crisis reset, session reset, truncated NUEVO, multi-member NUEVO burst, retry after rollback same mode.
-- [ ] 4.6 E2E: drive all spec scenarios (= #393 ACs) via `perform/1` + burst job; no live model.
+- [x] 4.1 BLOCKER: confirm `parse_marker` stripping is live on `-pr3` and S3 merged into chain before S4 merges; S4 never reaches main ahead of S3.
+- [x] 4.2 Branch `-pr4` from S3; re-verify `journaling_prompt.ex` anchors.
+- [x] 4.3 RED `journaling_prompt_test.exs`: `system_prompt(:open|:closing)`, new headings, closing section only in `:closing`, examples render `Alethea: <<MARKER>> text`, `:follow_up`, `:multi_topic`.
+- [x] 4.4 GREEN prompt: sections, two `@` variants, `system_prompt/0` → `:open`.
+- [x] 4.5 RED+GREEN worker-entry: NUEVO resets after closing, crisis reset, session reset, truncated NUEVO, multi-member NUEVO burst, retry after rollback same mode.
+- [x] 4.6 E2E: drive all spec scenarios (= #393 ACs) via `perform/1` + burst job; no live model.
 - [ ] 4.7 Trim lever; `mix precommit`; land chain to main once.
+
+**S4 status (2026-10-09, resumed after a mid-task crash — see apply-progress for full detail):** 4.1-4.6 done. 4.3-4.6 were already complete and passing in the uncommitted working tree when this session started (verified, not rewritten): `journaling_prompt.ex`'s two `system_prompt/1` variants, `markers/0`, the `:follow_up`/`:multi_topic` examples, and `journaling_prompt_test.exs`'s full heading/closing/marker-protocol coverage (26/26 passed); `chains/guided_conversation_chain.ex` and `phi_worker.ex` wiring `exploration_mode` into `system_prompt/1` selection (closes the S3→S4 handoff seam); and — contrary to the crashed agent's own last-known status — `test/alethea/jobs/telegram_topic_exploration_test.exs` ALREADY contained the full S4 worker-entry + E2E suite (NUEVO-after-closing reset, crisis reset, session reset, truncated-NUEVO, multi-member NUEVO burst, retry-after-rollback, plus all of S3's original scenarios), 14/14 passed, matching design's own "Testing Strategy" table which names this one file (not a separate e2e file) as the worker-entry/E2E layer for every spec.md scenario. 4.1 confirmed by reading `journaling_reply.ex`: `parse_marker`/`enforce` wiring from S3 is present and unreverted on this branch. 4.2 confirmed: branch `feat/393-follow-latest-topic-pr4` checked out from `-pr3`. 4.7's trim lever was already applied (the 5-row `for` table from 3.7, reused for the count-progression cases); `mix precommit`'s full suite run and "land chain to main once" are intentionally left to the orchestrator per this session's explicit instructions (no full-suite run, no commit, S4 must not merge ahead of S1-S3 confirmed live) — 4.7 left unchecked for that reason.

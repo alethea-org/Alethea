@@ -1,10 +1,10 @@
 defmodule Alethea.Jobs.TelegramTopicExplorationTest do
   @moduledoc """
-  Worker-entry tests for the exploration wiring (#393 S3): driven
+  Worker-entry tests for the exploration wiring (#393 S3/S4): driven
   through `Alethea.Jobs.TelegramMessageWorker.perform/1` and the armed
   `Alethea.Jobs.TelegramBurstReplyWorker`, with `Alethea.AI.PhiWorkerMock`
   returning marker-prefixed canned text — simulating what #393 S4's
-  prompt will eventually cause the real model to emit. No live model.
+  prompt now actually instructs the real model to emit. No live model.
 
   Covers (design "Testing Strategy", worker entry row; tasks.md 3.3):
   the question-count progression `0->1` and `2->3`; a missing marker
@@ -15,9 +15,15 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
   fallback counting and, at the limit, itself being replaced by
   closing copy; and `exploration_mode` in the AI worker payload.
 
-  NUEVO resets, the crisis/session resets, the multi-topic burst, and
-  the retry-after-rollback scenario are #393 S4 (tasks.md Phase 4) —
-  out of scope here.
+  S4 (tasks.md 4.5) adds: a `<<NUEVO>>` marker resetting the stretch
+  even right after a closing invitation (the "reintroduced topic"
+  scenario); a newer `crisis_bypass` reply resetting the stretch; a
+  new session resetting the stretch; a truncated reply that still
+  carries a leading `<<NUEVO>>` still resetting the stretch (the
+  truncation only replaces the delivered text, via the ordinary
+  `:incomplete` guard path); a 2-member burst where the model emits
+  `<<NUEVO>>` and asks about only the latest topic; and a
+  rollback-then-retry computing the same `exploration_mode`.
   """
 
   use Alethea.DataCase, async: false
@@ -121,6 +127,204 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
     end
   end
 
+  describe "perform/1 — #393 S4: NUEVO resets the stretch" do
+    test "a <<NUEVO>> marker resets the stretch even right after a closing invitation", ctx do
+      session = open_session(ctx)
+      maybe_seed_prior(ctx, session, {3, true})
+
+      result = perform_scenario(ctx, "<<NUEVO>>\n¿Qué pasó hoy?", unique_n())
+
+      # The request was built from the *pre-call* state (3, sent), so
+      # the model was still told to close — it is the model's own
+      # marker that overrides that and reintroduces a topic.
+      assert result.request.exploration_mode == :closing
+      assert result.persisted_body == "¿Qué pasó hoy?"
+      assert result.reply.exploration_questions == 1
+      refute result.reply.closing_invitation_sent
+    end
+  end
+
+  describe "perform/1 — #393 S4: crisis and session resets" do
+    test "a newer crisis_bypass reply resets the stretch for the next ordinary reply", ctx do
+      session = open_session(ctx)
+      maybe_seed_prior(ctx, session, {3, false})
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args: build_args(unique_n(), "me quiero morir")
+               })
+
+      # Clears the crisis reply's own enqueued delivery job: `perform_scenario`
+      # asserts exactly one enqueued `TelegramOutboundWorker` job (its own).
+      Repo.delete_all(Oban.Job)
+
+      # Backdated so it unambiguously precedes the next scenario's own
+      # inbound: both happen inside the same wall-clock second, and
+      # `before_snapshot/3`'s tie-break (timestamp, then direction)
+      # would otherwise exclude an "outbound" row tied with an
+      # "inbound" `current` row (same reasoning as `maybe_seed_prior/3`).
+      backdate_newest_crisis_reply(ctx)
+
+      result = perform_scenario(ctx, "<<SIGUE>>\n¿Qué sentiste?", unique_n())
+
+      assert result.request.exploration_mode == :open
+      assert result.reply.exploration_questions == 1
+      refute result.reply.closing_invitation_sent
+    end
+
+    test "a new session resets the stretch for the next ordinary reply", ctx do
+      session = open_session(ctx)
+      maybe_seed_prior(ctx, session, {3, true})
+
+      {:ok, _closed} = SessionManager.close_session(session)
+
+      result = perform_scenario(ctx, "<<SIGUE>>\n¿Qué sentiste?", unique_n())
+
+      assert result.request.exploration_mode == :open
+      assert result.reply.exploration_questions == 1
+      refute result.reply.closing_invitation_sent
+    end
+  end
+
+  describe "perform/1 — #393 S4: truncation does not suppress the marker reset" do
+    test "a truncated reply with a leading <<NUEVO>> still resets the stretch", ctx do
+      session = open_session(ctx)
+      maybe_seed_prior(ctx, session, {3, true})
+
+      result =
+        perform_scenario(
+          ctx,
+          "<<NUEVO>>\nMe pregunto si",
+          unique_n(),
+          &ai_result_truncated/2
+        )
+
+      refute result.persisted_body =~ "<<"
+      assert result.persisted_body in JournalingFallback.variants()
+      assert result.reply.exploration_questions == 1
+      refute result.reply.closing_invitation_sent
+    end
+  end
+
+  describe "perform/1 — #393 S4: multi-topic burst" do
+    test "a 2-member burst with a <<NUEVO>> reply acknowledges both and asks only about the latest",
+         ctx do
+      test_pid = self()
+
+      {:ok, member_a} =
+        Clinical.save_telegram_message(
+          ctx.foundation_patient,
+          "hoy me retaron en el trabajo por un informe",
+          "inbound",
+          "spontaneous",
+          to_string(unique_n())
+        )
+
+      {:ok, member_b} =
+        Clinical.save_telegram_message(
+          ctx.foundation_patient,
+          "y en la noche discuti con mi pareja",
+          "inbound",
+          "spontaneous",
+          to_string(unique_n())
+        )
+
+      reply_text =
+        "<<NUEVO>> Gracias por contarme lo del trabajo y lo de tu pareja. ¿Qué pasó en esa discusión?"
+
+      expect(Alethea.AI.PhiWorkerMock, :process, fn request ->
+        send(test_pid, {:request, request})
+        {:ok, ai_result(request.message_id, reply_text)}
+      end)
+
+      args = %{
+        patient_id: ctx.foundation_patient.id,
+        chat_id: @chat_id,
+        chat_id_hash: @chat_id_hash
+      }
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: args})
+      assert_receive {:request, request}
+
+      assert request.sanitized_content =~ "trabajo"
+      assert request.sanitized_content =~ "pareja"
+
+      reload = fn m -> Repo.get!(Message, m.id) end
+      reply_ids = [member_a, member_b] |> Enum.map(reload) |> Enum.map(& &1.replied_by_message_id)
+      assert [reply_id] = Enum.uniq(reply_ids)
+      refute is_nil(reply_id)
+
+      reply = Repo.get!(Message, reply_id)
+      refute decrypted_body(ctx, reply) =~ "<<"
+      assert reply.exploration_questions == 1
+      refute reply.closing_invitation_sent
+    end
+  end
+
+  describe "perform/1 — #393 S4: retry after rollback" do
+    test "a rollback-then-retry computes the same exploration_mode", ctx do
+      session = open_session(ctx)
+      maybe_seed_prior(ctx, session, {1, false})
+
+      {:ok, member} =
+        Clinical.save_telegram_message(
+          ctx.foundation_patient,
+          "primero",
+          "inbound",
+          "spontaneous",
+          to_string(unique_n())
+        )
+
+      test_pid = self()
+
+      stub(Alethea.AI.PhiWorkerMock, :process, fn request ->
+        send(test_pid, {:request, request})
+
+        receive do
+          :release -> {:ok, ai_result(request.message_id, "<<SIGUE>>\n¿Y qué más?")}
+        after
+          5_000 -> {:error, :never_released}
+        end
+      end)
+
+      args = %{
+        patient_id: ctx.foundation_patient.id,
+        chat_id: @chat_id,
+        chat_id_hash: @chat_id_hash
+      }
+
+      task = Task.async(fn -> TelegramBurstReplyWorker.perform(%Oban.Job{args: args}) end)
+
+      assert_receive {:request, first_request}, 5_000
+
+      {:ok, _newer} =
+        Clinical.save_telegram_message(
+          ctx.foundation_patient,
+          "segundo, llego durante la generacion",
+          "inbound",
+          "spontaneous",
+          to_string(unique_n())
+        )
+
+      send(task.pid, :release)
+      assert :ok = Task.await(task, 10_000)
+
+      # Rolled back: the first member is still unreplied.
+      refute Repo.get!(Message, member.id).replied_by_message_id
+
+      expect(Alethea.AI.PhiWorkerMock, :process, fn request ->
+        send(test_pid, {:request, request})
+        {:ok, ai_result(request.message_id, "<<SIGUE>>\n¿Y qué más?")}
+      end)
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: args})
+      assert_receive {:request, second_request}
+
+      assert first_request.exploration_mode == second_request.exploration_mode
+      assert first_request.exploration_mode == :open
+    end
+  end
+
   # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
@@ -177,14 +381,39 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
     :ok
   end
 
+  # S4 (crisis reset): backdates the newest `crisis_bypass` outbound
+  # reply for `ctx`'s patient so it unambiguously precedes whatever
+  # inbound comes next, for the same tie-break reason `maybe_seed_prior/3`
+  # backdates its own seeded reply.
+  defp backdate_newest_crisis_reply(ctx) do
+    crisis_reply =
+      Repo.one!(
+        from m in Message,
+          where:
+            m.patient_id == ^ctx.legacy_patient.id and m.behavior_type == "crisis_bypass" and
+              m.direction == "outbound",
+          order_by: [desc: m.timestamp, desc: m.id],
+          limit: 1
+      )
+
+    past = DateTime.utc_now() |> DateTime.add(-100, :second) |> DateTime.truncate(:second)
+
+    Repo.update_all(from(m in Message, where: m.id == ^crisis_reply.id), set: [timestamp: past])
+
+    :ok
+  end
+
   # Runs one inbound through the real worker chain, drives the armed
   # burst-reply job, and returns everything a test might assert on.
-  defp perform_scenario(ctx, raw_reply, n) do
+  # `result_fun` builds the `{:ok, chain_result}` the mock AI worker
+  # returns for `raw_reply` — defaults to an ordinary, non-truncated
+  # result (`ai_result/2`); S4's truncated-NUEVO scenario overrides it.
+  defp perform_scenario(ctx, raw_reply, n, result_fun \\ &ai_result/2) do
     test_pid = self()
 
     expect(Alethea.AI.PhiWorkerMock, :process, fn request ->
       send(test_pid, {:request, request})
-      {:ok, ai_result(request.message_id, raw_reply)}
+      {:ok, result_fun.(request.message_id, raw_reply)}
     end)
 
     assert :ok =
@@ -222,6 +451,15 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
       model_version: "phi-4-mini",
       behavior_type: :elicited
     }
+  end
+
+  # S4 (task 4.5): a reply the AI worker reports as cut off by the
+  # length limit. `TopicExploration.parse_marker/1` still reads its
+  # leading marker before the guard ever sees `truncated: true` and
+  # withholds it (design pipeline steps 6-8) — the truncation only
+  # replaces the delivered text, not the marker-driven reset.
+  defp ai_result_truncated(message_id, response) do
+    ai_result(message_id, response) |> Map.put(:truncated, true)
   end
 
   defp decrypted_body(ctx, %Message{} = message) do
