@@ -632,6 +632,38 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  def handle_info(
+        {:risk_uncertain, %{event_id: event_id, legacy_patient_id: patient_id}},
+        %{assigns: %{use_mock_data: false}} = socket
+      )
+      when is_binary(event_id) and is_binary(patient_id) do
+    professional = socket.assigns.current_professional
+
+    if is_valid_uuid?(patient_id) and Regex.match?(~r/\A[0-9a-f]{64}\z/, event_id) do
+      case Accounts.get_patient_for_professional(professional.id, patient_id) do
+        nil ->
+          {:noreply, socket}
+
+        patient ->
+          notif =
+            NotificationCenter.build_notification(:risk_uncertain, %{
+              event_key: event_id,
+              patient_id: patient.id,
+              patient_path: ~p"/dashboard/patients/#{patient.id}"
+            })
+
+          Phoenix.LiveView.send_update(NotificationCenter,
+            id: "notification-center",
+            new_notification: notif
+          )
+
+          {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:patient_created, patient}, socket) do
     if patient.professional_id == socket.assigns.current_professional.id do
       patients = Accounts.list_patients(socket.assigns.current_professional.id)
