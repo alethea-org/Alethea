@@ -79,10 +79,16 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
   enqueue delivery without a second lookup).
   """
   @spec arm(%{patient_id: binary(), chat_id: integer(), chat_id_hash: String.t()}) :: :ok
-  def arm(%{patient_id: _, chat_id: _, chat_id_hash: _} = args) do
+  def arm(args) when is_map(args) do
+    normalized = %{
+      patient_id: fetch!(args, :patient_id),
+      chat_id: fetch!(args, :chat_id),
+      chat_id_hash: fetch!(args, :chat_id_hash)
+    }
+
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    args
+    normalized
     |> new(scheduled_at: DateTime.add(now, @window_seconds, :second))
     |> Oban.insert!()
 

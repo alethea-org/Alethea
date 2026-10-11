@@ -74,7 +74,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Clinical.{Message, RunningSummary, SessionManager}
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
-  alias Alethea.Telegram.{ChatIdHash, LogRedactor}
+  alias Alethea.Telegram.{ChatIdHash, LogRedactor, RiskSignal}
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
 
   alias AletheaJobs.{
@@ -187,48 +187,250 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       # carries only the patient id, so it cannot affect the reply path.
       RunningSummary.schedule_if_due(legacy_patient.id, hash_prefix)
 
-      # The reply belongs to the session its inbound was recorded in; a
-      # resumed execution may observe a newer open session.
-      reply_session_id = inbound.session_id || session.id
+      # Record one bounded, content-free deterministic audit per inbound row.
+      # This runs before either existing response branch, and never invokes a
+      # model or changes diagnosis/emotion scheduling.
+      deterministic_result = CrisisMonitor.detect(text)
+      risk_signal = persist_risk_signal!(inbound, deterministic_result)
+      effective_result = effective_risk_result(deterministic_result, risk_signal)
 
-      case CrisisMonitor.detect(text) do
-        :safe ->
-          # One logical reply per inbound (#390): when a previous
-          # execution already persisted the reply, no generation happens;
-          # the persisted reply's delivery is re-established instead.
-          case Clinical.get_telegram_reply(inbound.id) do
-            nil ->
-              # #391: the safe path no longer generates synchronously.
-              # It arms (or renews) the patient's single debounced burst
-              # job — `TelegramBurstReplyWorker.arm/1` — which replies
-              # once for every uncovered inbound after ~45s of
-              # inactivity (R1). `reply_session_id` is not needed here:
-              # the burst job resolves its own session when it saves
-              # the reply.
-              TelegramBurstReplyWorker.arm(%{
-                patient_id: foundation_patient.id,
-                chat_id: chat_id,
-                chat_id_hash: chat_id_hash
-              })
-
-            %Message{} = reply ->
-              resume_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, reply)
-          end
-
-        {:crisis, level, triggers} ->
-          handle_crisis_path(
-            foundation_patient,
-            legacy_patient,
-            chat_id,
-            chat_id_hash,
-            hash_prefix,
-            inbound,
-            level,
-            triggers,
-            reply_session_id
-          )
+      if effective_result == :uncertain do
+        handle_uncertain_path(
+          foundation_patient,
+          legacy_patient,
+          chat_id,
+          chat_id_hash,
+          hash_prefix,
+          inbound,
+          risk_signal
+        )
+      else
+        process_authoritative_result(
+          foundation_patient,
+          legacy_patient,
+          chat_id,
+          chat_id_hash,
+          hash_prefix,
+          text,
+          inbound,
+          effective_result,
+          session
+        )
       end
     end
+  end
+
+  defp effective_risk_result({:crisis, _, _} = current, _persisted), do: current
+
+  defp effective_risk_result(_current, %{"category" => "confirmed_crisis"} = persisted) do
+    severity =
+      case persisted["deterministic_severity"] do
+        "immediate" -> :immediate
+        "high" -> :high
+        "low" -> :low
+        _ -> :high
+      end
+
+    {:crisis, severity, Enum.take(persisted["rule_matches"] || [], 8)}
+  end
+
+  defp effective_risk_result(_current, %{"response_intent" => "fixed_uncertainty"}),
+    do: :uncertain
+
+  defp effective_risk_result(current, _persisted), do: current
+
+  defp process_authoritative_result(
+         foundation_patient,
+         legacy_patient,
+         chat_id,
+         chat_id_hash,
+         hash_prefix,
+         _text,
+         inbound,
+         deterministic_result,
+         session
+       ) do
+    # The reply belongs to the session its inbound was recorded in; a
+    # resumed execution may observe a newer open session.
+    reply_session_id = inbound.session_id || session.id
+
+    case deterministic_result do
+      :safe ->
+        # One logical reply per inbound (#390): when a previous
+        # execution already persisted the reply, no generation happens;
+        # the persisted reply's delivery is re-established instead.
+        case Clinical.get_telegram_reply(inbound.id) do
+          nil ->
+            # #391: the safe path no longer generates synchronously.
+            # It arms (or renews) the patient's single debounced burst
+            # job — `TelegramBurstReplyWorker.arm/1` — which replies
+            # once for every uncovered inbound after ~45s of
+            # inactivity (R1). `reply_session_id` is not needed here:
+            # the burst job resolves its own session when it saves
+            # the reply.
+            TelegramBurstReplyWorker.arm(%{
+              patient_id: foundation_patient.id,
+              chat_id: chat_id,
+              chat_id_hash: chat_id_hash
+            })
+
+          %Message{} = reply ->
+            resume_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, reply)
+        end
+
+      {:crisis, level, triggers} ->
+        handle_crisis_path(
+          foundation_patient,
+          legacy_patient,
+          chat_id,
+          chat_id_hash,
+          hash_prefix,
+          inbound,
+          level,
+          triggers,
+          reply_session_id
+        )
+    end
+  end
+
+  defp handle_uncertain_path(
+         foundation_patient,
+         legacy_patient,
+         chat_id,
+         chat_id_hash,
+         hash_prefix,
+         inbound,
+         risk_signal
+       ) do
+    # One patient -> reply ordering shared with outbound dispatch. The coverage
+    # change and fixed-reply creation commit together, so neither a dispatcher
+    # nor a burst generator can observe released coverage without its reply.
+    {:ok, reply} =
+      Repo.transaction(fn ->
+        :ok = Clinical.lock_patient_conversation!(legacy_patient.id)
+
+        case Clinical.get_telegram_reply(inbound.id) do
+          %Message{} = existing ->
+            {:existing, existing}
+
+          nil ->
+            pending = Clinical.pending_reply_ids(legacy_patient.id)
+
+            candidates =
+              Clinical.crisis_cover_candidates(
+                legacy_patient.id,
+                inbound.telegram_message_id,
+                pending
+              )
+
+            Clinical.supersede_absorbed(pending)
+            Clinical.release_coverage(pending)
+
+            case Clinical.save_telegram_reply(
+                   foundation_patient,
+                   RiskSignal.uncertainty_copy(),
+                   "spontaneous",
+                   inbound.id,
+                   inbound.session_id
+                 ) do
+              {:ok, created} ->
+                case Clinical.cover_members(candidates, created.id) do
+                  count when count == length(candidates) -> {:created, created}
+                  _ -> Repo.rollback(:coverage_lost)
+                end
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
+        end
+      end)
+
+    category =
+      case risk_signal["category"] do
+        "uncertain" -> :uncertain
+        "escalated" -> :escalated
+        _ -> :uncertain
+      end
+
+    event_id = uncertainty_event_id(inbound.id, risk_signal)
+
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "psychologist:alerts",
+      {:risk_uncertain,
+       %{
+         event_id: event_id,
+         patient_id: foundation_patient.id,
+         legacy_patient_id: legacy_patient.id,
+         inbound_message_id: inbound.id,
+         category: category,
+         detector_version: risk_signal["detector_version"],
+         classified_at: risk_signal["classified_at"],
+         detector_status: risk_signal["detector_status"],
+         unavailable_reason: risk_signal["unavailable_reason"],
+         rule_digest: risk_signal["rule_digest"],
+         at: DateTime.utc_now()
+       }}
+    )
+
+    case reply do
+      {:existing, existing} ->
+        resume_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, existing)
+
+      {:created, created} ->
+        deliver_uncertain_reply(
+          created,
+          foundation_patient,
+          chat_id,
+          chat_id_hash,
+          hash_prefix,
+          RiskSignal.uncertainty_copy()
+        )
+    end
+  end
+
+  defp uncertainty_event_id(inbound_id, signal) when is_binary(inbound_id) do
+    category =
+      case signal["category"] do
+        "uncertain" -> "uncertain"
+        "escalated" -> "escalated"
+        _ -> "uncertain"
+      end
+
+    version = signal["detector_version"]
+
+    with true <-
+           Regex.match?(
+             ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i,
+             inbound_id
+           ),
+         true <- is_binary(version) and byte_size(version) in 1..48 do
+      :crypto.hash(:sha256, [
+        "telegram-risk-v1:",
+        String.downcase(inbound_id),
+        ":",
+        category,
+        ":",
+        Integer.to_string(byte_size(version)),
+        ":",
+        version
+      ])
+      |> Base.encode16(case: :lower)
+    else
+      _ -> raise ArgumentError, "invalid persisted risk event identity"
+    end
+  end
+
+  defp deliver_uncertain_reply(
+         reply,
+         foundation_patient,
+         chat_id,
+         chat_id_hash,
+         hash_prefix,
+         body
+       ) do
+    deliver_reply(foundation_patient, chat_id, chat_id_hash, hash_prefix, reply, body)
+    :ok
   end
 
   # ----------------------------------------------------------------
@@ -310,6 +512,46 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # onto the job the first execution enqueued instead of analysing the
   # same message twice, and still enqueues it when the first execution
   # died before reaching this point.
+  defp persist_risk_signal!(inbound, deterministic_result) do
+    {:ok, signal} =
+      RiskSignal.build(
+        deterministic_result,
+        optional_risk_signal(inbound, deterministic_result),
+        "deterministic-rules-v1",
+        DateTime.utc_now()
+      )
+
+    case Clinical.initialize_telegram_risk_signal(inbound, RiskSignal.to_map(signal)) do
+      {:ok, persisted} ->
+        persisted.risk_signal
+
+      {:error, reason} ->
+        raise "TelegramMessageWorker: failed to persist risk audit " <>
+                "(reason=#{SafeReason.for_log(reason)})"
+    end
+  end
+
+  if Application.compile_env(:alethea, :env) == :test do
+    defp optional_risk_signal(%Message{risk_signal: persisted}, _deterministic)
+         when is_map(persisted), do: {:unavailable, :disabled}
+
+    defp optional_risk_signal(_inbound, {:crisis, _, _}), do: {:unavailable, :disabled}
+
+    defp optional_risk_signal(_inbound, :safe) do
+      case Application.get_env(:alethea, :telegram_additional_risk_signal) do
+        provider when is_function(provider, 0) -> provider.()
+        nil -> {:unavailable, :disabled}
+        _ -> {:unavailable, :error}
+      end
+    rescue
+      _ -> {:unavailable, :error}
+    catch
+      _, _ -> {:unavailable, :error}
+    end
+  else
+    defp optional_risk_signal(_inbound, _deterministic), do: {:unavailable, :disabled}
+  end
+
   defp enqueue_emotion_analysis(message_id, hash_prefix) do
     %{message_id: message_id}
     |> EmotionAnalysisWorker.new(unique: [keys: [:message_id], period: :infinity, states: :all])
@@ -692,6 +934,11 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     persisted =
       case Clinical.get_telegram_reply(inbound.id) do
         %Message{} = existing ->
+          # Current deterministic rules can confirm a crisis after an earlier
+          # uncertainty response was persisted. Preserve that reply and its
+          # delivery state, but still apply the existing urgent-intervention
+          # side effect. Never create a second reply or diagnosis on replay.
+          ensure_existing_crisis_urgent!(legacy_patient)
           {:resumed, existing, 0}
 
         nil ->
@@ -841,6 +1088,18 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
         :ok
     end
+  end
+
+  defp ensure_existing_crisis_urgent!(legacy_patient) do
+    {:ok, _patient} =
+      Repo.transaction(fn ->
+        :ok = Clinical.lock_patient_conversation!(legacy_patient.id)
+
+        case Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true}) do
+          {:ok, patient} -> patient
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
   end
 
   # ----------------------------------------------------------------

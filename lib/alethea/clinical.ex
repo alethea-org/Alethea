@@ -250,6 +250,35 @@ defmodule Alethea.Clinical do
     end
   end
 
+  @doc """
+  Atomically initializes the bounded risk audit on an inbound Telegram row.
+  The row lock makes the first classification authoritative across retries and
+  concurrent worker executions; later calls return that persisted value.
+  """
+  @spec initialize_telegram_risk_signal(Message.t(), map()) ::
+          {:ok, Message.t()} | {:error, term()}
+  def initialize_telegram_risk_signal(%Message{direction: "inbound", id: id}, signal)
+      when is_map(signal) do
+    Repo.transaction(fn ->
+      inbound =
+        Repo.one!(
+          from(m in Message, where: m.id == ^id and m.direction == "inbound", lock: "FOR UPDATE")
+        )
+
+      case inbound.risk_signal do
+        nil -> Repo.update!(Ecto.Changeset.change(inbound, risk_signal: signal))
+        _persisted -> inbound
+      end
+    end)
+    |> case do
+      {:ok, inbound} -> {:ok, inbound}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def initialize_telegram_risk_signal(_inbound, _signal),
+    do: {:error, :invalid_inbound_or_signal}
+
   defp get_telegram_inbound(patient_id, telegram_message_id) do
     Repo.one(
       from(m in Message,
@@ -378,7 +407,20 @@ defmodule Alethea.Clinical do
     end
   end
 
+  defp latest_uncertain_telegram_id(patient_id) do
+    from(u in Message,
+      where:
+        u.patient_id == ^patient_id and u.direction == "inbound" and
+          fragment("?->>'response_intent' = 'fixed_uncertainty'", u.risk_signal),
+      select: fragment("?::bigint", u.telegram_message_id),
+      order_by: [desc: fragment("?::bigint", u.telegram_message_id)],
+      limit: 1
+    )
+  end
+
   defp burst_members_query(patient_id) do
+    latest_uncertain_id = latest_uncertain_telegram_id(patient_id)
+
     pending_reply_ids =
       from(r in Message,
         where:
@@ -391,6 +433,11 @@ defmodule Alethea.Clinical do
       where:
         m.patient_id == ^patient_id and m.direction == "inbound" and
           not is_nil(m.telegram_message_id) and
+          fragment(
+            "?::bigint > COALESCE((?), 0)",
+            m.telegram_message_id,
+            subquery(latest_uncertain_id)
+          ) and
           (is_nil(m.replied_by_message_id) or
              m.replied_by_message_id in subquery(pending_reply_ids)),
       order_by: fragment("?::bigint", m.telegram_message_id)
@@ -488,11 +535,18 @@ defmodule Alethea.Clinical do
   """
   @spec uncovered_inbound?(binary()) :: boolean()
   def uncovered_inbound?(patient_id) do
+    latest_uncertain = latest_uncertain_telegram_id(patient_id)
+
     Repo.exists?(
       from(m in Message,
         where:
           m.patient_id == ^patient_id and m.direction == "inbound" and
-            not is_nil(m.telegram_message_id) and is_nil(m.replied_by_message_id)
+            not is_nil(m.telegram_message_id) and is_nil(m.replied_by_message_id) and
+            fragment(
+              "?::bigint > COALESCE((?), 0)",
+              m.telegram_message_id,
+              subquery(latest_uncertain)
+            )
       )
     )
   end
@@ -618,6 +672,11 @@ defmodule Alethea.Clinical do
   def claim_telegram_delivery(message_id) do
     {:ok, result} =
       Repo.transaction(fn ->
+        patient_id =
+          Repo.one!(from(m in Message, where: m.id == ^message_id, select: m.patient_id))
+
+        :ok = lock_patient_conversation!(patient_id)
+
         case claim_or_supersede(message_id) do
           :claimed ->
             :claimed
@@ -653,6 +712,10 @@ defmodule Alethea.Clinical do
                 SELECT 1 FROM messages i
                 WHERE i.patient_id = ? AND i.direction = 'inbound'
                   AND i.replied_by_message_id IS NULL
+                  AND i.risk_signal->>'response_intent' IS DISTINCT FROM 'fixed_uncertainty'
+                  AND i.telegram_message_id::bigint > COALESCE((SELECT MAX(u.telegram_message_id::bigint)
+                    FROM messages u WHERE u.patient_id = i.patient_id AND u.direction = 'inbound'
+                      AND u.risk_signal->>'response_intent' = 'fixed_uncertainty'), 0)
               ) THEN 'superseded' ELSE 'sending' END
               """,
               m.patient_id

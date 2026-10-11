@@ -21,6 +21,9 @@ defmodule Alethea.Clinical.Message do
     # rows. Set programmatically through `Alethea.Clinical` (never cast).
     # Non-sensitive metadata — the content stays in `encrypted_content`.
     field(:delivery_state, :string)
+    # Bounded, content-free risk audit for inbound Telegram messages. Set only
+    # by Alethea.Clinical; deliberately excluded from untrusted changesets.
+    field(:risk_signal, :map)
     # The id Telegram returned for the delivered message.
     field(:delivered_telegram_message_id, :string)
     field(:encrypted_content, :binary)
