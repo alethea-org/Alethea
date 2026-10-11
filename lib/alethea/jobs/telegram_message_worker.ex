@@ -305,7 +305,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     # One patient -> reply ordering shared with outbound dispatch. The coverage
     # change and fixed-reply creation commit together, so neither a dispatcher
     # nor a burst generator can observe released coverage without its reply.
-    {:ok, reply} =
+    transaction_result =
       Repo.transaction(fn ->
         :ok = Clinical.lock_patient_conversation!(legacy_patient.id)
 
@@ -344,6 +344,18 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
             end
         end
       end)
+
+    reply =
+      case transaction_result do
+        {:ok, reply} ->
+          reply
+
+        {:error, :coverage_lost} ->
+          raise "uncertainty reply transaction failed: coverage_lost"
+
+        {:error, _reason} ->
+          raise "uncertainty reply transaction failed: reply_persistence_failed"
+      end
 
     category =
       case risk_signal["category"] do
