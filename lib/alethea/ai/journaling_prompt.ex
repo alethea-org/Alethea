@@ -15,6 +15,16 @@ defmodule Alethea.AI.JournalingPrompt do
 
   @type example :: %{situation: atom(), patient: String.t(), alethea: String.t()}
 
+  # #393 S2: the leading markers the model is instructed to prefix its
+  # reply with (design §1/§4). Defined here, the module that renders
+  # the prompt, so the literal strings exist in one place only;
+  # `Alethea.Telegram.TopicExploration` reads them through `markers/0`
+  # instead of duplicating them (Telegram -> AI, the direction
+  # `JournalingReply` already depends in). The prompt text itself is
+  # NOT changed in this slice (S4) — only these constants are added.
+  @new_marker "<<NUEVO>>"
+  @same_marker "<<SIGUE>>"
+
   @examples [
     %{
       situation: :journaling,
@@ -106,4 +116,12 @@ defmodule Alethea.AI.JournalingPrompt do
   """
   @spec examples() :: [example()]
   def examples, do: @examples
+
+  @doc """
+  The leading markers the model prefixes its reply with (#393):
+  `:new` for a new situation, `:same` for the same one. The single
+  place other modules read these literal strings from.
+  """
+  @spec markers() :: %{new: String.t(), same: String.t()}
+  def markers, do: %{new: @new_marker, same: @same_marker}
 end
