@@ -28,11 +28,19 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
         {:ok, socket}
 
       notif ->
-        notifications =
-          [notif | socket.assigns.notifications]
-          |> Enum.take(@max_notifications)
+        already_present? =
+          notif.event_key &&
+            Enum.any?(socket.assigns.notifications, &(&1.event_key == notif.event_key))
 
-        {:ok, assign(socket, :notifications, notifications)}
+        if already_present? do
+          {:ok, socket}
+        else
+          notifications =
+            [notif | socket.assigns.notifications]
+            |> Enum.take(@max_notifications)
+
+          {:ok, assign(socket, :notifications, notifications)}
+        end
     end
   end
 
@@ -128,7 +136,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
         <div :if={@page_items != []}>
           <div
             :for={notif <- @page_items}
-            id={"notif-#{notif.id}"}
+            id={"notif-#{notif.event_key || notif.id}"}
             class={["notif__item", !notif.read && "notif__item--unread"]}
           >
             <span
@@ -139,6 +147,14 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
             <div style="flex:1; min-width:0;">
               <p class="notif__msg">{notif.message}</p>
 
+              <.link
+                :if={notif.patient_path}
+                navigate={notif.patient_path}
+                class="link-button"
+                aria-label="Ver paciente asociado a la señal no concluyente"
+              >
+                Ver paciente
+              </.link>
               <p class="notif__time">{relative_time(notif.inserted_at)}</p>
             </div>
 
@@ -196,6 +212,8 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
       severity: notification_severity(type, attrs),
       message: notification_message(type, attrs),
       patient_id: Map.get(attrs, :patient_id),
+      patient_path: Map.get(attrs, :patient_path),
+      event_key: Map.get(attrs, :event_key),
       read: false,
       inserted_at: DateTime.utc_now()
     }
@@ -214,6 +232,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
   end
 
   defp notification_severity(:crisis_detected, _), do: :warning
+  defp notification_severity(:risk_uncertain, _), do: :info
   defp notification_severity(:patient_created, _), do: :info
   defp notification_severity(_, _), do: :info
 
@@ -225,6 +244,9 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
   defp notification_message(:crisis_detected, %{level: level}) do
     "Crisis detectada (nivel: #{level})"
   end
+
+  defp notification_message(:risk_uncertain, _),
+    do: "Señal de riesgo no concluyente. Revisar con el paciente."
 
   defp notification_message(:patient_created, %{patient_alias: alias})
        when is_binary(alias) do
