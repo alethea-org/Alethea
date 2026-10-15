@@ -183,16 +183,21 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
       enqueue_emotion_analysis(inbound.id, hash_prefix)
 
-      # #394: schedule the running-summary job when due. Never raises and
-      # carries only the patient id, so it cannot affect the reply path.
-      RunningSummary.schedule_if_due(legacy_patient.id, hash_prefix)
-
       # Record one bounded, content-free deterministic audit per inbound row.
       # This runs before either existing response branch, and never invokes a
       # model or changes diagnosis/emotion scheduling.
       deterministic_result = CrisisMonitor.detect(text)
       risk_signal = persist_risk_signal!(inbound, deterministic_result)
       effective_result = effective_risk_result(deterministic_result, risk_signal)
+
+      # #394: schedule the running-summary job when due. Never raises and
+      # carries only the patient id, so it cannot affect the reply path.
+      # #399: deliberately AFTER `persist_risk_signal!/2` — the summary
+      # cadence counts journaling inbounds only, and a crisis trigger is
+      # identified by the very `risk_signal` written above. Scheduling
+      # before the audit would count this inbound while it is still
+      # indistinguishable from an ordinary one.
+      RunningSummary.schedule_if_due(legacy_patient.id, hash_prefix)
 
       if effective_result == :uncertain do
         handle_uncertain_path(

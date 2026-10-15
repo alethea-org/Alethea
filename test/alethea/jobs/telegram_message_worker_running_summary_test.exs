@@ -61,9 +61,16 @@ defmodule Alethea.Jobs.TelegramMessageWorkerRunningSummaryTest do
       assert all_enqueued(worker: RunningSummaryWorker) == []
     end
 
-    test "a crisis inbound counts toward the cadence", ctx do
+    # #399: a crisis trigger inbound leaves the summarized population
+    # (collapsed into a placeholder turn in the content), so it does not
+    # count toward the cadence; the next ordinary inbound does.
+    test "a crisis inbound does not count toward the cadence", ctx do
       inbound(1..9)
       assert :ok = perform("Quiero morir", 10)
+
+      assert all_enqueued(worker: RunningSummaryWorker) == []
+
+      assert :ok = perform("mensaje 11", 11)
 
       assert [%{args: %{"patient_id" => id}}] = all_enqueued(worker: RunningSummaryWorker)
       assert id == ctx.legacy_patient.id
