@@ -64,9 +64,18 @@ defmodule Alethea.Clinical.RunningSummaryScheduleTest do
       assert [_one] = jobs()
     end
 
-    test "crisis inbounds count toward the batch", ctx do
+    # #399: a crisis trigger inbound leaves the summarized population
+    # (it collapses into a placeholder turn in the content), so it does
+    # not advance the batch cadence.
+    test "a crisis trigger inbound does not count toward the batch", ctx do
       seed(ctx.patient, ctx.dek, 1..9)
-      seed(ctx.patient, ctx.dek, 10..10, inbound_behavior: "crisis_bypass")
+      trigger = turn(ctx.patient, ctx.dek, "inbound", "spontaneous", "crisis", 30)
+      mark_crisis_trigger(trigger)
+
+      assert :ok = RunningSummary.schedule_if_due(ctx.patient.id, "abcd1234")
+      assert jobs() == []
+
+      seed(ctx.patient, ctx.dek, 10..10)
 
       assert :ok = RunningSummary.schedule_if_due(ctx.patient.id, "abcd1234")
       assert [_one] = jobs()

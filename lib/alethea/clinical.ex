@@ -15,7 +15,7 @@ defmodule Alethea.Clinical do
   import Ecto.Query, warn: false
 
   alias Alethea.Repo
-  alias Alethea.Clinical.{Message, Outbox, Summary, Trend}
+  alias Alethea.Clinical.{CrisisExchange, Message, Outbox, Summary, Trend}
   alias Alethea.AI.Diagnosis
   alias Alethea.Clinical.EmotionAnalysis
   alias Alethea.Accounts.EncryptionKey
@@ -945,6 +945,14 @@ defmodule Alethea.Clinical do
 
   Content is returned decrypted and unsanitized; callers that hand it to
   a model must pass it through `Alethea.AI.Sanitizer` first.
+
+  ## Crisis exchanges (#399)
+
+  A crisis exchange — the triggering inbound and its `crisis_bypass`
+  reply — never reaches the model verbatim: it is collapsed into one
+  neutral placeholder turn by `Alethea.Clinical.CrisisExchange.turns/2`
+  (which documents the identification rule). The placeholder counts as
+  one of the `limit` turns; the rows it replaces are not decrypted.
   """
   @spec list_conversation_turns(Alethea.Accounts.Patient.t(), Message.t(), pos_integer()) ::
           {:ok, [conversation_turn()]} | {:error, term()}
@@ -953,21 +961,13 @@ defmodule Alethea.Clinical do
     with {:ok, dek} <- patient_dek(patient) do
       patient.id
       |> turns_before(current, limit)
-      |> Enum.reduce_while({:ok, []}, fn message, {:ok, turns} ->
-        case decrypt_message_content(message, dek) do
-          {:ok, content} ->
-            {:cont, {:ok, [%{role: turn_role(message), content: content} | turns]}}
-
-          {:error, reason} ->
-            {:halt, {:error, reason}}
-        end
-      end)
+      |> CrisisExchange.turns(dek)
     end
   end
 
-  # Newest first, so `limit` keeps the most recent turns; the reduce in
-  # `list_conversation_turns/3` prepends and thereby restores
-  # chronological order.
+  # Newest first, so `limit` keeps the most recent turns;
+  # `CrisisExchange.turns/2` restores chronological order while
+  # collapsing each crisis exchange into one placeholder turn (#399).
   defp turns_before(patient_id, %Message{} = current, limit) do
     Message
     |> before_snapshot(patient_id, current)
@@ -980,6 +980,11 @@ defmodule Alethea.Clinical do
   # `exploration_state/3` — bounded strictly before `current` (by
   # timestamp, then direction, then id) and excluding `superseded`
   # rows. Pure refactor, no behavior change (design §2).
+  #
+  # #399: deliberately NOT filtered for crisis exchanges here —
+  # `exploration_state/3` must keep seeing `crisis_bypass` rows so its
+  # stretch resets after a crisis. The history population filter lives
+  # downstream, in `CrisisExchange.turns/2`.
   defp before_snapshot(query, patient_id, %Message{} = current) do
     query
     |> where([m], m.patient_id == ^patient_id)
@@ -992,9 +997,6 @@ defmodule Alethea.Clinical do
            m.id < ^current.id)
     )
   end
-
-  defp turn_role(%Message{direction: "inbound"}), do: :patient
-  defp turn_role(%Message{direction: "outbound"}), do: :alethea
 
   @doc """
   Reads the exploration stretch state for the reply about to be

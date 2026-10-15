@@ -81,6 +81,24 @@ defmodule Alethea.RunningSummaryHelper do
     Repo.get!(Message, message.id)
   end
 
+  @doc "Marks an inbound as the crisis trigger (#399 identification rule)."
+  def mark_crisis_trigger(%Message{} = inbound) do
+    Repo.update_all(from(m in Message, where: m.id == ^inbound.id),
+      set: [risk_signal: %{"category" => "confirmed_crisis"}]
+    )
+
+    Repo.get!(Message, inbound.id)
+  end
+
+  @doc "Links a `crisis_bypass` reply to the inbound that triggered it (#399)."
+  def mark_crisis_reply(%Message{} = reply, %Message{} = trigger) do
+    Repo.update_all(from(m in Message, where: m.id == ^reply.id),
+      set: [behavior_type: "crisis_bypass", reply_to_message_id: trigger.id]
+    )
+
+    Repo.get!(Message, reply.id)
+  end
+
   @doc "Writes a stored row directly (ciphertext sealed under `dek`)."
   def put_row(patient, dek, text, mode, expected, count, target) do
     {:ok, ciphertext} = PatientVault.encrypt(text, dek)

@@ -7,6 +7,13 @@ defmodule Alethea.Clinical.RunningSummary do
   mismatched tenant at the database. Writes are compare-and-swap on
   `covered_inbound_count`, so concurrent jobs can never regress or overwrite
   each other. The module never logs or returns plaintext outside `{:ok, text}`.
+
+  #399: the summarized population is the journaling population — crisis
+  exchanges (the triggering inbound and its `crisis_bypass` reply) are
+  collapsed into one neutral placeholder turn, and trigger inbounds are
+  excluded from the cadence count, exactly as in
+  `Alethea.Clinical.list_conversation_turns/3`. See
+  `Alethea.Clinical.CrisisExchange` for the identification rule.
   """
 
   import Ecto.Query
@@ -16,6 +23,7 @@ defmodule Alethea.Clinical.RunningSummary do
   alias Alethea.Accounts.Patient
   alias Alethea.AI.LLMConfig
   alias Alethea.Clinical
+  alias Alethea.Clinical.CrisisExchange
   alias Alethea.Clinical.Message
   alias Alethea.Clinical.RunningSummary.Snapshot
   alias Alethea.Encryption.PatientVault
@@ -117,18 +125,20 @@ defmodule Alethea.Clinical.RunningSummary do
   order as `Clinical.list_conversation_turns/3` (superseded replies excluded),
   up to and including the target inbound, newest #{@window_cap} turns, oldest
   first. Incremental plans start at the anchor's (closed) second.
+
+  #399: crisis exchanges collapse into one neutral placeholder turn,
+  exactly as in the history, so both consumers see one population.
   """
   @spec window_turns(Patient.t(), plan(), binary()) ::
           {:ok, [Clinical.conversation_turn()]} | {:error, :decrypt_failed}
   def window_turns(%Patient{id: patient_id}, %{target: target} = plan, dek) do
     patient_id
     |> window_messages(target, Map.get(plan, :lower_bound))
-    |> Enum.reduce_while({:ok, []}, fn message, {:ok, turns} ->
-      case Clinical.decrypt_message_content(message, dek) do
-        {:ok, content} -> {:cont, {:ok, [%{role: role(message), content: content} | turns]}}
-        _ -> {:halt, {:error, :decrypt_failed}}
-      end
-    end)
+    |> CrisisExchange.turns(dek)
+    |> case do
+      {:ok, turns} -> {:ok, turns}
+      {:error, _reason} -> {:error, :decrypt_failed}
+    end
   end
 
   @doc "True when a row exists for exactly this patient and professional. No decrypt."
@@ -190,11 +200,12 @@ defmodule Alethea.Clinical.RunningSummary do
   end
 
   defp assess(patient) do
+    # #399: the cadence counts journaling inbounds only — a crisis
+    # trigger is not part of the summarized population.
     count =
-      Repo.aggregate(
-        from(m in Message, where: m.patient_id == ^patient.id and m.direction == "inbound"),
-        :count
-      )
+      from(m in Message, where: m.patient_id == ^patient.id and m.direction == "inbound")
+      |> CrisisExchange.exclude_members()
+      |> Repo.aggregate(:count)
 
     row =
       patient
@@ -243,6 +254,7 @@ defmodule Alethea.Clinical.RunningSummary do
     target =
       Message
       |> where([m], m.patient_id == ^patient.id and m.direction == "inbound")
+      |> CrisisExchange.exclude_members()
       |> order_by([m], asc: m.timestamp, asc: m.id)
       |> offset(^(plan.target_count - 1))
       |> limit(1)
@@ -253,6 +265,8 @@ defmodule Alethea.Clinical.RunningSummary do
 
   # Mirrors `Clinical.turns_before/3` (patient scope, superseded replies
   # excluded, same tuple order) with the bound inclusive of the target.
+  # Crisis rows are kept here and collapsed downstream, in
+  # `CrisisExchange.turns/2` — same rule as the history (#399).
   defp window_messages(patient_id, target, lower_bound) do
     Message
     |> where([m], m.patient_id == ^patient_id)
@@ -269,9 +283,6 @@ defmodule Alethea.Clinical.RunningSummary do
     |> limit(^@window_cap)
     |> Repo.all()
   end
-
-  defp role(%Message{direction: "inbound"}), do: :patient
-  defp role(%Message{direction: "outbound"}), do: :alethea
 
   # Atoms and the redacted chat prefix only: never message text or reasons.
   defp warn(reason, hash_prefix) do

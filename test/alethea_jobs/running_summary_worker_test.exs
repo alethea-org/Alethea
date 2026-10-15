@@ -11,6 +11,7 @@ defmodule AletheaJobs.RunningSummaryWorkerTest do
   alias Alethea.Accounts.AuditLog
   alias Alethea.AI.PhiWorkerMock
   alias Alethea.Clinical
+  alias Alethea.Clinical.CrisisExchange
   alias Alethea.Clinical.Message
   alias Alethea.Clinical.RunningSummary
   alias Alethea.Clinical.RunningSummary.Snapshot
@@ -75,7 +76,9 @@ defmodule AletheaJobs.RunningSummaryWorkerTest do
       assert row(ctx.patient).covered_through_message_id == target.id
     end
 
-    test "window is capped at 40 turns and keeps crisis_bypass replies in order", ctx do
+    # #399: the `crisis_bypass` reply is never supplied verbatim — it
+    # collapses into the neutral placeholder turn, in order.
+    test "window is capped at 40 turns and collapses a crisis reply into the placeholder", ctx do
       [_ | _] = inbounds = seed(ctx.patient, ctx.dek, 1..30)
       turn(ctx.patient, ctx.dek, "outbound", "crisis_bypass", "alethea crisis", 41)
       target = Enum.at(inbounds, 29)
@@ -87,7 +90,29 @@ defmodule AletheaJobs.RunningSummaryWorkerTest do
       request = requested()
       assert length(request.turns) == 40
       assert request.turns == before ++ [%{role: :patient, content: "paciente 30"}]
-      assert %{role: :alethea, content: "alethea crisis"} in request.turns
+      assert %{role: :alethea, content: CrisisExchange.placeholder_text()} in request.turns
+      refute "alethea crisis" in Enum.map(request.turns, & &1.content)
+    end
+
+    # #399: one placeholder turn per crisis exchange (trigger inbound +
+    # `crisis_bypass` reply) — the trigger's words and the crisis copy
+    # never reach the summarizer.
+    test "a crisis exchange collapses into one placeholder turn in the window", ctx do
+      seed(ctx.patient, ctx.dek, 1..12)
+      trigger = turn(ctx.patient, ctx.dek, "inbound", "spontaneous", "disparador", 15)
+      mark_crisis_trigger(trigger)
+      reply = turn(ctx.patient, ctx.dek, "outbound", "elicited", "copy de crisis", 16)
+      mark_crisis_reply(reply, trigger)
+      stub_summary()
+
+      assert :ok = run(ctx.patient)
+
+      request = requested()
+      contents = Enum.map(request.turns, & &1.content)
+      assert length(request.turns) == 20
+      assert Enum.count(contents, &(&1 == CrisisExchange.placeholder_text())) == 1
+      refute "disparador" in contents
+      refute "copy de crisis" in contents
     end
 
     test "a superseded reply is withheld from the model; sent and pending ones are supplied",
