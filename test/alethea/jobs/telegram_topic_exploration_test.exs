@@ -350,13 +350,18 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
   # `uncovered_inbound?/1` nor `list_burst_members/1` folds it into
   # the new burst (design's test-setup note).
   defp maybe_seed_prior(ctx, session, {questions, closing_invitation_sent}) do
+    # Numeric, like real Telegram message ids: the burst/crisis queries
+    # cast `telegram_message_id::bigint`, which aborts the whole query
+    # on a non-numeric value whenever the plan evaluates the cast
+    # before the row's other predicates (plan-order dependent, and
+    # therefore a latent flake in every test that seeds fake ids).
     {:ok, prior_inbound} =
       Clinical.save_telegram_message(
         ctx.foundation_patient,
         "previo",
         "inbound",
         "spontaneous",
-        "prior-#{unique_n()}",
+        to_string(unique_n()),
         session.id
       )
 

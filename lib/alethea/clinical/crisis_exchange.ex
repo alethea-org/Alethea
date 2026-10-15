@@ -101,7 +101,9 @@ defmodule Alethea.Clinical.CrisisExchange do
       step(message, turns, seen, trigger_ids, dek)
     end)
     |> case do
-      {:ok, turns, _seen} -> {:ok, turns}
+      # The walk is chronological and prepends, so the accumulator is
+      # newest first: reverse once to return oldest first.
+      {:ok, turns, _seen} -> {:ok, Enum.reverse(turns)}
       {:error, reason} -> {:error, reason}
     end
   end
