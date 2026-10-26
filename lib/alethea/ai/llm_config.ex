@@ -33,10 +33,11 @@ defmodule Alethea.AI.LLMConfig do
   """
 
   alias Alethea.AI.ChatModels.OllamaChat
+  alias Alethea.AI.ChatModels.AnthropicChat
   alias Alethea.AI.Retry
   alias LangChain.ChatModels.ChatOpenAI
 
-  @type provider :: :local | :cloud
+  @type provider :: :local | :cloud | :anthropic
   @type chain_name ::
           :guided_conversation
           | :session_summary
@@ -49,7 +50,7 @@ defmodule Alethea.AI.LLMConfig do
 
   @type config :: %__MODULE__.Config{
           provider: provider(),
-          model: String.t(),
+          model: String.t() | nil,
           api_key: String.t() | nil,
           endpoint_url: String.t() | nil,
           temperature: float(),
@@ -76,7 +77,7 @@ defmodule Alethea.AI.LLMConfig do
 
     @type t :: %__MODULE__{
             provider: Alethea.AI.LLMConfig.provider(),
-            model: String.t(),
+            model: String.t() | nil,
             api_key: String.t() | nil,
             endpoint_url: String.t() | nil,
             temperature: float(),
@@ -135,9 +136,14 @@ defmodule Alethea.AI.LLMConfig do
     %Config{
       provider: provider,
       model:
-        Keyword.get(overrides, :model) ||
-          Keyword.get(chain_config, :model) ||
-          Keyword.get(defaults, :model, default_model(provider)),
+        resolve_model(
+          provider,
+          overrides,
+          chain_config,
+          chain_provider_config,
+          global_provider_config,
+          defaults
+        ),
       api_key: api_key,
       endpoint_url: endpoint_url,
       temperature:
@@ -163,7 +169,8 @@ defmodule Alethea.AI.LLMConfig do
   @doc """
   Construye un LLM instance listo para usar.
   """
-  @spec build_llm(config()) :: {:ok, OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
+  @spec build_llm(config()) ::
+          {:ok, OllamaChat.t() | ChatOpenAI.t() | AnthropicChat.t()} | {:error, String.t()}
   def build_llm(%Config{provider: provider, endpoint_url: endpoint_url} = config) do
     # A blank endpoint is not an endpoint: the adapters would either fall
     # back to their own localhost default or request a relative path.
@@ -203,10 +210,34 @@ defmodule Alethea.AI.LLMConfig do
     end
   end
 
+  defp build_chat_model(%Config{provider: :anthropic} = config) do
+    cond do
+      not usable_api_key?(config.api_key) ->
+        {:error, "API key required for anthropic provider"}
+
+      not is_binary(config.model) or String.trim(config.model) == "" ->
+        {:error, "Model required for anthropic provider"}
+
+      true ->
+        case AnthropicChat.new(%{
+               model: config.model,
+               api_key: config.api_key,
+               endpoint: config.endpoint_url,
+               temperature: config.temperature,
+               max_tokens: config.max_tokens,
+               stream: config.stream,
+               receive_timeout: config.timeout
+             }) do
+          {:ok, model} -> {:ok, model}
+          {:error, _reason} -> {:error, "Invalid Anthropic configuration"}
+        end
+    end
+  end
+
   @doc """
   Construye un LLM instance o lanza excepción.
   """
-  @spec build_llm!(config()) :: OllamaChat.t() | ChatOpenAI.t() | no_return()
+  @spec build_llm!(config()) :: OllamaChat.t() | ChatOpenAI.t() | AnthropicChat.t() | no_return()
   def build_llm!(%Config{} = config) do
     case build_llm(config) do
       {:ok, llm} -> llm
@@ -218,7 +249,8 @@ defmodule Alethea.AI.LLMConfig do
   Obtiene la config y construye el LLM en un solo paso.
   """
   @spec get_and_build(chain_name(), keyword()) ::
-          {:ok, config(), OllamaChat.t() | ChatOpenAI.t()} | {:error, String.t()}
+          {:ok, config(), OllamaChat.t() | ChatOpenAI.t() | AnthropicChat.t()}
+          | {:error, String.t()}
   def get_and_build(chain_name, overrides \\ []) do
     config = get(chain_name, overrides)
 
@@ -275,6 +307,20 @@ defmodule Alethea.AI.LLMConfig do
   end
 
   defp default_endpoint(:cloud), do: "https://api.openai.com/v1/"
+  defp default_endpoint(:anthropic), do: "https://api.anthropic.com/v1/messages"
+
+  # Anthropic requires an explicit model. A local chain's Phi model and the
+  # legacy shared defaults must not become an accidental hosted model choice.
+  defp resolve_model(:anthropic, overrides, chain, provider, global_provider, _defaults) do
+    Keyword.get(overrides, :model) ||
+      if(Keyword.get(chain, :provider) == :anthropic, do: Keyword.get(chain, :model)) ||
+      Keyword.get(provider, :model) || Keyword.get(global_provider, :model)
+  end
+
+  defp resolve_model(provider, overrides, chain, _provider, _global_provider, defaults) do
+    Keyword.get(overrides, :model) || Keyword.get(chain, :model) ||
+      Keyword.get(defaults, :model, default_model(provider))
+  end
 
   defp default_model(:local), do: "phi4-mini"
   defp default_model(:cloud), do: "gpt-4o-mini"

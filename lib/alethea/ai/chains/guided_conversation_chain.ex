@@ -23,6 +23,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias Alethea.AI.JournalingPrompt
   alias Alethea.AI.LLMConfig
   alias Alethea.AI.ChatModels.OllamaChat
+  alias Alethea.AI.ChatModels.AnthropicChat
   alias Alethea.AI.Chains.SafeRun
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
@@ -48,7 +49,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   def suggested_max_tokens, do: 160
 
   @impl true
-  def supported_providers, do: [:local, :cloud]
+  def supported_providers, do: [:local, :cloud, :anthropic]
 
   @doc """
   Whether the model stopped `message` because it reached the length
@@ -96,11 +97,13 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   end
 
   defp do_run(llm, content, history, msg_id) do
+    provider = if match?(%AnthropicChat{}, llm), do: :anthropic, else: :cloud
+
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
       %{
         chain: :guided_conversation,
-        provider: :cloud
+        provider: provider
       },
       %{}
     )
@@ -111,11 +114,12 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
     :telemetry.execute([:alethea, :ai, :chain, :stop], %{duration_ms: duration}, %{
       chain: :guided_conversation,
-      provider: :cloud,
+      provider: provider,
       success: match?({:ok, _}, result)
     })
 
-    result |> wrap_result(msg_id)
+    model_version = if provider == :anthropic, do: llm.model, else: "phi-4-mini"
+    wrap_result(result, msg_id, model_version)
   end
 
   # Prior turns reach the model as distinct chat messages, never as one
@@ -141,16 +145,18 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   defp turn_message(%{role: :patient, content: content}), do: Message.new_user!(content)
   defp turn_message(%{role: :alethea, content: content}), do: Message.new_assistant!(content)
 
-  defp wrap_result({:ok, %Message{} = message}, msg_id),
+  defp wrap_result(result, msg_id, model_version \\ "phi-4-mini")
+
+  defp wrap_result({:ok, %Message{} = message}, msg_id, model_version),
     do:
       {:ok,
        %{
          response: message.content,
          truncated: truncated?(message),
          source_message_id: msg_id,
-         model_version: "phi-4-mini",
+         model_version: model_version,
          behavior_type: :elicited
        }}
 
-  defp wrap_result({:error, _} = error, _msg_id), do: error
+  defp wrap_result({:error, _} = error, _msg_id, _model_version), do: error
 end

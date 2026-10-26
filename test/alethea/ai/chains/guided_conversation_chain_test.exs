@@ -114,7 +114,76 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
       assert result.response == "Gracias por contarlo. ¿Cómo lo viviste?"
       assert result.source_message_id == "msg-3"
       assert result.behavior_type == :elicited
+      assert result.model_version == "phi-4-mini"
     end
+  end
+
+  test "Anthropic preserves the reply contract and reports its actual configured model" do
+    original = Application.fetch_env(:alethea, GuidedConversationChain)
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:alethea, GuidedConversationChain, value)
+        :error -> Application.delete_env(:alethea, GuidedConversationChain)
+      end
+
+      Application.delete_env(:alethea, :anthropic_chat_req_options)
+    end)
+
+    Application.put_env(:alethea, GuidedConversationChain,
+      provider: :anthropic,
+      model: "claude-test-model",
+      api_key: "synthetic-key",
+      endpoint_url: "https://api.anthropic.com/v1/messages",
+      max_tokens: 160
+    )
+
+    Application.put_env(:alethea, :anthropic_chat_req_options, plug: {Req.Test, __MODULE__})
+
+    for {reason, truncated} <- [{"end_turn", false}, {"max_tokens", true}] do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "content" => [%{"type" => "text", "text" => "Synthetic reply"}],
+          "stop_reason" => reason
+        })
+      end)
+
+      assert {:ok, result} =
+               GuidedConversationChain.run(%{
+                 sanitized_content: "Synthetic input",
+                 history: [],
+                 message_id: "demo-message"
+               })
+
+      assert result == %{
+               response: "Synthetic reply",
+               truncated: truncated,
+               source_message_id: "demo-message",
+               model_version: "claude-test-model",
+               behavior_type: :elicited
+             }
+    end
+
+    assert :anthropic in GuidedConversationChain.supported_providers()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_status(401)
+      |> Req.Test.json(%{"error" => %{"message" => "SYNTHETIC_PRIVATE_MARKER"}})
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:llm_run_failed, "http_error"}} =
+                 GuidedConversationChain.run(%{
+                   sanitized_content: "SYNTHETIC_PRIVATE_MARKER",
+                   history: [],
+                   message_id: "demo-message"
+                 })
+      end)
+
+    refute log =~ "SYNTHETIC_PRIVATE_MARKER"
+    refute log =~ "synthetic-key"
   end
 
   describe "run/1 — local generation stopped at the length bound" do

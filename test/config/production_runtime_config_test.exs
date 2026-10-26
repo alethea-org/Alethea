@@ -9,7 +9,16 @@ defmodule Alethea.ProductionRuntimeConfigTest do
 
   use ExUnit.Case, async: false
 
-  alias Alethea.AI.Chains.{ClinicalConsultationChain, GuidedConversationChain}
+  alias Alethea.AI.Chains.{
+    ClinicalConsultationChain,
+    ClinicalHypothesisChain,
+    FunctionalAnalysisDraftChain,
+    GuidedConversationChain,
+    PatternProposalChain,
+    SessionSummaryChain,
+    WeeklySummaryChain
+  }
+
   alias Alethea.AI.{Embeddings, EmotionAnalyzer, LLMConfig, Whisper}
 
   @managed_env ~w(
@@ -189,6 +198,45 @@ defmodule Alethea.ProductionRuntimeConfigTest do
   end
 
   describe "LLM provider" do
+    test "Anthropic is distinct from OpenAI and requires its own key and model" do
+      overrides = %{
+        "AI_PROVIDER" => "anthropic",
+        "LOCAL_LLM_BASE_URL" => nil,
+        "ANTHROPIC_API_KEY" => "synthetic-anthropic-key",
+        "LLM_MODEL" => "claude-test-model"
+      }
+
+      config = prod_config(overrides)
+      assert alethea(config, GuidedConversationChain)[:provider] == :anthropic
+      assert alethea(config, GuidedConversationChain)[:model] == "claude-test-model"
+
+      assert alethea(config, LLMConfig)[:anthropic] == [
+               endpoint_url: "https://api.anthropic.com/v1/messages",
+               api_key: "synthetic-anthropic-key"
+             ]
+
+      custom =
+        prod_config(
+          Map.put(overrides, "ANTHROPIC_BASE_URL", "https://gateway.example.test/messages")
+        )
+
+      assert alethea(custom, LLMConfig)[:anthropic][:endpoint_url] ==
+               "https://gateway.example.test/messages"
+
+      for key <- [nil, "", "   "] do
+        assert_raise RuntimeError, ~r/ANTHROPIC_API_KEY is missing or empty/, fn ->
+          prod_config(Map.put(overrides, "ANTHROPIC_API_KEY", key))
+        end
+      end
+
+      error =
+        assert_raise RuntimeError, ~r/LLM_MODEL is missing or empty/, fn ->
+          prod_config(Map.put(overrides, "LLM_MODEL", nil))
+        end
+
+      refute error.message =~ "synthetic-anthropic-key"
+    end
+
     test "AI_PROVIDER must be set explicitly to a supported value" do
       assert_raise RuntimeError, ~r/AI_PROVIDER is missing/, fn ->
         prod_config(%{"AI_PROVIDER" => nil})
@@ -452,5 +500,9 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     config
     |> Keyword.fetch!(:alethea)
     |> Keyword.fetch!(key)
+  end
+
+  defp alethea_raw(config) do
+    Keyword.fetch!(config, :alethea)
   end
 end

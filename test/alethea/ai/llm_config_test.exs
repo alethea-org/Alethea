@@ -317,6 +317,49 @@ defmodule Alethea.AI.LLMConfigTest do
   end
 
   describe "get_and_build/2" do
+    test "Anthropic does not inherit the local model and rejects missing credentials" do
+      Application.put_env(:alethea, LLMConfig, defaults: [model: "phi4-mini"])
+
+      assert {:error, "Model required for anthropic provider"} =
+               LLMConfig.get_and_build(:guided_conversation,
+                 provider: :anthropic,
+                 api_key: "synthetic-anthropic-key"
+               )
+
+      Application.delete_env(:alethea, GuidedConversationChain)
+
+      for key <- [nil, "", "   "] do
+        assert {:error, "API key required for anthropic provider"} =
+                 LLMConfig.get_and_build(:guided_conversation,
+                   provider: :anthropic,
+                   api_key: key,
+                   model: "claude-test-model"
+                 )
+      end
+    end
+
+    test "builds Anthropic explicitly without replacing the existing cloud provider" do
+      Application.delete_env(:alethea, GuidedConversationChain)
+
+      Application.put_env(:alethea, LLMConfig,
+        anthropic: [api_key: "synthetic-anthropic-key", model: "claude-test-model"]
+      )
+
+      assert {:ok, config, model} =
+               LLMConfig.get_and_build(:guided_conversation, provider: :anthropic)
+
+      assert model.__struct__ == Alethea.AI.ChatModels.AnthropicChat
+      assert config.model == "claude-test-model"
+      assert config.endpoint_url == "https://api.anthropic.com/v1/messages"
+      refute inspect(model) =~ "synthetic-anthropic-key"
+
+      assert {:ok, _config, %LangChain.ChatModels.ChatOpenAI{}} =
+               LLMConfig.get_and_build(:guided_conversation,
+                 provider: :cloud,
+                 api_key: "synthetic-openai-key"
+               )
+    end
+
     test "returns the resolved config and local adapter" do
       assert {:ok, config, %Alethea.AI.ChatModels.OllamaChat{} = model} =
                LLMConfig.get_and_build(:guided_conversation)
