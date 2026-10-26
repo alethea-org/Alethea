@@ -95,3 +95,13 @@ Use `Req` (`:req`) for all HTTP requests. Do **not** use `:httpoison`, `:tesla`,
 - Use `:sys.get_state/1` to synchronize before a subsequent call to a GenServer.
 - Every AI pipeline change must include a sentiment regression test.
 - Mock external APIs (WhatsApp, LLMs) in integration tests; domain tests have no external dependencies.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are published to GitHub Issues via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context domain docs live under `openspec/`. See `docs/agents/domain.md`.
