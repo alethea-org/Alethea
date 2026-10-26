@@ -41,7 +41,12 @@ kill_timeout = 40
   # AI_PROVIDER, EMOTION_ANALYZER_ENABLED and EMBEDDINGS_ENABLED. They are
   # required by config/runtime.exs, so the release command (and the deploy)
   # fails fast with a message naming the missing variable until the operator
-  # sets them. See "AI capabilities" in the operator guide.
+  # sets them. See "AI capabilities" in the operator guide (docs/deployment/fly-neon.md)
+  # and the AI sidecars readiness runbook (docs/deployment/ai-services-fly.md).
+  #
+  # For the synthetic demo profile (gated on explicit user cost consent, S4):
+  # - EMBEDDINGS_ENABLED = "true" with EMBEDDINGS_BASE_URL = "http://alethea-embeddings.internal:11434"
+  # - EMOTION_ANALYZER_ENABLED = "true" with EMOTION_SIDECAR_URL = "http://alethea-emotion.internal:8080"
   #
   # Deliberately absent, because the single Machine reaches Neon over the
   # public internet and is not clustered: ECTO_IPV6 and DNS_CLUSTER_QUERY.

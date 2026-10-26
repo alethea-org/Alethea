@@ -115,8 +115,8 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | --- | --- | --- |
 | Guided conversation chain (Telegram replies) | `AI_PROVIDER`, plus `LOCAL_LLM_BASE_URL`, or the selected hosted provider's API key + `LLM_MODEL` | Cannot be off: the boot fails without a complete provider. |
 | Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft | `LOCAL_LLM_BASE_URL` only by default (pinned to local). When `DEMO_SYNTHETIC_DATA=true` and `AI_PROVIDER=anthropic`, the six non-report text chains are routed to Claude with `LLM_MODEL`. | "Not configured": summaries fail and retry; consultations and reports return errors. |
-| Emotion analyzer slot | `EMOTION_ANALYZER_ENABLED` + `EMOTION_SIDECAR_URL` | Explicit `Disabled` adapter; session closure completes without trends. |
-| Embeddings slot (RAG indexing) | `EMBEDDINGS_ENABLED` + `EMBEDDINGS_BASE_URL` (+ `EMBEDDINGS_MODEL`) | Explicit `Disabled` adapter; indexing jobs fail and retry per event (known gap). |
+| Emotion analyzer slot | `EMOTION_ANALYZER_ENABLED` + `EMOTION_SIDECAR_URL` | Explicit `Disabled` adapter; session closure completes without trends. When enabled for the synthetic demo, points to `http://alethea-emotion.internal:8080` (see `docs/deployment/ai-services-fly.md`). |
+| Embeddings slot (RAG indexing) | `EMBEDDINGS_ENABLED` + `EMBEDDINGS_BASE_URL` (+ `EMBEDDINGS_MODEL`) | Explicit `Disabled` adapter; indexing jobs fail and retry per event (known gap). When enabled for the synthetic demo, points to `http://alethea-embeddings.internal:11434` (see `docs/deployment/ai-services-fly.md`). |
 | Transcription slot (Whisper) | nothing | Always disabled. |
 
 No Fake adapter and no `localhost` endpoint is reachable in production.
@@ -167,8 +167,8 @@ These belong to the product owner. The deploy fails fast until the three require
 
 - **Hosted provider for non-guided chains.** With `AI_PROVIDER=cloud` and no `LOCAL_LLM_BASE_URL`, only guided conversation works. Letting the other chains use a hosted provider is a privacy decision.
 - **No "LLM disabled" mode.** `AI_PROVIDER` accepts only `local` or `cloud`.
-- **Emotion analyzer posture.** Enabling it in production conflicts with its development-only status from issue 198.
-- **Where a `local` model runs.** `LOCAL_LLM_BASE_URL` must be reachable from the Fly Machine; no hosting for it is defined yet.
+- **Emotion analyzer posture.** In development (issue #198), the emotion analyzer was designated development-only due to lack of clinical validation and `pysentimiento`'s non-commercial academic license. For the synthetic demo profile (`DEMO_SYNTHETIC_DATA=true`, `DEMO_RESTRICTED_ACCESS=true`), enabling it is accepted under S2 to fulfill the full-service demo requirement in an academic context ("a mí y al profe"), since no real patients or clinical decisions are involved. It remains strictly prohibited for real patient data (milestone 2). Full deployment runbook and sizing are in `docs/deployment/ai-services-fly.md`.
+- **Where auxiliary AI models run.** BGE-M3 embeddings and the emotion sidecar run as secondary Fly apps (`alethea-embeddings` and `alethea-emotion`) reachable over Fly's private network (`.internal`), keeping text within the private network with zero public egress. Full runbook, sizing, and monthly cost estimates (~$26.25/mo always-on or ~$2.25/mo storage + active demo hours) are documented in `docs/deployment/ai-services-fly.md`. Actual provisioning is gated on explicit user cost consent (S4).
 - **Telegram secrets policy.** Keep the three `TELEGRAM_*` values permanently, or set them for one deploy and unset them afterwards.
 - **Machine capacity.** `fly.toml` uses `shared-cpu-1x` with 1 GB as a starting point.
 
