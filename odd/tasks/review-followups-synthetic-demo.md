@@ -83,3 +83,4 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
     - No orphans.
   - `mix precommit`: 2171 passed, 5 skipped.
   - Rollout note: the emotion sidecar now refuses to start without its secret, so stage `SIDECAR_AUTH_TOKEN` before its deploy (the runbook already does).
+- L11: Verifier on 43a66b7: PASS, no blockers. Its advisories are fixed: a TERM during startup exits 0; any BaseException at load reaches on_load_failure; the stale token comment in runtime.exs is updated. Re-probed: entrypoint 7 cases; python tests OK; config 47/47.

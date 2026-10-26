@@ -23,6 +23,9 @@ trap 'stopping=1; kill -TERM "$ollama_pid" $caddy_pid 2>/dev/null || true' TERM 
 # proxied to a listening upstream instead of getting a 502.
 attempt=0
 until ollama list >/dev/null 2>&1; do
+  if [ "$stopping" -eq 1 ]; then
+    exit 0
+  fi
   if ! kill -0 "$ollama_pid" 2>/dev/null; then
     echo "ollama exited during startup" >&2
     exit 1

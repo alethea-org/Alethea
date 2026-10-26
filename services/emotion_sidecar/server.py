@@ -51,7 +51,8 @@ class EmotionRuntime:
     def _load(self, analyzer_factory):
         try:
             self.analyzer = analyzer_factory()
-        except Exception:
+        except BaseException:
+            # BaseException too: any load failure must reach on_load_failure.
             self.analyzer = None
         finally:
             self.loaded.set()

@@ -437,8 +437,9 @@ if config_env() == :prod do
   if capability_switch.("EMOTION_ANALYZER_ENABLED") do
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
-    # The bearer token is optional: the sidecar only enforces it when it
-    # was started with SIDECAR_AUTH_TOKEN, so both must be staged together.
+    # The bearer token is optional here so the app can be deployed before the
+    # sidecar enforces it; the deployed sidecar refuses to start without its
+    # SIDECAR_AUTH_TOKEN, and both must hold the same value.
     config :alethea, Alethea.AI.EmotionAnalyzer,
       base_url:
         required_env.(
