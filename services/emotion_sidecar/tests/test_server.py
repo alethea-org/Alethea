@@ -159,6 +159,34 @@ class EmotionSidecarHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(body["results"]), 1)
 
+    def test_batches_held_during_load_queue_instead_of_failing_busy(self):
+        release = threading.Event()
+
+        class SlowAnalyzer(FakeAnalyzer):
+            def predict(self, texts):
+                threading.Event().wait(0.1)
+                return super().predict(texts)
+
+        def slow_factory():
+            release.wait(timeout=5)
+            return SlowAnalyzer()
+
+        server = self.start(slow_factory, load_in_background=True)
+        responses = []
+
+        def post_batch():
+            responses.append(server.request("/v1/emotions:batch", {"texts": ["Synthetic"]}))
+
+        waiters = [threading.Thread(target=post_batch) for _ in range(3)]
+        for waiter in waiters:
+            waiter.start()
+        threading.Event().wait(0.1)
+        release.set()
+        for waiter in waiters:
+            waiter.join(timeout=3)
+
+        self.assertEqual([status for status, _body in responses], [200, 200, 200])
+
     def test_health_stays_open_when_token_configured(self):
         server = self.start(FakeAnalyzer, auth_token="demo-secret")
 

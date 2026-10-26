@@ -374,8 +374,8 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       config =
         prod_config(
           Map.merge(enabled, %{
-            "EMOTION_SIDECAR_AUTH_TOKEN" => "synthetic-emotion-token",
-            "EMBEDDINGS_AUTH_TOKEN" => "synthetic-embeddings-token"
+            "EMOTION_SIDECAR_AUTH_TOKEN" => "synthetic-emotion-token\n",
+            "EMBEDDINGS_AUTH_TOKEN" => " synthetic-embeddings-token "
           })
         )
 

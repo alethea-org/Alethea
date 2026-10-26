@@ -31,7 +31,9 @@ primary_region = "gru"
     timeout = "5s"
     grace_period = "240s"
     method = "GET"
-    path = "/health/ready"
+    # Liveness, not readiness: the proxy must keep routing to a machine that
+    # is still loading its model, because the sidecar holds those batches.
+    path = "/health/live"
 
 [[vm]]
   size = "shared-cpu-2x"

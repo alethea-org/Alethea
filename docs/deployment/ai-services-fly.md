@@ -30,7 +30,7 @@ Because they are public, inference is gated by a shared secret sent as `Authoriz
 
 ### Cold starts
 
-A stopped sidecar must boot and load its model before it answers (~210 s observed for the emotion sidecar). `fly.toml` on `alethea-prod` sets 300 s receive timeouts for both sidecars, and a 10 s connect timeout for the emotion sidecar. The emotion sidecar binds its port first, then loads the model in the background. A batch that arrives meanwhile is held for up to 280 s rather than refused, because `EmotionAnalysisWorker` runs a single attempt.
+A stopped sidecar must boot and load its model before it answers (~210 s observed for the emotion sidecar). `fly.toml` on `alethea-prod` sets 300 s receive timeouts for both sidecars, and a 10 s connect timeout for the emotion sidecar. The emotion sidecar binds its port first, then loads the model in the background. A batch that arrives meanwhile is held for up to 280 s rather than refused, and held batches queue for the single inference slot instead of failing `busy`, because `EmotionAnalysisWorker` runs a single attempt. The Fly check uses `/health/live`, so the proxy keeps routing to a machine that is still loading.
 
 ```
 [Public Internet] --> [alethea-prod] (Port 4000)
@@ -159,33 +159,52 @@ The conflict is resolved specifically and exclusively for the synthetic demo pro
 
 > Remote operations: run these only with explicit authorization for the target app. Commands run from the repository root.
 
-### Phase A: Embeddings (`alethea-embeddings`)
+Generate both tokens once in the shell session that runs every phase. Fly secrets cannot be read back, so these variables are the only copy:
+
+```sh
+EMBEDDINGS_TOKEN="$(openssl rand -hex 32)"
+EMOTION_TOKEN="$(openssl rand -hex 32)"
+```
+
+### Enabling tokens on the existing deployment
+
+Order matters, or every sidecar call fails with 401 until the other side catches up:
+
+1. **App first.** The deployed sidecars ignore the header until they enforce it.
+   ```sh
+   fly secrets set --stage -a alethea-prod \
+     EMBEDDINGS_AUTH_TOKEN="$EMBEDDINGS_TOKEN" EMOTION_SIDECAR_AUTH_TOKEN="$EMOTION_TOKEN"
+   fly deploy --ha=false
+   ```
+2. **Then each sidecar**, as in Phase A and Phase B below, steps 3 and 4 (secret and deploy only; the apps and volumes already exist).
+
+### Fresh provisioning
+
+#### Phase A: Embeddings (`alethea-embeddings`)
 
 ```sh
 fly apps create alethea-embeddings --org <your-org>
 fly volumes create ollama_data --app alethea-embeddings --region gru --size 10 --yes
-
-# Token gate (Caddy refuses to start without it)
-fly secrets set --stage -a alethea-embeddings OLLAMA_AUTH_TOKEN="$(openssl rand -hex 32)"
-
+# 3. Token gate (the entrypoint refuses to start without it)
+fly secrets set --stage -a alethea-embeddings OLLAMA_AUTH_TOKEN="$EMBEDDINGS_TOKEN"
+# 4. Deploy
 fly deploy deploy/embeddings -c deploy/fly.embeddings.toml --dockerfile deploy/embeddings/Dockerfile --ha=false
-
 # One-time model pull into the volume (Ollama listens on loopback only)
 fly ssh console -a alethea-embeddings -C "ollama pull bge-m3"
 ```
 
-### Phase B: Emotion sidecar (`alethea-emotion`)
+#### Phase B: Emotion sidecar (`alethea-emotion`)
 
 ```sh
 fly apps create alethea-emotion --org <your-org>
 fly volumes create emotion_cache --app alethea-emotion --region gru --size 5 --yes
-fly secrets set --stage -a alethea-emotion SIDECAR_AUTH_TOKEN="$(openssl rand -hex 32)"
+# 3. Token gate
+fly secrets set --stage -a alethea-emotion SIDECAR_AUTH_TOKEN="$EMOTION_TOKEN"
+# 4. Deploy
 fly deploy services/emotion_sidecar -c services/emotion_sidecar/fly.toml --ha=false
 ```
 
-### Phase C: Wire `alethea-prod`
-
-Read each sidecar token once, without echoing it (`read -s`), and stage it on `alethea-prod`:
+#### Phase C: Wire `alethea-prod`
 
 ```sh
 fly secrets set --stage -a alethea-prod \
@@ -195,11 +214,9 @@ fly secrets set --stage -a alethea-prod \
   EMOTION_ANALYZER_ENABLED="true" \
   EMOTION_SIDECAR_URL="https://alethea-emotion.fly.dev" \
   EMOTION_SIDECAR_AUTH_TOKEN="$EMOTION_TOKEN"
-
 fly deploy --ha=false
+unset EMBEDDINGS_TOKEN EMOTION_TOKEN
 ```
-
-Order: deploy the app with the client tokens first (an unenforced sidecar ignores the header), then set the sidecar secrets and redeploy each sidecar. The reverse order fails every call with 401 until the app catches up.
 
 ### Verify
 

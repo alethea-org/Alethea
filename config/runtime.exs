@@ -126,6 +126,12 @@ if config_env() == :prod do
     end
   end
 
+  # Shared secrets pasted with surrounding whitespace must still match the
+  # value the sidecar compares against (it strips its own copy).
+  optional_secret = fn name ->
+    if value = optional_env.(name), do: String.trim(value)
+  end
+
   required_env = fn name, hint ->
     optional_env.(name) || raise "environment variable #{name} is missing or empty. #{hint}"
   end
@@ -439,7 +445,7 @@ if config_env() == :prod do
           "EMOTION_SIDECAR_URL",
           "It is required while EMOTION_ANALYZER_ENABLED=true."
         ),
-      auth_token: optional_env.("EMOTION_SIDECAR_AUTH_TOKEN")
+      auth_token: optional_secret.("EMOTION_SIDECAR_AUTH_TOKEN")
   else
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Disabled
     # Clears the loopback default compiled in from config/config.exs.
@@ -452,7 +458,7 @@ if config_env() == :prod do
         endpoint_url:
           required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true."),
         # Matches the token the Caddy proxy in deploy/embeddings checks.
-        auth_token: optional_env.("EMBEDDINGS_AUTH_TOKEN"),
+        auth_token: optional_secret.("EMBEDDINGS_AUTH_TOKEN"),
         receive_timeout: positive_integer_env.("EMBEDDINGS_RECEIVE_TIMEOUT_MS", "120000")
       ]
 

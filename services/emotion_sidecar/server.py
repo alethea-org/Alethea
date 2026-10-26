@@ -3,6 +3,7 @@ import hmac
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from numbers import Number
 
@@ -51,9 +52,19 @@ class EmotionRuntime:
             self.loaded.set()
 
     def predict(self, texts):
+        held = not self.loaded.is_set()
+        started = time.monotonic()
         if not self.loaded.wait(timeout=LOAD_WAIT_SECONDS) or self.analyzer is None:
             raise AnalyzerUnavailable()
-        if not self.inference_gate.acquire(blocking=False):
+        # A warm sidecar fails fast when busy. Batches held through a cold start
+        # queue for the gate within their remaining wait, so the burst that woke
+        # the machine is not dropped (the app runs each batch only once).
+        if held:
+            remaining = max(0.0, LOAD_WAIT_SECONDS - (time.monotonic() - started))
+            acquired = self.inference_gate.acquire(timeout=remaining)
+        else:
+            acquired = self.inference_gate.acquire(blocking=False)
+        if not acquired:
             raise AnalyzerBusy()
 
         try:
