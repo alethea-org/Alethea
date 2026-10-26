@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -9,6 +10,7 @@ from services.emotion_sidecar.server import (
     MAX_BODY_BYTES,
     MAX_TEXT_BYTES,
     create_server,
+    resolve_auth_token,
 )
 
 
@@ -40,14 +42,8 @@ class FakeAnalyzer:
 
 
 class RunningServer:
-    def __init__(self, factory, auth_token=None, load_in_background=False):
-        self.server = create_server(
-            "127.0.0.1",
-            0,
-            analyzer_factory=factory,
-            auth_token=auth_token,
-            load_in_background=load_in_background,
-        )
+    def __init__(self, factory, **options):
+        self.server = create_server("127.0.0.1", 0, analyzer_factory=factory, **options)
         self.thread = threading.Thread(
             target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
         )
@@ -101,9 +97,12 @@ class EmotionSidecarHTTPTest(unittest.TestCase):
             self.running.close()
 
     def start(self, factory, auth_token=None, load_in_background=False):
-        self.running = RunningServer(
+        return self.start_with(
             factory, auth_token=auth_token, load_in_background=load_in_background
         )
+
+    def start_with(self, factory, **options):
+        self.running = RunningServer(factory, **options)
         return self.running
 
     def test_background_load_serves_health_and_holds_batches_until_ready(self):
@@ -180,12 +179,42 @@ class EmotionSidecarHTTPTest(unittest.TestCase):
         waiters = [threading.Thread(target=post_batch) for _ in range(3)]
         for waiter in waiters:
             waiter.start()
-        threading.Event().wait(0.1)
+        self.wait_until(lambda: server.server.runtime.waiting_for_load == 3)
         release.set()
         for waiter in waiters:
             waiter.join(timeout=3)
 
         self.assertEqual([status for status, _body in responses], [200, 200, 200])
+
+    def wait_until(self, condition, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while not condition():
+            self.assertLess(time.monotonic(), deadline, "condition not reached")
+            threading.Event().wait(0.005)
+
+    def test_background_load_failure_reports_and_stays_unready(self):
+        failures = []
+
+        def broken_factory():
+            raise RuntimeError("model download failed")
+
+        server = self.start_with(
+            broken_factory, load_in_background=True, on_load_failure=lambda: failures.append(True)
+        )
+
+        self.wait_until(lambda: failures == [True])
+        status, body = server.request("/health/ready")
+        self.assertEqual(status, 503)
+        self.assertEqual(body["error"]["code"], "analyzer_unavailable")
+
+    def test_production_entrypoint_requires_a_token_unless_explicitly_disabled(self):
+        with self.assertRaises(SystemExit):
+            resolve_auth_token({})
+        with self.assertRaises(SystemExit):
+            resolve_auth_token({"SIDECAR_AUTH_TOKEN": "  "})
+
+        self.assertEqual(resolve_auth_token({"SIDECAR_AUTH_TOKEN": " demo-secret\n"}), "demo-secret")
+        self.assertIsNone(resolve_auth_token({"SIDECAR_AUTH_DISABLED": "true"}))
 
     def test_health_stays_open_when_token_configured(self):
         server = self.start(FakeAnalyzer, auth_token="demo-secret")

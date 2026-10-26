@@ -24,13 +24,15 @@ Because they are public, inference is gated by a shared secret sent as `Authoriz
 | `alethea-emotion` | `SIDECAR_AUTH_TOKEN` | `EMOTION_SIDECAR_AUTH_TOKEN` | `GET /health/live`, `GET /health/ready` |
 
 - Ollama has no native auth. `deploy/embeddings/` runs a pinned Ollama on loopback behind a Caddy proxy that forwards only `GET /` and token-authenticated `POST /api/embed`. Model pull/delete/create/generate are unreachable from outside the machine. The entrypoint refuses to start without a token.
-- The emotion sidecar checks the token itself (`services/emotion_sidecar/server.py`, constant-time compare). Without `SIDECAR_AUTH_TOKEN` it accepts every batch, which is meant for local development only.
+- The emotion sidecar checks the token itself (`services/emotion_sidecar/server.py`, constant-time compare). It refuses to start without `SIDECAR_AUTH_TOKEN` unless `SIDECAR_AUTH_DISABLED=true`, which only local `docker-compose.yml` sets.
 - Generate each token with `openssl rand -hex 32`, and stage the same value on both sides.
 - Traffic leaves Fly's private network, so egress is billed (negligible at demo volume). Sanitized clinical text travels over TLS.
 
 ### Cold starts
 
-A stopped sidecar must boot and load its model before it answers (~210 s observed for the emotion sidecar). `fly.toml` on `alethea-prod` sets 300 s receive timeouts for both sidecars, and a 10 s connect timeout for the emotion sidecar. The emotion sidecar binds its port first, then loads the model in the background. A batch that arrives meanwhile is held for up to 280 s rather than refused, and held batches queue for the single inference slot instead of failing `busy`, because `EmotionAnalysisWorker` runs a single attempt. The Fly check uses `/health/live`, so the proxy keeps routing to a machine that is still loading.
+A stopped sidecar must boot and load its model before it answers (~210 s observed for the emotion sidecar). `fly.toml` on `alethea-prod` sets 300 s receive timeouts for both sidecars, and a 10 s connect timeout for the emotion sidecar. The emotion sidecar binds its port first, then loads the model in the background. A batch that arrives meanwhile is held rather than refused, and held batches queue for the single inference slot instead of failing `busy`, because `EmotionAnalysisWorker` runs a single attempt. Waiting for the model and for the slot share a 240 s budget, which leaves the 300 s client timeout room for the machine boot and the inference itself. The Fly check uses `/health/live`, so the proxy keeps routing to a machine that is still loading. If the model fails to load, the process exits and Fly restarts the machine.
+
+The embeddings entrypoint starts Caddy only after Ollama answers, so the request that woke the machine never meets a 502. It supervises both processes: if either exits, the machine exits non-zero and Fly restarts it.
 
 ```
 [Public Internet] --> [alethea-prod] (Port 4000)
@@ -39,7 +41,7 @@ A stopped sidecar must boot and load its model before it answers (~210 s observe
                          |                                                     Volume: 10 GB (/root/.ollama)
                          |
                          +-- https://alethea-emotion.fly.dev     (Bearer) --> server.py :8080 (pysentimiento)
-                                                                               Volume: 5 GB (/home/sidecar/.cache)
+                                                                               Volume: 5 GB (/home/sidecar/.cache/huggingface)
 ```
 
 ---
@@ -89,7 +91,7 @@ A stopped sidecar must boot and load its model before it answers (~210 s observe
 - **Model / Library**: `pysentimiento` 0.7.3 (`robertuito-emotion-analysis`, ~440 MB weights) with PyTorch CPU 2.2.1 and Transformers 4.38.2.
 - **Artifact**: `services/emotion_sidecar/Dockerfile` (Debian 12 slim base, non-root user `sidecar:sidecar`, port 8080).
 - **Elixir Adapter**: `Alethea.AI.EmotionAnalyzer` (`lib/alethea/ai/emotion_analyzer.ex`).
-- **Endpoint**: `https://alethea-emotion.fly.dev/v1/emotions:batch` (bearer token required when `SIDECAR_AUTH_TOKEN` is set).
+- **Endpoint**: `https://alethea-emotion.fly.dev/v1/emotions:batch` (bearer token required).
 - **Health Checks**: `GET /health/live` (process alive) and `GET /health/ready` (model loaded; `503 analyzer_loading` while it loads). Both are unauthenticated.
 - **Batch limits**: 1 to 32 texts per request, max 4096 bytes per text.
 

@@ -2,6 +2,7 @@ import argparse
 import hmac
 import json
 import os
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,9 +12,10 @@ from numbers import Number
 MAX_BATCH_SIZE = 32
 MAX_BODY_BYTES = 256 * 1024
 MAX_TEXT_BYTES = 4096
-# A batch that arrives during a cold start waits for the model this long,
-# just under the app's 300 s receive timeout.
-LOAD_WAIT_SECONDS = 280
+# Budget for a batch held through a cold start: waiting for the model plus
+# queueing for the inference slot. It leaves the app's 300 s receive timeout
+# room for the machine boot before the port binds and for inference itself.
+LOAD_WAIT_SECONDS = 240
 OFFICIAL_LABELS = {
     "others",
     "joy",
@@ -32,10 +34,13 @@ def create_official_analyzer():
 
 
 class EmotionRuntime:
-    def __init__(self, analyzer_factory, load_in_background=False):
+    def __init__(self, analyzer_factory, load_in_background=False, on_load_failure=None):
         self.inference_gate = threading.BoundedSemaphore(value=1)
         self.analyzer = None
         self.loaded = threading.Event()
+        self.on_load_failure = on_load_failure
+        self.waiting_for_load = 0
+        self.waiting_lock = threading.Lock()
         if load_in_background:
             # Bind the port first so a cold start can answer health probes and
             # hold incoming batches instead of refusing connections.
@@ -50,11 +55,22 @@ class EmotionRuntime:
             self.analyzer = None
         finally:
             self.loaded.set()
+        if self.analyzer is None and self.on_load_failure is not None:
+            self.on_load_failure()
 
     def predict(self, texts):
         held = not self.loaded.is_set()
         started = time.monotonic()
-        if not self.loaded.wait(timeout=LOAD_WAIT_SECONDS) or self.analyzer is None:
+        if held:
+            with self.waiting_lock:
+                self.waiting_for_load += 1
+        try:
+            loaded = self.loaded.wait(timeout=LOAD_WAIT_SECONDS)
+        finally:
+            if held:
+                with self.waiting_lock:
+                    self.waiting_for_load -= 1
+        if not loaded or self.analyzer is None:
             raise AnalyzerUnavailable()
         # A warm sidecar fails fast when busy. Batches held through a cold start
         # queue for the gate within their remaining wait, so the burst that woke
@@ -228,9 +244,33 @@ def create_server(
     analyzer_factory=create_official_analyzer,
     auth_token=None,
     load_in_background=False,
+    on_load_failure=None,
 ):
-    runtime = EmotionRuntime(analyzer_factory, load_in_background=load_in_background)
+    runtime = EmotionRuntime(
+        analyzer_factory,
+        load_in_background=load_in_background,
+        on_load_failure=on_load_failure,
+    )
     return EmotionHTTPServer((host, port), runtime, auth_token)
+
+
+def resolve_auth_token(environ):
+    # Fail closed: the deployed sidecar is public, so it never serves batches
+    # without a token unless local development opts out explicitly.
+    token = environ.get("SIDECAR_AUTH_TOKEN", "").strip()
+    if token:
+        return token
+    if environ.get("SIDECAR_AUTH_DISABLED") == "true":
+        return None
+    raise SystemExit("SIDECAR_AUTH_TOKEN is required (set SIDECAR_AUTH_DISABLED=true for local use)")
+
+
+def exit_after_load_failure():
+    # The process exits so the platform restarts it; a live process that can
+    # never serve would keep passing liveness checks.
+    sys.stderr.write("emotion analyzer failed to load; exiting\n")
+    sys.stderr.flush()
+    os._exit(1)
 
 
 def main():
@@ -242,8 +282,9 @@ def main():
     server = create_server(
         args.host,
         args.port,
-        auth_token=os.environ.get("SIDECAR_AUTH_TOKEN", "").strip(),
+        auth_token=resolve_auth_token(os.environ),
         load_in_background=True,
+        on_load_failure=exit_after_load_failure,
     )
     try:
         server.serve_forever()

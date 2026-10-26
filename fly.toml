@@ -54,7 +54,7 @@ kill_timeout = 40
   #
   # A stopped sidecar needs minutes to load its model. The emotion sidecar
   # binds its port first and holds batches until the model is ready (up to
-  # 280 s), so the receive timeouts below wait out a cold start.
+  # 240 s), so the receive timeouts below wait out a cold start.
   EMBEDDINGS_RECEIVE_TIMEOUT_MS = "300000"
   EMOTION_SIDECAR_CONNECT_TIMEOUT_MS = "10000"
   EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS = "300000"
