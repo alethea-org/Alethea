@@ -14,12 +14,24 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - Health endpoints stay unauthenticated, because Fly checks call them without a token.
   - Assumption: the tokens are optional in app config (no header when unset), so local dev and the current deploy keep working until the secrets are staged.
   - Redeploying to Fly needs separate, explicit user authorization.
+- S3: "sí, arreglemos" (2026-10-26). Fix the 10 advisory findings of native review `review-962c71a65f376080`:
+  - R1-001: emotion sidecar fails open without a token;
+  - R4-embeddings-ollama-unsupervised: Ollama is unsupervised, and Caddy can return 502 during a cold start;
+  - R4-emotion-check-hides-failed-load;
+  - R4-held-batch-exceeds-client-timeout;
+  - R2-readme-busy-contract-contradiction;
+  - R2-hosted-attribution-fallback-local;
+  - R2-volume-path-doc-mismatch;
+  - R3-cloud-model-version-unproved;
+  - R3-routing-results-unasserted;
+  - R3-held-batch-test-race.
 
 ## Tasks
 
 - T1 [S1,S2] inline; done; commit `2373a46`. Sidecar bearer auth (emotion `server.py`, Ollama behind a Caddy proxy with a pinned image), app clients send the token, cold-start-tolerant timeouts. Risk: items 2 and 5.
 - T2 [S1] inline; done; commit `ffb8b73`. Code findings: Anthropic adapter, guided chain attribution, llm_config naming, admission guard, runtime flag parsing, chain contract docs, routed-chain test.
 - T3 [S1,S2] inline; done; commit: docs slice. Docs match the deployed posture, and the demo identities are removed from the task log.
+- T4 [S3] inline; done; commits: sidecars slice + attribution slice. Second-review advisories. Risk: items 2 and 5.
 
 ## Log
 
@@ -59,3 +71,15 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - the routing test does not assert weekly/FA results;
   - the held-batch test can race.
   - Pending the user's decision on whether to fix them.
+- L9 (2026-10-26): "sí, arreglemos"
+- L10: T4 done.
+  - Python: 13 tests OK, stable across 5 runs.
+  - Entrypoint probed with stub ollama/caddy (bash harness):
+    - Caddy waits for Ollama readiness.
+    - Ollama or Caddy death exits 1.
+    - Never-ready exits 1.
+    - No token exits 1.
+    - TERM exits 0.
+    - No orphans.
+  - `mix precommit`: 2171 passed, 5 skipped.
+  - Rollout note: the emotion sidecar now refuses to start without its secret, so stage `SIDECAR_AUTH_TOKEN` before its deploy (the runbook already does).
