@@ -153,6 +153,40 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
     assert {:ok, %Message{content: "ok"}} = AnthropicChat.call(haiku_model, "di ok")
   end
 
+  test "transport failures report a payload-free reason class" do
+    Req.Test.stub(__MODULE__, &Req.Test.transport_error(&1, :timeout))
+
+    assert {:error, error} = AnthropicChat.call(model(), "SYNTHETIC_PRIVATE_MARKER")
+    assert error.type == "request_failed"
+    assert Exception.message(error) == "Anthropic request failed: timeout"
+  end
+
+  test "keeps temperature for models that accept it" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert Jason.decode!(body)["temperature"] == 0.3
+
+      Req.Test.json(conn, %{
+        "content" => [%{"type" => "text", "text" => "ok"}],
+        "stop_reason" => "end_turn"
+      })
+    end)
+
+    assert {:ok, %Message{content: "ok"}} =
+             AnthropicChat.call(model(model: "claude-test-model", temperature: 0.3), "di ok")
+  end
+
+  test "restore_from_map follows the LangChain callback contract" do
+    serialized = AnthropicChat.serialize_config(model())
+
+    assert {:error, message} = AnthropicChat.restore_from_map(serialized)
+    assert is_binary(message)
+    refute message =~ "synthetic-secret-key"
+
+    assert {:ok, %AnthropicChat{model: "claude-test-model"}} =
+             AnthropicChat.restore_from_map(Map.put(serialized, :api_key, "synthetic-secret-key"))
+  end
+
   defp model(overrides \\ []) do
     attrs =
       Map.merge(

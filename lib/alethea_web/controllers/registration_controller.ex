@@ -13,7 +13,7 @@ defmodule AletheaWeb.RegistrationController do
   def create(conn, %{"professional" => professional_params}) do
     email = professional_params["email"] || professional_params[:email]
 
-    if AdmissionPolicy.restricted?() and not AdmissionPolicy.allowed_email?(email) do
+    if not AdmissionPolicy.allowed_email?(email) do
       changeset =
         %Professional{}
         |> Professional.changeset(professional_params)

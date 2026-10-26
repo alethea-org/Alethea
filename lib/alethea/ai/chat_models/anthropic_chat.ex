@@ -47,10 +47,7 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
     do: call(model, [Message.new_user!(prompt)], [])
 
   def call(%__MODULE__{config: config}, messages, []) when is_list(messages) do
-    # LangChain's ChatAnthropic serializer always includes temperature in the payload.
-    # Anthropic models such as claude-haiku-5-5 (and newer reasoning models) reject
-    # the temperature parameter entirely with an invalid_request_error (HTTP 400).
-    # Strip it whenever it is 0.0 or nil so both legacy and modern models work.
+    # LangChain's serializer always includes temperature; see maybe_drop_temperature/2.
     payload =
       config
       |> ChatAnthropic.for_api(messages, [])
@@ -72,6 +69,12 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
       {:ok, %Req.Response{status: status}} ->
         error("http_error", "Anthropic API returned HTTP #{status}")
 
+      # Only the transport's reason atom (e.g. timeout, econnrefused) is
+      # reported: it tells throttling, auth and network failures apart
+      # without echoing any payload.
+      {:error, %Req.TransportError{reason: reason}} when is_atom(reason) ->
+        error("request_failed", "Anthropic request failed: #{reason}")
+
       {:error, _reason} ->
         error("request_failed", "Anthropic request failed")
     end
@@ -82,11 +85,12 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
   @impl true
   def serialize_config(%__MODULE__{config: config}), do: Map.take(config, @config_fields)
 
+  # Credentials are never serialized, so restoring needs `:api_key` added back.
   @impl true
   def restore_from_map(attrs) do
     case new(attrs) do
-      {:ok, model} -> model
-      {:error, _reason} -> :error
+      {:ok, model} -> {:ok, model}
+      {:error, _reason} -> {:error, "Invalid Anthropic configuration"}
     end
   end
 
@@ -112,8 +116,9 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
   defp invalid_response, do: error("invalid_response", "Invalid Anthropic response")
   defp error(type, message), do: {:error, LangChainError.exception(type: type, message: message)}
 
-  # Anthropic rejects `temperature` on claude-haiku-5-5 and reasoning models.
-  # If temperature is the default 0.0 or the model is known to reject it, strip it.
+  # The haiku-5 family rejects `temperature` with HTTP 400
+  # ("'temperature' is deprecated for this model"), whatever its value. Only
+  # that family is stripped; every other model keeps the configured value.
   defp maybe_drop_temperature(payload, model) do
     if is_binary(model) and String.contains?(model, "haiku-5") do
       Map.delete(payload, :temperature)

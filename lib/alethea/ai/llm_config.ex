@@ -311,13 +311,13 @@ defmodule Alethea.AI.LLMConfig do
 
   # Anthropic requires an explicit model. A local chain's Phi model and the
   # legacy shared defaults must not become an accidental hosted model choice.
-  defp resolve_model(:anthropic, overrides, chain, provider, global_provider, _defaults) do
+  defp resolve_model(:anthropic, overrides, chain, provider_config, global_config, _defaults) do
     Keyword.get(overrides, :model) ||
       if(Keyword.get(chain, :provider) == :anthropic, do: Keyword.get(chain, :model)) ||
-      Keyword.get(provider, :model) || Keyword.get(global_provider, :model)
+      Keyword.get(provider_config, :model) || Keyword.get(global_config, :model)
   end
 
-  defp resolve_model(provider, overrides, chain, _provider, _global_provider, defaults) do
+  defp resolve_model(provider, overrides, chain, _provider_config, _global_config, defaults) do
     Keyword.get(overrides, :model) || Keyword.get(chain, :model) ||
       Keyword.get(defaults, :model, default_model(provider))
   end

@@ -16,8 +16,7 @@ defmodule AletheaWeb.SessionController do
   def create(conn, %{"professional" => %{"email" => email, "password" => password} = params}) do
     case Accounts.authenticate_professional(email, password) do
       {:ok, professional} ->
-        if AdmissionPolicy.restricted?() and
-             not AdmissionPolicy.allowed_email?(professional.email) do
+        if not AdmissionPolicy.allowed_email?(professional.email) do
           conn
           |> put_flash(:error, "Correo o contraseña incorrectos.")
           |> redirect(to: "/login")

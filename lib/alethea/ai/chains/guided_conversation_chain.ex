@@ -28,6 +28,8 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
+  @local_model_version "phi-4-mini"
+
   @impl true
   def run(%{sanitized_content: content, history: history, message_id: msg_id}) do
     case LLMConfig.get_and_build(:guided_conversation) do
@@ -93,11 +95,12 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
     :telemetry.execute([:alethea, :ai, :chain, :stop], %{}, metadata)
 
-    result |> wrap_result(msg_id)
+    wrap_result(result, msg_id, @local_model_version)
   end
 
+  # Hosted providers. Local Ollama never reaches this clause (see above).
   defp do_run(llm, content, history, msg_id) do
-    provider = if match?(%AnthropicChat{}, llm), do: :anthropic, else: :cloud
+    provider = hosted_provider(llm)
 
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
@@ -118,9 +121,15 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
       success: match?({:ok, _}, result)
     })
 
-    model_version = if provider == :anthropic, do: llm.model, else: "phi-4-mini"
-    wrap_result(result, msg_id, model_version)
+    wrap_result(result, msg_id, hosted_model_version(llm))
   end
+
+  defp hosted_provider(%AnthropicChat{}), do: :anthropic
+  defp hosted_provider(_llm), do: :cloud
+
+  # Attribution names the model that actually answered.
+  defp hosted_model_version(%{model: model}) when is_binary(model) and model != "", do: model
+  defp hosted_model_version(_llm), do: @local_model_version
 
   # Prior turns reach the model as distinct chat messages, never as one
   # flattened context block, so it cannot mistake its own earlier
@@ -144,8 +153,6 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
   defp turn_message(%{role: :patient, content: content}), do: Message.new_user!(content)
   defp turn_message(%{role: :alethea, content: content}), do: Message.new_assistant!(content)
-
-  defp wrap_result(result, msg_id, model_version \\ "phi-4-mini")
 
   defp wrap_result({:ok, %Message{} = message}, msg_id, model_version),
     do:

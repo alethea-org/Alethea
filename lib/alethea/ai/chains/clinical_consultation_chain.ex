@@ -56,6 +56,10 @@ defmodule Alethea.AI.Chains.ClinicalConsultationChain do
   @impl true
   def suggested_max_tokens, do: 512
 
+  # The contract for real clinical data. The synthetic demo profile
+  # (DEMO_SYNTHETIC_DATA=true in config/runtime.exs) is the one deliberate
+  # override: it routes this chain to Anthropic because that deployment
+  # holds synthetic data only.
   @impl true
   def supported_providers, do: [:local]
 
