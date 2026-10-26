@@ -137,6 +137,22 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
     refute log =~ "synthetic-secret-key"
   end
 
+  test "strips temperature from payload for haiku-5 models to avoid Anthropic HTTP 400" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      decoded = Jason.decode!(body)
+      refute Map.has_key?(decoded, "temperature")
+
+      Req.Test.json(conn, %{
+        "content" => [%{"type" => "text", "text" => "ok"}],
+        "stop_reason" => "end_turn"
+      })
+    end)
+
+    haiku_model = model(model: "claude-haiku-5-5", temperature: 0.0)
+    assert {:ok, %Message{content: "ok"}} = AnthropicChat.call(haiku_model, "di ok")
+  end
+
   defp model(overrides \\ []) do
     attrs =
       Map.merge(

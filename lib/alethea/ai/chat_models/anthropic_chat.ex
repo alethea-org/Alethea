@@ -47,7 +47,14 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
     do: call(model, [Message.new_user!(prompt)], [])
 
   def call(%__MODULE__{config: config}, messages, []) when is_list(messages) do
-    payload = ChatAnthropic.for_api(config, messages, [])
+    # LangChain's ChatAnthropic serializer always includes temperature in the payload.
+    # Anthropic models such as claude-haiku-5-5 (and newer reasoning models) reject
+    # the temperature parameter entirely with an invalid_request_error (HTTP 400).
+    # Strip it whenever it is 0.0 or nil so both legacy and modern models work.
+    payload =
+      config
+      |> ChatAnthropic.for_api(messages, [])
+      |> maybe_drop_temperature(config.model)
 
     options =
       Keyword.merge(Application.get_env(:alethea, :anthropic_chat_req_options, []),
@@ -104,4 +111,14 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
   defp decode(_body), do: invalid_response()
   defp invalid_response, do: error("invalid_response", "Invalid Anthropic response")
   defp error(type, message), do: {:error, LangChainError.exception(type: type, message: message)}
+
+  # Anthropic rejects `temperature` on claude-haiku-5-5 and reasoning models.
+  # If temperature is the default 0.0 or the model is known to reject it, strip it.
+  defp maybe_drop_temperature(payload, model) do
+    if is_binary(model) and String.contains?(model, "haiku-5") do
+      Map.delete(payload, :temperature)
+    else
+      payload
+    end
+  end
 end
