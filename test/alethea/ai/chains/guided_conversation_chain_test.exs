@@ -191,7 +191,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, {:llm_run_failed, "http_error"}} =
+        assert {:error, {:llm_run_failed, "http_error.401"}} =
                  GuidedConversationChain.run(%{
                    sanitized_content: "SYNTHETIC_PRIVATE_MARKER",
                    history: [],

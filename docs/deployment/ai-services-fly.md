@@ -69,7 +69,7 @@ The embeddings entrypoint starts Caddy only after Ollama answers, so the request
 | --- | --- | --- |
 | `EMBEDDINGS_ENABLED` | `true` | Activates `Alethea.AI.Embeddings.Ollama` instead of `Disabled`. |
 | `EMBEDDINGS_BASE_URL` | `https://alethea-embeddings.fly.dev` | Public Fly host (auto-starts the machine). |
-| `EMBEDDINGS_AUTH_TOKEN` | secret | Same value as `OLLAMA_AUTH_TOKEN` on `alethea-embeddings`. Optional in config; no header is sent when unset. |
+| `EMBEDDINGS_AUTH_TOKEN` | secret | Same value as `OLLAMA_AUTH_TOKEN` on `alethea-embeddings`. Required while `EMBEDDINGS_ENABLED=true` (boot fails without it); surrounding whitespace is trimmed. |
 | `EMBEDDINGS_RECEIVE_TIMEOUT_MS` | `300000` (set in `fly.toml`) | Defaults to 120,000. Raised to wait out a cold start. |
 | `EMBEDDINGS_MODEL` | `bge-m3` *(optional)* | Defaults to `bge-m3` in the adapter if omitted. |
 
@@ -109,7 +109,7 @@ The embeddings entrypoint starts Caddy only after Ollama answers, so the request
 | --- | --- | --- |
 | `EMOTION_ANALYZER_ENABLED` | `true` | Activates `Alethea.AI.EmotionAnalyzer` instead of `Disabled`. |
 | `EMOTION_SIDECAR_URL` | `https://alethea-emotion.fly.dev` | Public Fly host (auto-starts the machine). |
-| `EMOTION_SIDECAR_AUTH_TOKEN` | secret | Same value as `SIDECAR_AUTH_TOKEN` on `alethea-emotion`. Optional in config; no header is sent when unset. |
+| `EMOTION_SIDECAR_AUTH_TOKEN` | secret | Same value as `SIDECAR_AUTH_TOKEN` on `alethea-emotion`. Required while `EMOTION_ANALYZER_ENABLED=true` (boot fails without it); surrounding whitespace is trimmed. |
 | `EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS` | `300000` (set in `fly.toml`) | Defaults to 30,000. Raised to wait out a cold start. |
 | `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` | `10000` (set in `fly.toml`) | Defaults to 2,000. |
 

@@ -326,8 +326,8 @@ if config_env() == :prod do
     end
 
   local_llm_base_url = optional_env.("LOCAL_LLM_BASE_URL")
-  openai_api_key = optional_env.("OPENAI_API_KEY")
-  anthropic_api_key = optional_env.("ANTHROPIC_API_KEY")
+  openai_api_key = optional_secret.("OPENAI_API_KEY")
+  anthropic_api_key = optional_secret.("ANTHROPIC_API_KEY")
   llm_model = optional_env.("LLM_MODEL")
 
   if ai_provider == :local and is_nil(local_llm_base_url) do
@@ -420,6 +420,12 @@ if config_env() == :prod do
         |> Enum.reject(&(&1 == ""))
     end
 
+  # The synthetic profile overrides the clinical chains' local-only contract,
+  # which is only acceptable while admission is restricted to the testers.
+  if demo_synthetic_data and not demo_restricted_access do
+    raise "environment variable DEMO_SYNTHETIC_DATA=true requires DEMO_RESTRICTED_ACCESS=true."
+  end
+
   if demo_restricted_access and demo_allowed_emails == [] do
     raise "environment variable DEMO_ALLOWED_EMAILS is missing or empty. " <>
             "It is required while DEMO_RESTRICTED_ACCESS=true."
@@ -437,16 +443,22 @@ if config_env() == :prod do
   if capability_switch.("EMOTION_ANALYZER_ENABLED") do
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
-    # The bearer token is optional here so the app can be deployed before the
-    # sidecar enforces it; the deployed sidecar refuses to start without its
-    # SIDECAR_AUTH_TOKEN, and both must hold the same value.
+    # The deployed sidecar refuses batches without its SIDECAR_AUTH_TOKEN, so
+    # a missing client token would silently drop every analysis (one attempt
+    # per job). Both sides must hold the same value.
     config :alethea, Alethea.AI.EmotionAnalyzer,
       base_url:
         required_env.(
           "EMOTION_SIDECAR_URL",
           "It is required while EMOTION_ANALYZER_ENABLED=true."
         ),
-      auth_token: optional_secret.("EMOTION_SIDECAR_AUTH_TOKEN")
+      auth_token:
+        String.trim(
+          required_env.(
+            "EMOTION_SIDECAR_AUTH_TOKEN",
+            "It is required while EMOTION_ANALYZER_ENABLED=true."
+          )
+        )
   else
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Disabled
     # Clears the loopback default compiled in from config/config.exs.
@@ -459,7 +471,13 @@ if config_env() == :prod do
         endpoint_url:
           required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true."),
         # Matches the token the Caddy proxy in deploy/embeddings checks.
-        auth_token: optional_secret.("EMBEDDINGS_AUTH_TOKEN"),
+        auth_token:
+          String.trim(
+            required_env.(
+              "EMBEDDINGS_AUTH_TOKEN",
+              "It is required while EMBEDDINGS_ENABLED=true."
+            )
+          ),
         receive_timeout: positive_integer_env.("EMBEDDINGS_RECEIVE_TIMEOUT_MS", "120000")
       ]
 

@@ -25,6 +25,14 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - R3-cloud-model-version-unproved;
   - R3-routing-results-unasserted;
   - R3-held-batch-test-race.
+- S4: "dale" + "pero el 1 no lo hagamos" (2026-10-26). Fix third-review advisories 2-6:
+  - R1-synthetic-routing-not-coupled-to-restriction;
+  - R3-routing-test-bypasses-runtime-wiring;
+  - R4-anthropic-no-transient-retry and R4-anthropic-status-lost-at-chain;
+  - R4-emotion-token-optional-vs-fail-closed-sidecar;
+  - R3-anthropic-key-not-trimmed.
+  - Not R1-allowlist-unverified-email: no code and no issue.
+  - Decision: sidecar client tokens become required while the sidecar is enabled. This supersedes the S2 assumption that they are optional.
 
 ## Tasks
 
@@ -32,6 +40,7 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
 - T2 [S1] inline; done; commit `ffb8b73`. Code findings: Anthropic adapter, guided chain attribution, llm_config naming, admission guard, runtime flag parsing, chain contract docs, routed-chain test.
 - T3 [S1,S2] inline; done; commit: docs slice. Docs match the deployed posture, and the demo identities are removed from the task log.
 - T4 [S3] inline; done; commits: sidecars slice + attribution slice. Second-review advisories. Risk: items 2 and 5.
+- T5 [S4] inline; done. Risk: items 2 and 3.
 
 ## Log
 
@@ -85,3 +94,9 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - Rollout note: the emotion sidecar now refuses to start without its secret, so stage `SIDECAR_AUTH_TOKEN` before its deploy (the runbook already does).
 - L11: Verifier on 43a66b7: PASS, no blockers. Its advisories are fixed: a TERM during startup exits 0; any BaseException at load reaches on_load_failure; the stale token comment in runtime.exs is updated. Re-probed: entrypoint 7 cases; python tests OK; config 47/47.
 - L12: Native review `review-133ea9bd8808d396`: approved and acknowledged (authority burned). 13 advisories pending a user decision. Triage: R3-emotion-test-env-leak is not real, because the setup re-puts the whole config per test. R3-routing-test-bypasses-runtime-wiring: LLMConfig falls back to the global provider api_key (llm_config.ex:118-122), but no test pins it.
+- L13 (2026-10-26): "dale", then "pero el 1 no lo hagamos".
+- L14: T5 done.
+  - RED: 6 tests.
+  - GREEN: chat_models + chains + config, 212 passed.
+  - The routing test passed on first run under runtime-shaped wiring, which proves the global Anthropic key fallback.
+  - Rollout: the next `alethea-prod` deploy fails to boot unless both sidecar tokens are staged (runbook step 1 stages them).

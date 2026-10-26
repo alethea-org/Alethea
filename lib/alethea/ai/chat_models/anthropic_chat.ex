@@ -58,7 +58,10 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
         json: payload,
         headers: [{"x-api-key", config.api_key}, {"anthropic-version", config.api_version}],
         receive_timeout: config.receive_timeout,
-        retry: false,
+        # Overload (529), rate limits (429), 408/5xx and transport errors are
+        # retried with backoff; auth and request errors fail at once.
+        retry: &retry?/2,
+        max_retries: 2,
         redirect: false
       )
 
@@ -66,8 +69,10 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
       {:ok, %Req.Response{status: 200, body: body}} ->
         decode(body)
 
+      # The status rides in the type so it survives SafeRun, which keeps only
+      # the type: a revoked key, a rate limit and an outage stay distinct.
       {:ok, %Req.Response{status: status}} ->
-        error("http_error", "Anthropic API returned HTTP #{status}")
+        error("http_error.#{status}", "Anthropic API returned HTTP #{status}")
 
       # Only the transport's reason atom (e.g. timeout, econnrefused) is
       # reported: it tells throttling, auth and network failures apart
@@ -93,6 +98,12 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
       {:error, _reason} -> {:error, "Invalid Anthropic configuration"}
     end
   end
+
+  # Req's :transient set lacks Anthropic's 529 (overloaded).
+  @retry_statuses [408, 429, 500, 502, 503, 504, 529]
+  defp retry?(_request, %Req.Response{status: status}), do: status in @retry_statuses
+  defp retry?(_request, %Req.TransportError{reason: reason}), do: reason in [:timeout, :closed]
+  defp retry?(_request, _other), do: false
 
   defp decode(%{"content" => [_ | _] = blocks, "stop_reason" => stop})
        when stop in ["end_turn", "stop_sequence", "max_tokens"] do

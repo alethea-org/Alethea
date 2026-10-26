@@ -6,7 +6,11 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
 
   setup do
     original = Application.fetch_env(:alethea, :anthropic_chat_req_options)
-    Application.put_env(:alethea, :anthropic_chat_req_options, plug: {Req.Test, __MODULE__})
+
+    Application.put_env(:alethea, :anthropic_chat_req_options,
+      plug: {Req.Test, __MODULE__},
+      retry_delay: fn _attempt -> 0 end
+    )
 
     on_exit(fn ->
       case original do
@@ -159,6 +163,46 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
     assert {:error, error} = AnthropicChat.call(model(), "SYNTHETIC_PRIVATE_MARKER")
     assert error.type == "request_failed"
     assert Exception.message(error) == "Anthropic request failed: timeout"
+  end
+
+  test "retries transient overload and rate limits, then succeeds" do
+    for status <- [429, 529, 503] do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+          0 ->
+            conn |> Plug.Conn.put_status(status) |> Req.Test.json(%{"error" => %{}})
+
+          _ ->
+            Req.Test.json(conn, %{
+              "content" => [%{"type" => "text", "text" => "ok"}],
+              "stop_reason" => "end_turn"
+            })
+        end
+      end)
+
+      assert {:ok, %Message{content: "ok"}} = AnthropicChat.call(model(), "di ok")
+      assert Agent.get(calls, & &1) == 2
+    end
+  end
+
+  test "error types carry the HTTP status, and auth failures are not retried" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Agent.update(calls, &(&1 + 1))
+      conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => %{}})
+    end)
+
+    assert {:error, %{type: "http_error.401"}} = AnthropicChat.call(model(), "x")
+    assert Agent.get(calls, & &1) == 1
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      conn |> Plug.Conn.put_status(529) |> Req.Test.json(%{"error" => %{}})
+    end)
+
+    assert {:error, %{type: "http_error.529"}} = AnthropicChat.call(model(), "x")
   end
 
   test "keeps temperature for models that accept it" do

@@ -44,7 +44,10 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     "AI_PROVIDER" => "local",
     "LOCAL_LLM_BASE_URL" => "http://llm.internal.test:11434",
     "EMOTION_ANALYZER_ENABLED" => "false",
-    "EMBEDDINGS_ENABLED" => "false"
+    "EMBEDDINGS_ENABLED" => "false",
+    # Required once a sidecar is enabled; unused while both are off.
+    "EMOTION_SIDECAR_AUTH_TOKEN" => "synthetic-emotion-token",
+    "EMBEDDINGS_AUTH_TOKEN" => "synthetic-embeddings-token"
   }
 
   describe "database" do
@@ -226,6 +229,9 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       assert alethea(custom, LLMConfig)[:anthropic][:endpoint_url] ==
                "https://gateway.example.test/messages"
 
+      padded = prod_config(Map.put(overrides, "ANTHROPIC_API_KEY", " synthetic-anthropic-key\n"))
+      assert alethea(padded, LLMConfig)[:anthropic][:api_key] == "synthetic-anthropic-key"
+
       for key <- [nil, "", "   "] do
         assert_raise RuntimeError, ~r/ANTHROPIC_API_KEY is missing or empty/, fn ->
           prod_config(Map.put(overrides, "ANTHROPIC_API_KEY", key))
@@ -359,7 +365,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       assert alethea(config, EmotionAnalyzer)[:base_url] == "http://emotion.internal.test:8080"
     end
 
-    test "sidecar auth tokens are optional and passed to the clients" do
+    test "sidecar auth tokens are required when the sidecars are enabled" do
       enabled = %{
         "EMOTION_ANALYZER_ENABLED" => "true",
         "EMOTION_SIDECAR_URL" => "https://emotion.example.test",
@@ -367,9 +373,16 @@ defmodule Alethea.ProductionRuntimeConfigTest do
         "EMBEDDINGS_BASE_URL" => "https://embeddings.example.test"
       }
 
-      config = prod_config(enabled)
-      assert alethea(config, EmotionAnalyzer)[:auth_token] == nil
-      assert alethea(config, Embeddings.Ollama)[:auth_token] == nil
+      tokens = %{
+        "EMOTION_SIDECAR_AUTH_TOKEN" => "synthetic-emotion-token",
+        "EMBEDDINGS_AUTH_TOKEN" => "synthetic-embeddings-token"
+      }
+
+      for {missing, _value} <- tokens do
+        assert_raise RuntimeError, ~r/#{missing} is missing or empty/, fn ->
+          prod_config(enabled |> Map.merge(tokens) |> Map.put(missing, " "))
+        end
+      end
 
       config =
         prod_config(
@@ -548,6 +561,24 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       assert alethea(config, :demo_restricted_access) == false
     end
 
+    test "DEMO_SYNTHETIC_DATA=true requires restricted admission" do
+      anthropic = %{
+        "AI_PROVIDER" => "anthropic",
+        "LOCAL_LLM_BASE_URL" => nil,
+        "ANTHROPIC_API_KEY" => "synthetic-anthropic-key",
+        "LLM_MODEL" => "claude-test-model",
+        "DEMO_SYNTHETIC_DATA" => "true"
+      }
+
+      for restricted <- [nil, "false"] do
+        assert_raise RuntimeError,
+                     ~r/DEMO_SYNTHETIC_DATA=true requires DEMO_RESTRICTED_ACCESS=true/,
+                     fn ->
+                       prod_config(Map.put(anthropic, "DEMO_RESTRICTED_ACCESS", restricted))
+                     end
+      end
+    end
+
     test "DEMO_SYNTHETIC_DATA=true without the anthropic provider fails at boot" do
       assert_raise RuntimeError,
                    ~r/DEMO_SYNTHETIC_DATA=true requires AI_PROVIDER=anthropic/,
@@ -576,7 +607,9 @@ defmodule Alethea.ProductionRuntimeConfigTest do
         "LOCAL_LLM_BASE_URL" => nil,
         "ANTHROPIC_API_KEY" => "synthetic-anthropic-key",
         "LLM_MODEL" => "claude-3-5-sonnet-20241022",
-        "DEMO_SYNTHETIC_DATA" => "true"
+        "DEMO_SYNTHETIC_DATA" => "true",
+        "DEMO_RESTRICTED_ACCESS" => "true",
+        "DEMO_ALLOWED_EMAILS" => "tester@example.test"
       }
 
       config = prod_config(overrides)

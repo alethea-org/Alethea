@@ -27,22 +27,30 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
   ]
 
   setup do
-    originals = Map.new(@chains, &{&1, Application.fetch_env(:alethea, &1)})
-    original_req = Application.fetch_env(:alethea, :anthropic_chat_req_options)
+    keys = [Alethea.AI.LLMConfig, :anthropic_chat_req_options | @chains]
+    originals = Map.new(keys, &{&1, Application.fetch_env(:alethea, &1)})
 
+    # Same wiring as config/runtime.exs: each chain gets only provider and
+    # model; the key and endpoint come from the global Anthropic entry.
     for chain <- @chains do
-      Application.put_env(:alethea, chain,
-        provider: :anthropic,
-        model: "claude-test-model",
-        api_key: "synthetic-key",
-        endpoint_url: "https://api.anthropic.com/v1/messages"
-      )
+      Application.put_env(:alethea, chain, provider: :anthropic, model: "claude-test-model")
     end
+
+    global = Application.get_env(:alethea, Alethea.AI.LLMConfig, [])
+
+    Application.put_env(
+      :alethea,
+      Alethea.AI.LLMConfig,
+      Keyword.put(global, :anthropic,
+        endpoint_url: "https://api.anthropic.com/v1/messages",
+        api_key: "synthetic-global-key"
+      )
+    )
 
     Application.put_env(:alethea, :anthropic_chat_req_options, plug: {Req.Test, __MODULE__})
 
     on_exit(fn ->
-      for {key, original} <- Map.put(originals, :anthropic_chat_req_options, original_req) do
+      for {key, original} <- originals do
         case original do
           {:ok, value} -> Application.put_env(:alethea, key, value)
           :error -> Application.delete_env(:alethea, key)
@@ -131,6 +139,7 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
       payload = Jason.decode!(body)
 
       assert payload["model"] == "claude-test-model"
+      assert Plug.Conn.get_req_header(conn, "x-api-key") == ["synthetic-global-key"]
       refute Map.has_key?(payload, "tools")
 
       Req.Test.json(conn, %{

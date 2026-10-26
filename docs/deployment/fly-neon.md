@@ -76,8 +76,8 @@ Built from `config/runtime.exs`. "Secret" means `fly secrets`; "plain" means `[e
 | `LLM_MODEL` | plain | `AI_PROVIDER=cloud` or `anthropic` | Explicit active model name; optional with `local` (compiled default `phi4-mini`). |
 | `EMOTION_SIDECAR_URL` | plain | `EMOTION_ANALYZER_ENABLED=true` | Emotion sidecar endpoint. |
 | `EMBEDDINGS_BASE_URL` | plain | `EMBEDDINGS_ENABLED=true` | Embeddings endpoint (Ollama API). |
-| `EMOTION_SIDECAR_AUTH_TOKEN` | secret | optional | Bearer token for the emotion sidecar; equals its `SIDECAR_AUTH_TOKEN`. No header when unset. |
-| `EMBEDDINGS_AUTH_TOKEN` | secret | optional | Bearer token for the embeddings proxy; equals its `OLLAMA_AUTH_TOKEN`. No header when unset. |
+| `EMOTION_SIDECAR_AUTH_TOKEN` | secret | `EMOTION_ANALYZER_ENABLED=true` | Bearer token for the emotion sidecar; equals its `SIDECAR_AUTH_TOKEN`. |
+| `EMBEDDINGS_AUTH_TOKEN` | secret | `EMBEDDINGS_ENABLED=true` | Bearer token for the embeddings proxy; equals its `OLLAMA_AUTH_TOKEN`. |
 | `DEMO_ALLOWED_EMAILS` | plain or secret | `DEMO_RESTRICTED_ACCESS=true` | Comma-separated list of allowed email addresses for restricted demo admission. |
 | `TELEGRAM_BOT_TOKEN` | secret | first deploy and token rotation | BotFather token. Read by the release command and by nothing else. |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | with `TELEGRAM_BOT_TOKEN` | 1–256 characters of `A-Z a-z 0-9 _ -`. Generate with `openssl rand -hex 32`. |
@@ -97,7 +97,7 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Hosted provider endpoint. |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1/messages` | Full Anthropic Messages endpoint, not an OpenAI-compatible base URL. |
 | `DEMO_RESTRICTED_ACCESS` | `false` | Must be exactly `true` or `false`. When `true`, restricts registration, login, and active sessions to emails in `DEMO_ALLOWED_EMAILS`. |
-| `DEMO_SYNTHETIC_DATA` | `false` | Exactly `true` or `false` (blank counts as unset). When `true`, routes the six non-guided text chains to Claude; the guided chain already follows `AI_PROVIDER`. Requires `AI_PROVIDER=anthropic`, otherwise the boot fails. The weekly report is not routed. |
+| `DEMO_SYNTHETIC_DATA` | `false` | Exactly `true` or `false` (blank counts as unset). When `true`, routes the six non-guided text chains to Claude; the guided chain already follows `AI_PROVIDER`. Requires `AI_PROVIDER=anthropic` and `DEMO_RESTRICTED_ACCESS=true`, otherwise the boot fails. The weekly report is not routed. |
 | `EMBEDDINGS_MODEL` | adapter default (`bge-m3`) | Embeddings model name. |
 | `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` / `_RECEIVE_TIMEOUT_MS` / `_MAX_BATCH_SIZE` / `_MAX_TEXT_BYTES` | `2000` / `30000` / `32` / `4096` | Emotion sidecar limits. `fly.toml` sets `10000` / `300000` to wait out a cold start. |
 | `EMBEDDINGS_RECEIVE_TIMEOUT_MS` | `120000` | Embeddings receive timeout. `fly.toml` sets `300000`. |
@@ -133,7 +133,10 @@ Claude key in `OPENAI_API_KEY`. Store credentials using staged Fly secrets,
 not committed files or command-line arguments.
 
 The app-owned adapter reuses LangChain message serialization but handles HTTP
-errors without logging raw provider bodies or transport exceptions. It accepts
+errors without logging raw provider bodies or transport exceptions. It retries
+429, 529, 408, 5xx and transport timeouts twice with backoff, and reports
+failures as `http_error.<status>` so auth, rate-limit and outage errors stay
+distinct in job results. It accepts
 non-streaming text only and explicitly rejects tools and streaming. A response
 stopped by `max_tokens` is marked truncated, and guided results report the
 configured Claude model. A cloud (OpenAI) result now reports its configured
