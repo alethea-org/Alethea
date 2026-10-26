@@ -70,7 +70,8 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
   test "pattern proposal parses Claude's reply" do
     expect_reply(~s({"proposals": ["Patron sintetico"]}))
 
-    assert {:ok, _result} = PatternProposalChain.run(%{sanitized_evidence: ["Evidencia"]})
+    assert {:ok, %{proposals: ["Patron sintetico"]}} =
+             PatternProposalChain.run(%{sanitized_evidence: ["Evidencia"]})
   end
 
   test "session summary returns Claude's reply" do
@@ -79,15 +80,48 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
     assert {:ok, %{summary: "1. Estable"}} = SessionSummaryChain.run(["Texto sintetico"], [])
   end
 
-  test "weekly summary and functional analysis reach Claude without tools" do
-    for run <- [
-          fn -> WeeklySummaryChain.run(["Resumen sintetico"], []) end,
-          fn -> FunctionalAnalysisDraftChain.run(%{sanitized_evidence: ["Evidencia"]}) end
-        ] do
-      expect_reply("{}")
-      run.()
-      Req.Test.verify!(__MODULE__)
-    end
+  test "weekly summary parses Claude's reply" do
+    expect_reply(
+      Jason.encode!(%{
+        "summary_text" => "Semana estable.",
+        "status_level" => "Estable",
+        "anxiety_score" => 0.2,
+        "social_score" => 0.5,
+        "emotional_range" => %{
+          "joy" => 0.4,
+          "sadness" => 0.1,
+          "anger" => 0.0,
+          "fear" => 0.1,
+          "neutral" => 0.4
+        },
+        "crisis_events" => 0,
+        "session_count" => 1
+      })
+    )
+
+    assert {:ok, %{summary_text: "Semana estable.", status_level: "Estable"}} =
+             WeeklySummaryChain.run(["Resumen sintetico"], [])
+  end
+
+  test "functional analysis draft parses Claude's reply" do
+    fields = %{
+      "antecedents_distal" => "Distal.",
+      "antecedents_immediate" => "Inmediato.",
+      "organism_sleep" => "Sueno.",
+      "organism_pain_or_discomfort" => "Sin dolor.",
+      "organism_hunger_or_nutrition" => "Comio.",
+      "organism_learning_history" => "Historia.",
+      "response_physiological" => "Fisiologica.",
+      "response_cognitive" => "Cognitiva.",
+      "response_motor" => "Motora.",
+      "consequences_short_term" => "Corto plazo.",
+      "consequences_long_term" => "Largo plazo."
+    }
+
+    expect_reply(Jason.encode!(fields))
+
+    assert {:ok, draft} = FunctionalAnalysisDraftChain.run(%{sanitized_evidence: ["Evidencia"]})
+    assert inspect(draft) =~ "Largo plazo."
   end
 
   # Asserts the chain sent a tool-free text request, then answers it.

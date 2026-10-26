@@ -89,6 +89,23 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
     end
   end
 
+  describe "model_version/1" do
+    test "names the model that answered, local constant for Ollama, unknown otherwise" do
+      assert GuidedConversationChain.model_version(%LangChain.ChatModels.ChatOpenAI{
+               model: "gpt-4o-mini"
+             }) ==
+               "gpt-4o-mini"
+
+      assert GuidedConversationChain.model_version(%Alethea.AI.ChatModels.OllamaChat{
+               model: "phi4-mini"
+             }) ==
+               "phi-4-mini"
+
+      assert GuidedConversationChain.model_version(%LangChain.ChatModels.ChatOpenAI{model: ""}) ==
+               "unknown"
+    end
+  end
+
   describe "run/1 — result" do
     test "reports a reply the model finished on its own as not truncated" do
       stub_reply("Gracias por contarlo. ¿Cómo lo viviste?")

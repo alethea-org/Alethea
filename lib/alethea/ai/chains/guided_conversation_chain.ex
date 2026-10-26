@@ -60,6 +60,16 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
   @spec truncated?(Message.t()) :: boolean()
   def truncated?(%Message{status: status}), do: status == :length
 
+  @doc """
+  The `model_version` a guided result reports for `llm`: the local Phi
+  constant for Ollama, otherwise the hosted model that answered, and
+  `"unknown"` rather than a guess when a hosted model has no name.
+  """
+  @spec model_version(struct()) :: String.t()
+  def model_version(%OllamaChat{}), do: @local_model_version
+  def model_version(%{model: model}) when is_binary(model) and model != "", do: model
+  def model_version(_llm), do: "unknown"
+
   defp do_run(%OllamaChat{} = llm, content, history, msg_id) do
     :telemetry.execute(
       [:alethea, :ai, :chain, :start],
@@ -95,7 +105,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
 
     :telemetry.execute([:alethea, :ai, :chain, :stop], %{}, metadata)
 
-    wrap_result(result, msg_id, @local_model_version)
+    wrap_result(result, msg_id, model_version(llm))
   end
 
   # Hosted providers. Local Ollama never reaches this clause (see above).
@@ -121,15 +131,11 @@ defmodule Alethea.AI.Chains.GuidedConversationChain do
       success: match?({:ok, _}, result)
     })
 
-    wrap_result(result, msg_id, hosted_model_version(llm))
+    wrap_result(result, msg_id, model_version(llm))
   end
 
   defp hosted_provider(%AnthropicChat{}), do: :anthropic
   defp hosted_provider(_llm), do: :cloud
-
-  # Attribution names the model that actually answered.
-  defp hosted_model_version(%{model: model}) when is_binary(model) and model != "", do: model
-  defp hosted_model_version(_llm), do: @local_model_version
 
   # Prior turns reach the model as distinct chat messages, never as one
   # flattened context block, so it cannot mistake its own earlier

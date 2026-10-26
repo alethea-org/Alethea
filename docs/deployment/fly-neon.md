@@ -136,7 +136,9 @@ The app-owned adapter reuses LangChain message serialization but handles HTTP
 errors without logging raw provider bodies or transport exceptions. It accepts
 non-streaming text only and explicitly rejects tools and streaming. A response
 stopped by `max_tokens` is marked truncated, and guided results report the
-configured Claude model. Existing local/OpenAI output contracts are unchanged.
+configured Claude model. A cloud (OpenAI) result now reports its configured
+model as well, instead of the former `phi-4-mini` literal; local results keep
+`phi-4-mini`.
 
 This selection alone does **not** move local clinical chains to Claude and
 does not provide embeddings, emotion analysis or transcription. Their separate
