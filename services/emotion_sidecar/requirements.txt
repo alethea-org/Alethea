@@ -8,3 +8,6 @@ spacy==3.7.4
 datasets==2.18.0
 accelerate==0.27.2
 numpy==1.26.4
+# pyarrow must stay <16: newer wheels require NumPy >=2 while torch 2.2.1
+# and the pins above are built against NumPy 1.x.
+pyarrow==15.0.2

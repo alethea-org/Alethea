@@ -1,0 +1,24 @@
+app = "alethea-emotion"
+primary_region = "gru"
+
+[mounts]
+  source = "emotion_cache"
+  destination = "/home/sidecar/.cache/huggingface"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/health/ready"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4gb"
