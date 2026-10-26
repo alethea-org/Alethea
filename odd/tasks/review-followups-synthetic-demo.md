@@ -45,3 +45,17 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - Docs now describe public sidecars with tokens, auto-stop, cold-start timeouts, the 6 routed chains, the actual revocation behavior and the 3 provider values.
   - Demo identities were removed from the task log, but they remain in git history.
   - R1-public-* is resolved by S2: token gate plus the Ollama API allowlist.
+- L7: Independent verifier on T1: PASS, no blockers.
+  - Its advisories fixed in `eceae3b`: held batches queue for the inference gate; the Fly check uses `/health/live`; tokens are trimmed; the runbook keeps tokens in shell variables and runs app-first on the existing deployment.
+- L8: Native review `review-962c71a65f376080` (4 lenses): approved; the acknowledgement burned the authority. 10 advisory findings, all non-blocking:
+  - emotion sidecar fails open without a token;
+  - Ollama is unsupervised, plus a Caddy 502 race at cold start;
+  - `/health/live` hides a failed model load;
+  - a held batch can outlast the 300 s client clock;
+  - the README busy contract contradicts the new queueing;
+  - the hosted attribution fallback reports `phi-4-mini`;
+  - the volume path in the diagram is wrong;
+  - the cloud `model_version` change is untested;
+  - the routing test does not assert weekly/FA results;
+  - the held-batch test can race.
+  - Pending the user's decision on whether to fix them.
