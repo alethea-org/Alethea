@@ -11,12 +11,25 @@ primary_region = "gru"
 [env]
   OLLAMA_HOST = "0.0.0.0:11434"
 
+# Public demo posture (user decision, synthetic-data demo only): the
+# embeddings endpoint is exposed unauthenticated on alethea-embeddings.fly.dev
+# so Fly's public proxy handles DNS and auto-start. Private 6PN broke both
+# (IPv6-only resolution and no DNS while auto-stopped).
 [[services]]
   internal_port = 11434
   protocol = "tcp"
   auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
 
 [[vm]]
   size = "shared-cpu-2x"
