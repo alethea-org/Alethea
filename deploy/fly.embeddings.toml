@@ -1,22 +1,25 @@
 app = "alethea-embeddings"
 primary_region = "gru"
 
+# Ollama (pinned) behind a Caddy bearer-token proxy; see deploy/embeddings/.
+# Deploy from the repository root:
+#   fly deploy deploy/embeddings -c deploy/fly.embeddings.toml --dockerfile deploy/embeddings/Dockerfile
+# Requires the OLLAMA_AUTH_TOKEN secret on this app; the same value goes into
+# EMBEDDINGS_AUTH_TOKEN on alethea-prod.
 [build]
-  image = "ollama/ollama:latest"
+  dockerfile = "embeddings/Dockerfile"
 
 [mounts]
   source = "ollama_data"
   destination = "/root/.ollama"
 
-[env]
-  OLLAMA_HOST = "0.0.0.0:11434"
-
-# Public demo posture (user decision, synthetic-data demo only): the
-# embeddings endpoint is exposed unauthenticated on alethea-embeddings.fly.dev
-# so Fly's public proxy handles DNS and auto-start. Private 6PN broke both
-# (IPv6-only resolution and no DNS while auto-stopped).
+# Public demo posture (user decision, synthetic-data demo only): reachable on
+# alethea-embeddings.fly.dev so Fly's public proxy handles DNS and auto-start.
+# Private 6PN broke both (IPv6-only resolution and no DNS while auto-stopped).
+# Only GET / and token-authenticated POST /api/embed pass the proxy; model
+# pull/delete/create/generate are not reachable from outside the machine.
 [[services]]
-  internal_port = 11434
+  internal_port = 8080
   protocol = "tcp"
   auto_stop_machines = true
   auto_start_machines = true
@@ -30,6 +33,13 @@ primary_region = "gru"
   [[services.ports]]
     port = 443
     handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/"
 
 [[vm]]
   size = "shared-cpu-2x"

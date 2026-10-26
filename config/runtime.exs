@@ -137,6 +137,17 @@ if config_env() == :prod do
     end
   end
 
+  # Opt-in demo flags: unset or blank means false; any other value than the
+  # exact literals `true` or `false` is a boot error.
+  demo_flag = fn name ->
+    case optional_env.(name) do
+      nil -> false
+      "false" -> false
+      "true" -> true
+      _other -> raise "environment variable #{name} must be exactly true or false."
+    end
+  end
+
   # An AI capability is never enabled or disabled by omission: the switch
   # must be present and must be exactly `true` or `false`.
   capability_switch = fn name ->
@@ -357,24 +368,19 @@ if config_env() == :prod do
 
   # ## Synthetic demo AI profile
   #
-  # When DEMO_SYNTHETIC_DATA=true and AI_PROVIDER=anthropic, route all non-guided
-  # text generation chains to Claude using the same active model.
-  demo_synthetic_data =
-    case System.get_env("DEMO_SYNTHETIC_DATA") do
-      nil ->
-        false
+  # DEMO_SYNTHETIC_DATA=true routes the six non-guided text generation chains
+  # to Claude with the same active model (the guided chain already follows
+  # AI_PROVIDER). The three clinical chains declare a local-only
+  # `supported_providers/0` contract; this profile overrides it on purpose,
+  # here and only here, because the demo holds synthetic data exclusively.
+  # The flag has no meaning for other providers, so that combination fails.
+  demo_synthetic_data = demo_flag.("DEMO_SYNTHETIC_DATA")
 
-      "false" ->
-        false
+  if demo_synthetic_data and ai_provider != :anthropic do
+    raise "environment variable DEMO_SYNTHETIC_DATA=true requires AI_PROVIDER=anthropic."
+  end
 
-      "true" ->
-        true
-
-      _other ->
-        raise "environment variable DEMO_SYNTHETIC_DATA must be exactly true or false."
-    end
-
-  if demo_synthetic_data and ai_provider == :anthropic do
+  if demo_synthetic_data do
     synthetic_demo_chains = [
       Alethea.AI.Chains.SessionSummaryChain,
       Alethea.AI.Chains.WeeklySummaryChain,
@@ -393,20 +399,7 @@ if config_env() == :prod do
   #
   # DEMO_RESTRICTED_ACCESS restricts registration and login to the identities
   # listed in DEMO_ALLOWED_EMAILS. It must be explicitly true or false (default false).
-  demo_restricted_access =
-    case System.get_env("DEMO_RESTRICTED_ACCESS") do
-      nil ->
-        false
-
-      "false" ->
-        false
-
-      "true" ->
-        true
-
-      _other ->
-        raise "environment variable DEMO_RESTRICTED_ACCESS must be exactly true or false."
-    end
+  demo_restricted_access = demo_flag.("DEMO_RESTRICTED_ACCESS")
 
   demo_allowed_emails =
     case optional_env.("DEMO_ALLOWED_EMAILS") do
@@ -438,12 +431,15 @@ if config_env() == :prod do
   if capability_switch.("EMOTION_ANALYZER_ENABLED") do
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
+    # The bearer token is optional: the sidecar only enforces it when it
+    # was started with SIDECAR_AUTH_TOKEN, so both must be staged together.
     config :alethea, Alethea.AI.EmotionAnalyzer,
       base_url:
         required_env.(
           "EMOTION_SIDECAR_URL",
           "It is required while EMOTION_ANALYZER_ENABLED=true."
-        )
+        ),
+      auth_token: optional_env.("EMOTION_SIDECAR_AUTH_TOKEN")
   else
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Disabled
     # Clears the loopback default compiled in from config/config.exs.
@@ -454,7 +450,10 @@ if config_env() == :prod do
     embeddings_endpoint =
       [
         endpoint_url:
-          required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true.")
+          required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true."),
+        # Matches the token the Caddy proxy in deploy/embeddings checks.
+        auth_token: optional_env.("EMBEDDINGS_AUTH_TOKEN"),
+        receive_timeout: positive_integer_env.("EMBEDDINGS_RECEIVE_TIMEOUT_MS", "120000")
       ]
 
     # The adapter's own default model (bge-m3) applies unless overridden.

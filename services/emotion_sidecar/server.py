@@ -1,5 +1,7 @@
 import argparse
+import hmac
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from numbers import Number
@@ -8,6 +10,9 @@ from numbers import Number
 MAX_BATCH_SIZE = 32
 MAX_BODY_BYTES = 256 * 1024
 MAX_TEXT_BYTES = 4096
+# A batch that arrives during a cold start waits for the model this long,
+# just under the app's 300 s receive timeout.
+LOAD_WAIT_SECONDS = 280
 OFFICIAL_LABELS = {
     "others",
     "joy",
@@ -26,15 +31,27 @@ def create_official_analyzer():
 
 
 class EmotionRuntime:
-    def __init__(self, analyzer_factory):
+    def __init__(self, analyzer_factory, load_in_background=False):
         self.inference_gate = threading.BoundedSemaphore(value=1)
+        self.analyzer = None
+        self.loaded = threading.Event()
+        if load_in_background:
+            # Bind the port first so a cold start can answer health probes and
+            # hold incoming batches instead of refusing connections.
+            threading.Thread(target=self._load, args=(analyzer_factory,), daemon=True).start()
+        else:
+            self._load(analyzer_factory)
+
+    def _load(self, analyzer_factory):
         try:
             self.analyzer = analyzer_factory()
         except Exception:
             self.analyzer = None
+        finally:
+            self.loaded.set()
 
     def predict(self, texts):
-        if self.analyzer is None:
+        if not self.loaded.wait(timeout=LOAD_WAIT_SECONDS) or self.analyzer is None:
             raise AnalyzerUnavailable()
         if not self.inference_gate.acquire(blocking=False):
             raise AnalyzerBusy()
@@ -85,8 +102,9 @@ class EmotionHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 16
 
-    def __init__(self, server_address, runtime):
+    def __init__(self, server_address, runtime, auth_token=None):
         self.runtime = runtime
+        self.auth_token = auth_token or None
         super().__init__(server_address, EmotionRequestHandler)
 
 
@@ -97,7 +115,9 @@ class EmotionRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/health/live":
             self.send_json(200, {"status": "ok"})
         elif self.path == "/health/ready":
-            if self.server.runtime.analyzer is None:
+            if not self.server.runtime.loaded.is_set():
+                self.send_error_json(503, "analyzer_loading", "Analyzer is loading")
+            elif self.server.runtime.analyzer is None:
                 self.send_error_json(503, "analyzer_unavailable", "Analyzer is unavailable")
             else:
                 self.send_json(200, {"status": "ready"})
@@ -107,6 +127,10 @@ class EmotionRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/emotions:batch":
             self.send_error_json(404, "not_found", "Endpoint not found")
+            return
+
+        if not self.authorized():
+            self.send_error_json(401, "unauthorized", "Missing or invalid bearer token")
             return
 
         payload = self.read_json_body()
@@ -127,6 +151,15 @@ class EmotionRequestHandler(BaseHTTPRequestHandler):
             self.send_error_json(503, "busy", "Analyzer is busy")
         except AnalyzerUnavailable:
             self.send_error_json(503, "analyzer_unavailable", "Analyzer is unavailable")
+
+    def authorized(self):
+        # Health endpoints stay open for platform checks; only inference is gated.
+        token = self.server.auth_token
+        if token is None:
+            return True
+        expected = f"Bearer {token}".encode("utf-8")
+        provided = (self.headers.get("Authorization") or "").encode("utf-8")
+        return hmac.compare_digest(provided, expected)
 
     def read_json_body(self):
         content_length = self.headers.get("Content-Length")
@@ -178,8 +211,15 @@ def validate_texts(texts):
     return None
 
 
-def create_server(host, port, analyzer_factory=create_official_analyzer):
-    return EmotionHTTPServer((host, port), EmotionRuntime(analyzer_factory))
+def create_server(
+    host,
+    port,
+    analyzer_factory=create_official_analyzer,
+    auth_token=None,
+    load_in_background=False,
+):
+    runtime = EmotionRuntime(analyzer_factory, load_in_background=load_in_background)
+    return EmotionHTTPServer((host, port), runtime, auth_token)
 
 
 def main():
@@ -188,7 +228,12 @@ def main():
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
 
-    server = create_server(args.host, args.port)
+    server = create_server(
+        args.host,
+        args.port,
+        auth_token=os.environ.get("SIDECAR_AUTH_TOKEN", "").strip(),
+        load_in_background=True,
+    )
     try:
         server.serve_forever()
     finally:

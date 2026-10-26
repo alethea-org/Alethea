@@ -60,7 +60,7 @@ defmodule Alethea.AI.Embeddings.Ollama do
     }
 
     req_opts =
-      [json: payload, receive_timeout: receive_timeout()] ++
+      [json: payload, headers: auth_headers(), receive_timeout: receive_timeout()] ++
         Application.get_env(:alethea, :ollama_embeddings_req_options, [])
 
     case Req.post(url, req_opts) do
@@ -78,6 +78,13 @@ defmodule Alethea.AI.Embeddings.Ollama do
 
   defp endpoint_url do
     config(:endpoint_url, @default_endpoint) |> String.trim_trailing("/")
+  end
+
+  defp auth_headers do
+    case config(:auth_token, nil) do
+      token when is_binary(token) and token != "" -> [{"authorization", "Bearer " <> token}]
+      _none -> []
+    end
   end
 
   defp receive_timeout, do: config(:receive_timeout, @default_timeout)

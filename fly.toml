@@ -44,9 +44,20 @@ kill_timeout = 40
   # sets them. See "AI capabilities" in the operator guide (docs/deployment/fly-neon.md)
   # and the AI sidecars readiness runbook (docs/deployment/ai-services-fly.md).
   #
-  # For the synthetic demo profile (gated on explicit user cost consent, S4):
-  # - EMBEDDINGS_ENABLED = "true" with EMBEDDINGS_BASE_URL = "http://alethea-embeddings.internal:11434"
-  # - EMOTION_ANALYZER_ENABLED = "true" with EMOTION_SIDECAR_URL = "http://alethea-emotion.internal:8080"
+  # Synthetic demo profile (deployed): the sidecars are public Fly apps with
+  # auto-stop, reached through their fly.dev hosts. Private .internal
+  # addresses do not work for them: 6PN has no DNS while a machine is stopped.
+  # - EMBEDDINGS_ENABLED = "true" with EMBEDDINGS_BASE_URL = "https://alethea-embeddings.fly.dev"
+  # - EMOTION_ANALYZER_ENABLED = "true" with EMOTION_SIDECAR_URL = "https://alethea-emotion.fly.dev"
+  # - EMBEDDINGS_AUTH_TOKEN and EMOTION_SIDECAR_AUTH_TOKEN as secrets, equal to
+  #   the sidecars' OLLAMA_AUTH_TOKEN and SIDECAR_AUTH_TOKEN.
+  #
+  # A stopped sidecar needs minutes to load its model. The emotion sidecar
+  # binds its port first and holds batches until the model is ready (up to
+  # 280 s), so the receive timeouts below wait out a cold start.
+  EMBEDDINGS_RECEIVE_TIMEOUT_MS = "300000"
+  EMOTION_SIDECAR_CONNECT_TIMEOUT_MS = "10000"
+  EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS = "300000"
   #
   # Deliberately absent, because the single Machine reaches Neon over the
   # public internet and is not clustered: ECTO_IPV6 and DNS_CLUSTER_QUERY.

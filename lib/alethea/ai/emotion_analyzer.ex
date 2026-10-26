@@ -60,6 +60,7 @@ defmodule Alethea.AI.EmotionAnalyzer do
         String.trim_trailing(base_url, "/") <> "/v1/emotions:batch",
         [
           json: %{texts: texts},
+          headers: auth_headers(config[:auth_token]),
           retry: false,
           receive_timeout: config[:receive_timeout] || 30_000,
           connect_options: [timeout: config[:connect_timeout] || 2_000]
@@ -69,6 +70,11 @@ defmodule Alethea.AI.EmotionAnalyzer do
       {:error, :unavailable}
     end
   end
+
+  defp auth_headers(token) when is_binary(token) and token != "",
+    do: [{"authorization", "Bearer " <> token}]
+
+  defp auth_headers(_token), do: []
 
   defp parse_results(%{"version" => "v1", "results" => results}, expected_count)
        when is_list(results) and length(results) == expected_count do

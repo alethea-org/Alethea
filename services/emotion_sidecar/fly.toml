@@ -6,7 +6,10 @@ primary_region = "gru"
   destination = "/home/sidecar/.cache/huggingface"
 
 # Public demo posture (user decision, synthetic-data demo only): see the
-# note in deploy/fly.embeddings.toml.
+# note in deploy/fly.embeddings.toml. POST /v1/emotions:batch requires the
+# SIDECAR_AUTH_TOKEN secret as a bearer token (EMOTION_SIDECAR_AUTH_TOKEN on
+# alethea-prod); /health/* stays open for the checks below. A cold start can
+# take minutes, so alethea-prod raises its sidecar receive timeouts.
 [[services]]
   internal_port = 8080
   protocol = "tcp"

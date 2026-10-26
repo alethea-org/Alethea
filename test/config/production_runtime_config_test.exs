@@ -28,8 +28,9 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     CLOAK_AES_KEY TELEGRAM_CHAT_ID_PEPPER TELEGRAM_CLIENT_ADAPTER
     AI_PROVIDER LLM_MODEL LOCAL_LLM_BASE_URL OPENAI_API_KEY OPENAI_BASE_URL
     ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
-    EMOTION_ANALYZER_ENABLED EMOTION_SIDECAR_URL
-    EMBEDDINGS_ENABLED EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL
+    EMOTION_ANALYZER_ENABLED EMOTION_SIDECAR_URL EMOTION_SIDECAR_AUTH_TOKEN
+    EMBEDDINGS_ENABLED EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL EMBEDDINGS_AUTH_TOKEN
+    EMBEDDINGS_RECEIVE_TIMEOUT_MS
     WHISPER_ENABLED
     DEMO_RESTRICTED_ACCESS DEMO_ALLOWED_EMAILS DEMO_SYNTHETIC_DATA
   )
@@ -358,6 +359,49 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       assert alethea(config, EmotionAnalyzer)[:base_url] == "http://emotion.internal.test:8080"
     end
 
+    test "sidecar auth tokens are optional and passed to the clients" do
+      enabled = %{
+        "EMOTION_ANALYZER_ENABLED" => "true",
+        "EMOTION_SIDECAR_URL" => "https://emotion.example.test",
+        "EMBEDDINGS_ENABLED" => "true",
+        "EMBEDDINGS_BASE_URL" => "https://embeddings.example.test"
+      }
+
+      config = prod_config(enabled)
+      assert alethea(config, EmotionAnalyzer)[:auth_token] == nil
+      assert alethea(config, Embeddings.Ollama)[:auth_token] == nil
+
+      config =
+        prod_config(
+          Map.merge(enabled, %{
+            "EMOTION_SIDECAR_AUTH_TOKEN" => "synthetic-emotion-token",
+            "EMBEDDINGS_AUTH_TOKEN" => "synthetic-embeddings-token"
+          })
+        )
+
+      assert alethea(config, EmotionAnalyzer)[:auth_token] == "synthetic-emotion-token"
+      assert alethea(config, Embeddings.Ollama)[:auth_token] == "synthetic-embeddings-token"
+    end
+
+    test "embeddings receive timeout is tunable through the environment" do
+      enabled = %{
+        "EMBEDDINGS_ENABLED" => "true",
+        "EMBEDDINGS_BASE_URL" => "https://embeddings.example.test"
+      }
+
+      assert prod_config(enabled) |> alethea(Embeddings.Ollama) |> Keyword.get(:receive_timeout) ==
+               120_000
+
+      config = prod_config(Map.put(enabled, "EMBEDDINGS_RECEIVE_TIMEOUT_MS", "300000"))
+      assert alethea(config, Embeddings.Ollama)[:receive_timeout] == 300_000
+
+      assert_raise RuntimeError,
+                   ~r/EMBEDDINGS_RECEIVE_TIMEOUT_MS must be a positive integer/,
+                   fn ->
+                     prod_config(Map.put(enabled, "EMBEDDINGS_RECEIVE_TIMEOUT_MS", "soon"))
+                   end
+    end
+
     test "embeddings disabled" do
       assert prod_config() |> alethea(:ai_embeddings) == Embeddings.Disabled
     end
@@ -495,6 +539,27 @@ defmodule Alethea.ProductionRuntimeConfigTest do
         refute Keyword.has_key?(alethea_raw(config), WeeklySummaryChain)
         refute Keyword.has_key?(alethea_raw(config), PatternProposalChain)
       end
+    end
+
+    test "an empty demo flag counts as unset" do
+      config = prod_config(%{"DEMO_SYNTHETIC_DATA" => "", "DEMO_RESTRICTED_ACCESS" => " "})
+
+      refute Keyword.has_key?(alethea_raw(config), SessionSummaryChain)
+      assert alethea(config, :demo_restricted_access) == false
+    end
+
+    test "DEMO_SYNTHETIC_DATA=true without the anthropic provider fails at boot" do
+      assert_raise RuntimeError,
+                   ~r/DEMO_SYNTHETIC_DATA=true requires AI_PROVIDER=anthropic/,
+                   fn ->
+                     prod_config(%{"DEMO_SYNTHETIC_DATA" => "true"})
+                   end
+
+      assert_raise RuntimeError,
+                   ~r/DEMO_SYNTHETIC_DATA=true requires AI_PROVIDER=anthropic/,
+                   fn ->
+                     prod_config(cloud_env(%{"DEMO_SYNTHETIC_DATA" => "true"}))
+                   end
     end
 
     test "rejects invalid values for DEMO_SYNTHETIC_DATA" do
