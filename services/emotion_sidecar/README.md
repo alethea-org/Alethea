@@ -14,9 +14,14 @@ and demonstration use. Review upstream terms before any commercial deployment.
 ## Runtime contract
 
 - `GET /health/live` reports process liveness.
-- `GET /health/ready` reports whether the analyzer loaded successfully.
+- `GET /health/ready` reports whether the analyzer loaded successfully
+  (`503 analyzer_loading` while the model loads in the background).
 - `POST /v1/emotions:batch` accepts `{"texts": [...]}` with 1 to 32 non-empty
-  strings, at most 4096 UTF-8 bytes each.
+  strings, at most 4096 UTF-8 bytes each. A batch that arrives while the model
+  loads waits up to 280 s for it.
+- When `SIDECAR_AUTH_TOKEN` is set, batches require
+  `Authorization: Bearer <token>` (`401 unauthorized` otherwise). Health
+  endpoints stay open.
 - One request runs inference at a time. Concurrent inference fails fast with a
   stable `busy` error instead of creating an unbounded queue.
 - Responses contain only official labels and scores. Inputs and bodies are never

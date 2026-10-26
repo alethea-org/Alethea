@@ -1,39 +1,45 @@
-# AI Services Deployment Readiness on Fly.io (Synthetic Demo Profile)
+# AI Services on Fly.io (Synthetic Demo Profile)
 
-> **Status: Readiness, sizing, and architecture complete. Actual provisioning is GATED on user cost consent (S4).**
-> Do not execute the provisioning commands in this document without explicit authorization and agreed budget.
-> Scope: Synthetic clinical demonstration on Fly.io (`feat/synthetic-demo-ai`, T3 under S2 and S4). Real patient data is strictly prohibited.
+> **Status: deployed** as `alethea-embeddings` and `alethea-emotion` in `gru` (`feat/synthetic-demo-ai`, T3/T5).
+> Scope: synthetic clinical demonstration only. Real patient data is strictly prohibited.
 
 ---
 
 ## 1. Overview & Architecture
 
-To satisfy S2 ("todas las pantallas tienen que funcionar, todos los servicios tienen que funcionar") without running local models on developer laptops, Alethea requires two auxiliary AI runtimes alongside the main web application (`alethea-prod`):
+To satisfy S2 ("todas las pantallas tienen que funcionar, todos los servicios tienen que funcionar") without running local models on developer laptops, Alethea runs two auxiliary AI runtimes alongside the main web application (`alethea-prod`):
 
 1. **Embeddings Service (`alethea-embeddings`)**: Ollama running `BAAI/bge-m3` for multilingual, 1024-dimensional semantic embeddings used by RAG retrieval (`Alethea.AI.Embeddings.Ollama`).
 2. **Emotion Sidecar (`alethea-emotion`)**: Python 3.11 / PyTorch CPU microservice running `pysentimiento` for Spanish emotion analysis (`Alethea.AI.EmotionAnalyzer`).
 
-### Zero-Egress Private Networking (`.internal`)
+### Public endpoints with bearer tokens
 
-All communication between `alethea-prod` and the two AI sidecars takes place entirely over Fly.io's private WireGuard mesh network (6PN):
+Both sidecars are **public** Fly apps reached through their `fly.dev` hosts over TLS, and **auto-stop** when idle (user decision for the demo). Private 6PN (`.internal`) was tried first and dropped: it resolves IPv6-only and has no DNS while a machine is stopped, so it breaks auto-start.
 
-- **No public IP addresses** are allocated to the AI sidecars (`fly ips allocate-v4` and `allocate-v6` are never run).
-- Endpoints use Fly private DNS: `http://<app-name>.internal:<port>`.
-- Internal network traffic is encrypted, has zero bandwidth egress cost, and cannot be reached from the public internet.
-- All apps are deployed in region **`gru` (São Paulo)** alongside `alethea-prod` and AWS `sa-east-1` (Neon PostgreSQL) for sub-millisecond local network latency.
+Because they are public, inference is gated by a shared secret sent as `Authorization: Bearer <token>`:
+
+| Sidecar | Secret on the sidecar | Secret on `alethea-prod` | Open without token |
+| --- | --- | --- | --- |
+| `alethea-embeddings` | `OLLAMA_AUTH_TOKEN` | `EMBEDDINGS_AUTH_TOKEN` | `GET /` (health) |
+| `alethea-emotion` | `SIDECAR_AUTH_TOKEN` | `EMOTION_SIDECAR_AUTH_TOKEN` | `GET /health/live`, `GET /health/ready` |
+
+- Ollama has no native auth. `deploy/embeddings/` runs a pinned Ollama on loopback behind a Caddy proxy that forwards only `GET /` and token-authenticated `POST /api/embed`. Model pull/delete/create/generate are unreachable from outside the machine. The entrypoint refuses to start without a token.
+- The emotion sidecar checks the token itself (`services/emotion_sidecar/server.py`, constant-time compare). Without `SIDECAR_AUTH_TOKEN` it accepts every batch, which is meant for local development only.
+- Generate each token with `openssl rand -hex 32`, and stage the same value on both sides.
+- Traffic leaves Fly's private network, so egress is billed (negligible at demo volume). Sanitized clinical text travels over TLS.
+
+### Cold starts
+
+A stopped sidecar must boot and load its model before it answers (~210 s observed for the emotion sidecar). `fly.toml` on `alethea-prod` sets 300 s receive timeouts for both sidecars, and a 10 s connect timeout for the emotion sidecar. The emotion sidecar binds its port first, then loads the model in the background. A batch that arrives meanwhile is held for up to 280 s rather than refused, because `EmotionAnalysisWorker` runs a single attempt.
 
 ```
-                      +-------------------------------------------------------+
-                      |                      Fly.io (gru)                     |
-                      |                                                       |
-[Public Internet] --> | [alethea-prod] (Port 4000)                            |
-                      |   |                                                   |
-                      |   |-- (http://alethea-embeddings.internal:11434) ---> | [alethea-embeddings] (Ollama + bge-m3)
-                      |   |                                                   |   NVMe Volume: 10 GB (/root/.ollama)
-                      |   |                                                   |
-                      |   +-- (http://alethea-emotion.internal:8080) -------> | [alethea-emotion] (pysentimiento)
-                      |                                                       |   NVMe Volume: 5 GB (/home/sidecar/.cache)
-                      +-------------------------------------------------------+
+[Public Internet] --> [alethea-prod] (Port 4000)
+                         |
+                         |-- https://alethea-embeddings.fly.dev  (Bearer) --> Caddy :8080 --> Ollama 127.0.0.1:11434 (bge-m3)
+                         |                                                     Volume: 10 GB (/root/.ollama)
+                         |
+                         +-- https://alethea-emotion.fly.dev     (Bearer) --> server.py :8080 (pysentimiento)
+                                                                               Volume: 5 GB (/home/sidecar/.cache)
 ```
 
 ---
@@ -44,7 +50,8 @@ All communication between `alethea-prod` and the two AI sidecars takes place ent
 
 - **Model**: `BAAI/bge-m3` (multilingual, 1024-dimension vector output).
 - **Elixir Adapter**: `Alethea.AI.Embeddings.Ollama` (`lib/alethea/ai/embeddings/ollama.ex`).
-- **Endpoint**: `http://alethea-embeddings.internal:11434/api/embed`.
+- **Endpoint**: `https://alethea-embeddings.fly.dev/api/embed` (bearer token required).
+- **Image**: `deploy/embeddings/Dockerfile`: `ollama/ollama:0.40.11` plus Caddy 2.11.7, both pinned.
 - **Dimensionality**: Fixed at 1024 dimensions, exactly matching the `vector(1024)` column in PostgreSQL `clinical_embeddings`.
 
 ### Sizing Justification
@@ -56,12 +63,12 @@ All communication between `alethea-prod` and the two AI sidecars takes place ent
 
 ### Environment Configuration on `alethea-prod`
 
-When enabled, stage the following variables on `alethea-prod`:
-
 | Variable | Value | Description |
 | --- | --- | --- |
 | `EMBEDDINGS_ENABLED` | `true` | Activates `Alethea.AI.Embeddings.Ollama` instead of `Disabled`. |
-| `EMBEDDINGS_BASE_URL` | `http://alethea-embeddings.internal:11434` | Private 6PN URL reachable from `alethea-prod`. |
+| `EMBEDDINGS_BASE_URL` | `https://alethea-embeddings.fly.dev` | Public Fly host (auto-starts the machine). |
+| `EMBEDDINGS_AUTH_TOKEN` | secret | Same value as `OLLAMA_AUTH_TOKEN` on `alethea-embeddings`. Optional in config; no header is sent when unset. |
+| `EMBEDDINGS_RECEIVE_TIMEOUT_MS` | `300000` (set in `fly.toml`) | Defaults to 120,000. Raised to wait out a cold start. |
 | `EMBEDDINGS_MODEL` | `bge-m3` *(optional)* | Defaults to `bge-m3` in the adapter if omitted. |
 
 ### Cost Breakdown (Estimated)
@@ -82,8 +89,8 @@ When enabled, stage the following variables on `alethea-prod`:
 - **Model / Library**: `pysentimiento` 0.7.3 (`robertuito-emotion-analysis`, ~440 MB weights) with PyTorch CPU 2.2.1 and Transformers 4.38.2.
 - **Artifact**: `services/emotion_sidecar/Dockerfile` (Debian 12 slim base, non-root user `sidecar:sidecar`, port 8080).
 - **Elixir Adapter**: `Alethea.AI.EmotionAnalyzer` (`lib/alethea/ai/emotion_analyzer.ex`).
-- **Endpoint**: `http://alethea-emotion.internal:8080/v1/emotions:batch`.
-- **Health Checks**: `GET /health/live` (process alive) and `GET /health/ready` (model weights loaded and warm).
+- **Endpoint**: `https://alethea-emotion.fly.dev/v1/emotions:batch` (bearer token required when `SIDECAR_AUTH_TOKEN` is set).
+- **Health Checks**: `GET /health/live` (process alive) and `GET /health/ready` (model loaded; `503 analyzer_loading` while it loads). Both are unauthenticated.
 - **Batch limits**: 1 to 32 texts per request, max 4096 bytes per text.
 
 ### Sizing Justification
@@ -96,14 +103,13 @@ When enabled, stage the following variables on `alethea-prod`:
 
 ### Environment Configuration on `alethea-prod`
 
-When enabled, stage the following variables on `alethea-prod`:
-
 | Variable | Value | Description |
 | --- | --- | --- |
 | `EMOTION_ANALYZER_ENABLED` | `true` | Activates `Alethea.AI.EmotionAnalyzer` instead of `Disabled`. |
-| `EMOTION_SIDECAR_URL` | `http://alethea-emotion.internal:8080` | Private 6PN URL reachable from `alethea-prod`. |
-| `EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS` | `30000` *(optional)* | Timeout in ms (defaults to 30,000 in `runtime.exs`). |
-| `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` | `2000` *(optional)* | Connect timeout in ms (defaults to 2,000 in `runtime.exs`). |
+| `EMOTION_SIDECAR_URL` | `https://alethea-emotion.fly.dev` | Public Fly host (auto-starts the machine). |
+| `EMOTION_SIDECAR_AUTH_TOKEN` | secret | Same value as `SIDECAR_AUTH_TOKEN` on `alethea-emotion`. Optional in config; no header is sent when unset. |
+| `EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS` | `300000` (set in `fly.toml`) | Defaults to 30,000. Raised to wait out a cold start. |
+| `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` | `10000` (set in `fly.toml`) | Defaults to 2,000. |
 
 ### Cost Breakdown (Estimated)
 
@@ -129,7 +135,7 @@ In development, issue #198 explicitly stamped `Alethea.AI.EmotionAnalyzer` as a 
 
 The conflict is resolved specifically and exclusively for the synthetic demo profile under the following documented criteria:
 
-1. **Strictly Non-Commercial Academic/Demonstration Scope**: The target audience is the academic evaluator ("a mí y al profe", S3). This directly adheres to `pysentimiento`'s non-commercial research licensing terms.
+1. **Strictly Non-Commercial Academic/Demonstration Scope**: The target audience is the academic evaluator ("a mí y al profe", S3). This directly adheres to `pysentimiento`'s non-commercial research licensing terms. The endpoint is public, but inference requires the bearer token held only by `alethea-prod`, so the model serves no one outside that scope.
 2. **Exclusively Synthetic Patient Data**: Under `DEMO_SYNTHETIC_DATA=true` and restricted admission (`DEMO_RESTRICTED_ACCESS=true`), no real patients or genuine clinical histories are processed. No diagnostic harm or clinical consequence can occur.
 3. **Fulfillment of S2**: Requirement S2 explicitly mandates: *"todas las pantallas tienen que funcionar, todos los servicios tienen que funcionar"*. Running the sidecar enables the emotion trends dashboard in the clinician interface without mock placeholders.
 4. **Permanent Guardrail for Milestone 2**: This resolution applies **solely to the synthetic demo**. For any future production deployment with real patient data (milestone 2 of issue #402), enabling the emotion analyzer remains strictly forbidden until a clinically validated, commercially licensed model is integrated.
@@ -145,118 +151,60 @@ The conflict is resolved specifically and exclusively for the synthetic demo pro
 | **Main App** (`alethea-prod`) | `shared-cpu-1x` (1 GB) | None | ~$3.20 | ~$3.20 (must be always-on for Oban) |
 | **Total Auxiliary AI** | — | **15 GB NVMe** | **~$26.25 / month** | **~$2.25/mo + active hours** |
 
-*Note: All prices are estimates based on standard Fly.io compute and storage rates as of 2025/2026. Data transfer over 6PN (`.internal`) is $0.00.*
+*Note: All prices are estimates based on standard Fly.io compute and storage rates as of 2025/2026. The deployed posture is auto-stop; sidecar traffic goes over the public hosts, so it counts as (negligible) egress.*
 
 ---
 
-## 6. Provisioning Runbook (Gated on User Cost Consent - S4)
+## 6. Provisioning Runbook
 
-> **DO NOT EXECUTE THESE COMMANDS WITHOUT EXPLICIT USER CONSENT.**
-> These commands are cataloged here so that once cost consent (S4) is granted, deployment is deterministic, reproducible, and rapid.
+> Remote operations: run these only with explicit authorization for the target app. Commands run from the repository root.
 
-### Phase A: Provision Embeddings App (`alethea-embeddings`)
+### Phase A: Embeddings (`alethea-embeddings`)
 
 ```sh
-# 1. Create the Fly application (no public IPs)
 fly apps create alethea-embeddings --org <your-org>
-
-# 2. Create the 10GB persistent volume in São Paulo (gru)
 fly volumes create ollama_data --app alethea-embeddings --region gru --size 10 --yes
 
-# 3. Create fly.toml for alethea-embeddings:
-cat <<'EOF' > fly.embeddings.toml
-app = "alethea-embeddings"
-primary_region = "gru"
+# Token gate (Caddy refuses to start without it)
+fly secrets set --stage -a alethea-embeddings OLLAMA_AUTH_TOKEN="$(openssl rand -hex 32)"
 
-[build]
-  image = "ollama/ollama:latest"
+fly deploy deploy/embeddings -c deploy/fly.embeddings.toml --dockerfile deploy/embeddings/Dockerfile --ha=false
 
-[mounts]
-  source = "ollama_data"
-  destination = "/root/.ollama"
-
-[env]
-  OLLAMA_HOST = "0.0.0.0:11434"
-
-[[services]]
-  internal_port = 11434
-  protocol = "tcp"
-  auto_stop_machines = "off"
-  auto_start_machines = true
-  min_machines_running = 1
-
-[[vm]]
-  size = "shared-cpu-2x"
-  memory = "4gb"
-EOF
-
-# 4. Deploy the embeddings app
-fly deploy --config fly.embeddings.toml --ha=false
-
-# 5. Pull the bge-m3 model into the persistent volume (one-time operation)
+# One-time model pull into the volume (Ollama listens on loopback only)
 fly ssh console -a alethea-embeddings -C "ollama pull bge-m3"
-
-# 6. Verify model embedding output locally via 6PN proxy
-fly ssh console -a alethea-embeddings -C 'curl -s http://localhost:11434/api/embed -d "{\"model\": \"bge-m3\", \"input\": \"Hola mundo\"}"'
 ```
 
-### Phase B: Provision Emotion Sidecar App (`alethea-emotion`)
+### Phase B: Emotion sidecar (`alethea-emotion`)
 
 ```sh
-# 1. Create the Fly application (no public IPs)
 fly apps create alethea-emotion --org <your-org>
-
-# 2. Create the 5GB persistent volume in São Paulo (gru)
 fly volumes create emotion_cache --app alethea-emotion --region gru --size 5 --yes
-
-# 3. Create fly.toml for alethea-emotion:
-cat <<'EOF' > fly.emotion.toml
-app = "alethea-emotion"
-primary_region = "gru"
-
-[build]
-  dockerfile = "services/emotion_sidecar/Dockerfile"
-
-[mounts]
-  source = "emotion_cache"
-  destination = "/home/sidecar/.cache/huggingface"
-
-[[services]]
-  internal_port = 8080
-  protocol = "tcp"
-  auto_stop_machines = "off"
-  auto_start_machines = true
-  min_machines_running = 1
-
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "240s"
-    method = "GET"
-    path = "/health/ready"
-
-[[vm]]
-  size = "shared-cpu-2x"
-  memory = "4gb"
-EOF
-
-# 4. Deploy the emotion sidecar from repository context
-fly deploy --config fly.emotion.toml --ha=false
-
-# 5. Verify sidecar readiness
-fly ssh console -a alethea-emotion -C "curl -s http://localhost:8080/health/ready"
+fly secrets set --stage -a alethea-emotion SIDECAR_AUTH_TOKEN="$(openssl rand -hex 32)"
+fly deploy services/emotion_sidecar -c services/emotion_sidecar/fly.toml --ha=false
 ```
 
-### Phase C: Wire `alethea-prod` to Auxiliary AI Services
+### Phase C: Wire `alethea-prod`
+
+Read each sidecar token once, without echoing it (`read -s`), and stage it on `alethea-prod`:
 
 ```sh
-# Stage the AI capability variables on alethea-prod
 fly secrets set --stage -a alethea-prod \
   EMBEDDINGS_ENABLED="true" \
-  EMBEDDINGS_BASE_URL="http://alethea-embeddings.internal:11434" \
+  EMBEDDINGS_BASE_URL="https://alethea-embeddings.fly.dev" \
+  EMBEDDINGS_AUTH_TOKEN="$EMBEDDINGS_TOKEN" \
   EMOTION_ANALYZER_ENABLED="true" \
-  EMOTION_SIDECAR_URL="http://alethea-emotion.internal:8080"
+  EMOTION_SIDECAR_URL="https://alethea-emotion.fly.dev" \
+  EMOTION_SIDECAR_AUTH_TOKEN="$EMOTION_TOKEN"
 
-# Trigger a rolling deploy of alethea-prod to consume the new staged configuration
 fly deploy --ha=false
+```
+
+Order: deploy the app with the client tokens first (an unenforced sidecar ignores the header), then set the sidecar secrets and redeploy each sidecar. The reverse order fails every call with 401 until the app catches up.
+
+### Verify
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://alethea-embeddings.fly.dev/api/embed   # 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://alethea-emotion.fly.dev/v1/emotions:batch # 401
+curl -s https://alethea-emotion.fly.dev/health/ready                                              # {"status":"ready"} once warm
 ```

@@ -29,7 +29,7 @@ Delivery: `ask-on-risk` (chain strategy pending before commits); runner: ExUnit/
 - L11 — Deployment and E2E verification complete (T5, S2, S4):
   - Sidecars deployed in `gru`: `alethea-embeddings` (Ollama bge-m3, 1024 dims) and `alethea-emotion` (pysentimiento). Public demo posture (user decision, option 2) to ensure auto-start by Fly proxy without private-DNS deadlocks.
   - App deployed: `alethea-prod` in `gru` connected to Neon PostgreSQL production (58 migrations, 31 tables).
-  - Restricted admission verified live: unlisted emails (`intruso@gmail.com`) rejected with "no autorizado" at registration; listed demo accounts created successfully (`vicenzo@demo.alethea.app`, `profe@demo.alethea.app`); authenticated login reaches dashboard (HTTP 302 -> /dashboard -> 200).
+  - Restricted admission verified live: unlisted emails (`intruso@gmail.com`) rejected with "no autorizado" at registration; both listed demo accounts created successfully (identities live only in the `DEMO_ALLOWED_EMAILS` secret); authenticated login reaches dashboard (HTTP 302 -> /dashboard -> 200).
   - AI services verified from live Elixir runtime:
     - Embeddings: POST https://alethea-embeddings.fly.dev/api/embed -> 200 (1024-dim vector returned).
     - Emotion: GET https://alethea-emotion.fly.dev/health/ready -> 200 (status: ready).
