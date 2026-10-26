@@ -97,4 +97,8 @@ defmodule Alethea.AI.Chains.SessionSummaryChainTest do
       refute Exception.message(error) =~ @marker
     end)
   end
+
+  test "supported_providers includes :anthropic" do
+    assert :anthropic in SessionSummaryChain.supported_providers()
+  end
 end

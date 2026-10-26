@@ -62,7 +62,7 @@ Built from `config/runtime.exs`. "Secret" means `fly secrets`; "plain" means `[e
 | `CLOAK_AES_KEY` | secret | none | Base64 of 32 random bytes; encrypts clinical data at rest. Generate with `openssl rand -base64 32`. **Losing it loses the data.** |
 | `TELEGRAM_CHAT_ID_PEPPER` | secret | none | HMAC key for Telegram chat id hashes, at least 32 bytes. Generate with `openssl rand -hex 32`. Changing it orphans every stored hash. |
 | `PHX_HOST` | plain, in `fly.toml` | none | Public bare host name. Drives URLs, the origin check and the webhook URL. |
-| `AI_PROVIDER` | plain | none | `local` or `cloud`. Provider of the guided conversation chain only. **Pending decision; not in `fly.toml`.** |
+| `AI_PROVIDER` | plain | none | `local` (Ollama), `cloud` (OpenAI), or `anthropic` (Claude). Provider of the guided conversation chain only. **Not in `fly.toml`.** |
 | `EMOTION_ANALYZER_ENABLED` | plain | none | Exactly `true` or `false`. **Pending decision; not in `fly.toml`.** |
 | `EMBEDDINGS_ENABLED` | plain | none | Exactly `true` or `false`. **Pending decision; not in `fly.toml`.** |
 
@@ -72,9 +72,11 @@ Built from `config/runtime.exs`. "Secret" means `fly secrets`; "plain" means `[e
 | --- | --- | --- | --- |
 | `LOCAL_LLM_BASE_URL` | plain | `AI_PROVIDER=local` | Endpoint of the self-hosted model. Also the only endpoint of every non-guided chain. |
 | `OPENAI_API_KEY` | secret | `AI_PROVIDER=cloud` | Hosted provider credential. |
-| `LLM_MODEL` | plain | `AI_PROVIDER=cloud` | Model name; optional with `local` (compiled default `phi4-mini`). |
+| `ANTHROPIC_API_KEY` | secret | `AI_PROVIDER=anthropic` | Anthropic API credential, separate from OpenAI. |
+| `LLM_MODEL` | plain | `AI_PROVIDER=cloud` or `anthropic` | Explicit active model name; optional with `local` (compiled default `phi4-mini`). |
 | `EMOTION_SIDECAR_URL` | plain | `EMOTION_ANALYZER_ENABLED=true` | Emotion sidecar endpoint. |
 | `EMBEDDINGS_BASE_URL` | plain | `EMBEDDINGS_ENABLED=true` | Embeddings endpoint (Ollama API). |
+| `DEMO_ALLOWED_EMAILS` | plain or secret | `DEMO_RESTRICTED_ACCESS=true` | Comma-separated list of allowed email addresses for restricted demo admission. |
 | `TELEGRAM_BOT_TOKEN` | secret | first deploy and token rotation | BotFather token. Read by the release command and by nothing else. |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | with `TELEGRAM_BOT_TOKEN` | 1–256 characters of `A-Z a-z 0-9 _ -`. Generate with `openssl rand -hex 32`. |
 | `TELEGRAM_BOT_USERNAME` | plain | with `TELEGRAM_BOT_TOKEN` | Bot user name, 5–32 letters, digits or underscores. |
@@ -91,6 +93,9 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | `PHX_EXTRA_ORIGINS` | empty | Comma-separated extra allowed origins, for example a custom domain. |
 | `POOL_SIZE`, `DATABASE_CONNECT_TIMEOUT_MS`, `DATABASE_QUEUE_TARGET_MS`, `DATABASE_QUEUE_INTERVAL_MS` | see [Topology](#topology) | Database pool tuning. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Hosted provider endpoint. |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1/messages` | Full Anthropic Messages endpoint, not an OpenAI-compatible base URL. |
+| `DEMO_RESTRICTED_ACCESS` | `false` | Must be exactly `true` or `false`. When `true`, restricts registration, login, and active sessions to emails in `DEMO_ALLOWED_EMAILS`. |
+| `DEMO_SYNTHETIC_DATA` | `false` | Must be exactly `true` or `false`. When `true` and `AI_PROVIDER=anthropic`, routes all seven text generation chains to Claude. |
 | `EMBEDDINGS_MODEL` | adapter default (`bge-m3`) | Embeddings model name. |
 | `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` / `_RECEIVE_TIMEOUT_MS` / `_MAX_BATCH_SIZE` / `_MAX_TEXT_BYTES` | `2000` / `30000` / `32` / `4096` | Emotion sidecar limits. |
 | `WHISPER_ENABLED` | unset (disabled) | Must be unset or `false`; `true` fails the boot because no production adapter exists. |
@@ -108,13 +113,53 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 
 | Capability | Configured by | When off or unconfigured |
 | --- | --- | --- |
-| Guided conversation chain (Telegram replies) | `AI_PROVIDER`, plus `LOCAL_LLM_BASE_URL` or `OPENAI_API_KEY` + `LLM_MODEL` | Cannot be off: the boot fails without a complete provider. |
-| Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft | `LOCAL_LLM_BASE_URL` only. They are pinned to the local provider so clinical narrative is never rerouted to a hosted model by `AI_PROVIDER`. | "Not configured": summaries fail and retry; consultations and reports return errors. |
+| Guided conversation chain (Telegram replies) | `AI_PROVIDER`, plus `LOCAL_LLM_BASE_URL`, or the selected hosted provider's API key + `LLM_MODEL` | Cannot be off: the boot fails without a complete provider. |
+| Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft | `LOCAL_LLM_BASE_URL` only by default (pinned to local). When `DEMO_SYNTHETIC_DATA=true` and `AI_PROVIDER=anthropic`, the six non-report text chains are routed to Claude with `LLM_MODEL`. | "Not configured": summaries fail and retry; consultations and reports return errors. |
 | Emotion analyzer slot | `EMOTION_ANALYZER_ENABLED` + `EMOTION_SIDECAR_URL` | Explicit `Disabled` adapter; session closure completes without trends. |
 | Embeddings slot (RAG indexing) | `EMBEDDINGS_ENABLED` + `EMBEDDINGS_BASE_URL` (+ `EMBEDDINGS_MODEL`) | Explicit `Disabled` adapter; indexing jobs fail and retry per event (known gap). |
 | Transcription slot (Whisper) | nothing | Always disabled. |
 
 No Fake adapter and no `localhost` endpoint is reachable in production.
+
+### Claude configuration boundary
+
+Set `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` and an explicit `LLM_MODEL`
+to select Claude for guided conversations. Choose an active model available
+to the API account; no historical dependency default is used. Never put a
+Claude key in `OPENAI_API_KEY`. Store credentials using staged Fly secrets,
+not committed files or command-line arguments.
+
+The app-owned adapter reuses LangChain message serialization but handles HTTP
+errors without logging raw provider bodies or transport exceptions. It accepts
+non-streaming text only and explicitly rejects tools and streaming. A response
+stopped by `max_tokens` is marked truncated, and guided results report the
+configured Claude model. Existing local/OpenAI output contracts are unchanged.
+
+This selection alone does **not** move local clinical chains to Claude and
+does not provide embeddings, emotion analysis or transcription. Their separate
+deployment and the restricted synthetic-demo policy remain required before a
+complete demo can be claimed. Do not enter real patient data.
+
+### Demo admission and synthetic-data profile
+
+For an opt-in hosted demonstration with synthetic clinical data:
+
+1. **Restricted Admission:** Set `DEMO_RESTRICTED_ACCESS=true` and `DEMO_ALLOWED_EMAILS`
+   to a comma-separated list of authorized tester emails (e.g. `DEMO_ALLOWED_EMAILS=user@example.com,prof@university.edu`).
+   This restricts registration, authentication, active session checks, and remember-me tokens
+   to only listed addresses (case-insensitive). Unlisted users cannot register (changeset error)
+   or log in (generic invalid credentials error). If an unlisted user had an active session or
+   remember token, the token is invalidated, cookies are purged, and access is revoked.
+2. **Synthetic-Data Chain Routing:** Set `DEMO_SYNTHETIC_DATA=true` alongside `AI_PROVIDER=anthropic`
+   and `LLM_MODEL`. This explicitly routes the six non-guided text chains
+   (`SessionSummaryChain`, `WeeklySummaryChain`, `PatternProposalChain`,
+   `ClinicalConsultationChain`, `ClinicalHypothesisChain`, `FunctionalAnalysisDraftChain`)
+   to Claude under the synthetic demo profile. When `DEMO_SYNTHETIC_DATA` is unset or `false`,
+   clinical chains remain pinned to local inference.
+3. **Privacy Caveat:** This profile is strictly authorized for **synthetic demonstration data only**.
+   Restricting application access with `DEMO_RESTRICTED_ACCESS` controls user admission,
+   but it does **NOT** prove or ensure that entered clinical information is synthetic.
+   Never input real patient or clinical data into hosted AI providers.
 
 ### Open decisions
 

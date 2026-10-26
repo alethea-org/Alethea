@@ -51,7 +51,7 @@ defmodule Alethea.AI.Chains.WeeklySummaryChain do
   def suggested_max_tokens, do: 768
 
   @impl true
-  def supported_providers, do: [:local, :cloud]
+  def supported_providers, do: [:local, :cloud, :anthropic]
 
   @typedoc """
   Reporte semanal estructurado: exactamente las claves que hoy se persisten

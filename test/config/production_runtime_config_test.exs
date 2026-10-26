@@ -27,9 +27,11 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     SECRET_KEY_BASE PHX_HOST PHX_EXTRA_ORIGINS PHX_SERVER PORT DNS_CLUSTER_QUERY
     CLOAK_AES_KEY TELEGRAM_CHAT_ID_PEPPER TELEGRAM_CLIENT_ADAPTER
     AI_PROVIDER LLM_MODEL LOCAL_LLM_BASE_URL OPENAI_API_KEY OPENAI_BASE_URL
+    ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
     EMOTION_ANALYZER_ENABLED EMOTION_SIDECAR_URL
     EMBEDDINGS_ENABLED EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL
     WHISPER_ENABLED
+    DEMO_RESTRICTED_ACCESS DEMO_ALLOWED_EMAILS DEMO_SYNTHETIC_DATA
   )
 
   @complete_env %{
@@ -430,6 +432,140 @@ defmodule Alethea.ProductionRuntimeConfigTest do
 
         # The clinical consultation chain stays pinned to the local provider.
         assert merged[ClinicalConsultationChain][:provider] == :local
+      end
+    end
+  end
+
+  describe "demo restricted access configuration" do
+    test "defaults to demo_restricted_access: false and empty allowed emails when unset" do
+      config = prod_config()
+
+      assert alethea(config, :demo_restricted_access) == false
+      assert alethea(config, :demo_allowed_emails) == []
+    end
+
+    test "explicitly false keeps demo_restricted_access: false" do
+      config = prod_config(%{"DEMO_RESTRICTED_ACCESS" => "false"})
+
+      assert alethea(config, :demo_restricted_access) == false
+      assert alethea(config, :demo_allowed_emails) == []
+    end
+
+    test "rejects invalid values for DEMO_RESTRICTED_ACCESS" do
+      for invalid <- ["truee", "FALSE", "1", "0", "yes", "no"] do
+        assert_raise RuntimeError, ~r/DEMO_RESTRICTED_ACCESS must be exactly true or false/, fn ->
+          prod_config(%{"DEMO_RESTRICTED_ACCESS" => invalid})
+        end
+      end
+    end
+
+    test "when DEMO_RESTRICTED_ACCESS=true, parses comma-separated allowed emails normalized" do
+      config =
+        prod_config(%{
+          "DEMO_RESTRICTED_ACCESS" => "true",
+          "DEMO_ALLOWED_EMAILS" => " User@Example.com, PROF@University.edu , extra@test.org "
+        })
+
+      assert alethea(config, :demo_restricted_access) == true
+
+      assert alethea(config, :demo_allowed_emails) == [
+               "user@example.com",
+               "prof@university.edu",
+               "extra@test.org"
+             ]
+    end
+
+    test "when DEMO_RESTRICTED_ACCESS=true, raises if DEMO_ALLOWED_EMAILS is missing or empty" do
+      for missing <- [nil, "", "   ", ",,  ,"] do
+        assert_raise RuntimeError, ~r/DEMO_ALLOWED_EMAILS is missing or empty/, fn ->
+          prod_config(%{
+            "DEMO_RESTRICTED_ACCESS" => "true",
+            "DEMO_ALLOWED_EMAILS" => missing
+          })
+        end
+      end
+    end
+  end
+
+  describe "synthetic demo chains routing" do
+    test "defaults to demo_synthetic_data false when unset or false" do
+      for val <- [nil, "false"] do
+        config = prod_config(%{"DEMO_SYNTHETIC_DATA" => val})
+        refute Keyword.has_key?(alethea_raw(config), SessionSummaryChain)
+        refute Keyword.has_key?(alethea_raw(config), WeeklySummaryChain)
+        refute Keyword.has_key?(alethea_raw(config), PatternProposalChain)
+      end
+    end
+
+    test "rejects invalid values for DEMO_SYNTHETIC_DATA" do
+      for invalid <- ["True", "1", "yes", "on"] do
+        assert_raise RuntimeError, ~r/DEMO_SYNTHETIC_DATA must be exactly true or false/, fn ->
+          prod_config(%{"DEMO_SYNTHETIC_DATA" => invalid})
+        end
+      end
+    end
+
+    test "with DEMO_SYNTHETIC_DATA=true and AI_PROVIDER=anthropic, routes all 7 chains to Anthropic" do
+      overrides = %{
+        "AI_PROVIDER" => "anthropic",
+        "LOCAL_LLM_BASE_URL" => nil,
+        "ANTHROPIC_API_KEY" => "synthetic-anthropic-key",
+        "LLM_MODEL" => "claude-3-5-sonnet-20241022",
+        "DEMO_SYNTHETIC_DATA" => "true"
+      }
+
+      config = prod_config(overrides)
+
+      seven_chains = [
+        GuidedConversationChain,
+        SessionSummaryChain,
+        WeeklySummaryChain,
+        PatternProposalChain,
+        ClinicalConsultationChain,
+        ClinicalHypothesisChain,
+        FunctionalAnalysisDraftChain
+      ]
+
+      for chain <- seven_chains do
+        chain_conf = alethea(config, chain)
+
+        assert chain_conf[:provider] == :anthropic,
+               "expected #{inspect(chain)} to have provider :anthropic, got: #{inspect(chain_conf)}"
+
+        assert chain_conf[:model] == "claude-3-5-sonnet-20241022",
+               "expected #{inspect(chain)} to have model claude-3-5-sonnet-20241022, got: #{inspect(chain_conf)}"
+      end
+    end
+
+    test "without DEMO_SYNTHETIC_DATA (or false), the six chains remain unconfigured/local" do
+      overrides = %{
+        "AI_PROVIDER" => "anthropic",
+        "LOCAL_LLM_BASE_URL" => nil,
+        "ANTHROPIC_API_KEY" => "synthetic-anthropic-key",
+        "LLM_MODEL" => "claude-3-5-sonnet-20241022",
+        "DEMO_SYNTHETIC_DATA" => "false"
+      }
+
+      config = prod_config(overrides)
+
+      # Guided conversation is routed to anthropic
+      assert alethea(config, GuidedConversationChain)[:provider] == :anthropic
+
+      # The other six are NOT routed to anthropic
+      non_guided_chains = [
+        SessionSummaryChain,
+        WeeklySummaryChain,
+        PatternProposalChain,
+        ClinicalConsultationChain,
+        ClinicalHypothesisChain,
+        FunctionalAnalysisDraftChain
+      ]
+
+      for chain <- non_guided_chains do
+        chain_conf = Keyword.get(alethea_raw(config), chain)
+
+        assert is_nil(chain_conf) or chain_conf[:provider] != :anthropic,
+               "expected #{inspect(chain)} not to be routed to anthropic when DEMO_SYNTHETIC_DATA=false"
       end
     end
   end

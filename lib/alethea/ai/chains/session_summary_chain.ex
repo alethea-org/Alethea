@@ -45,7 +45,7 @@ defmodule Alethea.AI.Chains.SessionSummaryChain do
   def suggested_max_tokens, do: 256
 
   @impl true
-  def supported_providers, do: [:local, :cloud]
+  def supported_providers, do: [:local, :cloud, :anthropic]
 
   defp do_run(llm, content) do
     start_time = System.monotonic_time(:millisecond)
