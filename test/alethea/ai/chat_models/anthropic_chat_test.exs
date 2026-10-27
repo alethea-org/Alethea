@@ -240,6 +240,48 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
     assert {:error, %{type: "http_error.529"}} = AnthropicChat.call(model(), "x")
   end
 
+  test "disables thinking for haiku-5 models so it cannot consume max_tokens" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert Jason.decode!(body)["thinking"] == %{"type" => "disabled"}
+
+      Req.Test.json(conn, %{
+        "content" => [%{"type" => "text", "text" => "ok"}],
+        "stop_reason" => "end_turn"
+      })
+    end)
+
+    assert {:ok, %Message{content: "ok"}} =
+             AnthropicChat.call(model(model: "claude-haiku-5-5"), "di ok")
+  end
+
+  test "ignores thinking blocks and returns the text" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        "content" => [
+          %{"type" => "thinking", "thinking" => "", "signature" => "synthetic"},
+          %{"type" => "redacted_thinking", "data" => "synthetic"},
+          %{"type" => "text", "text" => "Respuesta"}
+        ],
+        "stop_reason" => "end_turn"
+      })
+    end)
+
+    assert {:ok, %Message{content: "Respuesta", status: :complete}} =
+             AnthropicChat.call(model(), "hola")
+  end
+
+  test "a reply with only thinking blocks is still invalid" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        "content" => [%{"type" => "thinking", "thinking" => "", "signature" => "synthetic"}],
+        "stop_reason" => "max_tokens"
+      })
+    end)
+
+    assert {:error, %{type: "invalid_response"}} = AnthropicChat.call(model(), "hola")
+  end
+
   test "keeps temperature for models that accept it" do
     Req.Test.stub(__MODULE__, fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)

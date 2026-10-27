@@ -47,11 +47,11 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
     do: call(model, [Message.new_user!(prompt)], [])
 
   def call(%__MODULE__{config: config}, messages, []) when is_list(messages) do
-    # LangChain's serializer always includes temperature; see maybe_drop_temperature/2.
+    # LangChain's serializer always includes temperature; see haiku_5_payload/2.
     payload =
       config
       |> ChatAnthropic.for_api(messages, [])
-      |> maybe_drop_temperature(config.model)
+      |> haiku_5_payload(config.model)
 
     options =
       Keyword.merge(Application.get_env(:alethea, :anthropic_chat_req_options, []),
@@ -103,6 +103,7 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
   # bounded: a provider Retry-After is capped, and a receive timeout is not
   # retried (each attempt would wait the full timeout again).
   @retry_statuses [408, 429, 500, 502, 503, 504, 529]
+  @reasoning_blocks ["thinking", "redacted_thinking"]
   @default_max_retry_delay_ms 5_000
 
   # Every retry returns an explicit delay: exponential backoff (1 s, 2 s), or
@@ -139,7 +140,12 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
 
   defp decode(%{"content" => [_ | _] = blocks, "stop_reason" => stop})
        when stop in ["end_turn", "stop_sequence", "max_tokens"] do
-    if Enum.all?(blocks, &match?(%{"type" => "text", "text" => text} when is_binary(text), &1)) do
+    # Reasoning blocks carry no reply text and are dropped; every other block
+    # must be text, and at least one must be non-blank.
+    blocks = Enum.reject(blocks, &match?(%{"type" => type} when type in @reasoning_blocks, &1))
+
+    if blocks != [] and
+         Enum.all?(blocks, &match?(%{"type" => "text", "text" => text} when is_binary(text), &1)) do
       text = Enum.map_join(blocks, & &1["text"])
 
       if String.trim(text) != "" do
@@ -159,12 +165,17 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
   defp invalid_response, do: error("invalid_response", "Invalid Anthropic response")
   defp error(type, message), do: {:error, LangChainError.exception(type: type, message: message)}
 
-  # The haiku-5 family rejects `temperature` with HTTP 400
-  # ("'temperature' is deprecated for this model"), whatever its value. Only
-  # that family is stripped; every other model keeps the configured value.
-  defp maybe_drop_temperature(payload, model) do
+  # The haiku-5 family rejects `temperature` with HTTP 400 ("'temperature'
+  # is deprecated for this model"), whatever its value, and runs adaptive
+  # thinking by default: thinking tokens count against `max_tokens` (160 for
+  # guided replies) and can leave no room for the reply. Thinking is disabled
+  # explicitly, which this family accepts at its default `medium` effort.
+  # Every other model keeps the payload as serialized.
+  defp haiku_5_payload(payload, model) do
     if is_binary(model) and String.contains?(model, "haiku-5") do
-      Map.delete(payload, :temperature)
+      payload
+      |> Map.delete(:temperature)
+      |> Map.put(:thinking, %{type: "disabled"})
     else
       payload
     end
