@@ -40,7 +40,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   alias Alethea.Clinical
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Repo
-  alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
+  alias Alethea.Telegram.{ChatIdHash, Client.Fake, GenerationFailureNotice, Pacer}
   alias AletheaJobs.{ClinicalRecordOutboxWorker, EmotionAnalysisWorker}
 
   import Alethea.FoundationTestHelper
@@ -235,6 +235,395 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   describe "perform/1 — happy path safe clinical round-trip" do
     setup :setup_bound_patient
 
+    test "optional uncertainty stores fixed reply, emits independent alert, and skips PhiWorker",
+         ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      args = build_args("mensaje sensible", telegram_message_id: 390, telegram_update_id: 390)
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, 0, fn _ -> flunk("uncertainty must not invoke PhiWorker") end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound = Repo.one!(from m in Message, where: m.telegram_message_id == "390")
+      assert inbound.risk_signal["category"] == "uncertain"
+
+      assert [%Message{direction: "outbound", behavior_type: "spontaneous"} = reply] =
+               Repo.all(from m in Message, where: m.direction == "outbound")
+
+      assert decrypted_outbound_body(reply) == Alethea.Telegram.RiskSignal.uncertainty_copy()
+      refute_enqueued(worker: TelegramBurstReplyWorker)
+      assert_enqueued(worker: TelegramOutboundWorker, args: %{message_id: reply.id})
+      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: outbound_job.args})
+      assert [%{text: body}] = Fake.sends()
+      assert body == Alethea.Telegram.RiskSignal.uncertainty_copy()
+
+      assert_receive {:risk_uncertain, payload}
+      assert payload.patient_id == ctx.foundation_patient.id
+      assert payload.legacy_patient_id == ctx.legacy_patient.id
+      assert payload.inbound_message_id == inbound.id
+      assert is_binary(payload.event_id)
+
+      assert payload.event_id ==
+               :crypto.hash(:sha256, [
+                 "telegram-risk-v1:",
+                 String.downcase(inbound.id),
+                 ":uncertain:",
+                 "22",
+                 ":deterministic-rules-v1"
+               ])
+               |> Base.encode16(case: :lower)
+
+      assert payload.category == :uncertain
+      refute inspect(payload) =~ "mensaje sensible"
+      refute Map.has_key?(payload, :chat_id)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert_receive {:risk_uncertain, replay_payload}
+      assert replay_payload.event_id == payload.event_id
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+      assert length(all_enqueued(worker: TelegramOutboundWorker)) == 1
+      assert length(Fake.sends()) == 1
+    end
+
+    test "uncertainty outbound retries a rate limit then sends the fixed reply once", _ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+      Fake.queue_responses([{:error, {:rate_limited, 1}}, {:ok, 987_654}])
+
+      args = build_args("private", telegram_message_id: 388, telegram_update_id: 388)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      [first_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: first_job.args})
+      assert Fake.sends() == []
+
+      [retry_job] = all_enqueued(worker: TelegramOutboundWorker, state: "scheduled")
+      assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: retry_job.args})
+      assert [%{text: body}] = Fake.sends()
+      assert body == Alethea.Telegram.RiskSignal.uncertainty_copy()
+
+      inbound = Repo.get_by!(Message, telegram_message_id: "388", direction: "inbound")
+      reply = Repo.get_by!(Message, reply_to_message_id: inbound.id)
+      assert Repo.get!(Message, reply.id).delivery_state == "sent"
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert length(Fake.sends()) == 1
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+    end
+
+    test "uncertainty supersession serializes with an in-flight burst generation", _ctx do
+      ordinary_args =
+        build_args("ordinary in-flight", telegram_message_id: 384, telegram_update_id: 384)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: ordinary_args})
+      [burst_job] = all_enqueued(worker: TelegramBurstReplyWorker)
+      test_pid = self()
+
+      stub(Alethea.AI.PhiWorkerMock, :process, fn request ->
+        send(test_pid, {:generating, self()})
+
+        receive do
+          :release_generation ->
+            {:ok,
+             %{
+               response: "stale generated response",
+               source_message_id: request.message_id,
+               model_version: "phi-4-mini",
+               behavior_type: :elicited
+             }}
+        end
+      end)
+
+      task =
+        Task.async(fn -> TelegramBurstReplyWorker.perform(%Oban.Job{args: burst_job.args}) end)
+
+      Mox.allow(Alethea.AI.PhiWorkerMock, self(), task.pid)
+      assert_receive {:generating, generator}, 5_000
+
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      uncertain_args =
+        build_args("uncertain arrives during generation",
+          telegram_message_id: 385,
+          telegram_update_id: 385
+        )
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: uncertain_args})
+      send(generator, :release_generation)
+      assert :ok = Task.await(task, 10_000)
+
+      ordinary = Repo.get_by!(Message, telegram_message_id: "384", direction: "inbound")
+      uncertain = Repo.get_by!(Message, telegram_message_id: "385", direction: "inbound")
+      fixed_reply = Repo.get_by!(Message, reply_to_message_id: uncertain.id)
+      assert Repo.get!(Message, ordinary.id).replied_by_message_id == fixed_reply.id
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+
+      refute Enum.any?(all_enqueued(worker: TelegramOutboundWorker), fn job ->
+               job.args["body"] == "stale generated response"
+             end)
+
+      [fixed_job] = all_enqueued(worker: TelegramOutboundWorker)
+      assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: fixed_job.args})
+      assert [%{text: sent}] = Fake.sends()
+      assert sent == Alethea.Telegram.RiskSignal.uncertainty_copy()
+    end
+
+    test "terminal uncertainty failure survives inbound replay without another send", ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      args = build_args("private", telegram_message_id: 387, telegram_update_id: 387)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      [job] = all_enqueued(worker: TelegramOutboundWorker)
+      Fake.queue_responses([{:error, {:rate_limited, 1}}])
+
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: Map.put(job.args, "_attempt", 5),
+                 attempt: 1
+               })
+
+      inbound = Repo.get_by!(Message, telegram_message_id: "387", direction: "inbound")
+      original = Repo.get_by!(Message, reply_to_message_id: inbound.id)
+      assert Repo.get!(Message, original.id).delivery_state == "failed"
+      audit = inbound.risk_signal
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert_receive {:risk_uncertain, alert}
+
+      assert alert.event_id ==
+               :crypto.hash(:sha256, [
+                 "telegram-risk-v1:",
+                 String.downcase(inbound.id),
+                 ":uncertain:",
+                 "22",
+                 ":deterministic-rules-v1"
+               ])
+               |> Base.encode16(case: :lower)
+
+      retained = Repo.get_by!(Message, reply_to_message_id: inbound.id)
+      assert retained.id == original.id
+      assert retained.risk_signal == nil
+      assert Repo.get!(Message, inbound.id).risk_signal == audit
+      assert Repo.get!(Message, retained.id).delivery_state == "failed"
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+      assert Fake.sends() == []
+      _ = ctx
+    end
+
+    test "uncertainty supersedes queued ordinary reply, preserves coverage, and sends only fixed copy",
+         _ctx do
+      args =
+        build_args("ordinary patient text", telegram_message_id: 386, telegram_update_id: 386)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = run_burst_reply()
+
+      ordinary = Repo.get_by!(Message, telegram_message_id: "386", direction: "inbound")
+      ordinary_reply = Repo.get!(Message, ordinary.replied_by_message_id)
+      assert ordinary_reply.behavior_type == "elicited"
+      assert_enqueued(worker: TelegramOutboundWorker, args: %{message_id: ordinary_reply.id})
+
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      uncertain_args =
+        build_args("uncertain followup", telegram_message_id: 387, telegram_update_id: 387)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: uncertain_args})
+      uncertain = Repo.get_by!(Message, telegram_message_id: "387", direction: "inbound")
+      fixed_reply = Repo.get_by!(Message, reply_to_message_id: uncertain.id)
+      assert Repo.get!(Message, ordinary_reply.id).delivery_state == "superseded"
+      assert Repo.get!(Message, ordinary.id).replied_by_message_id == fixed_reply.id
+      assert Repo.get!(Message, uncertain.id).replied_by_message_id == fixed_reply.id
+
+      jobs = all_enqueued(worker: TelegramOutboundWorker)
+      ordinary_job = Enum.find(jobs, &(&1.args["message_id"] == ordinary_reply.id))
+      fixed_job = Enum.find(jobs, &(&1.args["message_id"] == fixed_reply.id))
+      assert ordinary_job
+      assert fixed_job
+      assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: ordinary_job.args})
+      assert Fake.sends() == []
+      assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: fixed_job.args})
+      assert [%{text: sent}] = Fake.sends()
+      assert sent == Alethea.Telegram.RiskSignal.uncertainty_copy()
+      assert Repo.get!(Message, fixed_reply.id).delivery_state == "sent"
+    end
+
+    test "unknown persisted uncertainty category replays conservatively without creating an atom",
+         _ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      args = build_args("mensaje ordinario", telegram_message_id: 388, telegram_update_id: 388)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      inbound = Repo.get_by!(Message, telegram_message_id: "388", direction: "inbound")
+      original_reply = Repo.get_by!(Message, reply_to_message_id: inbound.id)
+      unknown_category = "persisted_unrecognized_category_396"
+      risk_signal = Map.put(inbound.risk_signal, "category", unknown_category)
+      Repo.update!(Ecto.Changeset.change(inbound, risk_signal: risk_signal))
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(unknown_category) end
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert_receive {:risk_uncertain, alert}
+      assert alert.category == :uncertain
+      assert Repo.get_by!(Message, reply_to_message_id: inbound.id).id == original_reply.id
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+    end
+
+    test "current deterministic crisis overrides a persisted uncertainty on replay", ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      args = build_args("mensaje ordinario", telegram_message_id: 389, telegram_update_id: 389)
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      inbound = Repo.get_by!(Message, telegram_message_id: "389", direction: "inbound")
+      original_reply = Repo.get_by!(Message, reply_to_message_id: inbound.id)
+      original_body = decrypted_outbound_body(original_reply)
+      assert original_reply.behavior_type == "spontaneous"
+
+      Application.put_env(:alethea, :crisis_patterns, immediate: [~r/mensaje ordinario/iu])
+      on_exit(fn -> Application.delete_env(:alethea, :crisis_patterns) end)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      retained_reply = Repo.get_by!(Message, reply_to_message_id: inbound.id)
+      assert retained_reply.id == original_reply.id
+      assert retained_reply.behavior_type == original_reply.behavior_type
+      assert decrypted_outbound_body(retained_reply) == original_body
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+      assert Repo.get!(Alethea.Accounts.Patient, ctx.legacy_patient.id).urgent_intervention
+      assert_receive {:crisis_detected, alert}
+      assert alert.patient_id == ctx.foundation_patient.id
+      assert alert.legacy_patient_id == ctx.legacy_patient.id
+      assert alert.level == :immediate
+    end
+
+    test "a later ordinary message after uncertainty enters its own burst", ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args(
+                     "uncertain first",
+                     telegram_message_id: 395,
+                     telegram_update_id: 395
+                   )
+               })
+
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :safe}
+      end)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args(
+                     "ordinary later",
+                     telegram_message_id: 396,
+                     telegram_update_id: 396
+                   )
+               })
+
+      assert :ok = run_burst_reply()
+      later = Repo.one!(from m in Message, where: m.telegram_message_id == "396")
+      reply = Repo.get!(Message, later.replied_by_message_id)
+      assert reply.reply_to_message_id == later.id
+      refute Repo.get_by(Message, telegram_message_id: "395").replied_by_message_id == reply.id
+      _ = ctx
+    end
+
+    test "professional alert is broadcast before an outbound enqueue failure", ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        {:available, :uncertain}
+      end)
+
+      on_exit(fn ->
+        Application.delete_env(:alethea, :telegram_additional_risk_signal)
+        Application.delete_env(:alethea, :telegram_outbound_enqueue)
+      end)
+
+      Mox.defmock(UncertainFailingEnqueue, for: Alethea.Telegram.OutboundEnqueue)
+      Mox.expect(UncertainFailingEnqueue, :insert, fn _ -> {:error, :unavailable} end)
+      Application.put_env(:alethea, :telegram_outbound_enqueue, UncertainFailingEnqueue)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+      args = build_args("private text", telegram_message_id: 394, telegram_update_id: 394)
+
+      assert_raise RuntimeError, ~r/failed to enqueue TelegramOutboundWorker/, fn ->
+        TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      assert_receive {:risk_uncertain, payload}
+      refute inspect(payload) =~ "private text"
+      assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
+
+      assert Repo.get_by(Message, telegram_message_id: "394", direction: "inbound").risk_signal[
+               "category"
+             ] == "uncertain"
+
+      _ = ctx
+    end
+
+    test "a malformed or failed optional provider records unavailable and keeps ordinary burst handling",
+         ctx do
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      for {message_id, provider} <- [
+            {391, fn -> {:available, "raw detector output"} end},
+            {392, fn -> raise "private detector exception" end}
+          ] do
+        Application.put_env(:alethea, :telegram_additional_risk_signal, provider)
+
+        args =
+          build_args("ordinary followup",
+            telegram_message_id: message_id,
+            telegram_update_id: message_id
+          )
+
+        assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      inbounds = Repo.all(from m in Message, where: m.telegram_message_id in ["391", "392"])
+      assert length(inbounds) == 2
+      assert Enum.all?(inbounds, &(&1.risk_signal["category"] == "safe"))
+      assert Enum.all?(inbounds, &(&1.risk_signal["detector_status"] == "unavailable"))
+      assert Enum.all?(inbounds, &(&1.risk_signal["unavailable_reason"] == "error"))
+      assert_enqueued(worker: TelegramBurstReplyWorker)
+      refute Repo.exists?(from m in Message, where: m.direction == "outbound")
+      _ = ctx
+    end
+
     test "persists inbound Message with telegram_message_id, direction: 'inbound', behavior_type: 'spontaneous'",
          ctx do
       args = build_args("hola, buen día", telegram_message_id: 300, telegram_update_id: 5)
@@ -274,6 +663,76 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       assert first_session_id != nil
       assert second_session_id == first_session_id
+    end
+
+    test "persists bounded disabled risk metadata for every inbound and preserves it on replay",
+         ctx do
+      args =
+        build_args("mensaje seguro con dato privado",
+          telegram_message_id: 301,
+          telegram_update_id: 61
+        )
+
+      _ = ctx
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+      signal = Map.get(inbound, :risk_signal)
+      assert signal["category"] == "safe"
+      assert signal["detector_status"] == "unavailable"
+      assert signal["unavailable_reason"] == "disabled"
+      refute inspect(signal) =~ "dato privado"
+      classified_at = signal["classified_at"]
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      replayed = Repo.get!(Message, inbound.id)
+      assert replayed.risk_signal == signal
+      assert replayed.risk_signal["classified_at"] == classified_at
+    end
+
+    test "persists redacted deterministic crisis metadata without changing crisis handling",
+         ctx do
+      args =
+        build_args("me voy a quitar la vida", telegram_message_id: 302, telegram_update_id: 62)
+
+      _ = ctx
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+      signal = Map.get(inbound, :risk_signal)
+      assert signal["category"] == "confirmed_crisis"
+      assert signal["authority"] == "deterministic_rule"
+      assert signal["rule_match_count"] > 0
+      refute inspect(signal) =~ "quitar"
+      assert_enqueued(worker: TelegramOutboundWorker, args: %{lane: :crisis})
+    end
+
+    test "records separate risk audits for every inbound in a burst", ctx do
+      _ = ctx
+
+      for {body, message_id} <- [{"primer mensaje", 310}, {"segundo mensaje", 311}] do
+        args = build_args(body, telegram_message_id: message_id, telegram_update_id: message_id)
+        assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      end
+
+      inbounds =
+        Repo.all(
+          from m in Message,
+            where: m.direction == "inbound" and m.telegram_message_id in ["310", "311"],
+            order_by: m.telegram_message_id
+        )
+
+      assert length(inbounds) == 2
+
+      assert Enum.all?(
+               inbounds,
+               &(is_map(&1.risk_signal) and &1.risk_signal["category"] == "safe")
+             )
+
+      assert Enum.all?(inbounds, &is_binary(&1.risk_signal["classified_at"]))
+      assert_enqueued(worker: TelegramBurstReplyWorker)
     end
 
     test "enqueues an EmotionAnalysisWorker job on :ai_analysis", ctx do
@@ -915,6 +1374,179 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # Generation retry exhaustion (#395)
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — generation retry exhaustion (#395)" do
+    setup :setup_bound_patient
+
+    test "exhausted generation persists one fixed service-unavailable notice and enqueues its delivery",
+         ctx do
+      args =
+        build_args("me siento muy solo hoy", telegram_message_id: 900, telegram_update_id: 900)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      assert :ok = run_burst_reply_exhausted()
+
+      [inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+      [notice] = Repo.all(from m in Message, where: m.direction == "outbound")
+
+      assert notice.behavior_type == "elicited"
+      assert notice.reply_to_message_id == inbound.id
+      assert notice.delivery_state == "pending"
+      assert notice.patient_id == ctx.legacy_patient.id
+
+      assert decrypted_outbound_body(notice) == GenerationFailureNotice.text(recorded?: true)
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == notice.id
+
+      assert_enqueued(
+        worker: TelegramOutboundWorker,
+        args: %{
+          message_id: notice.id,
+          body: GenerationFailureNotice.text(recorded?: true),
+          lane: :safe
+        }
+      )
+
+      assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
+    end
+
+    test "a generation failure before the budget is exhausted raises and sends no notice", ctx do
+      _ = ctx
+
+      args = build_args("hola", telegram_message_id: 901, telegram_update_id: 901)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+
+      assert_raise RuntimeError, ~r/PhiWorker error/, fn ->
+        TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args, attempt: 1, max_attempts: 3})
+      end
+
+      assert [] == Repo.all(from m in Message, where: m.direction == "outbound")
+      refute_enqueued(worker: TelegramOutboundWorker)
+      assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
+    end
+
+    test "a re-execution after exhaustion reuses the persisted notice and never generates again",
+         ctx do
+      test_pid = self()
+
+      args = build_args("hola", telegram_message_id: 902, telegram_update_id: 902)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ ->
+        send(test_pid, :generated)
+        {:error, :service_unavailable}
+      end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+      assert :ok = run_burst_reply_exhausted()
+      assert_received :generated
+
+      # The same burst job re-executed (Oban replay / manual recovery)
+      # must reuse the persisted logical outcome — no second generation,
+      # reply, diagnosis, or delivery job.
+      assert :ok = run_burst_reply_exhausted()
+      refute_received :generated
+
+      [inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+      [notice] = Repo.all(from m in Message, where: m.direction == "outbound")
+
+      assert Repo.get!(Message, inbound.id).replied_by_message_id == notice.id
+      assert [_one_delivery_job] = all_enqueued(worker: TelegramOutboundWorker)
+
+      assert [_one_diagnosis] =
+               Repo.all(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+    end
+
+    test "a newer inbound invalidates an undelivered failure notice at the delivery boundary",
+         ctx do
+      _ = ctx
+
+      first_args = build_args("primer mensaje", telegram_message_id: 910, telegram_update_id: 910)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: first_args})
+      assert :ok = run_burst_reply_exhausted()
+
+      [first_inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+      [notice] = Repo.all(from m in Message, where: m.direction == "outbound")
+      assert notice.delivery_state == "pending"
+
+      # A newer inbound arrives while the notice is still undelivered.
+      second_args =
+        build_args("segundo mensaje", telegram_message_id: 911, telegram_update_id: 911)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: second_args})
+
+      # The notice's delivery job runs under the same claim rules as a
+      # generated reply: a newer uncovered inbound supersedes it, its
+      # coverage is released, and nothing is sent.
+      assert :ok = run_outbound_delivery()
+
+      assert Repo.get!(Message, notice.id).delivery_state == "superseded"
+      assert Repo.get!(Message, first_inbound.id).replied_by_message_id == nil
+      assert Fake.sends() == []
+
+      # The released members are picked up by a re-armed burst job.
+      assert [_rearmed] = all_enqueued(worker: TelegramBurstReplyWorker)
+    end
+
+    test "the exhaustion path records PHI-safe failure metadata and writes no dead-letter", ctx do
+      _ = ctx
+
+      sentinel = "SENTINEL-PHI-#{unique_int()}-mi terapeuta me dijo que..."
+      args = build_args(sentinel, telegram_message_id: 920, telegram_update_id: 920)
+
+      Alethea.AI.PhiWorkerMock
+      |> stub(:process, fn _ -> {:error, :service_unavailable} end)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert :ok = run_burst_reply_exhausted()
+        end)
+
+      refute log =~ sentinel
+
+      [inbound] = Repo.all(from m in Message, where: m.direction == "inbound")
+
+      assert [diagnosis] =
+               Repo.all(from d in Alethea.AI.Diagnosis, where: d.message_id == ^inbound.id)
+
+      assert diagnosis.model_version == "generation-unavailable"
+      assert diagnosis.ai_response == GenerationFailureNotice.text(recorded?: true)
+
+      assert diagnosis.extracted_emotions["outcome"] == "generation_unavailable"
+      assert diagnosis.extracted_emotions["reason"] == ":service_unavailable"
+      assert diagnosis.extracted_emotions["covered_messages"] == 1
+      assert diagnosis.extracted_emotions["attempts"] == 3
+      refute inspect(diagnosis.extracted_emotions) =~ sentinel
+
+      assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
+    end
+
+    test "the unrecorded notice variant never claims the message was recorded" do
+      assert GenerationFailureNotice.text(recorded?: true) =~ "quedó registrado"
+      refute GenerationFailureNotice.text(recorded?: false) =~ "quedó registrado"
+      refute GenerationFailureNotice.text() =~ "quedó registrado"
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Crisis branch (REQ-C5-crisis-bypasses-llm, REQ-C5-crisis-broadcasts-alert,
   #                REQ-C5-persist-outbound-reply — crisis source)
   # ----------------------------------------------------------------
@@ -927,6 +1559,26 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       # to assert the broadcast shape.
       Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
       :ok
+    end
+
+    test "deterministic crisis never invokes the optional test provider", ctx do
+      Application.put_env(:alethea, :telegram_additional_risk_signal, fn ->
+        flunk("optional detector must not run for deterministic crisis")
+      end)
+
+      on_exit(fn -> Application.delete_env(:alethea, :telegram_additional_risk_signal) end)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args(
+                     "me voy a suicidar",
+                     telegram_message_id: 699,
+                     telegram_update_id: 699
+                   )
+               })
+
+      _ = ctx
     end
 
     test "on :crisis classification, PhiWorkerMock.process/1 is NOT invoked (REQ-C5 scenario: never produces a neutral LLM reply)",
@@ -1850,6 +2502,19 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   defp run_burst_reply do
     [job] = all_enqueued(worker: TelegramBurstReplyWorker)
     TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args})
+  end
+
+  # #395: executes the armed burst job as its FINAL Oban attempt, which
+  # is when generation retry exhaustion must produce the failure notice.
+  defp run_burst_reply_exhausted do
+    [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+    TelegramBurstReplyWorker.perform(%Oban.Job{args: job.args, attempt: 3, max_attempts: 3})
+  end
+
+  # Executes the single enqueued outbound delivery job (journaling lane).
+  defp run_outbound_delivery do
+    [job] = all_enqueued(worker: TelegramOutboundWorker)
+    TelegramOutboundWorker.perform(%Oban.Job{args: job.args})
   end
 
   defp setup_bound_patient(_ctx) do

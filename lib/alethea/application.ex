@@ -10,6 +10,9 @@ defmodule Alethea.Application do
     # Attach Oban telemetry handlers
     Alethea.ObanTelemetry.attach()
 
+    # One boot-time line when the running summary (#394) has no local LLM endpoint.
+    Alethea.Clinical.RunningSummary.log_boot_status()
+
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Alethea.Supervisor]

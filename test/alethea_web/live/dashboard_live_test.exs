@@ -50,6 +50,111 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
+  describe "real-time uncertainty alerts (real mode, issue #396)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional, %{alias: "Paciente reservado"})
+      %{patient: patient}
+    end
+
+    test "shows one fixed notification linked to the authorized patient without marking it urgent",
+         %{
+           conn: conn,
+           patient: patient
+         } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      payload = %{
+        event_id: String.duplicate("a", 64),
+        patient_id: Ecto.UUID.generate(),
+        legacy_patient_id: patient.id,
+        inbound_message_id: 123,
+        category: :uncertain,
+        detector_version: "v1",
+        at: DateTime.utc_now()
+      }
+
+      send(view.pid, {:risk_uncertain, payload})
+      send(view.pid, {:risk_uncertain, payload})
+
+      view |> element("button[aria-label='Notificaciones']") |> render_click()
+
+      assert has_element?(view, "#notif-#{payload.event_id}")
+      assert has_element?(view, ".notif__count", "1")
+
+      assert has_element?(
+               view,
+               "#notif-#{payload.event_id}",
+               "Señal de riesgo no concluyente"
+             )
+
+      assert has_element?(
+               view,
+               "#notif-#{payload.event_id} a[href='/dashboard/patients/#{patient.id}']",
+               "Ver paciente"
+             )
+
+      refute has_element?(view, "#notif-#{payload.event_id}", "v1")
+      refute Accounts.get_patient!(patient.id).urgent_intervention
+      refute has_element?(view, "a.pta-chip--risk", patient.alias)
+
+      {:ok, other_professional} =
+        Accounts.create_professional(%{
+          email: "other-#{System.unique_integer()}@alethea.com",
+          password: "password1234",
+          full_name: "Otro profesional"
+        })
+
+      other_conn = log_in_professional(conn, other_professional)
+
+      assert {:error, {:live_redirect, %{to: "/dashboard", flash: %{"error" => message}}}} =
+               live(other_conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert message =~ "no encontrado o no autorizado"
+
+      assert {:ok, _patient_view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+    end
+
+    test "does not disclose alerts for another professional or a malformed/nonexistent patient",
+         %{
+           conn: conn
+         } do
+      {:ok, other_professional} =
+        Accounts.create_professional(%{
+          email: "foreign-#{System.unique_integer()}@alethea.com",
+          password: "password1234",
+          full_name: "Otro profesional"
+        })
+
+      foreign_patient = legacy_patient_fixture(other_professional)
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(
+        view.pid,
+        {:risk_uncertain,
+         %{event_id: String.duplicate("b", 64), legacy_patient_id: foreign_patient.id}}
+      )
+
+      send(
+        view.pid,
+        {:risk_uncertain, %{event_id: String.duplicate("c", 64), legacy_patient_id: nil}}
+      )
+
+      send(
+        view.pid,
+        {:risk_uncertain,
+         %{event_id: String.duplicate("d", 64), legacy_patient_id: Ecto.UUID.generate()}}
+      )
+
+      view |> element("button[aria-label='Notificaciones']") |> render_click()
+      refute has_element?(view, "#notif-#{String.duplicate("b", 64)}")
+      refute has_element?(view, "#notif-#{String.duplicate("c", 64)}")
+      refute has_element?(view, "#notif-#{String.duplicate("d", 64)}")
+    end
+  end
+
   describe "real-time crisis alerts with legacy_patient_id (real mode, #286)" do
     setup %{professional: professional} do
       Application.put_env(:alethea, :use_mock_data, false)

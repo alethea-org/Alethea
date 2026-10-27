@@ -102,7 +102,12 @@ config :alethea, Oban,
     # queue ever runs, which is what makes
     # `Alethea.ClinicalRecord.Retention`'s terminal zero-remaining
     # crypto-erasure check race-safe (design AD4).
-    clinical_record_retention: 1
+    clinical_record_retention: 1,
+    # `running_summary` (#394). Consumed by `AletheaJobs.RunningSummaryWorker`.
+    # The limit is GLOBAL across patients and limits LLM load, not correctness;
+    # it can be raised because uniqueness is per patient and writes are
+    # CAS-guarded on `covered_inbound_count`.
+    running_summary: 1
   ],
   repo: Alethea.Repo,
   plugins: [

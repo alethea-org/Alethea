@@ -20,6 +20,22 @@ defmodule Alethea.Telegram.JournalingFallback do
     "Te leo con atención. ¿Qué sentiste mientras ocurría?"
   ]
 
+  # #393 S2 (design §6): closing/acknowledgement copy for the
+  # three-question stretch limit — a separate, shared pair of lists.
+  # Unlike `@variants`, none of these asks a question: they stand in
+  # for a model reply that `TopicExploration.enforce/4` is replacing
+  # at or after the limit, regardless of which guard reason (if any)
+  # triggered the original fallback substitution.
+  @closing_invitations [
+    "Gracias por todo lo que me contaste sobre esto. Cuando quieras, puedes contarme otra cosa de tu día.",
+    "Gracias por compartir todo esto conmigo. Cuando gustes, puedes contarme algo más de tu día."
+  ]
+
+  @acknowledgements [
+    "Gracias, queda registrado.",
+    "Gracias, lo anoté."
+  ]
+
   @doc "Every fallback variant, in fixed order."
   @spec variants() :: [String.t()]
   def variants, do: @variants
@@ -28,5 +44,34 @@ defmodule Alethea.Telegram.JournalingFallback do
   @spec for_inbound(binary()) :: String.t()
   def for_inbound(inbound_id) when is_binary(inbound_id) do
     Enum.at(@variants, :erlang.phash2(inbound_id, length(@variants)))
+  end
+
+  @doc "Every closing invitation variant, in fixed order."
+  @spec closing_invitations() :: [String.t()]
+  def closing_invitations, do: @closing_invitations
+
+  @doc "Every post-closing acknowledgement variant, in fixed order."
+  @spec acknowledgements() :: [String.t()]
+  def acknowledgements, do: @acknowledgements
+
+  @doc """
+  The closing invitation for the inbound message identified by
+  `inbound_id` (design §3): substituted for a model question once the
+  stretch reaches its question limit and no invitation has been sent
+  yet for it.
+  """
+  @spec closing_for_inbound(binary()) :: String.t()
+  def closing_for_inbound(inbound_id) when is_binary(inbound_id) do
+    Enum.at(@closing_invitations, :erlang.phash2(inbound_id, length(@closing_invitations)))
+  end
+
+  @doc """
+  The post-closing acknowledgement for the inbound message identified
+  by `inbound_id` (design §3): substituted for a model question once
+  the invitation has already been sent for this stretch.
+  """
+  @spec acknowledgement_for_inbound(binary()) :: String.t()
+  def acknowledgement_for_inbound(inbound_id) when is_binary(inbound_id) do
+    Enum.at(@acknowledgements, :erlang.phash2(inbound_id, length(@acknowledgements)))
   end
 end

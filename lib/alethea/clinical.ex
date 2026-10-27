@@ -15,7 +15,7 @@ defmodule Alethea.Clinical do
   import Ecto.Query, warn: false
 
   alias Alethea.Repo
-  alias Alethea.Clinical.{Message, Outbox, Summary, Trend}
+  alias Alethea.Clinical.{CrisisExchange, Message, Outbox, Summary, Trend}
   alias Alethea.AI.Diagnosis
   alias Alethea.Clinical.EmotionAnalysis
   alias Alethea.Accounts.EncryptionKey
@@ -250,6 +250,35 @@ defmodule Alethea.Clinical do
     end
   end
 
+  @doc """
+  Atomically initializes the bounded risk audit on an inbound Telegram row.
+  The row lock makes the first classification authoritative across retries and
+  concurrent worker executions; later calls return that persisted value.
+  """
+  @spec initialize_telegram_risk_signal(Message.t(), map()) ::
+          {:ok, Message.t()} | {:error, term()}
+  def initialize_telegram_risk_signal(%Message{direction: "inbound", id: id}, signal)
+      when is_map(signal) do
+    Repo.transaction(fn ->
+      inbound =
+        Repo.one!(
+          from(m in Message, where: m.id == ^id and m.direction == "inbound", lock: "FOR UPDATE")
+        )
+
+      case inbound.risk_signal do
+        nil -> Repo.update!(Ecto.Changeset.change(inbound, risk_signal: signal))
+        _persisted -> inbound
+      end
+    end)
+    |> case do
+      {:ok, inbound} -> {:ok, inbound}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def initialize_telegram_risk_signal(_inbound, _signal),
+    do: {:error, :invalid_inbound_or_signal}
+
   defp get_telegram_inbound(patient_id, telegram_message_id) do
     Repo.one(
       from(m in Message,
@@ -301,9 +330,17 @@ defmodule Alethea.Clinical do
           String.t(),
           String.t(),
           binary(),
-          binary() | nil
+          binary() | nil,
+          %{exploration_questions: 0..3, closing_invitation_sent: boolean()} | nil
         ) :: {:ok, Message.t()} | {:error, :reply_already_exists} | {:error, term()}
-  def save_telegram_reply(foundation_patient, text, behavior_type, inbound_message_id, session_id) do
+  def save_telegram_reply(
+        foundation_patient,
+        text,
+        behavior_type,
+        inbound_message_id,
+        session_id,
+        exploration \\ nil
+      ) do
     with {:ok, legacy_patient} <- linked_legacy_patient(foundation_patient),
          {:ok, changeset} <-
            encrypted_message_changeset(
@@ -318,6 +355,7 @@ defmodule Alethea.Clinical do
       changeset
       |> Ecto.Changeset.put_change(:reply_to_message_id, inbound_message_id)
       |> Ecto.Changeset.put_change(:delivery_state, "pending")
+      |> put_exploration(exploration)
       |> Repo.insert()
       |> case do
         {:ok, reply} ->
@@ -329,6 +367,23 @@ defmodule Alethea.Clinical do
             else: error
       end
     end
+  end
+
+  # #393 S1: `exploration` is `nil` for every caller today (the crisis
+  # path at `telegram_message_worker.ex:704-710` passes nothing and
+  # keeps writing NULL into both columns). S3 wires the real value from
+  # `TopicExploration.enforce/4`'s `:exploration` map, which also
+  # carries `:new_situation` — pattern-matching only the two stored
+  # keys below lets that extra key pass through untouched.
+  defp put_exploration(changeset, nil), do: changeset
+
+  defp put_exploration(changeset, %{
+         exploration_questions: exploration_questions,
+         closing_invitation_sent: closing_invitation_sent
+       }) do
+    changeset
+    |> Ecto.Changeset.put_change(:exploration_questions, exploration_questions)
+    |> Ecto.Changeset.put_change(:closing_invitation_sent, closing_invitation_sent)
   end
 
   @doc """
@@ -378,7 +433,20 @@ defmodule Alethea.Clinical do
     end
   end
 
+  defp latest_uncertain_telegram_id(patient_id) do
+    from(u in Message,
+      where:
+        u.patient_id == ^patient_id and u.direction == "inbound" and
+          fragment("?->>'response_intent' = 'fixed_uncertainty'", u.risk_signal),
+      select: fragment("?::bigint", u.telegram_message_id),
+      order_by: [desc: fragment("?::bigint", u.telegram_message_id)],
+      limit: 1
+    )
+  end
+
   defp burst_members_query(patient_id) do
+    latest_uncertain_id = latest_uncertain_telegram_id(patient_id)
+
     pending_reply_ids =
       from(r in Message,
         where:
@@ -391,6 +459,11 @@ defmodule Alethea.Clinical do
       where:
         m.patient_id == ^patient_id and m.direction == "inbound" and
           not is_nil(m.telegram_message_id) and
+          fragment(
+            "?::bigint > COALESCE((?), 0)",
+            m.telegram_message_id,
+            subquery(latest_uncertain_id)
+          ) and
           (is_nil(m.replied_by_message_id) or
              m.replied_by_message_id in subquery(pending_reply_ids)),
       order_by: fragment("?::bigint", m.telegram_message_id)
@@ -488,11 +561,18 @@ defmodule Alethea.Clinical do
   """
   @spec uncovered_inbound?(binary()) :: boolean()
   def uncovered_inbound?(patient_id) do
+    latest_uncertain = latest_uncertain_telegram_id(patient_id)
+
     Repo.exists?(
       from(m in Message,
         where:
           m.patient_id == ^patient_id and m.direction == "inbound" and
-            not is_nil(m.telegram_message_id) and is_nil(m.replied_by_message_id)
+            not is_nil(m.telegram_message_id) and is_nil(m.replied_by_message_id) and
+            fragment(
+              "?::bigint > COALESCE((?), 0)",
+              m.telegram_message_id,
+              subquery(latest_uncertain)
+            )
       )
     )
   end
@@ -618,6 +698,11 @@ defmodule Alethea.Clinical do
   def claim_telegram_delivery(message_id) do
     {:ok, result} =
       Repo.transaction(fn ->
+        patient_id =
+          Repo.one!(from(m in Message, where: m.id == ^message_id, select: m.patient_id))
+
+        :ok = lock_patient_conversation!(patient_id)
+
         case claim_or_supersede(message_id) do
           :claimed ->
             :claimed
@@ -653,6 +738,10 @@ defmodule Alethea.Clinical do
                 SELECT 1 FROM messages i
                 WHERE i.patient_id = ? AND i.direction = 'inbound'
                   AND i.replied_by_message_id IS NULL
+                  AND i.risk_signal->>'response_intent' IS DISTINCT FROM 'fixed_uncertainty'
+                  AND i.telegram_message_id::bigint > COALESCE((SELECT MAX(u.telegram_message_id::bigint)
+                    FROM messages u WHERE u.patient_id = i.patient_id AND u.direction = 'inbound'
+                      AND u.risk_signal->>'response_intent' = 'fixed_uncertainty'), 0)
               ) THEN 'superseded' ELSE 'sending' END
               """,
               m.patient_id
@@ -856,6 +945,14 @@ defmodule Alethea.Clinical do
 
   Content is returned decrypted and unsanitized; callers that hand it to
   a model must pass it through `Alethea.AI.Sanitizer` first.
+
+  ## Crisis exchanges (#399)
+
+  A crisis exchange — the triggering inbound and its `crisis_bypass`
+  reply — never reaches the model verbatim: it is collapsed into one
+  neutral placeholder turn by `Alethea.Clinical.CrisisExchange.turns/2`
+  (which documents the identification rule). The placeholder counts as
+  one of the `limit` turns; the rows it replaces are not decrypted.
   """
   @spec list_conversation_turns(Alethea.Accounts.Patient.t(), Message.t(), pos_integer()) ::
           {:ok, [conversation_turn()]} | {:error, term()}
@@ -864,23 +961,32 @@ defmodule Alethea.Clinical do
     with {:ok, dek} <- patient_dek(patient) do
       patient.id
       |> turns_before(current, limit)
-      |> Enum.reduce_while({:ok, []}, fn message, {:ok, turns} ->
-        case decrypt_message_content(message, dek) do
-          {:ok, content} ->
-            {:cont, {:ok, [%{role: turn_role(message), content: content} | turns]}}
-
-          {:error, reason} ->
-            {:halt, {:error, reason}}
-        end
-      end)
+      |> CrisisExchange.turns(dek)
     end
   end
 
-  # Newest first, so `limit` keeps the most recent turns; the reduce in
-  # `list_conversation_turns/3` prepends and thereby restores
-  # chronological order.
+  # Newest first, so `limit` keeps the most recent turns;
+  # `CrisisExchange.turns/2` restores chronological order while
+  # collapsing each crisis exchange into one placeholder turn (#399).
   defp turns_before(patient_id, %Message{} = current, limit) do
     Message
+    |> before_snapshot(patient_id, current)
+    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  # #393 S1: the where-clauses shared by `turns_before/3` and
+  # `exploration_state/3` — bounded strictly before `current` (by
+  # timestamp, then direction, then id) and excluding `superseded`
+  # rows. Pure refactor, no behavior change (design §2).
+  #
+  # #399: deliberately NOT filtered for crisis exchanges here —
+  # `exploration_state/3` must keep seeing `crisis_bypass` rows so its
+  # stretch resets after a crisis. The history population filter lives
+  # downstream, in `CrisisExchange.turns/2`.
+  defp before_snapshot(query, patient_id, %Message{} = current) do
+    query
     |> where([m], m.patient_id == ^patient_id)
     |> where([m], is_nil(m.delivery_state) or m.delivery_state != "superseded")
     |> where(
@@ -890,13 +996,67 @@ defmodule Alethea.Clinical do
         (m.timestamp == ^current.timestamp and m.direction == ^current.direction and
            m.id < ^current.id)
     )
-    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
-    |> limit(^limit)
-    |> Repo.all()
   end
 
-  defp turn_role(%Message{direction: "inbound"}), do: :patient
-  defp turn_role(%Message{direction: "outbound"}), do: :alethea
+  @doc """
+  Reads the exploration stretch state for the reply about to be
+  generated (#393 S1, design §2). `current` is the earliest member of
+  the burst being answered — the same bound `before_snapshot/3` already
+  gives `turns_before/3` — and `current_session_id` is the session the
+  reply is being generated in (`anchor.session_id`).
+
+  Resets to a fresh `%{questions: 0, closing_invitation_sent: false}`
+  when: there is no prior ordinary outbound reply in the snapshot; the
+  newest one is a `crisis_bypass` reply; its `session_id` differs from
+  `current_session_id` (or `current_session_id` is `nil`); or it
+  predates this migration (`exploration_questions` is `nil`). Otherwise
+  returns that reply's stored counters.
+
+  Reads no encrypted content and needs no DEK — only non-PHI metadata
+  columns.
+  """
+  @spec exploration_state(Alethea.Accounts.Patient.t(), Message.t(), binary() | nil) ::
+          %{questions: 0..3, closing_invitation_sent: boolean()}
+  def exploration_state(
+        %Alethea.Accounts.Patient{} = patient,
+        %Message{} = current,
+        current_session_id
+      ) do
+    patient.id
+    |> newest_outbound_before(current)
+    |> exploration_state_from_row(current_session_id)
+  end
+
+  defp newest_outbound_before(patient_id, %Message{} = current) do
+    Message
+    |> before_snapshot(patient_id, current)
+    |> where([m], m.direction == "outbound")
+    |> order_by([m], desc: m.timestamp, desc: m.direction, desc: m.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp exploration_state_from_row(nil, _current_session_id), do: fresh_exploration_state()
+
+  defp exploration_state_from_row(%Message{behavior_type: "crisis_bypass"}, _current_session_id),
+    do: fresh_exploration_state()
+
+  defp exploration_state_from_row(%Message{exploration_questions: nil}, _current_session_id),
+    do: fresh_exploration_state()
+
+  defp exploration_state_from_row(%Message{session_id: row_session_id}, current_session_id)
+       when is_nil(current_session_id) or row_session_id != current_session_id do
+    fresh_exploration_state()
+  end
+
+  defp exploration_state_from_row(%Message{} = row, _current_session_id) do
+    %{
+      questions: row.exploration_questions,
+      closing_invitation_sent: row.closing_invitation_sent || false
+    }
+  end
+
+  defp fresh_exploration_state, do: %{questions: 0, closing_invitation_sent: false}
 
   @spec save_ai_diagnosis(binary(), map()) :: {:ok, Diagnosis.t()} | {:error, term()}
   def save_ai_diagnosis(message_id, chain_result) do
@@ -1035,7 +1195,7 @@ defmodule Alethea.Clinical do
   def get_dek(_patient, dek) when is_binary(dek) and byte_size(dek) == 32, do: {:ok, dek}
   def get_dek(patient, _), do: patient_dek(patient)
 
-  def patient_dek(patient) do
+  def patient_dek(patient, reason \\ "clinical_context_loading") when is_binary(reason) do
     patient = Repo.preload(patient, :professional)
 
     with %Alethea.Accounts.Professional{} = professional <- patient.professional,
@@ -1048,7 +1208,7 @@ defmodule Alethea.Clinical do
         action: "PII_DECRYPT",
         resource_type: "Patient",
         resource_id: patient.id,
-        details: %{reason: "clinical_context_loading"}
+        details: %{reason: reason}
       })
 
       {:ok, dek}
