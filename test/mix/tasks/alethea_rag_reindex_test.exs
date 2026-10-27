@@ -61,8 +61,9 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     assert output =~ "consultation_evidence=1"
     assert output =~ "clinician_observation=1"
     assert output =~ "ai_proposal=1"
-    assert output =~ "functional_analysis_draft=1"
-    assert output =~ "total=5"
+    # Functional analysis drafts are working formulations, never evidence.
+    refute output =~ "functional_analysis_draft="
+    assert output =~ "total=4"
 
     refute_enqueued(worker: @worker, args: %{"patient_id" => patient.id})
   end
@@ -74,13 +75,13 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     output = capture_io(fn -> run_task(["--patient-id", patient.id, "--confirm"]) end)
 
     assert output =~ "ALETHEA_RAG_REINDEX_COMPLETE"
-    assert output =~ "enqueued=5"
+    assert output =~ "enqueued=4"
 
     enqueued =
       all_enqueued(worker: ClinicalRecordOutboxWorker)
       |> Enum.filter(&(&1.args["patient_id"] == patient.id))
 
-    assert length(enqueued) == 5
+    assert length(enqueued) == 4
 
     events = Enum.map(enqueued, & &1.args["event"]) |> Enum.sort()
 
@@ -89,8 +90,7 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
                "clinical_note_created",
                "consultation_evidence_created",
                "clinician_observation_created",
-               "ai_proposal_accepted",
-               "functional_analysis_draft_saved"
+               "ai_proposal_accepted"
              ])
 
     refute Enum.any?(enqueued, &(&1.args["professional_id"] not in [professional.id]))
@@ -113,13 +113,13 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     output =
       capture_io(fn ->
         assert_raise Mix.Error,
-                     "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=0 failed=5",
+                     "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=0 failed=4",
                      fn ->
                        run_task(["--patient-id", patient.id, "--confirm"])
                      end
       end)
 
-    assert output =~ "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=0 failed=5"
+    assert output =~ "ALETHEA_RAG_REINDEX_FAILED reason=enqueue_failed enqueued=0 failed=4"
     refute output =~ "ALETHEA_RAG_REINDEX_COMPLETE"
     refute_enqueued(worker: @worker, args: %{"patient_id" => patient.id})
   end
@@ -132,7 +132,7 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     drain_outbox!()
 
     first_chunk_count = chunk_count(patient.id)
-    assert first_chunk_count == 5
+    assert first_chunk_count == 4
 
     capture_io(fn -> run_task(["--patient-id", patient.id, "--confirm"]) end)
     drain_outbox!()

@@ -17,7 +17,6 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     ClinicalNote,
     ClinicianObservation,
     ConsultationEvidence,
-    FunctionalAnalysisDraft,
     Outbox
   }
 
@@ -131,14 +130,14 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     end
   end
 
-  @resource_kinds ~w(clinical_note consultation_evidence clinician_observation ai_proposal functional_analysis_draft patient_message)
+  # Functional analysis drafts are working formulations, never evidence.
+  @resource_kinds ~w(clinical_note consultation_evidence clinician_observation ai_proposal patient_message)
 
   defp eligible_entries(patient_id) do
     clinical_notes(patient_id) ++
       consultation_evidences(patient_id) ++
       clinician_observations(patient_id) ++
       accepted_ai_proposals(patient_id) ++
-      functional_analysis_drafts(patient_id) ++
       patient_messages(patient_id)
   end
 
@@ -171,13 +170,6 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     |> where([r], r.patient_id == ^patient_id and r.status == "accepted")
     |> Repo.all()
     |> Enum.map(&{"ai_proposal_accepted", "ai_proposal", &1})
-  end
-
-  defp functional_analysis_drafts(patient_id) do
-    FunctionalAnalysisDraft
-    |> where([r], r.patient_id == ^patient_id)
-    |> Repo.all()
-    |> Enum.map(&{"functional_analysis_draft_saved", "functional_analysis_draft", &1})
   end
 
   # Only inbound patient messages are INDEX-eligible (spec's ingest-

@@ -6134,6 +6134,44 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "functional analysis drafts are never evidence" do
+    test "a draft chunk already in the index is not suggested", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, vector} = Alethea.AI.Embeddings.Fake.embed("Conducta sintética", [])
+
+      draft =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "ALETHEA_FUNCTIONAL_ANALYSIS_CONTENT borrador sintético",
+          vector,
+          "functional_analysis_draft",
+          DateTime.utc_now()
+        )
+
+      note =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Nota clínica sintética sobre la conducta.",
+          vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+      assert has_element?(view, "#suggested-candidate-#{note.id}")
+      refute has_element?(view, "#suggested-candidate-#{draft.id}")
+    end
+  end
+
   describe "source filter pills also filter the suggestions" do
     test "with an empty query, a pill narrows the suggestions and Todos restores them", %{
       conn: conn,
