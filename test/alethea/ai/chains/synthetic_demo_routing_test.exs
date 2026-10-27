@@ -13,6 +13,7 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
     ClinicalHypothesisChain,
     FunctionalAnalysisDraftChain,
     PatternProposalChain,
+    RunningSummaryChain,
     SessionSummaryChain,
     WeeklySummaryChain
   }
@@ -22,6 +23,7 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
     ClinicalHypothesisChain,
     FunctionalAnalysisDraftChain,
     PatternProposalChain,
+    RunningSummaryChain,
     SessionSummaryChain,
     WeeklySummaryChain
   ]
@@ -80,6 +82,13 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
 
     assert {:ok, %{proposals: ["Patron sintetico"]}} =
              PatternProposalChain.run(%{sanitized_evidence: ["Evidencia"]})
+  end
+
+  test "running summary returns Claude's reply" do
+    expect_reply("Resumen factual sintetico.")
+
+    assert {:ok, %{summary: "Resumen factual sintetico.", truncated: false}} =
+             RunningSummaryChain.run(%{turns: [%{role: :patient, content: "Hola"}]})
   end
 
   test "session summary returns Claude's reply" do

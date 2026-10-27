@@ -247,7 +247,8 @@ defmodule Alethea.Telegram.JournalingReply do
 
   defp load_summary(foundation_patient) do
     # Checked first: with a hosted reply provider the summary must not even
-    # be read, let alone sent to the model (REQ-22).
+    # be read, let alone sent to the model (REQ-22), except under the
+    # synthetic demo profile (see `RunningSummary.enabled?/0`).
     with true <- RunningSummary.enabled?() || :none,
          {:ok, legacy_patient} <- FoundationAccounts.legacy_patient(foundation_patient),
          %{} = patient <- Accounts.get_patient_with_professional(legacy_patient.id),

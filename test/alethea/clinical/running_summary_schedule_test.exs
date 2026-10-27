@@ -136,6 +136,21 @@ defmodule Alethea.Clinical.RunningSummaryScheduleTest do
       refute RunningSummary.enabled?()
     end
 
+    test "the synthetic demo profile allows it with hosted replies" do
+      use_hosted_replies()
+      previous = Application.fetch_env(:alethea, :demo_synthetic_data)
+      Application.put_env(:alethea, :demo_synthetic_data, true)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:alethea, :demo_synthetic_data, value)
+          :error -> Application.delete_env(:alethea, :demo_synthetic_data)
+        end
+      end)
+
+      assert RunningSummary.enabled?()
+    end
+
     test "hosted replies: ten inbounds enqueue nothing", ctx do
       seed(ctx.patient, ctx.dek, 1..10)
       use_hosted_replies()

@@ -699,6 +699,31 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       end
     end
 
+    test "the synthetic demo profile also routes the running summary to Anthropic" do
+      demo = %{
+        "AI_PROVIDER" => "anthropic",
+        "LOCAL_LLM_BASE_URL" => nil,
+        "ANTHROPIC_API_KEY" => "synthetic-anthropic-key",
+        "LLM_MODEL" => "claude-test-model",
+        "DEMO_SYNTHETIC_DATA" => "true",
+        "DEMO_RESTRICTED_ACCESS" => "true",
+        "DEMO_ALLOWED_EMAILS" => "tester@example.test"
+      }
+
+      config = prod_config(demo)
+
+      assert alethea(config, RunningSummaryChain) == [
+               provider: :anthropic,
+               model: "claude-test-model"
+             ]
+
+      assert alethea(config, :demo_synthetic_data) == true
+
+      config = prod_config(Map.put(demo, "DEMO_SYNTHETIC_DATA", "false"))
+      assert alethea(config, RunningSummaryChain) == [provider: :local]
+      assert alethea(config, :demo_synthetic_data) == false
+    end
+
     test "without DEMO_SYNTHETIC_DATA (or false), the six chains remain unconfigured/local" do
       overrides = %{
         "AI_PROVIDER" => "anthropic",
