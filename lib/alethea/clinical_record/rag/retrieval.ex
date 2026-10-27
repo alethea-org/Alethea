@@ -284,6 +284,9 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   # `score_candidate/5` (the only caller that decrypts) only ever sees
   # rows already inside this window. See the moduledoc's "Security
   # boundary" section.
+  # Chunks indexed before drafts stopped being evidence are still skipped.
+  @never_evidence ["functional_analysis_draft"]
+
   defp fetch_candidates(patient_id, query_vector, candidate_limit, opts) do
     source_filter =
       Keyword.get(opts, :source_kind) ||
@@ -296,6 +299,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     |> exclude_ids(:id, Keyword.get(opts, :exclude_chunk_ids, []))
     |> exclude_ids(:source_resource_id, Keyword.get(opts, :exclude_resource_ids, []))
     |> filter_by_source(source_filter)
+    |> where([c], c.source_resource_type not in ^@never_evidence)
     |> select([c], %{
       chunk: c,
       dense_distance: selected_as(cosine_distance(c.embedding, ^query_vector), :dense_distance)

@@ -64,3 +64,5 @@ __pycache__/
 opencode.jsonc
 # Local Pi runtime state
 .atl/
+.neon
+opencode.json

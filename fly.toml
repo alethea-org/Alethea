@@ -41,7 +41,23 @@ kill_timeout = 40
   # AI_PROVIDER, EMOTION_ANALYZER_ENABLED and EMBEDDINGS_ENABLED. They are
   # required by config/runtime.exs, so the release command (and the deploy)
   # fails fast with a message naming the missing variable until the operator
-  # sets them. See "AI capabilities" in the operator guide.
+  # sets them. See "AI capabilities" in the operator guide (docs/deployment/fly-neon.md)
+  # and the AI sidecars readiness runbook (docs/deployment/ai-services-fly.md).
+  #
+  # Synthetic demo profile (deployed): the sidecars are public Fly apps with
+  # auto-stop, reached through their fly.dev hosts. Private .internal
+  # addresses do not work for them: 6PN has no DNS while a machine is stopped.
+  # - EMBEDDINGS_ENABLED = "true" with EMBEDDINGS_BASE_URL = "https://alethea-embeddings.fly.dev"
+  # - EMOTION_ANALYZER_ENABLED = "true" with EMOTION_SIDECAR_URL = "https://alethea-emotion.fly.dev"
+  # - EMBEDDINGS_AUTH_TOKEN and EMOTION_SIDECAR_AUTH_TOKEN as secrets, equal to
+  #   the sidecars' OLLAMA_AUTH_TOKEN and SIDECAR_AUTH_TOKEN.
+  #
+  # A stopped sidecar needs minutes to load its model. The emotion sidecar
+  # binds its port first and holds batches until the model is ready (up to
+  # 240 s), so the receive timeouts below wait out a cold start.
+  EMBEDDINGS_RECEIVE_TIMEOUT_MS = "300000"
+  EMOTION_SIDECAR_CONNECT_TIMEOUT_MS = "10000"
+  EMOTION_SIDECAR_RECEIVE_TIMEOUT_MS = "300000"
   #
   # Deliberately absent, because the single Machine reaches Neon over the
   # public internet and is not clustered: ECTO_IPV6 and DNS_CLUSTER_QUERY.

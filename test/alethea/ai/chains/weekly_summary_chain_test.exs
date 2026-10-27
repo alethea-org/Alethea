@@ -206,4 +206,10 @@ defmodule Alethea.AI.Chains.WeeklySummaryChainTest do
       assert report.session_count == 2
     end
   end
+
+  describe "supported_providers/0" do
+    test "includes :anthropic" do
+      assert :anthropic in WeeklySummaryChain.supported_providers()
+    end
+  end
 end

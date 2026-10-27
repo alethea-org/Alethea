@@ -14,11 +14,20 @@ and demonstration use. Review upstream terms before any commercial deployment.
 ## Runtime contract
 
 - `GET /health/live` reports process liveness.
-- `GET /health/ready` reports whether the analyzer loaded successfully.
+- `GET /health/ready` reports whether the analyzer loaded successfully
+  (`503 analyzer_loading` while the model loads in the background).
 - `POST /v1/emotions:batch` accepts `{"texts": [...]}` with 1 to 32 non-empty
   strings, at most 4096 UTF-8 bytes each.
-- One request runs inference at a time. Concurrent inference fails fast with a
-  stable `busy` error instead of creating an unbounded queue.
+- Batches require `Authorization: Bearer <token>` matching `SIDECAR_AUTH_TOKEN`
+  (`401 unauthorized` otherwise). The server refuses to start without a token
+  unless `SIDECAR_AUTH_DISABLED=true` (local use; `docker-compose.yml` sets it).
+  Health endpoints stay open.
+- If the model fails to load, the process exits so the platform restarts it.
+- One request runs inference at a time. On a warm sidecar, concurrent inference
+  fails fast with a stable `busy` error instead of creating an unbounded queue.
+  The exception is a cold start: batches that arrived while the model loaded
+  wait for it and then queue for the inference slot, within a shared 240 s
+  budget.
 - Responses contain only official labels and scores. Inputs and bodies are never
   logged or echoed.
 

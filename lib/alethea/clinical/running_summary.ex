@@ -51,9 +51,13 @@ defmodule Alethea.Clinical.RunningSummary do
   guided (reply) chain must also resolve to the local provider. With a hosted
   reply provider the stored summary would travel to the hosted model inside
   the reply request, so it is neither generated nor attached (REQ-22).
+
+  The one exception is the synthetic demo profile (`DEMO_SYNTHETIC_DATA=true`,
+  which requires restricted admission): it holds synthetic data only, routes
+  this chain to Anthropic, and allows the summary in hosted replies.
   """
   @spec enabled?() :: boolean()
-  def enabled?, do: local_endpoint?() and local_replies?()
+  def enabled?, do: local_endpoint?() and (local_replies?() or synthetic_demo?())
 
   @doc """
   Logs once, at boot, that the summary is disabled and why: no local LLM
@@ -69,7 +73,7 @@ defmodule Alethea.Clinical.RunningSummary do
             "(set LOCAL_LLM_BASE_URL); no summary jobs will be enqueued"
         )
 
-      not local_replies?() ->
+      not (local_replies?() or synthetic_demo?()) ->
         Logger.warning(
           "RunningSummary: running summary disabled, replies use a hosted provider " <>
             "(AI_PROVIDER=cloud); no summary jobs will be enqueued"
@@ -82,6 +86,8 @@ defmodule Alethea.Clinical.RunningSummary do
     :ok
   end
 
+  # The endpoint of whichever provider the chain resolves to: local, or Anthropic
+  # under the synthetic demo profile.
   defp local_endpoint? do
     case LLMConfig.get(:running_summary).endpoint_url do
       url when is_binary(url) -> String.trim(url) != ""
@@ -90,6 +96,8 @@ defmodule Alethea.Clinical.RunningSummary do
   end
 
   defp local_replies?, do: LLMConfig.get(:guided_conversation).provider == :local
+
+  defp synthetic_demo?, do: Application.get_env(:alethea, :demo_synthetic_data) == true
 
   @doc """
   Enqueues a `RunningSummaryWorker` job when the patient's persisted inbound

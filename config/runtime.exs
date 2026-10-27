@@ -133,6 +133,12 @@ if config_env() == :prod do
     end
   end
 
+  # Shared secrets pasted with surrounding whitespace must still match the
+  # value the sidecar compares against (it strips its own copy).
+  optional_secret = fn name ->
+    if value = optional_env.(name), do: String.trim(value)
+  end
+
   required_env = fn name, hint ->
     optional_env.(name) || raise "environment variable #{name} is missing or empty. #{hint}"
   end
@@ -141,6 +147,17 @@ if config_env() == :prod do
     case Integer.parse(System.get_env(name, default)) do
       {value, ""} when value > 0 -> value
       _other -> raise "environment variable #{name} must be a positive integer."
+    end
+  end
+
+  # Opt-in demo flags: unset or blank means false; any other value than the
+  # exact literals `true` or `false` is a boot error.
+  demo_flag = fn name ->
+    case optional_env.(name) do
+      nil -> false
+      "false" -> false
+      "true" -> true
+      _other -> raise "environment variable #{name} must be exactly true or false."
     end
   end
 
@@ -304,16 +321,20 @@ if config_env() == :prod do
       "cloud" ->
         :cloud
 
+      "anthropic" ->
+        :anthropic
+
       nil ->
-        raise "environment variable AI_PROVIDER is missing. Set it explicitly to local or cloud."
+        raise "environment variable AI_PROVIDER is missing. Set it explicitly to local, cloud or anthropic."
 
       _other ->
         raise "environment variable AI_PROVIDER has an unsupported value. " <>
-                "Supported values: local, cloud."
+                "Supported values: local, cloud, anthropic."
     end
 
   local_llm_base_url = optional_env.("LOCAL_LLM_BASE_URL")
-  openai_api_key = optional_env.("OPENAI_API_KEY")
+  openai_api_key = optional_secret.("OPENAI_API_KEY")
+  anthropic_api_key = optional_secret.("ANTHROPIC_API_KEY")
   llm_model = optional_env.("LLM_MODEL")
 
   if ai_provider == :local and is_nil(local_llm_base_url) do
@@ -326,11 +347,16 @@ if config_env() == :prod do
             "It is required while AI_PROVIDER=cloud."
   end
 
+  if ai_provider == :anthropic and is_nil(anthropic_api_key) do
+    raise "environment variable ANTHROPIC_API_KEY is missing or empty. " <>
+            "It is required while AI_PROVIDER=anthropic."
+  end
+
   # The compiled default model is a local model name; a hosted provider
   # must name its own.
-  if ai_provider == :cloud and is_nil(llm_model) do
+  if ai_provider in [:cloud, :anthropic] and is_nil(llm_model) do
     raise "environment variable LLM_MODEL is missing or empty. " <>
-            "It is required while AI_PROVIDER=cloud."
+            "It is required while AI_PROVIDER=#{ai_provider}."
   end
 
   # Global endpoints, shared by every chain through `Alethea.AI.LLMConfig`.
@@ -341,11 +367,80 @@ if config_env() == :prod do
     local: if(local_llm_base_url, do: [endpoint_url: local_llm_base_url], else: []),
     cloud:
       [endpoint_url: optional_env.("OPENAI_BASE_URL") || "https://api.openai.com/v1"] ++
-        if(openai_api_key, do: [api_key: openai_api_key], else: [])
+        if(openai_api_key, do: [api_key: openai_api_key], else: []),
+    anthropic:
+      [
+        endpoint_url:
+          optional_env.("ANTHROPIC_BASE_URL") || "https://api.anthropic.com/v1/messages"
+      ] ++
+        if(anthropic_api_key, do: [api_key: anthropic_api_key], else: [])
 
   config :alethea,
          Alethea.AI.Chains.GuidedConversationChain,
          [provider: ai_provider] ++ if(llm_model, do: [model: llm_model], else: [])
+
+  # ## Synthetic demo AI profile
+  #
+  # DEMO_SYNTHETIC_DATA=true routes the six non-guided text generation chains
+  # to Claude with the same active model (the guided chain already follows
+  # AI_PROVIDER). The three clinical chains declare a local-only
+  # `supported_providers/0` contract; this profile overrides it on purpose,
+  # here and only here, because the demo holds synthetic data exclusively.
+  # The flag has no meaning for other providers, so that combination fails.
+  demo_synthetic_data = demo_flag.("DEMO_SYNTHETIC_DATA")
+
+  if demo_synthetic_data and ai_provider != :anthropic do
+    raise "environment variable DEMO_SYNTHETIC_DATA=true requires AI_PROVIDER=anthropic."
+  end
+
+  if demo_synthetic_data do
+    synthetic_demo_chains = [
+      Alethea.AI.Chains.SessionSummaryChain,
+      Alethea.AI.Chains.WeeklySummaryChain,
+      Alethea.AI.Chains.PatternProposalChain,
+      Alethea.AI.Chains.ClinicalConsultationChain,
+      Alethea.AI.Chains.ClinicalHypothesisChain,
+      Alethea.AI.Chains.FunctionalAnalysisDraftChain
+    ]
+
+    Enum.each(synthetic_demo_chains, fn chain ->
+      config :alethea, chain, provider: :anthropic, model: llm_model
+    end)
+  end
+
+  # ## Demo admission policy
+  #
+  # DEMO_RESTRICTED_ACCESS restricts registration and login to the identities
+  # listed in DEMO_ALLOWED_EMAILS. It must be explicitly true or false (default false).
+  demo_restricted_access = demo_flag.("DEMO_RESTRICTED_ACCESS")
+
+  demo_allowed_emails =
+    case optional_env.("DEMO_ALLOWED_EMAILS") do
+      nil ->
+        []
+
+      raw ->
+        raw
+        |> String.split(",")
+        |> Enum.map(&String.trim/1)
+        |> Enum.map(&String.downcase/1)
+        |> Enum.reject(&(&1 == ""))
+    end
+
+  # The synthetic profile overrides the clinical chains' local-only contract,
+  # which is only acceptable while admission is restricted to the testers.
+  if demo_synthetic_data and not demo_restricted_access do
+    raise "environment variable DEMO_SYNTHETIC_DATA=true requires DEMO_RESTRICTED_ACCESS=true."
+  end
+
+  if demo_restricted_access and demo_allowed_emails == [] do
+    raise "environment variable DEMO_ALLOWED_EMAILS is missing or empty. " <>
+            "It is required while DEMO_RESTRICTED_ACCESS=true."
+  end
+
+  config :alethea,
+    demo_restricted_access: demo_restricted_access,
+    demo_allowed_emails: demo_allowed_emails
 
   # The running summary (#394) is pinned to the local provider whatever
   # AI_PROVIDER says, so clinical narrative never reaches a hosted model. It
@@ -358,6 +453,18 @@ if config_env() == :prod do
          [provider: :local] ++
            if(ai_provider == :local and llm_model, do: [model: llm_model], else: [])
 
+  # The synthetic demo profile is the one deliberate exception to that pin:
+  # it holds synthetic data only (restricted admission is enforced above), so
+  # the running summary is generated by Claude and may ride along in hosted
+  # replies (`Alethea.Clinical.RunningSummary.enabled?/0`).
+  if demo_synthetic_data do
+    config :alethea, Alethea.AI.Chains.RunningSummaryChain,
+      provider: :anthropic,
+      model: llm_model
+  end
+
+  config :alethea, demo_synthetic_data: demo_synthetic_data
+
   # ## AI capability switches (issue #402)
   #
   # Each discovery slot of `Alethea.AI` is either enabled with its endpoint
@@ -366,11 +473,21 @@ if config_env() == :prod do
   if capability_switch.("EMOTION_ANALYZER_ENABLED") do
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
+    # The deployed sidecar refuses batches without its SIDECAR_AUTH_TOKEN, so
+    # a missing client token would silently drop every analysis (one attempt
+    # per job). Both sides must hold the same value.
     config :alethea, Alethea.AI.EmotionAnalyzer,
       base_url:
         required_env.(
           "EMOTION_SIDECAR_URL",
           "It is required while EMOTION_ANALYZER_ENABLED=true."
+        ),
+      auth_token:
+        String.trim(
+          required_env.(
+            "EMOTION_SIDECAR_AUTH_TOKEN",
+            "It is required while EMOTION_ANALYZER_ENABLED=true."
+          )
         )
   else
     config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Disabled
@@ -382,7 +499,16 @@ if config_env() == :prod do
     embeddings_endpoint =
       [
         endpoint_url:
-          required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true.")
+          required_env.("EMBEDDINGS_BASE_URL", "It is required while EMBEDDINGS_ENABLED=true."),
+        # Matches the token the Caddy proxy in deploy/embeddings checks.
+        auth_token:
+          String.trim(
+            required_env.(
+              "EMBEDDINGS_AUTH_TOKEN",
+              "It is required while EMBEDDINGS_ENABLED=true."
+            )
+          ),
+        receive_timeout: positive_integer_env.("EMBEDDINGS_RECEIVE_TIMEOUT_MS", "120000")
       ]
 
     # The adapter's own default model (bge-m3) applies unless overridden.

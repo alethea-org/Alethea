@@ -70,7 +70,7 @@ defmodule Alethea.AI.Chains.PatternProposalChain do
   def suggested_max_tokens, do: 512
 
   @impl true
-  def supported_providers, do: [:local, :cloud]
+  def supported_providers, do: [:local, :cloud, :anthropic]
 
   @doc false
   @spec pattern_proposal_schema() :: map()

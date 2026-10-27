@@ -117,8 +117,8 @@
     </p>
   </div>
   <%!-- ── Briefing body (when patient selected) ── --%>
-  <div :if={@selected_patient}>
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
+  <div :if={@selected_patient} class="pt-briefing">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
       <h2 class="pt-h2">Briefing · {@selected_patient.alias}</h2>
 
       <div id="patient-record-actions" style="display:flex; align-items:center; gap:8px;">
@@ -294,7 +294,7 @@
       </div>
     </div>
     <%!-- Session snapshots — past clinical sessions --%>
-    <h3 class="pt-h2" style="margin-bottom:14px;">Sesiones anteriores</h3>
+    <h3 class="pt-h2">Sesiones anteriores</h3>
 
     <div :if={@session_summaries == []} class="empty-state">
       <p class="empty-state__text" style="margin-bottom:0;">
@@ -315,7 +315,7 @@
       </div>
     </div>
     <%!-- Schedule form + chat decrypt + Telegram invite (per-patient) --%>
-    <div class="pt-card" style="margin-top:20px;">
+    <div class="pt-card">
       <div class="pt-card__head"><span class="pt-h2">Sesión y chat</span></div>
 
       <div

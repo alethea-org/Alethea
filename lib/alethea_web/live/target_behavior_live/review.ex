@@ -180,17 +180,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:draft_generation_pending, false)
           |> assign(:draft_generation_token, nil)
           |> assign(:draft_generation_request_values, nil)
-          |> assign_async(:suggested_candidates, fn ->
-            case ClinicalRecord.suggest_evidence_candidates(
-                   professional,
-                   patient_id,
-                   target_behavior_id,
-                   limit: 5
-                 ) do
-              {:ok, candidates} -> {:ok, %{suggested_candidates: candidates}}
-              {:error, reason} -> {:error, reason}
-            end
-          end)
+          |> load_suggested_candidates("all")
           |> stream(:timeline, items)
 
         {:ok, socket}
@@ -226,8 +216,10 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     source = normalize_search_source_filter(source)
     socket = assign(socket, :search_source_filter, source)
 
+    # With no query the panel shows the suggestions, so the filter reloads
+    # them; with a query it reruns the search.
     if socket.assigns.search_query == "" do
-      {:noreply, socket}
+      {:noreply, load_suggested_candidates(socket, source)}
     else
       {:noreply, trigger_evidence_search(socket, socket.assigns.search_query, source)}
     end
@@ -1593,6 +1585,27 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
       _other ->
         socket
     end
+  end
+
+  defp load_suggested_candidates(socket, source) do
+    professional = socket.assigns.current_professional
+    patient_id = socket.assigns.patient_id
+    target_behavior_id = socket.assigns.target_behavior_id
+
+    socket
+    |> cancel_async(:suggested_candidates)
+    |> assign_async(:suggested_candidates, fn ->
+      case ClinicalRecord.suggest_evidence_candidates(
+             professional,
+             patient_id,
+             target_behavior_id,
+             source_kind: source,
+             limit: 5
+           ) do
+        {:ok, candidates} -> {:ok, %{suggested_candidates: candidates}}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   defp trigger_evidence_search(socket, query, source) do
@@ -3380,6 +3393,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               phx-submit="register_functional_analysis_version"
               class="functional-analysis-version-form"
             >
+              <div class="functional-analysis-version-form__intro">
+                <span class="pt-eyebrow">Versionado</span>
+                <p class="functional-analysis-version-form__hint">
+                  Registrá una versión para dejar constancia del análisis en este momento.
+                </p>
+              </div>
               <.input
                 field={@version_form[:change_note]}
                 id="functional-analysis-version-note"
@@ -3389,7 +3408,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 placeholder="Qué cambió en esta versión"
                 autocomplete="off"
               />
-              <div class="form-actions functional-analysis-actions">
+              <div class="functional-analysis-version-form__actions">
                 <button
                   type="submit"
                   id="register-functional-analysis-version"

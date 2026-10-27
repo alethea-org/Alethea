@@ -79,8 +79,8 @@ defmodule Alethea.AI.ChatModels.OllamaChat do
   @impl ChatModel
   def restore_from_map(attrs) do
     case new(attrs) do
-      {:ok, model} -> model
-      {:error, _changeset} -> :error
+      {:ok, model} -> {:ok, model}
+      {:error, _changeset} -> {:error, "Invalid Ollama configuration"}
     end
   end
 

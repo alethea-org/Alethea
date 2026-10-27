@@ -56,9 +56,9 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       assert Indexer.eligibility("ai_proposal_accepted") == {:index, :ai_proposal}
     end
 
-    test "functional_analysis_draft_saved indexes (replace prior chunks)" do
+    test "functional_analysis_draft_saved is ignored: a working draft is not evidence" do
       assert Indexer.eligibility("functional_analysis_draft_saved") ==
-               {:index, :functional_analysis_draft}
+               {:ignore, :working_draft}
     end
 
     test "functional-analysis version registration is not a recognized RAG event" do
@@ -503,7 +503,7 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       assert length(chunks) == 1
     end
 
-    test "functional_analysis_draft_saved produces a retrievable chunk", %{
+    test "functional_analysis_draft_saved produces no chunk", %{
       professional: professional,
       patient: patient
     } do
@@ -529,7 +529,7 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
 
       chunks = Chunk |> Alethea.Repo.all() |> Enum.filter(&(&1.source_resource_id == draft.id))
 
-      assert length(chunks) == 1
+      assert chunks == []
     end
   end
 

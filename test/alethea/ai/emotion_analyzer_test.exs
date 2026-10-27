@@ -128,6 +128,42 @@ defmodule Alethea.AI.EmotionAnalyzerTest do
     assert EmotionAnalyzer.analyze_batch(["Synthetic"]) == {:error, :unavailable}
   end
 
+  describe "sidecar bearer token" do
+    test "sends the configured auth token as a bearer header" do
+      config = Application.get_env(:alethea, EmotionAnalyzer)
+
+      Application.put_env(
+        :alethea,
+        EmotionAnalyzer,
+        Keyword.put(config, :auth_token, "demo-secret")
+      )
+
+      Req.Test.expect(__MODULE__, fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer demo-secret"]
+
+        Req.Test.json(conn, %{
+          "version" => "v1",
+          "results" => [result("joy", %{"joy" => 1.0})]
+        })
+      end)
+
+      assert {:ok, _scores} = EmotionAnalyzer.analyze_batch(["Synthetic"])
+    end
+
+    test "omits the authorization header when no token is configured" do
+      Req.Test.expect(__MODULE__, fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == []
+
+        Req.Test.json(conn, %{
+          "version" => "v1",
+          "results" => [result("joy", %{"joy" => 1.0})]
+        })
+      end)
+
+      assert {:ok, _scores} = EmotionAnalyzer.analyze_batch(["Synthetic"])
+    end
+  end
+
   defp expect_results(results) do
     Req.Test.expect(__MODULE__, fn conn ->
       Req.Test.json(conn, %{"version" => "v1", "results" => results})

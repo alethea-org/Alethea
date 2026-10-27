@@ -3,6 +3,7 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
   import Phoenix.Controller, only: [redirect: 2]
 
   alias Alethea.Accounts
+  alias Alethea.Accounts.AdmissionPolicy
   alias Alethea.Encryption.ProfessionalKek
 
   require Logger
@@ -19,34 +20,43 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
         try do
           professional = Accounts.get_professional!(professional_id)
 
-          # NEW: Verify KEK exists for this professional
-          case ProfessionalKek.kek_exists?(professional_id) do
-            {:ok, _key_id} ->
-              # KEK ownership verified, now load it
-              case Accounts.load_professional_kek(professional) do
-                {:ok, kek} ->
-                  # NEW: Log successful KEK access
-                  log_kek_access(professional_id, :success)
+          if not AdmissionPolicy.allowed_email?(professional.email) do
+            log_kek_access(professional_id, :not_admitted)
+            redirect_with_error(socket, "Sesión inválida. Por favor, iniciá sesión nuevamente.")
+          else
+            # NEW: Verify KEK exists for this professional
+            case ProfessionalKek.kek_exists?(professional_id) do
+              {:ok, _key_id} ->
+                # KEK ownership verified, now load it
+                case Accounts.load_professional_kek(professional) do
+                  {:ok, kek} ->
+                    # NEW: Log successful KEK access
+                    log_kek_access(professional_id, :success)
 
-                  {:cont,
-                   socket
-                   |> Phoenix.Component.assign(:current_professional, professional)
-                   |> Phoenix.Component.assign(:professional_kek, kek)}
+                    {:cont,
+                     socket
+                     |> Phoenix.Component.assign(:current_professional, professional)
+                     |> Phoenix.Component.assign(:professional_kek, kek)}
 
-                {:error, _reason} ->
-                  # KEK exists but couldn't be loaded - this shouldn't happen
-                  log_kek_access(professional_id, :load_failed)
+                  {:error, _reason} ->
+                    # KEK exists but couldn't be loaded - this shouldn't happen
+                    log_kek_access(professional_id, :load_failed)
 
-                  redirect_with_error(
-                    socket,
-                    "Sesión inválida. Por favor, iniciá sesión nuevamente."
-                  )
-              end
+                    redirect_with_error(
+                      socket,
+                      "Sesión inválida. Por favor, iniciá sesión nuevamente."
+                    )
+                end
 
-            {:error, :not_found} ->
-              # No KEK for this professional - session is invalid
-              log_kek_access(professional_id, :not_found)
-              redirect_with_error(socket, "Sesión inválida. Por favor, iniciá sesión nuevamente.")
+              {:error, :not_found} ->
+                # No KEK for this professional - session is invalid
+                log_kek_access(professional_id, :not_found)
+
+                redirect_with_error(
+                  socket,
+                  "Sesión inválida. Por favor, iniciá sesión nuevamente."
+                )
+            end
           end
         rescue
           _e in Ecto.NoResultsError ->
@@ -115,7 +125,15 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
   defp fetch_current_professional_from_session(conn, professional_id) do
     professional = Accounts.get_professional!(professional_id)
 
-    assign(conn, :current_professional, professional)
+    # If demo access is restricted and the professional's email is not in the allowlist,
+    # assign nil. The session cookie is left intact because the login gate is the primary
+    # enforcement point, and downstream plugs (require_authenticated_professional) will
+    # halt and redirect to /login.
+    if AdmissionPolicy.allowed_email?(professional.email) do
+      assign(conn, :current_professional, professional)
+    else
+      assign(conn, :current_professional, nil)
+    end
   rescue
     Ecto.NoResultsError -> assign(conn, :current_professional, nil)
   end
@@ -130,11 +148,19 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
       token ->
         case Accounts.verify_remember_token(token) do
           {:ok, professional, rotated_token} ->
-            conn
-            |> configure_session(renew: true)
-            |> put_session(:professional_id, professional.id)
-            |> put_remember_cookie(rotated_token)
-            |> assign(:current_professional, professional)
+            if AdmissionPolicy.allowed_email?(professional.email) do
+              conn
+              |> configure_session(renew: true)
+              |> put_session(:professional_id, professional.id)
+              |> put_remember_cookie(rotated_token)
+              |> assign(:current_professional, professional)
+            else
+              Accounts.invalidate_remember_token(professional.id)
+
+              conn
+              |> delete_remember_cookie()
+              |> assign(:current_professional, nil)
+            end
 
           {:error, _reason} ->
             conn

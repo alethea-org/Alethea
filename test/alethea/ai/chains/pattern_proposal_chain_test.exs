@@ -79,4 +79,10 @@ defmodule Alethea.AI.Chains.PatternProposalChainTest do
       assert config.provider == :local
     end
   end
+
+  describe "supported_providers/0" do
+    test "includes :anthropic" do
+      assert :anthropic in PatternProposalChain.supported_providers()
+    end
+  end
 end

@@ -60,6 +60,9 @@ services:
   emotion-sidecar:
     build:
       context: ./services/emotion_sidecar
+    environment:
+      # Local only: the deployed sidecar refuses to start without a token.
+      - SIDECAR_AUTH_DISABLED=true
     volumes:
       - emotion_model_cache:/home/sidecar/.cache/huggingface
     healthcheck:

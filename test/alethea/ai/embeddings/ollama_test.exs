@@ -141,4 +141,29 @@ defmodule Alethea.AI.Embeddings.OllamaTest do
       end)
     end
   end
+
+  describe "sidecar bearer token" do
+    test "sends the configured auth token as a bearer header" do
+      with_ollama_config([auth_token: "demo-secret"], fn ->
+        stub_ollama(fn conn ->
+          assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer demo-secret"]
+          Req.Test.json(conn, %{"embeddings" => [fake_vector()]})
+        end)
+
+        assert {:ok, vector} = Ollama.embed("hola", [])
+        assert length(vector) == 1024
+      end)
+    end
+
+    test "omits the authorization header when no token is configured" do
+      with_ollama_config(fn ->
+        stub_ollama(fn conn ->
+          assert Plug.Conn.get_req_header(conn, "authorization") == []
+          Req.Test.json(conn, %{"embeddings" => [fake_vector()]})
+        end)
+
+        assert {:ok, _vector} = Ollama.embed("hola", [])
+      end)
+    end
+  end
 end

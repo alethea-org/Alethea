@@ -1,0 +1,138 @@
+# Review follow-ups: synthetic demo
+
+Objective: resolve the 28 advisory findings from native review `review-3b8961b76aa0c2f0` of `feat/synthetic-demo-ai`.
+Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test` and `python -m unittest` (emotion sidecar).
+
+## Specs
+
+- S1: "arreglemos todo". Every advisory finding of review `review-3b8961b76aa0c2f0` gets fixed or is explicitly resolved in code, config, or docs. Finding IDs:
+  - R1: public-ollama, public-emotion-sidecar, docs-contradict-exposure, unpinned-ollama-image, allowlist-identities-published.
+  - R4: emotion-coldstart-vs-timeout, embeddings-autostop, internal-url-guidance-contradicts-deploy, anthropic-error-observability.
+  - R2: temperature-comment-mismatch, provider-label-mislabels-local, dead-default-arg, resolve-model-shadowed-names, redundant-restricted-guard, duplicated-bool-env-parsing, synthetic-flag-silently-noop, clinical-chain-contract-contradiction, chain-count-doc-inconsistency, docs-claim-private-network, session-revocation-doc-mismatch, stale-provider-list.
+  - R3: synthetic-routing-unproved, demo-flag-silently-ignored, temperature-strip-narrow, restore-from-map-contract, sidecar-cold-start-vs-timeout, internal-urls-contradict-deploy, empty-demo-flag-crash.
+- S2: sidecar posture, user choice "Token + auto-stop (Recomendado)": "Agrego un bearer token secreto en ambos sidecars (Ollama vía proxy liviano) y subo el timeout de la app para tolerar el arranque en frío. Sigue costando ~0 en reposo. Requiere redeploy en Fly."
+  - Health endpoints stay unauthenticated, because Fly checks call them without a token.
+  - Assumption: the tokens are optional in app config (no header when unset), so local dev and the current deploy keep working until the secrets are staged.
+  - Redeploying to Fly needs separate, explicit user authorization.
+- S3: "sí, arreglemos" (2026-10-26). Fix the 10 advisory findings of native review `review-962c71a65f376080`:
+  - R1-001: emotion sidecar fails open without a token;
+  - R4-embeddings-ollama-unsupervised: Ollama is unsupervised, and Caddy can return 502 during a cold start;
+  - R4-emotion-check-hides-failed-load;
+  - R4-held-batch-exceeds-client-timeout;
+  - R2-readme-busy-contract-contradiction;
+  - R2-hosted-attribution-fallback-local;
+  - R2-volume-path-doc-mismatch;
+  - R3-cloud-model-version-unproved;
+  - R3-routing-results-unasserted;
+  - R3-held-batch-test-race.
+- S4: "dale" + "pero el 1 no lo hagamos" (2026-10-26). Fix third-review advisories 2-6:
+  - R1-synthetic-routing-not-coupled-to-restriction;
+  - R3-routing-test-bypasses-runtime-wiring;
+  - R4-anthropic-no-transient-retry and R4-anthropic-status-lost-at-chain;
+  - R4-emotion-token-optional-vs-fail-closed-sidecar;
+  - R3-anthropic-key-not-trimmed.
+  - Not R1-allowlist-unverified-email: no code and no issue.
+  - Decision: sidecar client tokens become required while the sidecar is enabled. This supersedes the S2 assumption that they are optional.
+- S5: "dale" (2026-10-26), to fixing only these three items from review `review-28951176750a2a87`, then closing:
+  - R4-weekly-report-unrouted-under-anthropic;
+  - R2-unlisted-mount-branch-unlogged;
+  - R4-anthropic-retry-latency-unbounded.
+
+## Tasks
+
+- T1 [S1,S2] inline; done; commit `2373a46`. Sidecar bearer auth (emotion `server.py`, Ollama behind a Caddy proxy with a pinned image), app clients send the token, cold-start-tolerant timeouts. Risk: items 2 and 5.
+- T2 [S1] inline; done; commit `ffb8b73`. Code findings: Anthropic adapter, guided chain attribution, llm_config naming, admission guard, runtime flag parsing, chain contract docs, routed-chain test.
+- T3 [S1,S2] inline; done; commit: docs slice. Docs match the deployed posture, and the demo identities are removed from the task log.
+- T4 [S3] inline; done; commits: sidecars slice + attribution slice. Second-review advisories. Risk: items 2 and 5.
+- T5 [S4] inline; done. Risk: items 2 and 3.
+- T6 [S5] inline; done. Risk: item 2 (audit entry on the auth path).
+
+## Log
+
+- L1 (2026-10-26): "arreglemos todo"
+- L2 (2026-10-26): The user chose "Token + auto-stop (Recomendado)" for the sidecars.
+- L3: Exploration findings:
+  - Neither sidecar client sends auth.
+  - Embeddings has no prod timeout env (120s default). Emotion's receive timeout is 30s.
+  - The app health check never pings the sidecars.
+  - Ollama runs `ollama/ollama:latest` with no Dockerfile. Pin it to `0.40.11`.
+  - The six routed chains parse JSON from text (`StructuredOutput.parse_json_response`) and use no tools, so the AnthropicChat tool rejection does not block them.
+  - `supported_providers/0` is never enforced at runtime.
+- L4: T1 done.
+  - RED, then GREEN: sidecar python 10/10; client header tests; runtime config 47/47.
+  - Caddy proxy checked against a fake upstream: no token gets 401; pull/delete/generate get 401 even with a valid token; embed with a token gets 200; `GET /` gets 200.
+  - Found `EmotionAnalysisWorker` `max_attempts: 1`, so the sidecar now binds first and holds batches during load instead of relying on retries.
+  - The demo-flag parsing (R2/R3 findings) landed in this commit because it shares `config/runtime.exs`.
+  - Not run: a container build (Docker daemon unavailable) and the Fly redeploy (needs authorization).
+- L5: T2 done. `mix precommit`: 2169 passed, 5 skipped.
+  - `synthetic_demo_routing_test` proves all six routed chains are tool-free through AnthropicChat. It is a characterization test: it passed on first run.
+  - Gap: cloud (OpenAI) `model_version` has no test, because LLMConfig exposes no request stub for ChatOpenAI.
+- L6: T3 done.
+  - Docs now describe public sidecars with tokens, auto-stop, cold-start timeouts, the 6 routed chains, the actual revocation behavior and the 3 provider values.
+  - Demo identities were removed from the task log, but they remain in git history.
+  - R1-public-* is resolved by S2: token gate plus the Ollama API allowlist.
+- L7: Independent verifier on T1: PASS, no blockers.
+  - Its advisories fixed in `eceae3b`: held batches queue for the inference gate; the Fly check uses `/health/live`; tokens are trimmed; the runbook keeps tokens in shell variables and runs app-first on the existing deployment.
+- L8: Native review `review-962c71a65f376080` (4 lenses): approved; the acknowledgement burned the authority. 10 advisory findings, all non-blocking:
+  - emotion sidecar fails open without a token;
+  - Ollama is unsupervised, plus a Caddy 502 race at cold start;
+  - `/health/live` hides a failed model load;
+  - a held batch can outlast the 300 s client clock;
+  - the README busy contract contradicts the new queueing;
+  - the hosted attribution fallback reports `phi-4-mini`;
+  - the volume path in the diagram is wrong;
+  - the cloud `model_version` change is untested;
+  - the routing test does not assert weekly/FA results;
+  - the held-batch test can race.
+  - Pending the user's decision on whether to fix them.
+- L9 (2026-10-26): "sí, arreglemos"
+- L10: T4 done.
+  - Python: 13 tests OK, stable across 5 runs.
+  - Entrypoint probed with stub ollama/caddy (bash harness):
+    - Caddy waits for Ollama readiness.
+    - Ollama or Caddy death exits 1.
+    - Never-ready exits 1.
+    - No token exits 1.
+    - TERM exits 0.
+    - No orphans.
+  - `mix precommit`: 2171 passed, 5 skipped.
+  - Rollout note: the emotion sidecar now refuses to start without its secret, so stage `SIDECAR_AUTH_TOKEN` before its deploy (the runbook already does).
+- L11: Verifier on 43a66b7: PASS, no blockers. Its advisories are fixed: a TERM during startup exits 0; any BaseException at load reaches on_load_failure; the stale token comment in runtime.exs is updated. Re-probed: entrypoint 7 cases; python tests OK; config 47/47.
+- L12: Native review `review-133ea9bd8808d396`: approved and acknowledged (authority burned). 13 advisories pending a user decision. Triage: R3-emotion-test-env-leak is not real, because the setup re-puts the whole config per test. R3-routing-test-bypasses-runtime-wiring: LLMConfig falls back to the global provider api_key (llm_config.ex:118-122), but no test pins it.
+- L13 (2026-10-26): "dale", then "pero el 1 no lo hagamos".
+- L14: T5 done.
+  - RED: 6 tests.
+  - GREEN: chat_models + chains + config, 212 passed.
+  - The routing test passed on first run under runtime-shaped wiring, which proves the global Anthropic key fallback.
+  - Rollout: the next `alethea-prod` deploy fails to boot unless both sidecar tokens are staged (runbook step 1 stages them).
+- L15: Verifier on 0175bc7: PASS, no blockers. Doc advisories fixed: retry status list and the restricted-admission requirement in demo step 2. Accepted as-is: a retried POST can double-bill; a Retry-After delay is uncapped inside the Oban job.
+- L16: Native review `review-28951176750a2a87`: approved and acknowledged (authority burned). 13 advisories, pending a user decision. Most relevant: the weekly report is not routed under the demo profile; retry latency is uncapped; the on_mount admission denial is not logged; the emotion guardrail described in the docs is not enforced by config.
+- L17 (2026-10-26): "dale"
+- L18: T6 done.
+  - The weekly report finding was a false alarm. `WeeklyReportWorker` uses `WeeklySummaryChain`, which is routed, and `WeeklyReportChain` does not exist (the `llm_config.ex:331` mapping is dead). Docs corrected.
+  - The on_mount admission denial now writes a KEK_ACCESS `:not_admitted` audit entry. RED, then GREEN.
+  - Anthropic retries now always use an explicit delay: backoff of 1 s, then 2 s, or the provider's Retry-After. Both are capped at 5 s (`:anthropic_retry_max_delay_ms`). Receive timeouts are no longer retried. RED, then GREEN.
+- L19: Verifier on b35b748: PASS, no blockers. A probe confirmed real delays of 1 s + 2 s backoff, a 5 s Retry-After cap, and no retry on timeout. Advisory: the default cap and backoff are not pinned by unit tests.
+- L20: The full-branch review stopped with `lens_context_budget_exceeded` (2972 lines; no authority created). A reduced candidate (1bdd001..HEAD, 148 lines) went to review `review-ca14b7584665b352`: approved and acknowledged (authority burned). 4 advisories, none blocking:
+  - Retry-After above the cap is retried early;
+  - the default backoff and cap are not pinned by tests (2 findings);
+  - the denial-audit write could crash the mount. Not real: log_kek_access rescues internally.
+  - Closed per S5.
+- L21 (2026-10-27): Deployed with user authorization ("arranquemos con el deploy"; the key was explicitly not rotated).
+  - Tokens generated and staged without printing.
+  - Order: alethea-prod, then alethea-embeddings, then alethea-emotion.
+  - Deploy-time defects found and fixed in `da25323`:
+    - flyctl resolves `-c` relative to the build context, so the first embeddings deploy never ran;
+    - Ollama returned 403 to the public Host header Caddy forwarded, so Caddy now rewrites `Host`.
+  - Live evidence:
+    - prod `/health/ready` ok;
+    - unauthenticated embed and pull return 401; unauthenticated emotion batch returns 401;
+    - `GET /` on embeddings returns 200; emotion `/health/live` returns 200;
+    - an RPC embed from prod returned 1024 dims;
+    - an RPC emotion batch sent during `analyzer_loading` was held, then returned joy=0.99.
+- L22 (2026-10-27): "necesito que el resumen conversacional funcione igual, porque esto es una demo, no va a haber datos reales"
+  - Merged origin/main (62d56fd) and redeployed; the 4 migrations are verified `up`. PR #433 is open.
+  - Running summary under DEMO_SYNTHETIC_DATA=true: RunningSummaryChain is routed to Anthropic, `enabled?` allows hosted replies, and `:demo_synthetic_data` is exposed in config.
+  - RED, then GREEN: schedule test and config test. The routing test passed on first run.
+  - Verifier on ae91e8e: PASS. Reachable only under the demo profile; non-demo prod config is unchanged (27-case differential). Deployed. Live: enabled?=true, provider=anthropic, RunningSummaryChain produced a summary through Claude.
+  - L23 (2026-10-27): Telegram replies failed with invalid_response. Root cause, reproduced in prod (2 of 3 runs): claude-haiku-5-5 runs adaptive thinking by default and can return an empty `thinking` block before the text, which the adapter rejected; the thinking also eats max_tokens=160. Fix: send `thinking: {type: disabled}` for haiku-5 and skip thinking/redacted_thinking blocks in decode. Also fixed a stale webhook (ngrok URL) via `telegram_bootstrap register-webhook`.

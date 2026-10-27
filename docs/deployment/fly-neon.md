@@ -62,7 +62,7 @@ Built from `config/runtime.exs`. "Secret" means `fly secrets`; "plain" means `[e
 | `CLOAK_AES_KEY` | secret | none | Base64 of 32 random bytes; encrypts clinical data at rest. Generate with `openssl rand -base64 32`. **Losing it loses the data.** |
 | `TELEGRAM_CHAT_ID_PEPPER` | secret | none | HMAC key for Telegram chat id hashes, at least 32 bytes. Generate with `openssl rand -hex 32`. Changing it orphans every stored hash. |
 | `PHX_HOST` | plain, in `fly.toml` | none | Public bare host name. Drives URLs, the origin check and the webhook URL. |
-| `AI_PROVIDER` | plain | none | `local` or `cloud`. Provider of the guided conversation chain only. **Pending decision; not in `fly.toml`.** |
+| `AI_PROVIDER` | plain | none | `local` (Ollama), `cloud` (OpenAI), or `anthropic` (Claude). Provider of the guided conversation chain only. **Not in `fly.toml`.** |
 | `EMOTION_ANALYZER_ENABLED` | plain | none | Exactly `true` or `false`. **Pending decision; not in `fly.toml`.** |
 | `EMBEDDINGS_ENABLED` | plain | none | Exactly `true` or `false`. **Pending decision; not in `fly.toml`.** |
 
@@ -72,9 +72,13 @@ Built from `config/runtime.exs`. "Secret" means `fly secrets`; "plain" means `[e
 | --- | --- | --- | --- |
 | `LOCAL_LLM_BASE_URL` | plain | `AI_PROVIDER=local` | Endpoint of the self-hosted model. Also the only endpoint of every non-guided chain. |
 | `OPENAI_API_KEY` | secret | `AI_PROVIDER=cloud` | Hosted provider credential. |
-| `LLM_MODEL` | plain | `AI_PROVIDER=cloud` | Model name; optional with `local` (compiled default `phi4-mini`). |
+| `ANTHROPIC_API_KEY` | secret | `AI_PROVIDER=anthropic` | Anthropic API credential, separate from OpenAI. |
+| `LLM_MODEL` | plain | `AI_PROVIDER=cloud` or `anthropic` | Explicit active model name; optional with `local` (compiled default `phi4-mini`). |
 | `EMOTION_SIDECAR_URL` | plain | `EMOTION_ANALYZER_ENABLED=true` | Emotion sidecar endpoint. |
 | `EMBEDDINGS_BASE_URL` | plain | `EMBEDDINGS_ENABLED=true` | Embeddings endpoint (Ollama API). |
+| `EMOTION_SIDECAR_AUTH_TOKEN` | secret | `EMOTION_ANALYZER_ENABLED=true` | Bearer token for the emotion sidecar; equals its `SIDECAR_AUTH_TOKEN`. |
+| `EMBEDDINGS_AUTH_TOKEN` | secret | `EMBEDDINGS_ENABLED=true` | Bearer token for the embeddings proxy; equals its `OLLAMA_AUTH_TOKEN`. |
+| `DEMO_ALLOWED_EMAILS` | plain or secret | `DEMO_RESTRICTED_ACCESS=true` | Comma-separated list of allowed email addresses for restricted demo admission. |
 | `TELEGRAM_BOT_TOKEN` | secret | first deploy and token rotation | BotFather token. Read by the release command and by nothing else. |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | with `TELEGRAM_BOT_TOKEN` | 1–256 characters of `A-Z a-z 0-9 _ -`. Generate with `openssl rand -hex 32`. |
 | `TELEGRAM_BOT_USERNAME` | plain | with `TELEGRAM_BOT_TOKEN` | Bot user name, 5–32 letters, digits or underscores. |
@@ -91,8 +95,12 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | `PHX_EXTRA_ORIGINS` | empty | Comma-separated extra allowed origins, for example a custom domain. |
 | `POOL_SIZE`, `DATABASE_CONNECT_TIMEOUT_MS`, `DATABASE_QUEUE_TARGET_MS`, `DATABASE_QUEUE_INTERVAL_MS` | see [Topology](#topology) | Database pool tuning. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Hosted provider endpoint. |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1/messages` | Full Anthropic Messages endpoint, not an OpenAI-compatible base URL. |
+| `DEMO_RESTRICTED_ACCESS` | `false` | Must be exactly `true` or `false`. When `true`, restricts registration, login, and active sessions to emails in `DEMO_ALLOWED_EMAILS`. |
+| `DEMO_SYNTHETIC_DATA` | `false` | Exactly `true` or `false` (blank counts as unset). When `true`, routes the six non-guided text chains to Claude; the guided chain already follows `AI_PROVIDER`. Requires `AI_PROVIDER=anthropic` and `DEMO_RESTRICTED_ACCESS=true`, otherwise the boot fails. The weekly report screen uses the weekly summary chain, so it is covered. |
 | `EMBEDDINGS_MODEL` | adapter default (`bge-m3`) | Embeddings model name. |
-| `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` / `_RECEIVE_TIMEOUT_MS` / `_MAX_BATCH_SIZE` / `_MAX_TEXT_BYTES` | `2000` / `30000` / `32` / `4096` | Emotion sidecar limits. |
+| `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` / `_RECEIVE_TIMEOUT_MS` / `_MAX_BATCH_SIZE` / `_MAX_TEXT_BYTES` | `2000` / `30000` / `32` / `4096` | Emotion sidecar limits. `fly.toml` sets `10000` / `300000` to wait out a cold start. |
+| `EMBEDDINGS_RECEIVE_TIMEOUT_MS` | `120000` | Embeddings receive timeout. `fly.toml` sets `300000`. |
 | `WHISPER_ENABLED` | unset (disabled) | Must be unset or `false`; `true` fails the boot because no production adapter exists. |
 | `DB_MONITORING_ENABLED` | `true` | Database telemetry warnings. |
 | `DB_SLOW_QUERY_THRESHOLD_MS` / `DB_POOL_QUEUE_WARN_MS` / `DB_POOL_QUEUE_LENGTH_WARN` / `DB_QUERY_LOG_MAX_CHARS` | `1000` / `100` / `1` / `4000` | Thresholds for those warnings. |
@@ -108,22 +116,70 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 
 | Capability | Configured by | When off or unconfigured |
 | --- | --- | --- |
-| Guided conversation chain (Telegram replies) | `AI_PROVIDER`, plus `LOCAL_LLM_BASE_URL` or `OPENAI_API_KEY` + `LLM_MODEL` | Cannot be off: the boot fails without a complete provider. |
-| Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft, running summary (Resumen conversacional, #394) | `LOCAL_LLM_BASE_URL` only. They are pinned to the local provider so clinical narrative is never rerouted to a hosted model by `AI_PROVIDER`. The running summary uses `LLM_MODEL` only while `AI_PROVIDER=local`; with `cloud` it keeps the compiled local default model, never the hosted one. | "Not configured": summaries fail and retry; consultations and reports return errors. The running summary is disabled instead: no jobs are enqueued and one line is logged at boot. It is also disabled when `AI_PROVIDER=cloud`, even with `LOCAL_LLM_BASE_URL` set, so a stored summary is never sent to the hosted model inside the reply request. |
-| Emotion analyzer slot | `EMOTION_ANALYZER_ENABLED` + `EMOTION_SIDECAR_URL` | Explicit `Disabled` adapter; session closure completes without trends. |
-| Embeddings slot (RAG indexing) | `EMBEDDINGS_ENABLED` + `EMBEDDINGS_BASE_URL` (+ `EMBEDDINGS_MODEL`) | Explicit `Disabled` adapter; indexing jobs fail and retry per event (known gap). |
+| Guided conversation chain (Telegram replies) | `AI_PROVIDER`, plus `LOCAL_LLM_BASE_URL`, or the selected hosted provider's API key + `LLM_MODEL` | Cannot be off: the boot fails without a complete provider. |
+| Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft, running summary (Resumen conversacional, #394) | `LOCAL_LLM_BASE_URL` only by default. They are pinned to the local provider so clinical narrative is never rerouted to a hosted model by `AI_PROVIDER`. When `DEMO_SYNTHETIC_DATA=true` (synthetic data with restricted admission only), the six non-guided text chains and the running summary are routed to Claude with `LLM_MODEL`, and the running summary is attached to hosted replies. The weekly report job uses the weekly summary chain; the `:weekly_report` chain name in `LLMConfig` has no module. The running summary uses `LLM_MODEL` only while `AI_PROVIDER=local`; otherwise it keeps the compiled local default model, never the hosted one. | "Not configured": summaries fail and retry; consultations and reports return errors. The running summary is disabled instead: no jobs are enqueued and one line is logged at boot. It is also disabled when the guided chain is hosted, even with `LOCAL_LLM_BASE_URL` set, so a stored summary is never sent to the hosted model inside the reply request — except under `DEMO_SYNTHETIC_DATA=true`, where the data is synthetic by contract. |
+| Emotion analyzer slot | `EMOTION_ANALYZER_ENABLED` + `EMOTION_SIDECAR_URL` | Explicit `Disabled` adapter; session closure completes without trends. When enabled for the synthetic demo, points to `https://alethea-emotion.fly.dev` with a bearer token (see `docs/deployment/ai-services-fly.md`). |
+| Embeddings slot (RAG indexing) | `EMBEDDINGS_ENABLED` + `EMBEDDINGS_BASE_URL` (+ `EMBEDDINGS_MODEL`) | Explicit `Disabled` adapter; indexing jobs fail and retry per event (known gap). When enabled for the synthetic demo, points to `https://alethea-embeddings.fly.dev` with a bearer token (see `docs/deployment/ai-services-fly.md`). |
 | Transcription slot (Whisper) | nothing | Always disabled. |
 
 No Fake adapter and no `localhost` endpoint is reachable in production.
+
+### Claude configuration boundary
+
+Set `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` and an explicit `LLM_MODEL`
+to select Claude for guided conversations. Choose an active model available
+to the API account; no historical dependency default is used. Never put a
+Claude key in `OPENAI_API_KEY`. Store credentials using staged Fly secrets,
+not committed files or command-line arguments.
+
+The app-owned adapter reuses LangChain message serialization but handles HTTP
+errors without logging raw provider bodies or transport exceptions. It retries
+HTTP 408, 429, 500, 502, 503, 504 and 529 plus closed sockets twice with
+backoff (a provider `Retry-After` is honoured up to 5 s; receive timeouts are
+not retried), and reports
+failures as `http_error.<status>` so auth, rate-limit and outage errors stay
+distinct in job results. It accepts
+non-streaming text only and explicitly rejects tools and streaming. A response
+stopped by `max_tokens` is marked truncated, and guided results report the
+configured Claude model. A cloud (OpenAI) result now reports its configured
+model as well, instead of the former `phi-4-mini` literal; local results keep
+`phi-4-mini`.
+
+This selection alone does **not** move local clinical chains to Claude and
+does not provide embeddings, emotion analysis or transcription. Their separate
+deployment and the restricted synthetic-demo policy remain required before a
+complete demo can be claimed. Do not enter real patient data.
+
+### Demo admission and synthetic-data profile
+
+For an opt-in hosted demonstration with synthetic clinical data:
+
+1. **Restricted Admission:** Set `DEMO_RESTRICTED_ACCESS=true` and `DEMO_ALLOWED_EMAILS`
+   to a comma-separated list of authorized tester emails (e.g. `DEMO_ALLOWED_EMAILS=user@example.com,prof@university.edu`).
+   This restricts registration, authentication, active session checks, and remember-me tokens
+   to only listed addresses (case-insensitive). Unlisted users cannot register (changeset error)
+   or log in (generic invalid credentials error). An unlisted user's existing session is treated as
+   signed out (`current_professional` is `nil`; the session cookie itself is left in place), and an
+   unlisted remember-me token is invalidated and its cookie deleted.
+2. **Synthetic-Data Chain Routing:** Set `DEMO_SYNTHETIC_DATA=true` alongside `AI_PROVIDER=anthropic`,
+   `LLM_MODEL` and restricted admission (step 1); the boot fails without them. This explicitly routes the six non-guided text chains
+   (`SessionSummaryChain`, `WeeklySummaryChain`, `PatternProposalChain`,
+   `ClinicalConsultationChain`, `ClinicalHypothesisChain`, `FunctionalAnalysisDraftChain`)
+   to Claude under the synthetic demo profile. When `DEMO_SYNTHETIC_DATA` is unset or `false`,
+   clinical chains remain pinned to local inference.
+3. **Privacy Caveat:** This profile is strictly authorized for **synthetic demonstration data only**.
+   Restricting application access with `DEMO_RESTRICTED_ACCESS` controls user admission,
+   but it does **NOT** prove or ensure that entered clinical information is synthetic.
+   Never input real patient or clinical data into hosted AI providers.
 
 ### Open decisions
 
 These belong to the product owner. The deploy fails fast until the three required AI variables are set, so they cannot be skipped by accident.
 
 - **Hosted provider for non-guided chains.** With `AI_PROVIDER=cloud` and no `LOCAL_LLM_BASE_URL`, only guided conversation works. Letting the other chains use a hosted provider is a privacy decision.
-- **No "LLM disabled" mode.** `AI_PROVIDER` accepts only `local` or `cloud`.
-- **Emotion analyzer posture.** Enabling it in production conflicts with its development-only status from issue 198.
-- **Where a `local` model runs.** `LOCAL_LLM_BASE_URL` must be reachable from the Fly Machine; no hosting for it is defined yet.
+- **No "LLM disabled" mode.** `AI_PROVIDER` accepts only `local`, `cloud`, or `anthropic`.
+- **Emotion analyzer posture.** In development (issue #198), the emotion analyzer was designated development-only due to lack of clinical validation and `pysentimiento`'s non-commercial academic license. For the synthetic demo profile (`DEMO_SYNTHETIC_DATA=true`, `DEMO_RESTRICTED_ACCESS=true`), enabling it is accepted under S2 to fulfill the full-service demo requirement in an academic context ("a mí y al profe"), since no real patients or clinical decisions are involved. It remains strictly prohibited for real patient data (milestone 2). Full deployment runbook and sizing are in `docs/deployment/ai-services-fly.md`.
+- **Where auxiliary AI models run.** BGE-M3 embeddings and the emotion sidecar run as secondary Fly apps (`alethea-embeddings` and `alethea-emotion`) with auto-stop. They are public `fly.dev` endpoints gated by bearer tokens; private `.internal` addresses broke auto-start. Sanitized text leaves Fly's private network over TLS. Runbook, sizing, and cost estimates are in `docs/deployment/ai-services-fly.md`.
 - **Telegram secrets policy.** Keep the three `TELEGRAM_*` values permanently, or set them for one deploy and unset them afterwards.
 - **Machine capacity.** `fly.toml` uses `shared-cpu-1x` with 1 GB as a starting point.
 

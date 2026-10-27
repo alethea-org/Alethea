@@ -2,6 +2,7 @@ defmodule AletheaWeb.SessionController do
   use AletheaWeb, :controller
 
   alias Alethea.Accounts
+  alias Alethea.Accounts.AdmissionPolicy
 
   require Logger
 
@@ -15,15 +16,21 @@ defmodule AletheaWeb.SessionController do
   def create(conn, %{"professional" => %{"email" => email, "password" => password} = params}) do
     case Accounts.authenticate_professional(email, password) do
       {:ok, professional} ->
-        return_to = get_session(conn, :return_to) || "/dashboard"
-        remember_me? = remember_me?(params)
+        if not AdmissionPolicy.allowed_email?(professional.email) do
+          conn
+          |> put_flash(:error, "Correo o contraseña incorrectos.")
+          |> redirect(to: "/login")
+        else
+          return_to = get_session(conn, :return_to) || "/dashboard"
+          remember_me? = remember_me?(params)
 
-        conn
-        |> configure_session(renew: true)
-        |> put_session(:professional_id, professional.id)
-        |> delete_session(:return_to)
-        |> maybe_put_remember_cookie(professional, remember_me?)
-        |> redirect(to: return_to)
+          conn
+          |> configure_session(renew: true)
+          |> put_session(:professional_id, professional.id)
+          |> delete_session(:return_to)
+          |> maybe_put_remember_cookie(professional, remember_me?)
+          |> redirect(to: return_to)
+        end
 
       {:error, :invalid_credentials} ->
         conn

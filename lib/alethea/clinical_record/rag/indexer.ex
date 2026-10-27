@@ -90,7 +90,9 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   def eligibility("clinician_observation_created"), do: {:index, :clinician_observation}
   def eligibility("clinician_observation_updated"), do: {:index, :clinician_observation}
   def eligibility("ai_proposal_accepted"), do: {:index, :ai_proposal}
-  def eligibility("functional_analysis_draft_saved"), do: {:index, :functional_analysis_draft}
+  # A working draft is the clinician's own formulation, not evidence: it
+  # never enters the index (and its serialized body is not readable text).
+  def eligibility("functional_analysis_draft_saved"), do: {:ignore, :working_draft}
   def eligibility("patient_message_received"), do: {:index, :patient_message}
 
   def eligibility("session_transcript_created"), do: {:index, :session_transcript}

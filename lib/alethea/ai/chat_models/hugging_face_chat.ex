@@ -152,8 +152,8 @@ defmodule Alethea.AI.ChatModels.HuggingFaceChat do
   @impl ChatModel
   def restore_from_map(attrs) do
     case new(attrs) do
-      {:ok, model} -> model
-      {:error, _changeset} -> :error
+      {:ok, model} -> {:ok, model}
+      {:error, _changeset} -> {:error, "Invalid Hugging Face configuration"}
     end
   end
 

@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -9,6 +10,7 @@ from services.emotion_sidecar.server import (
     MAX_BODY_BYTES,
     MAX_TEXT_BYTES,
     create_server,
+    resolve_auth_token,
 )
 
 
@@ -40,8 +42,8 @@ class FakeAnalyzer:
 
 
 class RunningServer:
-    def __init__(self, factory):
-        self.server = create_server("127.0.0.1", 0, analyzer_factory=factory)
+    def __init__(self, factory, **options):
+        self.server = create_server("127.0.0.1", 0, analyzer_factory=factory, **options)
         self.thread = threading.Thread(
             target=lambda: self.server.serve_forever(poll_interval=0.01), daemon=True
         )
@@ -54,12 +56,12 @@ class RunningServer:
         self.server.server_close()
         self.thread.join(timeout=2)
 
-    def request(self, path, payload=None):
+    def request(self, path, payload=None, headers=None):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             self.base_url + path,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **(headers or {})},
             method="POST" if data is not None else "GET",
         )
 
@@ -94,9 +96,131 @@ class EmotionSidecarHTTPTest(unittest.TestCase):
         if hasattr(self, "running"):
             self.running.close()
 
-    def start(self, factory):
-        self.running = RunningServer(factory)
+    def start(self, factory, auth_token=None, load_in_background=False):
+        return self.start_with(
+            factory, auth_token=auth_token, load_in_background=load_in_background
+        )
+
+    def start_with(self, factory, **options):
+        self.running = RunningServer(factory, **options)
         return self.running
+
+    def test_background_load_serves_health_and_holds_batches_until_ready(self):
+        release = threading.Event()
+        analyzer = FakeAnalyzer()
+
+        def slow_factory():
+            release.wait(timeout=5)
+            return analyzer
+
+        server = self.start(slow_factory, load_in_background=True)
+
+        self.assertEqual(server.request("/health/live"), (200, {"status": "ok"}))
+        status, body = server.request("/health/ready")
+        self.assertEqual(status, 503)
+        self.assertEqual(body["error"]["code"], "analyzer_loading")
+
+        outcome = {}
+
+        def post_batch():
+            outcome["response"] = server.request(
+                "/v1/emotions:batch", {"texts": ["Synthetic joy"]}
+            )
+
+        waiter = threading.Thread(target=post_batch)
+        waiter.start()
+        waiter.join(timeout=0.2)
+        self.assertTrue(waiter.is_alive())
+
+        release.set()
+        waiter.join(timeout=2)
+        status, body = outcome["response"]
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["results"]), 1)
+        self.assertEqual(server.request("/health/ready"), (200, {"status": "ready"}))
+
+    def test_batch_requires_bearer_token_when_configured(self):
+        analyzer = FakeAnalyzer()
+        server = self.start(lambda: analyzer, auth_token="demo-secret")
+        payload = {"texts": ["Synthetic joy"]}
+
+        for headers in [{}, {"Authorization": "Bearer wrong"}, {"Authorization": "demo-secret"}]:
+            with self.subTest(headers=headers):
+                status, body = server.request("/v1/emotions:batch", payload, headers)
+                self.assertEqual(status, 401)
+                self.assertEqual(body["error"]["code"], "unauthorized")
+
+        self.assertEqual(analyzer.calls, [])
+
+        status, body = server.request(
+            "/v1/emotions:batch", payload, {"Authorization": "Bearer demo-secret"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["results"]), 1)
+
+    def test_batches_held_during_load_queue_instead_of_failing_busy(self):
+        release = threading.Event()
+
+        class SlowAnalyzer(FakeAnalyzer):
+            def predict(self, texts):
+                threading.Event().wait(0.1)
+                return super().predict(texts)
+
+        def slow_factory():
+            release.wait(timeout=5)
+            return SlowAnalyzer()
+
+        server = self.start(slow_factory, load_in_background=True)
+        responses = []
+
+        def post_batch():
+            responses.append(server.request("/v1/emotions:batch", {"texts": ["Synthetic"]}))
+
+        waiters = [threading.Thread(target=post_batch) for _ in range(3)]
+        for waiter in waiters:
+            waiter.start()
+        self.wait_until(lambda: server.server.runtime.waiting_for_load == 3)
+        release.set()
+        for waiter in waiters:
+            waiter.join(timeout=3)
+
+        self.assertEqual([status for status, _body in responses], [200, 200, 200])
+
+    def wait_until(self, condition, timeout=2.0):
+        deadline = time.monotonic() + timeout
+        while not condition():
+            self.assertLess(time.monotonic(), deadline, "condition not reached")
+            threading.Event().wait(0.005)
+
+    def test_background_load_failure_reports_and_stays_unready(self):
+        failures = []
+
+        def broken_factory():
+            raise RuntimeError("model download failed")
+
+        server = self.start_with(
+            broken_factory, load_in_background=True, on_load_failure=lambda: failures.append(True)
+        )
+
+        self.wait_until(lambda: failures == [True])
+        status, body = server.request("/health/ready")
+        self.assertEqual(status, 503)
+        self.assertEqual(body["error"]["code"], "analyzer_unavailable")
+
+    def test_production_entrypoint_requires_a_token_unless_explicitly_disabled(self):
+        with self.assertRaises(SystemExit):
+            resolve_auth_token({})
+        with self.assertRaises(SystemExit):
+            resolve_auth_token({"SIDECAR_AUTH_TOKEN": "  "})
+
+        self.assertEqual(resolve_auth_token({"SIDECAR_AUTH_TOKEN": " demo-secret\n"}), "demo-secret")
+        self.assertIsNone(resolve_auth_token({"SIDECAR_AUTH_DISABLED": "true"}))
+
+    def test_health_stays_open_when_token_configured(self):
+        server = self.start(FakeAnalyzer, auth_token="demo-secret")
+
+        self.assertEqual(server.request("/health/live"), (200, {"status": "ok"}))
+        self.assertEqual(server.request("/health/ready"), (200, {"status": "ready"}))
 
     def test_liveness_and_readiness_create_analyzer_once(self):
         analyzer = FakeAnalyzer()

@@ -1,0 +1,40 @@
+app = "alethea-emotion"
+primary_region = "gru"
+
+[mounts]
+  source = "emotion_cache"
+  destination = "/home/sidecar/.cache/huggingface"
+
+# Public demo posture (user decision, synthetic-data demo only): see the
+# note in deploy/fly.embeddings.toml. POST /v1/emotions:batch requires the
+# SIDECAR_AUTH_TOKEN secret as a bearer token (EMOTION_SIDECAR_AUTH_TOKEN on
+# alethea-prod); /health/* stays open for the checks below. A cold start can
+# take minutes, so alethea-prod raises its sidecar receive timeouts.
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    # Liveness, not readiness: the proxy must keep routing to a machine that
+    # is still loading its model, because the sidecar holds those batches.
+    path = "/health/live"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4gb"

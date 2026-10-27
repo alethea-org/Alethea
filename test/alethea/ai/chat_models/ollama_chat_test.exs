@@ -73,6 +73,12 @@ defmodule Alethea.AI.ChatModels.OllamaChatTest do
     end
   end
 
+  test "restore_from_map follows the LangChain callback contract", %{model: model} do
+    assert {:ok, %OllamaChat{}} = OllamaChat.restore_from_map(OllamaChat.serialize_config(model))
+    assert {:error, message} = OllamaChat.restore_from_map(%{model: nil})
+    assert is_binary(message)
+  end
+
   defp stub_response(body) do
     Req.Test.stub(__MODULE__, fn conn -> Req.Test.json(conn, body) end)
   end
