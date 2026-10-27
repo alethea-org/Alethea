@@ -101,3 +101,4 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - The routing test passed on first run under runtime-shaped wiring, which proves the global Anthropic key fallback.
   - Rollout: the next `alethea-prod` deploy fails to boot unless both sidecar tokens are staged (runbook step 1 stages them).
 - L15: Verifier on 0175bc7: PASS, no blockers. Doc advisories fixed: retry status list and the restricted-admission requirement in demo step 2. Accepted as-is: a retried POST can double-bill; a Retry-After delay is uncapped inside the Oban job.
+- L16: Native review `review-28951176750a2a87`: approved and acknowledged (authority burned). 13 advisories, pending a user decision. Most relevant: the weekly report is not routed under the demo profile; retry latency is uncapped; the on_mount admission denial is not logged; the emotion guardrail described in the docs is not enforced by config.
