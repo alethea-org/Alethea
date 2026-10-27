@@ -216,6 +216,10 @@
 }
 .pt-card__body { padding: var(--spacing-md); }
 
+/* Patient briefing: one vertical rhythm for every card and heading. */
+.pt-briefing { display: flex; flex-direction: column; gap: var(--spacing-lg); }
+.pt-briefing > * { margin-top: 0; margin-bottom: 0; }
+
 .pt-eyebrow {
   font-size: 11px;
   font-weight: 700;
@@ -341,6 +345,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: var(--spacing-md) var(--spacing-lg);
   border-radius: var(--rounded-lg);
   background: var(--colors-primary);
@@ -359,6 +364,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: var(--spacing-md) var(--spacing-lg);
   border-radius: var(--rounded-lg);
   background: var(--colors-canvas);
@@ -634,6 +640,7 @@
   color: var(--colors-ink);
 }
 .pta-metrics {
+  margin-top: var(--spacing-lg);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 1px;
@@ -658,6 +665,14 @@
 
 .pta-timeline { border-left: 2px solid var(--colors-hairline); margin-left: 6px; padding-left: var(--spacing-lg); }
 .pta-timeline__item { position: relative; padding-bottom: var(--spacing-lg); }
+/* Items rendered straight into a card body (no .pta-timeline wrapper) draw
+   their own rail, so the dot stays inside the card. */
+.pt-card__body > .pta-timeline__item {
+  margin-left: 6px;
+  padding-left: var(--spacing-lg);
+  border-left: 2px solid var(--colors-hairline);
+}
+.pt-card__body > .pta-timeline__item:last-child { padding-bottom: 0; }
 .pta-timeline__item::before {
   content: '';
   position: absolute;
@@ -669,6 +684,7 @@
   background: var(--colors-canvas);
   border: 2px solid var(--colors-muted);
 }
+.pt-card__body > .pta-timeline__item::before { left: -8px; }
 
 .pta-settings { margin-top: 40px; border-top: 1px solid var(--colors-hairline); padding-top: var(--spacing-lg); }
 .pta-settings summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--colors-body); }
@@ -2628,7 +2644,8 @@ select.text-input {
   gap: var(--spacing-sm);
   flex-shrink: 0;
   margin-top: var(--spacing-md);
-  padding: var(--spacing-md) 0 0;
+  /* Keeps the composer clear of the viewport edge on every screen. */
+  padding: var(--spacing-md) 0 calc(var(--spacing-lg) + env(safe-area-inset-bottom));
   border-top: 1px solid var(--colors-hairline);
 }
 
@@ -2682,7 +2699,7 @@ select.text-input {
   }
 
   .consultation__composer {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: calc(var(--spacing-md) + env(safe-area-inset-bottom));
   }
 
   .citation__link {
@@ -2771,7 +2788,11 @@ select.text-input {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
 }
+.review-empty-banner .button-primary,
+.review-empty-banner .button-secondary { margin-top: var(--spacing-sm); }
 
 .review-empty-banner .empty-state__icon {
   margin: 0 0 var(--spacing-xs) 0;
@@ -2789,7 +2810,7 @@ select.text-input {
 .review-metadata-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--spacing-xs);
+  gap: var(--spacing-sm);
   border: 0;
   background: transparent;
   overflow: visible;
@@ -3429,6 +3450,37 @@ select.text-input {
   background: var(--colors-canvas);
   box-shadow: var(--shadow-overlay);
 }
+
+/* The draft column stacks its header, version pills and form with one gap. */
+.review-draft { display: flex; flex-direction: column; gap: var(--spacing-md); }
+.review-draft > .workbench-panel__header { margin-bottom: 0; }
+.workbench-panel__header .form-actions {
+  margin-top: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+.version-selector { display: flex; flex-wrap: wrap; gap: var(--spacing-xs); }
+
+/* Version registration: one quiet card below the analysis, not a second
+   sticky bar with a loose field between them. */
+.functional-analysis-version-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-md);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--colors-surface-soft, var(--colors-canvas));
+}
+.functional-analysis-version-form .field { margin-bottom: 0; }
+.functional-analysis-version-form__hint {
+  margin: 4px 0 0;
+  color: var(--colors-muted);
+  font-size: var(--typography-label-sm-size, 13px);
+}
+.functional-analysis-version-form__actions { display: flex; justify-content: flex-end; }
 
 @media (max-width: 980px) {
   .clinical-workbench { grid-template-columns: minmax(0, 1fr); }

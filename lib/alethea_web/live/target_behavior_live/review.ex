@@ -3380,6 +3380,12 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
               phx-submit="register_functional_analysis_version"
               class="functional-analysis-version-form"
             >
+              <div class="functional-analysis-version-form__intro">
+                <span class="pt-eyebrow">Versionado</span>
+                <p class="functional-analysis-version-form__hint">
+                  Registrá una versión para dejar constancia del análisis en este momento.
+                </p>
+              </div>
               <.input
                 field={@version_form[:change_note]}
                 id="functional-analysis-version-note"
@@ -3389,7 +3395,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
                 placeholder="Qué cambió en esta versión"
                 autocomplete="off"
               />
-              <div class="form-actions functional-analysis-actions">
+              <div class="functional-analysis-version-form__actions">
                 <button
                   type="submit"
                   id="register-functional-analysis-version"
