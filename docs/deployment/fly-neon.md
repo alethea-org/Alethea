@@ -134,7 +134,8 @@ not committed files or command-line arguments.
 
 The app-owned adapter reuses LangChain message serialization but handles HTTP
 errors without logging raw provider bodies or transport exceptions. It retries
-429, 529, 408, 5xx and transport timeouts twice with backoff, and reports
+HTTP 408, 429, 500, 502, 503, 504 and 529 plus transport timeouts and closed
+sockets twice with backoff (honouring `Retry-After` on 429/503), and reports
 failures as `http_error.<status>` so auth, rate-limit and outage errors stay
 distinct in job results. It accepts
 non-streaming text only and explicitly rejects tools and streaming. A response
@@ -159,8 +160,8 @@ For an opt-in hosted demonstration with synthetic clinical data:
    or log in (generic invalid credentials error). An unlisted user's existing session is treated as
    signed out (`current_professional` is `nil`; the session cookie itself is left in place), and an
    unlisted remember-me token is invalidated and its cookie deleted.
-2. **Synthetic-Data Chain Routing:** Set `DEMO_SYNTHETIC_DATA=true` alongside `AI_PROVIDER=anthropic`
-   and `LLM_MODEL`. This explicitly routes the six non-guided text chains
+2. **Synthetic-Data Chain Routing:** Set `DEMO_SYNTHETIC_DATA=true` alongside `AI_PROVIDER=anthropic`,
+   `LLM_MODEL` and restricted admission (step 1); the boot fails without them. This explicitly routes the six non-guided text chains
    (`SessionSummaryChain`, `WeeklySummaryChain`, `PatternProposalChain`,
    `ClinicalConsultationChain`, `ClinicalHypothesisChain`, `FunctionalAnalysisDraftChain`)
    to Claude under the synthetic demo profile. When `DEMO_SYNTHETIC_DATA` is unset or `false`,

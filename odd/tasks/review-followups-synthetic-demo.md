@@ -100,3 +100,4 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - GREEN: chat_models + chains + config, 212 passed.
   - The routing test passed on first run under runtime-shaped wiring, which proves the global Anthropic key fallback.
   - Rollout: the next `alethea-prod` deploy fails to boot unless both sidecar tokens are staged (runbook step 1 stages them).
+- L15: Verifier on 0175bc7: PASS, no blockers. Doc advisories fixed: retry status list and the restricted-admission requirement in demo step 2. Accepted as-is: a retried POST can double-bill; a Retry-After delay is uncapped inside the Oban job.
