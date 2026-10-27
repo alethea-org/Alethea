@@ -112,3 +112,4 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - The weekly report finding was a false alarm. `WeeklyReportWorker` uses `WeeklySummaryChain`, which is routed, and `WeeklyReportChain` does not exist (the `llm_config.ex:331` mapping is dead). Docs corrected.
   - The on_mount admission denial now writes a KEK_ACCESS `:not_admitted` audit entry. RED, then GREEN.
   - Anthropic retries now always use an explicit delay: backoff of 1 s, then 2 s, or the provider's Retry-After. Both are capped at 5 s (`:anthropic_retry_max_delay_ms`). Receive timeouts are no longer retried. RED, then GREEN.
+- L19: Verifier on b35b748: PASS, no blockers. A probe confirmed real delays of 1 s + 2 s backoff, a 5 s Retry-After cap, and no retry on timeout. Advisory: the default cap and backoff are not pinned by unit tests.
