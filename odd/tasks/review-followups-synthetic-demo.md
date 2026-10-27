@@ -118,3 +118,15 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - the default backoff and cap are not pinned by tests (2 findings);
   - the denial-audit write could crash the mount. Not real: log_kek_access rescues internally.
   - Closed per S5.
+- L21 (2026-10-27): Deployed with user authorization ("arranquemos con el deploy"; the key was explicitly not rotated).
+  - Tokens generated and staged without printing.
+  - Order: alethea-prod, then alethea-embeddings, then alethea-emotion.
+  - Deploy-time defects found and fixed in `da25323`:
+    - flyctl resolves `-c` relative to the build context, so the first embeddings deploy never ran;
+    - Ollama returned 403 to the public Host header Caddy forwarded, so Caddy now rewrites `Host`.
+  - Live evidence:
+    - prod `/health/ready` ok;
+    - unauthenticated embed and pull return 401; unauthenticated emotion batch returns 401;
+    - `GET /` on embeddings returns 200; emotion `/health/live` returns 200;
+    - an RPC embed from prod returned 1024 dims;
+    - an RPC emotion batch sent during `analyzer_loading` was held, then returned joy=0.99.
