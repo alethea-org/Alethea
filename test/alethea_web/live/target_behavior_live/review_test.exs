@@ -6134,6 +6134,56 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
     end
   end
 
+  describe "source filter pills also filter the suggestions" do
+    test "with an empty query, a pill narrows the suggestions and Todos restores them", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      {:ok, vector} = Alethea.AI.Embeddings.Fake.embed("Conducta sintética", [])
+
+      note =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Nota clínica sintética sobre la conducta.",
+          vector,
+          "clinical_note",
+          DateTime.utc_now()
+        )
+
+      message =
+        insert_rag_chunk!(
+          professional,
+          patient,
+          "Mensaje sintético del paciente sobre la conducta.",
+          vector,
+          "patient_message",
+          DateTime.utc_now()
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+      assert has_element?(view, "#suggested-candidate-#{note.id}")
+      assert has_element?(view, "#suggested-candidate-#{message.id}")
+
+      view |> element("#evidence-search-filter-telegram") |> render_click()
+      render_async(view)
+
+      refute has_element?(view, "#suggested-candidate-#{note.id}")
+      assert has_element?(view, "#suggested-candidate-#{message.id}")
+
+      view |> element("#evidence-search-filter-all") |> render_click()
+      render_async(view)
+
+      assert has_element?(view, "#suggested-candidate-#{note.id}")
+      assert has_element?(view, "#suggested-candidate-#{message.id}")
+    end
+  end
+
   describe "direct citation from semantic search results (#326)" do
     test "each citable search result displays a [+ Citar] action", %{
       conn: conn,
