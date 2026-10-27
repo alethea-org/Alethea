@@ -120,6 +120,39 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
              WeeklySummaryChain.run(["Resumen sintetico"], [])
   end
 
+  test "weekly summary puts the week's patient messages in the prompt" do
+    Req.Test.expect(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      user_text = body |> Jason.decode!() |> Map.fetch!("messages") |> inspect()
+
+      assert user_text =~ "Mensajes del paciente"
+      assert user_text =~ "Ayer desaprobé un examen"
+
+      Req.Test.json(conn, %{
+        "content" => [
+          %{
+            "type" => "text",
+            "text" =>
+              Jason.encode!(%{
+                "summary_text" => "Semana con un examen desaprobado.",
+                "status_level" => "Alerta",
+                "crisis_events" => 0,
+                "session_count" => 0
+              })
+          }
+        ],
+        "stop_reason" => "end_turn"
+      })
+    end)
+
+    assert {:ok, %{summary_text: "Semana con un examen desaprobado."}} =
+             WeeklySummaryChain.run(%{
+               summaries: [],
+               trends: [],
+               messages: ["Ayer desaprobé un examen"]
+             })
+  end
+
   test "functional analysis draft parses Claude's reply" do
     fields = %{
       "antecedents_distal" => "Distal.",

@@ -1187,6 +1187,43 @@ defmodule Alethea.Clinical do
     |> Enum.map(fn {name, avg_score} -> %{label: name, score: avg_score} end)
   end
 
+  @doc """
+  The patient's own (inbound) message texts since `since`, oldest first,
+  decrypted with the patient DEK. At most `limit` of the most recent ones;
+  a message that cannot be decrypted is skipped. Callers sanitize before any
+  LLM call.
+  """
+  @spec list_inbound_texts_since(Alethea.Accounts.Patient.t(), DateTime.t(), pos_integer()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def list_inbound_texts_since(patient, %DateTime{} = since, limit \\ 80) do
+    # A patient without a key has no decryptable messages (`patient_dek/2`
+    # cannot look the key up), so it degrades to an error, never a raise.
+    with key_id when not is_nil(key_id) <- patient.encryption_key_id,
+         {:ok, dek} <- patient_dek(patient, "weekly_report") do
+      texts =
+        Repo.all(
+          from m in Message,
+            where:
+              m.patient_id == ^patient.id and m.direction == "inbound" and
+                m.timestamp >= ^since,
+            order_by: [desc: m.timestamp],
+            limit: ^limit
+        )
+        |> Enum.reverse()
+        |> Enum.flat_map(fn message ->
+          case decrypt_message_content(message, dek) do
+            {:ok, text} when is_binary(text) and text != "" -> [text]
+            _undecryptable -> []
+          end
+        end)
+
+      {:ok, texts}
+    else
+      nil -> {:error, :no_patient_key}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def decrypt_message_content(%Message{} = message, dek) do
     PatientVault.decrypt(message.encrypted_content, dek)
   end

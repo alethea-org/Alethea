@@ -1,7 +1,8 @@
 defmodule AletheaJobs.WeeklyReportWorker do
   @moduledoc """
   Worker que genera un reporte semanal consolidado para el psicólogo.
-  Agrega resúmenes de sesiones y tendencias emocionales de los últimos 7 días.
+  Agrega resúmenes de sesiones, mensajes del paciente y tendencias emocionales
+  de los últimos 7 días.
   """
   use Oban.Worker, queue: :reports, max_attempts: 3
 
@@ -26,7 +27,20 @@ defmodule AletheaJobs.WeeklyReportWorker do
         %{summary | summary_text: Sanitizer.sanitize(summary.summary_text)}
       end)
 
-    with {:ok, report} <- weekly_summary_chain().run(sanitized_summaries, aggregated_trends),
+    # The week's own patient messages let the report describe what happened,
+    # even before any session has been closed and summarized.
+    sanitized_messages =
+      case Clinical.list_inbound_texts_since(patient, seven_days_ago) do
+        {:ok, texts} -> Enum.map(texts, &Sanitizer.sanitize/1)
+        {:error, _reason} -> []
+      end
+
+    with {:ok, report} <-
+           weekly_summary_chain().run(%{
+             summaries: sanitized_summaries,
+             trends: aggregated_trends,
+             messages: sanitized_messages
+           }),
          {:ok, _summary} <-
            Clinical.save_summary(%{
              period_start: seven_days_ago,

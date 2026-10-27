@@ -629,7 +629,7 @@ defmodule AletheaWeb.DashboardLiveTest do
       # button return to idle) before the in-flight `disabled` assertion runs —
       # a race that made this test fail intermittently (GitHub #297).
       Alethea.AI.WeeklySummaryChainMock
-      |> expect(:run, fn _summaries, _trends ->
+      |> expect(:run, fn %{summaries: _summaries, trends: _trends} ->
         send(test_pid, {:chain_started, self()})
 
         receive do
@@ -671,7 +671,7 @@ defmodule AletheaWeb.DashboardLiveTest do
       patient: patient
     } do
       Alethea.AI.WeeklySummaryChainMock
-      |> expect(:run, fn _summaries, _trends -> {:error, :invalid_json} end)
+      |> expect(:run, fn %{summaries: _summaries, trends: _trends} -> {:error, :invalid_json} end)
 
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
 
@@ -700,7 +700,7 @@ defmodule AletheaWeb.DashboardLiveTest do
         })
 
       Alethea.AI.WeeklySummaryChainMock
-      |> expect(:run, fn _summaries, _trends -> {:error, :schema_echo} end)
+      |> expect(:run, fn %{summaries: _summaries, trends: _trends} -> {:error, :schema_echo} end)
 
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
 
@@ -722,7 +722,9 @@ defmodule AletheaWeb.DashboardLiveTest do
       patient: patient
     } do
       Alethea.AI.WeeklySummaryChainMock
-      |> expect(:run, fn _summaries, _trends -> raise "timeout talking to Ollama" end)
+      |> expect(:run, fn %{summaries: _summaries, trends: _trends} ->
+        raise "timeout talking to Ollama"
+      end)
 
       {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
 

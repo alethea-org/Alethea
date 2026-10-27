@@ -34,6 +34,51 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
     %{patient: patient}
   end
 
+  test "passes the week's sanitized inbound patient messages, in order", %{patient: patient} do
+    {:ok, dek} = Clinical.patient_dek(patient)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    save = fn text, direction, at ->
+      {:ok, message} = Clinical.save_message(patient, text, dek, direction, "spontaneous")
+
+      Repo.update_all(from(m in Alethea.Clinical.Message, where: m.id == ^message.id),
+        set: [timestamp: at]
+      )
+    end
+
+    save.("Mensaje viejo de hace ocho días", "inbound", DateTime.add(now, -8, :day))
+
+    save.(
+      "Ayer desaprobé un examen. Escribime a juan@example.com",
+      "inbound",
+      DateTime.add(now, -1, :day)
+    )
+
+    save.("Respuesta del bot", "outbound", DateTime.add(now, -1, :day))
+    save.("Hoy me siento un poco mejor", "inbound", DateTime.add(now, -1, :hour))
+
+    Alethea.AI.WeeklySummaryChainMock
+    |> expect(:run, fn %{summaries: [], messages: messages} ->
+      assert messages == [
+               "Ayer desaprobé un examen. Escribime a [REDACTED_EMAIL]",
+               "Hoy me siento un poco mejor"
+             ]
+
+      {:ok,
+       %{
+         summary_text: "Semana con un examen desaprobado.",
+         status_level: "Alerta",
+         anxiety_score: nil,
+         social_score: nil,
+         emotional_range: nil,
+         crisis_events: 0,
+         session_count: 0
+       }}
+    end)
+
+    assert :ok = perform_job(WeeklyReportWorker, %{"patient_id" => patient.id})
+  end
+
   test "aggregates data and saves a weekly summary", %{patient: patient} do
     # 1. Crear datos de prueba (resúmenes de sesión y trends)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -61,7 +106,7 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
 
     # 2. Configurar Expectativas
     Alethea.AI.WeeklySummaryChainMock
-    |> expect(:run, fn summaries, trends ->
+    |> expect(:run, fn %{summaries: summaries, trends: trends} ->
       # Verificar que se recibió el resumen y que el email está sanitizado
       assert hd(summaries).summary_text =~ "[REDACTED_EMAIL]"
       # Verificar que se recibieron los trends agregados
@@ -118,7 +163,7 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
 
     # 2. La cadena rechaza la respuesta del modelo: eco del JSON schema
     Alethea.AI.WeeklySummaryChainMock
-    |> expect(:run, fn _summaries, _trends -> {:error, :schema_echo} end)
+    |> expect(:run, fn %{summaries: _summaries, trends: _trends} -> {:error, :schema_echo} end)
 
     # 3. El worker propaga el error (Oban reintentará)…
     assert {:error, :schema_echo} =

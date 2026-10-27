@@ -56,7 +56,7 @@ defmodule Mix.Tasks.Alethea.Demo.ProcessTest do
       {:ok, emotion_scores()}
     end)
 
-    expect(Alethea.AI.WeeklySummaryChainMock, :run, fn [], trends ->
+    expect(Alethea.AI.WeeklySummaryChainMock, :run, fn %{summaries: [], trends: trends} ->
       assert Enum.any?(trends, &(&1.label == "joy"))
       {:ok, weekly_report()}
     end)
