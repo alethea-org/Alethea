@@ -113,3 +113,8 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - The on_mount admission denial now writes a KEK_ACCESS `:not_admitted` audit entry. RED, then GREEN.
   - Anthropic retries now always use an explicit delay: backoff of 1 s, then 2 s, or the provider's Retry-After. Both are capped at 5 s (`:anthropic_retry_max_delay_ms`). Receive timeouts are no longer retried. RED, then GREEN.
 - L19: Verifier on b35b748: PASS, no blockers. A probe confirmed real delays of 1 s + 2 s backoff, a 5 s Retry-After cap, and no retry on timeout. Advisory: the default cap and backoff are not pinned by unit tests.
+- L20: The full-branch review stopped with `lens_context_budget_exceeded` (2972 lines; no authority created). A reduced candidate (1bdd001..HEAD, 148 lines) went to review `review-ca14b7584665b352`: approved and acknowledged (authority burned). 4 advisories, none blocking:
+  - Retry-After above the cap is retried early;
+  - the default backoff and cap are not pinned by tests (2 findings);
+  - the denial-audit write could crash the mount. Not real: log_kek_access rescues internally.
+  - Closed per S5.
