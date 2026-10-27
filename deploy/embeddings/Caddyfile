@@ -10,7 +10,10 @@
 		path /
 	}
 	handle @health {
-		reverse_proxy 127.0.0.1:11434
+		reverse_proxy 127.0.0.1:11434 {
+			# Ollama answers 403 to a non-local Host header.
+			header_up Host 127.0.0.1:11434
+		}
 	}
 
 	# The only API the app uses. The token is substituted at startup and must
@@ -21,7 +24,9 @@
 		header Authorization "Bearer {$OLLAMA_AUTH_TOKEN}"
 	}
 	handle @embed {
-		reverse_proxy 127.0.0.1:11434
+		reverse_proxy 127.0.0.1:11434 {
+			header_up Host 127.0.0.1:11434
+		}
 	}
 
 	handle {

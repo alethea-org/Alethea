@@ -190,7 +190,8 @@ fly volumes create ollama_data --app alethea-embeddings --region gru --size 10 -
 # 3. Token gate (the entrypoint refuses to start without it)
 fly secrets set --stage -a alethea-embeddings OLLAMA_AUTH_TOKEN="$EMBEDDINGS_TOKEN"
 # 4. Deploy
-fly deploy deploy/embeddings -c deploy/fly.embeddings.toml --dockerfile deploy/embeddings/Dockerfile --ha=false
+# flyctl resolves -c relative to the build context, so pass absolute paths
+fly deploy "$PWD/deploy/embeddings" -c "$PWD/deploy/fly.embeddings.toml" --dockerfile "$PWD/deploy/embeddings/Dockerfile" --ha=false
 # One-time model pull into the volume (Ollama listens on loopback only)
 fly ssh console -a alethea-embeddings -C "ollama pull bge-m3"
 ```
@@ -203,7 +204,7 @@ fly volumes create emotion_cache --app alethea-emotion --region gru --size 5 --y
 # 3. Token gate
 fly secrets set --stage -a alethea-emotion SIDECAR_AUTH_TOKEN="$EMOTION_TOKEN"
 # 4. Deploy
-fly deploy services/emotion_sidecar -c services/emotion_sidecar/fly.toml --ha=false
+fly deploy "$PWD/services/emotion_sidecar" -c "$PWD/services/emotion_sidecar/fly.toml" --ha=false
 ```
 
 #### Phase C: Wire `alethea-prod`

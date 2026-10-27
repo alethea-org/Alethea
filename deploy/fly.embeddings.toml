@@ -3,7 +3,9 @@ primary_region = "gru"
 
 # Ollama (pinned) behind a Caddy bearer-token proxy; see deploy/embeddings/.
 # Deploy from the repository root:
-#   fly deploy deploy/embeddings -c deploy/fly.embeddings.toml --dockerfile deploy/embeddings/Dockerfile
+#   fly deploy "$PWD/deploy/embeddings" -c "$PWD/deploy/fly.embeddings.toml" \
+#     --dockerfile "$PWD/deploy/embeddings/Dockerfile"
+# (absolute paths: flyctl resolves -c relative to the build context)
 # Requires the OLLAMA_AUTH_TOKEN secret on this app; the same value goes into
 # EMBEDDINGS_AUTH_TOKEN on alethea-prod.
 [build]
