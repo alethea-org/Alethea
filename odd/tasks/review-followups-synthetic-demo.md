@@ -134,3 +134,4 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - Merged origin/main (62d56fd) and redeployed; the 4 migrations are verified `up`. PR #433 is open.
   - Running summary under DEMO_SYNTHETIC_DATA=true: RunningSummaryChain is routed to Anthropic, `enabled?` allows hosted replies, and `:demo_synthetic_data` is exposed in config.
   - RED, then GREEN: schedule test and config test. The routing test passed on first run.
+  - Verifier on ae91e8e: PASS. Reachable only under the demo profile; non-demo prod config is unchanged (27-case differential). Deployed. Live: enabled?=true, provider=anthropic, RunningSummaryChain produced a summary through Claude.
