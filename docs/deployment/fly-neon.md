@@ -97,7 +97,7 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Hosted provider endpoint. |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1/messages` | Full Anthropic Messages endpoint, not an OpenAI-compatible base URL. |
 | `DEMO_RESTRICTED_ACCESS` | `false` | Must be exactly `true` or `false`. When `true`, restricts registration, login, and active sessions to emails in `DEMO_ALLOWED_EMAILS`. |
-| `DEMO_SYNTHETIC_DATA` | `false` | Exactly `true` or `false` (blank counts as unset). When `true`, routes the six non-guided text chains to Claude; the guided chain already follows `AI_PROVIDER`. Requires `AI_PROVIDER=anthropic` and `DEMO_RESTRICTED_ACCESS=true`, otherwise the boot fails. The weekly report is not routed. |
+| `DEMO_SYNTHETIC_DATA` | `false` | Exactly `true` or `false` (blank counts as unset). When `true`, routes the six non-guided text chains to Claude; the guided chain already follows `AI_PROVIDER`. Requires `AI_PROVIDER=anthropic` and `DEMO_RESTRICTED_ACCESS=true`, otherwise the boot fails. The weekly report screen uses the weekly summary chain, so it is covered. |
 | `EMBEDDINGS_MODEL` | adapter default (`bge-m3`) | Embeddings model name. |
 | `EMOTION_SIDECAR_CONNECT_TIMEOUT_MS` / `_RECEIVE_TIMEOUT_MS` / `_MAX_BATCH_SIZE` / `_MAX_TEXT_BYTES` | `2000` / `30000` / `32` / `4096` | Emotion sidecar limits. `fly.toml` sets `10000` / `300000` to wait out a cold start. |
 | `EMBEDDINGS_RECEIVE_TIMEOUT_MS` | `120000` | Embeddings receive timeout. `fly.toml` sets `300000`. |
@@ -117,7 +117,7 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | Capability | Configured by | When off or unconfigured |
 | --- | --- | --- |
 | Guided conversation chain (Telegram replies) | `AI_PROVIDER`, plus `LOCAL_LLM_BASE_URL`, or the selected hosted provider's API key + `LLM_MODEL` | Cannot be off: the boot fails without a complete provider. |
-| Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft | `LOCAL_LLM_BASE_URL` only by default (pinned to local). When `DEMO_SYNTHETIC_DATA=true` and `AI_PROVIDER=anthropic`, the six non-report text chains are routed to Claude with `LLM_MODEL`. | "Not configured": summaries fail and retry; consultations and reports return errors. |
+| Every other chain: session summary, weekly summary, weekly report, pattern proposal, clinical consultation, clinical hypothesis, functional analysis draft | `LOCAL_LLM_BASE_URL` only by default (pinned to local). When `DEMO_SYNTHETIC_DATA=true` and `AI_PROVIDER=anthropic`, the six non-guided text chains are routed to Claude with `LLM_MODEL`. The weekly report job uses the weekly summary chain; the `:weekly_report` chain name in `LLMConfig` has no module. | "Not configured": summaries fail and retry; consultations and reports return errors. |
 | Emotion analyzer slot | `EMOTION_ANALYZER_ENABLED` + `EMOTION_SIDECAR_URL` | Explicit `Disabled` adapter; session closure completes without trends. When enabled for the synthetic demo, points to `https://alethea-emotion.fly.dev` with a bearer token (see `docs/deployment/ai-services-fly.md`). |
 | Embeddings slot (RAG indexing) | `EMBEDDINGS_ENABLED` + `EMBEDDINGS_BASE_URL` (+ `EMBEDDINGS_MODEL`) | Explicit `Disabled` adapter; indexing jobs fail and retry per event (known gap). When enabled for the synthetic demo, points to `https://alethea-embeddings.fly.dev` with a bearer token (see `docs/deployment/ai-services-fly.md`). |
 | Transcription slot (Whisper) | nothing | Always disabled. |
@@ -134,8 +134,9 @@ not committed files or command-line arguments.
 
 The app-owned adapter reuses LangChain message serialization but handles HTTP
 errors without logging raw provider bodies or transport exceptions. It retries
-HTTP 408, 429, 500, 502, 503, 504 and 529 plus transport timeouts and closed
-sockets twice with backoff (honouring `Retry-After` on 429/503), and reports
+HTTP 408, 429, 500, 502, 503, 504 and 529 plus closed sockets twice with
+backoff (a provider `Retry-After` is honoured up to 5 s; receive timeouts are
+not retried), and reports
 failures as `http_error.<status>` so auth, rate-limit and outage errors stay
 distinct in job results. It accepts
 non-streaming text only and explicitly rejects tools and streaming. A response

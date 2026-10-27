@@ -7,16 +7,17 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
   setup do
     original = Application.fetch_env(:alethea, :anthropic_chat_req_options)
 
-    Application.put_env(:alethea, :anthropic_chat_req_options,
-      plug: {Req.Test, __MODULE__},
-      retry_delay: fn _attempt -> 0 end
-    )
+    Application.put_env(:alethea, :anthropic_chat_req_options, plug: {Req.Test, __MODULE__})
+    # Retries back off for real in production; tests cap every delay at 0 ms.
+    Application.put_env(:alethea, :anthropic_retry_max_delay_ms, 0)
 
     on_exit(fn ->
       case original do
         {:ok, value} -> Application.put_env(:alethea, :anthropic_chat_req_options, value)
         :error -> Application.delete_env(:alethea, :anthropic_chat_req_options)
       end
+
+      Application.delete_env(:alethea, :anthropic_retry_max_delay_ms)
     end)
 
     :ok
@@ -185,6 +186,40 @@ defmodule Alethea.AI.ChatModels.AnthropicChatTest do
       assert {:ok, %Message{content: "ok"}} = AnthropicChat.call(model(), "di ok")
       assert Agent.get(calls, & &1) == 2
     end
+  end
+
+  test "a long Retry-After is capped and timeouts are not retried" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+        0 ->
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "3600")
+          |> Plug.Conn.put_status(429)
+          |> Req.Test.json(%{"error" => %{}})
+
+        _ ->
+          Req.Test.json(conn, %{
+            "content" => [%{"type" => "text", "text" => "ok"}],
+            "stop_reason" => "end_turn"
+          })
+      end
+    end)
+
+    {elapsed_us, result} = :timer.tc(fn -> AnthropicChat.call(model(), "x") end)
+    assert {:ok, %Message{content: "ok"}} = result
+    assert elapsed_us < 1_000_000
+
+    {:ok, timeouts} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Agent.update(timeouts, &(&1 + 1))
+      Req.Test.transport_error(conn, :timeout)
+    end)
+
+    assert {:error, %{type: "request_failed"}} = AnthropicChat.call(model(), "x")
+    assert Agent.get(timeouts, & &1) == 1
   end
 
   test "error types carry the HTTP status, and auth failures are not retried" do

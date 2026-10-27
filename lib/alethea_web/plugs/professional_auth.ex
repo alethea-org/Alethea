@@ -21,6 +21,7 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
           professional = Accounts.get_professional!(professional_id)
 
           if not AdmissionPolicy.allowed_email?(professional.email) do
+            log_kek_access(professional_id, :not_admitted)
             redirect_with_error(socket, "Sesión inválida. Por favor, iniciá sesión nuevamente.")
           else
             # NEW: Verify KEK exists for this professional

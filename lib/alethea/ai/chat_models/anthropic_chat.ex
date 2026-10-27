@@ -58,8 +58,8 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
         json: payload,
         headers: [{"x-api-key", config.api_key}, {"anthropic-version", config.api_version}],
         receive_timeout: config.receive_timeout,
-        # Overload (529), rate limits (429), 408/5xx and transport errors are
-        # retried with backoff; auth and request errors fail at once.
+        # Overload (529), rate limits (429), 408/5xx and closed sockets are
+        # retried with backoff (see retry?/2); auth and request errors fail at once.
         retry: &retry?/2,
         max_retries: 2,
         redirect: false
@@ -99,11 +99,43 @@ defmodule Alethea.AI.ChatModels.AnthropicChat do
     end
   end
 
-  # Req's :transient set lacks Anthropic's 529 (overloaded).
+  # Req's :transient set lacks Anthropic's 529 (overloaded). Latency stays
+  # bounded: a provider Retry-After is capped, and a receive timeout is not
+  # retried (each attempt would wait the full timeout again).
   @retry_statuses [408, 429, 500, 502, 503, 504, 529]
-  defp retry?(_request, %Req.Response{status: status}), do: status in @retry_statuses
-  defp retry?(_request, %Req.TransportError{reason: reason}), do: reason in [:timeout, :closed]
+  @default_max_retry_delay_ms 5_000
+
+  # Every retry returns an explicit delay: exponential backoff (1 s, 2 s), or
+  # the provider's Retry-After, both capped.
+  defp retry?(request, %Req.Response{status: status} = response)
+       when status in @retry_statuses do
+    {:delay, min(retry_after_ms(response) || backoff_ms(request), max_retry_delay_ms())}
+  end
+
+  defp retry?(request, %Req.TransportError{reason: :closed}),
+    do: {:delay, min(backoff_ms(request), max_retry_delay_ms())}
+
   defp retry?(_request, _other), do: false
+
+  defp backoff_ms(request),
+    do: 1000 * Integer.pow(2, Req.Request.get_private(request, :req_retry_count, 0))
+
+  defp retry_after_ms(response) do
+    case Req.Response.get_header(response, "retry-after") do
+      [] ->
+        nil
+
+      [value | _] ->
+        case Integer.parse(value) do
+          {seconds, ""} when seconds >= 0 -> seconds * 1000
+          # An HTTP-date or malformed value: wait the cap, never longer.
+          _other -> max_retry_delay_ms()
+        end
+    end
+  end
+
+  defp max_retry_delay_ms,
+    do: Application.get_env(:alethea, :anthropic_retry_max_delay_ms, @default_max_retry_delay_ms)
 
   defp decode(%{"content" => [_ | _] = blocks, "stop_reason" => stop})
        when stop in ["end_turn", "stop_sequence", "max_tokens"] do

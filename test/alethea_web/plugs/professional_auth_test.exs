@@ -77,6 +77,47 @@ defmodule AletheaWeb.Plugs.ProfessionalAuthTest do
     end
   end
 
+  describe "on_mount admission" do
+    setup do
+      originals =
+        for key <- [:demo_restricted_access, :demo_allowed_emails],
+            do: {key, Application.fetch_env(:alethea, key)}
+
+      Application.put_env(:alethea, :demo_restricted_access, true)
+      Application.put_env(:alethea, :demo_allowed_emails, ["allowed@example.test"])
+
+      on_exit(fn ->
+        for {key, original} <- originals do
+          case original do
+            {:ok, value} -> Application.put_env(:alethea, key, value)
+            :error -> Application.delete_env(:alethea, key)
+          end
+        end
+      end)
+    end
+
+    test "an unlisted professional is redirected and the denial is audited" do
+      professional = create_professional_with_kek()
+
+      assert {:halt, _socket} =
+               AletheaWeb.Plugs.ProfessionalAuth.on_mount(
+                 :mount_current_professional,
+                 %{},
+                 %{"professional_id" => professional.id},
+                 %Phoenix.LiveView.Socket{}
+               )
+
+      entry =
+        Repo.one!(
+          from(a in AuditLog,
+            where: a.professional_id == ^professional.id and a.action == "KEK_ACCESS"
+          )
+        )
+
+      assert inspect(entry.details) =~ "not_admitted"
+    end
+  end
+
   describe "ProfessionalKek.kek_exists?" do
     test "returns {:ok, key_id} when KEK exists" do
       professional = create_professional_with_kek()

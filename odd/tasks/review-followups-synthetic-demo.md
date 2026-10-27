@@ -33,6 +33,10 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - R3-anthropic-key-not-trimmed.
   - Not R1-allowlist-unverified-email: no code and no issue.
   - Decision: sidecar client tokens become required while the sidecar is enabled. This supersedes the S2 assumption that they are optional.
+- S5: "dale" (2026-10-26), to fixing only these three items from review `review-28951176750a2a87`, then closing:
+  - R4-weekly-report-unrouted-under-anthropic;
+  - R2-unlisted-mount-branch-unlogged;
+  - R4-anthropic-retry-latency-unbounded.
 
 ## Tasks
 
@@ -41,6 +45,7 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
 - T3 [S1,S2] inline; done; commit: docs slice. Docs match the deployed posture, and the demo identities are removed from the task log.
 - T4 [S3] inline; done; commits: sidecars slice + attribution slice. Second-review advisories. Risk: items 2 and 5.
 - T5 [S4] inline; done. Risk: items 2 and 3.
+- T6 [S5] inline; done. Risk: item 2 (audit entry on the auth path).
 
 ## Log
 
@@ -102,3 +107,8 @@ Branch: `feat/synthetic-demo-ai`. Delivery: ask-on-risk. Test runner: `mix test`
   - Rollout: the next `alethea-prod` deploy fails to boot unless both sidecar tokens are staged (runbook step 1 stages them).
 - L15: Verifier on 0175bc7: PASS, no blockers. Doc advisories fixed: retry status list and the restricted-admission requirement in demo step 2. Accepted as-is: a retried POST can double-bill; a Retry-After delay is uncapped inside the Oban job.
 - L16: Native review `review-28951176750a2a87`: approved and acknowledged (authority burned). 13 advisories, pending a user decision. Most relevant: the weekly report is not routed under the demo profile; retry latency is uncapped; the on_mount admission denial is not logged; the emotion guardrail described in the docs is not enforced by config.
+- L17 (2026-10-26): "dale"
+- L18: T6 done.
+  - The weekly report finding was a false alarm. `WeeklyReportWorker` uses `WeeklySummaryChain`, which is routed, and `WeeklyReportChain` does not exist (the `llm_config.ex:331` mapping is dead). Docs corrected.
+  - The on_mount admission denial now writes a KEK_ACCESS `:not_admitted` audit entry. RED, then GREEN.
+  - Anthropic retries now always use an explicit delay: backoff of 1 s, then 2 s, or the provider's Retry-After. Both are capped at 5 s (`:anthropic_retry_max_delay_ms`). Receive timeouts are no longer retried. RED, then GREEN.
