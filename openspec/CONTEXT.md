@@ -51,7 +51,7 @@ El psicólogo es el **tenant**: una cuenta aísla los datos de sus pacientes.
 - El paciente escribe. Alethea **siempre** responde.
 - Alethea tiene **personalidad configurable** por el psicólogo, por paciente (clínico, cálido-cotidiano, silencioso, amigo-informado).
 - Cada mensaje del paciente pasa por **análisis emocional** (RoBERTa local).
-- **Triggers pasivos** modifican la respuesta de Alethea si el mensaje del paciente matchea una condición preconfigurada (debe sonar como recuerdo natural, no como mensaje aparte).
+- **Triggers reactivos** modifican la respuesta de Alethea si el mensaje del paciente matchea una condición preconfigurada (debe sonar como recuerdo natural, no como mensaje aparte).
 - **Triggers activos** disparan acciones en eventos programados (check-in diario, recordatorio de sesión, pregunta del terapeuta en fecha X).
 - **Por ahora solo texto.** La arquitectura está lista para audio/imagen/documento (`media_type` en `JournalEntry`).
 

@@ -108,6 +108,8 @@ Alethea.Accounts.SessionSchedule.next_datetime(dow :: 1..7, time :: Time.t(), fr
 
 ## ADR — enqueue-at-interaction vs cron+stored-chat_id (decided)
 
+> **Superseded by [ADR-011](../../../adr/011-telegram-chat-id-cifrado-por-paciente.md) (#436):** the architectural restriction to enqueue only at interaction is replaced by patient-key-encrypted chat id storage for scheduled delivery, including patients who have not written recently. This archived design records the original implementation; ADR-011 does not change its runtime behavior by itself.
+
 Chosen: enqueue-at-interaction. The rejected cron alternative would require a scheduled scan that reaches Telegram, but the plaintext `chat_id` exists nowhere at rest in decryptable form (`ChatIdHash` is one-way HMAC, no encrypted column). A cron path would force either storing a reversible chat_id (new PHI-at-rest surface, violates the one-way-hash posture) or being unable to address Telegram at all. Enqueue-at-interaction reuses the exact bounded surface already accepted for the goodbye dispatch, adds zero new persistent PHI, needs no schema change. Trade-off accepted: a silent patient (never messages in the pre-session window) receives no reminder.
 
 ## Open questions / risks
