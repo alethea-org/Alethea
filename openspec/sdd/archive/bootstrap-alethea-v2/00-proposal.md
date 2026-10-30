@@ -31,7 +31,7 @@ This is foundational work, **not** a feature. No Telegram bot, no LLM calls, no 
 - Whisper adapter concrete implementation → `ai-whisper-groq-foundation`
 - RAG ingestion pipeline → `rag-historia-clinica-foundation`
 - Crisis detection / protocol → `crisis-protocol-foundation`
-- Triggers (pasivos, activos, check-in) → `triggers-foundation`
+- Triggers (reactivos, activos, check-in) → `triggers-foundation`
 - Psicólogo dashboard (LiveView) → `psicologo-foundation`
 - Admin dashboard / billing → `admin-foundation`
 - Multi-tenant complex (teams, orgs) → explicitly out per `PRD.md`

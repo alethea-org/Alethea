@@ -18,14 +18,14 @@ Implementar tres features principales:
 
 | Tipo | Configuración | Ejemplo |
 |------|---------------|---------|
-| **Pasivo** | "Si paciente dice **[palabra/tema]** → responder con **[contenido]**" | "Si menciona 'trabajo' → recordarle la técnica de respiración" |
+| **Reactivo** | "Si paciente dice **[palabra/tema]** → responder con **[contenido]**" | "Si menciona 'trabajo' → recordarle la técnica de respiración" |
 | **Activo** | "En **[fecha/hora]** → enviar **[mensaje]**" | "Mañana 10am → '¿Cómo te fue en el parcial?'" |
 | **Recurrente** | "Cada **[intervalo]** → **[acción]**" | "Cada domingo 9am → '¿Cómo estuvo tu semana?'" |
 
 ### UI de Configuración
 
 Tres vistas separadas en el dashboard:
-- **Vista Triggers Pasivos**: lista de reglas if-then
+- **Vista Triggers Reactivos**: lista de reglas if-then
 - **Vista Triggers Activos**: lista de acciones programadas
 - **Vista Triggers Recurrentes**: lista de acciones periódicas
 
@@ -68,7 +68,7 @@ El profesional puede chatear con todos los datos del paciente:
 ### Comportamiento
 
 - **Solo lectura + sugerencias** — la IA responde preguntas y puede sugerir:
-  - "Detecté que menciona trabajo 8 veces. ¿Querés crear un trigger pasivo?"
+  - "Detecté que menciona trabajo 8 veces. ¿Querés crear un trigger reactivo?"
   - "Este resumen sugiere ansiedad creciente. ¿Querés marcar al paciente como requiring atención?"
 - **Persistencia** — el profesional puede guardar y nombrar conversaciones
 - **No modifica datos** — solo consulta, no crea ni modifica nada del paciente
@@ -95,7 +95,7 @@ El profesional puede chatear con todos los datos del paciente:
 ```elixir
 defmodule Alethea.Clinical.Trigger do
   schema "triggers" do
-    field :type, :string  # "passive", "active", "recurrent"
+    field :type, :string  # "reactive", "active", "recurrent"
     field :name, :string
     field :config, :map  # JSONB con condiciones y acciones
     field :is_active, :boolean, default: true
@@ -135,8 +135,8 @@ end
 - [ ] Crear migración
 - [ ] Crear `Clinical.create_trigger/2`, `list_triggers/2`, `update_trigger/2`, `delete_trigger/2`
 - [ ] Crear `TriggerWorker` para triggers activos
-- [ ] Integrar en el flujo de mensajes para triggers pasivos
-- [ ] UI: Vista de triggers pasivos
+- [ ] Integrar en el flujo de mensajes para triggers reactivos
+- [ ] UI: Vista de triggers reactivos
 - [ ] UI: Vista de triggers activos
 - [ ] UI: Vista de triggers recurrentes
 - [ ] Templates predefinidos

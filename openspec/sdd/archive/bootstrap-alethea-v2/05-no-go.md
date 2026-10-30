@@ -12,7 +12,7 @@ This document lists everything that is **explicitly NOT** part of the bootstrap.
 | `Alethea.AI.Whisper.Groq` concrete adapter | `ai-whisper-groq-foundation` | Provider-specific. |
 | RAG ingestion pipeline (events, embeddings storage, retrieval) | `rag-historia-clinica-foundation` | Large feature; needs `pgvector` setup + ingest workers. |
 | Crisis detection / protocol | `crisis-protocol-foundation` | Critical-path feature; not foundation work. |
-| Triggers (pasivos, activos, check-in, recordatorio de sesión) | `triggers-foundation` | Feature; depends on Patient + Telegram being live. |
+| Triggers (reactivos, activos, check-in, recordatorio de sesión) | `triggers-foundation` | Feature; depends on Patient + Telegram being live. |
 | Psicólogo dashboard (LiveView) | `psicologo-foundation` | Feature; depends on accounts, sessions, summaries. |
 | Admin dashboard / billing / RevenueCat | `admin-foundation` | Feature. |
 | Notebooks (NotebookLM-like view) | `notebook-foundation` | Feature; depends on RAG being live. |

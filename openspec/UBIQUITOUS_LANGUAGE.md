@@ -74,7 +74,7 @@ Conjunto de acciones automáticas cuando se detecta crisis:
 Etiquetas que un modelo (RoBERTa) le pone a un mensaje. Categorías: alegría, tristeza, miedo, enojo (las que se confirmen en implementación). Es por mensaje, no agregado.
 
 ### Personalidad de Alethea
-Tono con el que Alethea le habla al paciente. **Configurable por el psicólogo, por paciente.** Cuatro opciones: clínico, cálido-cotidiano, silencioso, amigo-informado. Es un trigger pasivo más: "cuando le hablo a este paciente, sueno así".
+Tono con el que Alethea le habla al paciente. **Configurable por el psicólogo, por paciente.** Cuatro opciones: clínico, cálido-cotidiano, silencioso, amigo-informado. Es una configuración de tono, no un trigger: no define una condición y una acción. Queda fuera del alcance del sistema de triggers.
 
 ---
 
@@ -85,8 +85,10 @@ Tono con el que Alethea le habla al paciente. **Configurable por el psicólogo, 
 ### Trigger
 Evento que desata una acción. Si no hay condición-acción explícita, no es trigger, es flujo normal.
 
-### Trigger pasivo
-La condición es un mensaje del paciente que matchea con X. La acción es lo que el psicólogo preconfiguró. **El trigger pasivo modifica la respuesta base de Alethea, no la reemplaza** — debe sonar como un recuerdo natural, no como un mensaje aparte.
+### Trigger reactivo
+La condición es un mensaje del paciente que matchea con X. La acción es lo que el psicólogo preconfiguró. **El trigger reactivo modifica la respuesta base de Alethea, no la reemplaza** — debe sonar como un recuerdo natural, no como un mensaje aparte.
+
+**Nombre histórico:** "Trigger pasivo". El nombre canónico es **Trigger reactivo**, porque reacciona al contenido del mensaje del paciente.
 
 ### Trigger activo
 La condición es un evento programado (fecha, hora, post-sesión, etc.). La acción la define el psicólogo o el sistema.
@@ -121,7 +123,7 @@ Datos personales mínimos cargados al alta: nombre, fecha de nacimiento, género
 ## Lo que NO existe en el sistema
 
 - **"Conversación terapéutica"** — borrado del lenguaje. Se llama **journaling interactivo**.
-- **"Feedback programado"** — no es un tipo de trigger, es el contenido que el terapeuta programa adentro de un trigger (activo o pasivo).
+- **"Feedback programado"** — no es un tipo de trigger, es el contenido que el terapeuta programa adentro de un trigger (activo o reactivo).
 - **"Gamificación"** — racha, emojis de estado, mensajes motivacionales. **Fuera de alcance del MVP.** Si se quiere en el futuro, se discute aparte.
 - **"Sesión" como login** — login es login, sesión clínica es otra cosa.
 - **WhatsApp, SMS, app móvil del paciente** — Telegram es el único canal, por diseño.
