@@ -12,6 +12,7 @@ defmodule Alethea.Accounts.Patient do
     field(:encryption_version, :integer, default: 1)
     field(:session_day_of_week, :integer)
     field(:session_time, :time)
+    field(:timezone, :string, default: "Etc/UTC")
 
     belongs_to(:professional, Alethea.Accounts.Professional)
     belongs_to(:encryption_key, Alethea.Accounts.EncryptionKey)
@@ -35,12 +36,14 @@ defmodule Alethea.Accounts.Patient do
       :session_time,
       :professional_id,
       :encryption_key_id,
-      :encryption_version
+      :encryption_version,
+      :timezone
     ])
     |> validate_required([:alias, :professional_id])
     |> validate_inclusion(:status, ["active", "archived", "deleted"])
     |> validate_inclusion(:session_day_of_week, 1..7,
       message: "must be between 1 (Monday) and 7 (Sunday)"
     )
+    |> Alethea.Accounts.Timezone.validate_timezone(:timezone)
   end
 end

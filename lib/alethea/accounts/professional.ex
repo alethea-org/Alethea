@@ -11,6 +11,7 @@ defmodule Alethea.Accounts.Professional do
     field :full_name, :string
     field :crisis_message, :string
     field :welcome_message, :string
+    field :timezone, :string, default: "Etc/UTC"
     field :remember_token_hash, :binary
     field :remember_token_expires_at, :utc_datetime
     field :password, :string, virtual: true
@@ -23,12 +24,21 @@ defmodule Alethea.Accounts.Professional do
 
   def changeset(professional, attrs) do
     professional
-    |> cast(attrs, [:email, :password, :mfa_secret, :full_name, :crisis_message, :welcome_message])
+    |> cast(attrs, [
+      :email,
+      :password,
+      :mfa_secret,
+      :full_name,
+      :crisis_message,
+      :welcome_message,
+      :timezone
+    ])
     |> validate_required([:email, :full_name])
     |> validate_password_required(professional)
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must have the @ sign and no spaces")
     |> validate_length(:password, min: 12, max: 72)
     |> validate_length(:welcome_message, max: 4096)
+    |> Alethea.Accounts.Timezone.validate_timezone(:timezone)
     |> unique_constraint(:email)
     |> put_password_hash()
   end

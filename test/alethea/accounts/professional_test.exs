@@ -114,4 +114,49 @@ defmodule Alethea.Accounts.ProfessionalTest do
       assert "can't be blank" in errors_on(changeset).password
     end
   end
+
+  describe "timezone field (Issue #439, S5)" do
+    test "defaults to Etc/UTC for newly created professional", %{professional: professional} do
+      assert professional.timezone == "Etc/UTC"
+    end
+
+    test "update_professional/2 updates timezone to valid IANA timezone", %{
+      professional: professional
+    } do
+      assert {:ok, updated} =
+               Accounts.update_professional(professional, %{
+                 timezone: "America/Argentina/Buenos_Aires"
+               })
+
+      assert updated.timezone == "America/Argentina/Buenos_Aires"
+    end
+
+    test "update_professional/2 rejects invalid IANA timezone and leaves state unchanged", %{
+      professional: professional
+    } do
+      assert {:error, changeset} =
+               Accounts.update_professional(professional, %{
+                 timezone: "Invalid/Zone"
+               })
+
+      assert %{timezone: [_error]} = errors_on(changeset)
+      reloaded = Accounts.get_professional!(professional.id)
+      assert reloaded.timezone == "Etc/UTC"
+    end
+
+    test "partial update preserves existing timezone without error", %{
+      professional: professional
+    } do
+      {:ok, pro_tz} =
+        Accounts.update_professional(professional, %{timezone: "Europe/Madrid"})
+
+      assert {:ok, updated} =
+               Accounts.update_professional(pro_tz, %{
+                 crisis_message: "Nuevo mensaje de crisis"
+               })
+
+      assert updated.timezone == "Europe/Madrid"
+      assert updated.crisis_message == "Nuevo mensaje de crisis"
+    end
+  end
 end
