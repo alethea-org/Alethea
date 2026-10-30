@@ -23,6 +23,8 @@ defmodule Alethea.Foundation.Accounts do
   the architecture rationale.
   """
 
+  alias Alethea.Clinical
+  alias Alethea.Encryption.PatientVault
   alias Alethea.Foundation.Accounts.{Admin, Patient, PatientAuthCode, Professional}
   alias Alethea.Repo
 
@@ -204,6 +206,141 @@ defmodule Alethea.Foundation.Accounts do
     case Repo.get(Alethea.Accounts.Patient, legacy_id) do
       nil -> {:error, :legacy_not_found}
       %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
+    end
+  end
+
+  @doc """
+  Encrypts and persists the Telegram chat_id for a patient using their DEK (ADR-011, S1, #438).
+
+  Validates that `chat_id` is an integer or string representing an integer.
+  Retrieves the linked legacy patient's DEK via `legacy_patient/1` and `Clinical.patient_dek/2`.
+  Updates `encrypted_telegram_chat_id` programmatically (never via generic cast attrs).
+
+  Returns:
+    - `{:ok, %Patient{}}` — the updated patient struct.
+    - `{:error, :invalid_chat_id}` — input is nil or not an integer.
+    - `{:error, :patient_not_linked}` — foundation patient has no legacy_patient_id.
+    - `{:error, :patient_not_found}` — patient row not found.
+    - `{:error, reason}` — key loading or encryption failure.
+  """
+  @spec store_encrypted_telegram_chat_id(Patient.t() | binary(), integer() | String.t()) ::
+          {:ok, Patient.t()} | {:error, atom() | Ecto.Changeset.t()}
+  def store_encrypted_telegram_chat_id(patient, chat_id) do
+    with {:ok, chat_id_int} <- validate_chat_id(chat_id),
+         {:ok, patient} <- resolve_patient(patient),
+         {:ok, legacy_patient} <- resolve_linked_for_store(patient),
+         {:ok, dek} <- get_patient_dek(legacy_patient, "telegram_chat_id_encryption"),
+         {:ok, ciphertext} <- PatientVault.encrypt(Integer.to_string(chat_id_int), dek) do
+      patient
+      |> Ecto.Changeset.change(%{})
+      |> Ecto.Changeset.put_change(:encrypted_telegram_chat_id, ciphertext)
+      |> Repo.update()
+    end
+  end
+
+  @doc """
+  Refreshes the encrypted Telegram chat_id on inbound messages (S3).
+  Alias for `store_encrypted_telegram_chat_id/2`.
+  """
+  def refresh_encrypted_telegram_chat_id(patient, chat_id),
+    do: store_encrypted_telegram_chat_id(patient, chat_id)
+
+  @doc """
+  Retrieves and decrypts the persisted Telegram chat_id for sending (ADR-011, S1, #438).
+
+  Always queries the fresh persisted ciphertext from the database (does not trust
+  caller-supplied in-memory ciphertext). Resolves the legacy DEK via `legacy_patient/1`
+  and `Clinical.patient_dek/2`.
+
+  Returns:
+    - `{:ok, chat_id_int}` — decrypted integer chat ID.
+    - `{:error, :missing_ciphertext}` — no chat_id has been encrypted/stored yet.
+    - `{:error, :not_linked}` — patient has no legacy bridge.
+    - `{:error, :patient_not_found}` — patient does not exist in DB.
+    - `{:error, :decryption_failed}` — key mismatch or corrupted ciphertext.
+    - `{:error, :corrupted_chat_id}` — decrypted plaintext is not a valid integer.
+    - `{:error, reason}` — key resolution error (e.g. `:missing_encryption_key`).
+  """
+  @spec decrypted_telegram_chat_id(Patient.t() | binary()) ::
+          {:ok, integer()} | {:error, atom()}
+  def decrypted_telegram_chat_id(patient) do
+    with {:ok, fresh_patient} <- fetch_fresh_patient(patient),
+         {:ok, legacy_patient} <- resolve_linked_for_decrypt(fresh_patient),
+         {:ok, ciphertext} <- fetch_ciphertext(fresh_patient),
+         {:ok, dek} <- get_patient_dek(legacy_patient, "telegram_chat_id_decryption"),
+         {:ok, plaintext} <- PatientVault.decrypt(ciphertext, dek),
+         {:ok, chat_id_int} <- parse_chat_id_integer(plaintext) do
+      {:ok, chat_id_int}
+    end
+  end
+
+  defp get_patient_dek(legacy_patient, reason) do
+    case legacy_patient.encryption_key_id do
+      nil -> {:error, :missing_encryption_key}
+      _ -> Clinical.patient_dek(legacy_patient, reason)
+    end
+  end
+
+  defp validate_chat_id(chat_id) when is_integer(chat_id), do: {:ok, chat_id}
+
+  defp validate_chat_id(chat_id) when is_binary(chat_id) do
+    case Integer.parse(chat_id) do
+      {int, ""} -> {:ok, int}
+      _ -> {:error, :invalid_chat_id}
+    end
+  end
+
+  defp validate_chat_id(_), do: {:error, :invalid_chat_id}
+
+  defp resolve_patient(%Patient{id: id}), do: resolve_patient(id)
+
+  defp resolve_patient(id) when is_binary(id) do
+    case Repo.get(Patient, id) do
+      nil -> {:error, :patient_not_found}
+      %Patient{} = patient -> {:ok, patient}
+    end
+  end
+
+  defp resolve_patient(_), do: {:error, :patient_not_found}
+
+  defp fetch_fresh_patient(%Patient{id: id}), do: fetch_fresh_patient(id)
+
+  defp fetch_fresh_patient(id) when is_binary(id) do
+    case Repo.get(Patient, id) do
+      nil -> {:error, :patient_not_found}
+      %Patient{} = patient -> {:ok, patient}
+    end
+  end
+
+  defp fetch_fresh_patient(_), do: {:error, :patient_not_found}
+
+  defp fetch_ciphertext(%Patient{encrypted_telegram_chat_id: nil}),
+    do: {:error, :missing_ciphertext}
+
+  defp fetch_ciphertext(%Patient{encrypted_telegram_chat_id: ciphertext})
+       when is_binary(ciphertext),
+       do: {:ok, ciphertext}
+
+  defp resolve_linked_for_store(%Patient{} = patient) do
+    case legacy_patient(patient) do
+      {:ok, legacy} -> {:ok, legacy}
+      :not_linked -> {:error, :patient_not_linked}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp resolve_linked_for_decrypt(%Patient{} = patient) do
+    case legacy_patient(patient) do
+      {:ok, legacy} -> {:ok, legacy}
+      :not_linked -> {:error, :not_linked}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp parse_chat_id_integer(plaintext) when is_binary(plaintext) do
+    case Integer.parse(plaintext) do
+      {int, ""} -> {:ok, int}
+      _ -> {:error, :corrupted_chat_id}
     end
   end
 
