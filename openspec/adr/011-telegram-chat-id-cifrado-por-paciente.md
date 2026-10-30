@@ -1,6 +1,6 @@
 # ADR-011: Guardar el chat id de Telegram cifrado con la clave del paciente
 
-**Status:** Aceptado (decisión arquitectónica; implementación pendiente)
+**Status:** Implementado (implementación completada en #438; decisión aceptada el 2026-10-30)
 **Fecha:** 2026-10-30
 **Contexto:** Triggers de pacientes — [#435](https://github.com/alethea-org/Alethea/issues/435), tarea [#436](https://github.com/alethea-org/Alethea/issues/436).
 **Reemplaza:** la decisión «enqueue only at interaction» del [diseño de recordatorios de sesión](../sdd/archive/telegram-session-reminders/03-design.md#adr--enqueue-at-interaction-vs-cronstored-chat_id-decided).
@@ -31,7 +31,7 @@ Los triggers activos necesitan enviar mensajes en el horario configurado por el 
 - Se incorpora un dato sensible recuperable en reposo. La implementación debe limitar el descifrado al proceso autorizado de entrega y evitar exponer el identificador en logs, errores o telemetría.
 - La implementación necesita persistencia cifrada y captura del identificador al vincular el chat. Los hashes existentes no permiten reconstruirlo para pacientes ya vinculados.
 - Destruir la DEK no borra copias del `chat_id` en texto plano. El diseño anterior ya lo pasa en `oban_jobs.args`; la implementación debe impedir que jobs pendientes o copias persistentes eludan el borrado. Este ADR no afirma que esa superficie ya esté resuelta ni que permita retirar mensajes entregados a Telegram.
-- Esta tarea solo registra la decisión: no agrega columnas, no migra datos, no cambia los recordatorios existentes ni implementa los triggers activos. Esos cambios y sus pruebas de cifrado, entrega y borrado corresponden a la implementación posterior.
+- La decisión fue implementada en #438 agregando la columna `encrypted_telegram_chat_id` a `foundation_patients`, captura en onboarding y refresco en cada mensaje entrante, y funciones de dominio para persistencia y descifrado seguro bajo la DEK del paciente. Las copias preexistentes del `chat_id` en texto plano dentro de `oban_jobs.args` (jobs de timeout y recordatorios de sesión) son preexistentes y permanecen como limitación aceptada fuera de este cambio acotado. La implementación de triggers activos programados corresponde a tareas posteriores.
 
 ## Alternativas descartadas
 

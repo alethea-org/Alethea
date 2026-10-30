@@ -121,107 +121,164 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     telegram_message_id = Keyword.fetch!(opts, :telegram_message_id)
 
     if empty_text?(text) do
-      Logger.info(
-        "TelegramMessageWorker: dropping empty-text update (hash_prefix=#{hash_prefix})"
-      )
-
-      :ok
+      handle_empty_inbound(foundation_patient, chat_id, hash_prefix)
     else
-      # The crisis branch reads `legacy_patient.professional.crisis_message`,
-      # so we preload the `:professional` association here (the safe
-      # path doesn't need it but the cost is one extra column and the
-      # branch is mutually exclusive with the safe path).
-      {:ok, legacy_patient} = FoundationAccounts.legacy_patient(foundation_patient)
-      legacy_patient = Accounts.get_patient_with_professional(legacy_patient.id)
-      {:ok, session} = SessionManager.current_open_session(legacy_patient.id)
+      # Refresh chat_id on every inbound message (ADR-011, S1, S3, #438)
+      case FoundationAccounts.store_encrypted_telegram_chat_id(foundation_patient, chat_id) do
+        {:ok, updated_foundation_patient} ->
+          continue_process_bound_message(
+            updated_foundation_patient,
+            chat_id,
+            chat_id_hash,
+            hash_prefix,
+            text,
+            telegram_message_id
+          )
 
-      # Find-or-insert (#390): a re-execution of this job (Oban retry,
-      # concurrent run, replay) resumes the inbound it already persisted
-      # instead of dying on the unique index, so a failure after this
-      # point no longer makes every retry unable to produce the reply.
-      inbound =
-        case Clinical.find_or_save_telegram_inbound(
-               foundation_patient,
-               text,
-               to_string(telegram_message_id),
-               session.id
-             ) do
-          {:ok, inbound} ->
-            inbound
+        {:error, reason} ->
+          Logger.error(
+            "TelegramMessageWorker: failed to encrypt/store chat_id " <>
+              "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
+          )
 
-          {:error, reason} ->
-            raise "TelegramMessageWorker: failed to persist inbound " <>
-                    "(reason=#{SafeReason.for_log(reason)})"
-        end
-
-      # PR-1 (#86): enqueue the session-timeout job right after the
-      # successful inbound save, BEFORE the CrisisMonitor.detect/1
-      # case split. One call site covers both the safe branch (line
-      # ~166) and the crisis branch (line ~167) because both branches
-      # share this successful-inbound-save point — the raw chat_id +
-      # chat_id_hash are passed at enqueue-time, the only place they
-      # exist (raw chat_id is never persisted at rest per PHI hygiene;
-      # see Session schema context).
-      #
-      # Renewal behavior matches the WhatsApp pipeline (`process_message_worker.ex`
-      # `schedule_session_timeout/3`): `Oban.insert!(replace:
-      # [:scheduled_at])` + the worker's own `unique:
-      # [fields: [:args]]` keeps a single scheduled row per
-      # (session_id, patient_id, channel) tuple — a subsequent inbound
-      # on the same open session upserts `scheduled_at` rather than
-      # duplicating the job.
-      schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash)
-
-      # #97: opportunistic pre-session reminder enqueue. This is the
-      # only in-process moment the plaintext chat_id exists, so the
-      # reminder (scheduled for next_session - 24h) is enqueued here,
-      # right after the timeout enqueue, reusing the already-loaded
-      # `legacy_patient` (no extra query). Silent no-op when the
-      # patient has no schedule or the 24h window has already elapsed
-      # — see `schedule_session_reminder/3`.
-      schedule_session_reminder(legacy_patient, chat_id, chat_id_hash)
-
-      enqueue_emotion_analysis(inbound.id, hash_prefix)
-
-      # Record one bounded, content-free deterministic audit per inbound row.
-      # This runs before either existing response branch, and never invokes a
-      # model or changes diagnosis/emotion scheduling.
-      deterministic_result = CrisisMonitor.detect(text)
-      risk_signal = persist_risk_signal!(inbound, deterministic_result)
-      effective_result = effective_risk_result(deterministic_result, risk_signal)
-
-      # #394: schedule the running-summary job when due. Never raises and
-      # carries only the patient id, so it cannot affect the reply path.
-      # #399: deliberately AFTER `persist_risk_signal!/2` — the summary
-      # cadence counts journaling inbounds only, and a crisis trigger is
-      # identified by the very `risk_signal` written above. Scheduling
-      # before the audit would count this inbound while it is still
-      # indistinguishable from an ordinary one.
-      RunningSummary.schedule_if_due(legacy_patient.id, hash_prefix)
-
-      if effective_result == :uncertain do
-        handle_uncertain_path(
-          foundation_patient,
-          legacy_patient,
-          chat_id,
-          chat_id_hash,
-          hash_prefix,
-          inbound,
-          risk_signal
-        )
-      else
-        process_authoritative_result(
-          foundation_patient,
-          legacy_patient,
-          chat_id,
-          chat_id_hash,
-          hash_prefix,
-          text,
-          inbound,
-          effective_result,
-          session
-        )
+          raise "TelegramMessageWorker: failed to encrypt/store chat_id " <>
+                  "(reason=#{SafeReason.for_log(reason)})"
       end
+    end
+  end
+
+  defp handle_empty_inbound(%{legacy_patient_id: nil}, _chat_id, hash_prefix) do
+    # Pre-existing unlinked no-op: foundation row has no legacy patient yet,
+    # and empty text has nothing to persist or route; drop update silently.
+    Logger.info("TelegramMessageWorker: dropping empty-text update (hash_prefix=#{hash_prefix})")
+
+    :ok
+  end
+
+  defp handle_empty_inbound(foundation_patient, chat_id, hash_prefix) do
+    # Linked patient: refresh encrypted chat_id on every inbound, including empty payloads.
+    # Encryption failure on a linked patient must fail loudly (scrubbed retryable failure).
+    case FoundationAccounts.store_encrypted_telegram_chat_id(foundation_patient, chat_id) do
+      {:ok, _updated_patient} ->
+        Logger.info(
+          "TelegramMessageWorker: dropping empty-text update (hash_prefix=#{hash_prefix})"
+        )
+
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "TelegramMessageWorker: failed to encrypt/store chat_id " <>
+            "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
+        )
+
+        raise "TelegramMessageWorker: failed to encrypt/store chat_id " <>
+                "(reason=#{SafeReason.for_log(reason)})"
+    end
+  end
+
+  defp continue_process_bound_message(
+         foundation_patient,
+         chat_id,
+         chat_id_hash,
+         hash_prefix,
+         text,
+         telegram_message_id
+       ) do
+    # The crisis branch reads `legacy_patient.professional.crisis_message`,
+    # so we preload the `:professional` association here (the safe
+    # path doesn't need it but the cost is one extra column and the
+    # branch is mutually exclusive with the safe path).
+    {:ok, legacy_patient} = FoundationAccounts.legacy_patient(foundation_patient)
+    legacy_patient = Accounts.get_patient_with_professional(legacy_patient.id)
+    {:ok, session} = SessionManager.current_open_session(legacy_patient.id)
+
+    # Find-or-insert (#390): a re-execution of this job (Oban retry,
+    # concurrent run, replay) resumes the inbound it already persisted
+    # instead of dying on the unique index, so a failure after this
+    # point no longer makes every retry unable to produce the reply.
+    inbound =
+      case Clinical.find_or_save_telegram_inbound(
+             foundation_patient,
+             text,
+             to_string(telegram_message_id),
+             session.id
+           ) do
+        {:ok, inbound} ->
+          inbound
+
+        {:error, reason} ->
+          raise "TelegramMessageWorker: failed to persist inbound " <>
+                  "(reason=#{SafeReason.for_log(reason)})"
+      end
+
+    # PR-1 (#86): enqueue the session-timeout job right after the
+    # successful inbound save, BEFORE the CrisisMonitor.detect/1
+    # case split. One call site covers both the safe branch (line
+    # ~166) and the crisis branch (line ~167) because both branches
+    # share this successful-inbound-save point. Per ADR-011 (#438),
+    # the chat_id is persisted encrypted with the patient's DEK on
+    # foundation_patients; pre-existing Oban job args continue to
+    # carry the raw chat_id for timeout and reminder delivery as an
+    # accepted caveat.
+    #
+    # Renewal behavior matches the WhatsApp pipeline (`process_message_worker.ex`
+    # `schedule_session_timeout/3`): `Oban.insert!(replace:
+    # [:scheduled_at])` + the worker's own `unique:
+    # [fields: [:args]]` keeps a single scheduled row per
+    # (session_id, patient_id, channel) tuple — a subsequent inbound
+    # on the same open session upserts `scheduled_at` rather than
+    # duplicating the job.
+    schedule_telegram_session_timeout(session, legacy_patient, chat_id, chat_id_hash)
+
+    # #97: opportunistic pre-session reminder enqueue.
+    # The reminder (scheduled for next_session - 24h) is enqueued here,
+    # right after the timeout enqueue, reusing the already-loaded
+    # `legacy_patient` (no extra query). Silent no-op when the
+    # patient has no schedule or the 24h window has already elapsed
+    # — see `schedule_session_reminder/3`.
+    schedule_session_reminder(legacy_patient, chat_id, chat_id_hash)
+
+    enqueue_emotion_analysis(inbound.id, hash_prefix)
+
+    # Record one bounded, content-free deterministic audit per inbound row.
+    # This runs before either existing response branch, and never invokes a
+    # model or changes diagnosis/emotion scheduling.
+    deterministic_result = CrisisMonitor.detect(text)
+    risk_signal = persist_risk_signal!(inbound, deterministic_result)
+    effective_result = effective_risk_result(deterministic_result, risk_signal)
+
+    # #394: schedule the running-summary job when due. Never raises and
+    # carries only the patient id, so it cannot affect the reply path.
+    # #399: deliberately AFTER `persist_risk_signal!/2` — the summary
+    # cadence counts journaling inbounds only, and a crisis trigger is
+    # identified by the very `risk_signal` written above. Scheduling
+    # before the audit would count this inbound while it is still
+    # indistinguishable from an ordinary one.
+    RunningSummary.schedule_if_due(legacy_patient.id, hash_prefix)
+
+    if effective_result == :uncertain do
+      handle_uncertain_path(
+        foundation_patient,
+        legacy_patient,
+        chat_id,
+        chat_id_hash,
+        hash_prefix,
+        inbound,
+        risk_signal
+      )
+    else
+      process_authoritative_result(
+        foundation_patient,
+        legacy_patient,
+        chat_id,
+        chat_id_hash,
+        hash_prefix,
+        text,
+        inbound,
+        effective_result,
+        session
+      )
     end
   end
 
