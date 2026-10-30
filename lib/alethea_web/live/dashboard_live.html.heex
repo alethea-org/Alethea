@@ -357,6 +357,33 @@
           </button>
         </.form>
 
+        <.form
+          :if={@patient_timezone_form}
+          for={@patient_timezone_form}
+          id="patient-timezone-form"
+          phx-submit="save_patient_timezone"
+        >
+          <h4 class="pta-field-title">Zona Horaria</h4>
+
+          <div style="margin-bottom:12px;">
+            <label class="pta-label" for="patient-timezone-input">
+              Zona horaria del paciente
+            </label>
+            <.input
+              type="text"
+              id="patient-timezone-input"
+              field={@patient_timezone_form[:timezone]}
+              class="text-input text-input--compact"
+              aria-label="Zona horaria del paciente"
+              placeholder="Ej: America/Argentina/Buenos_Aires o Etc/UTC"
+            />
+          </div>
+
+          <button type="submit" class="button-primary button-primary--sm button-primary--block">
+            Guardar zona horaria
+          </button>
+        </.form>
+
         <div>
           <h4 class="pta-field-title">Historial Clínico</h4>
 
@@ -561,6 +588,31 @@
           class="text-input text-input--multiline"
           aria-label="Mensaje de bienvenida"
           placeholder="Ej: ¡Hola %{name}! Bienvenido a tu espacio…"
+        />
+        <button type="submit" class="pta-nudge__submit">Actualizar</button>
+      </.form>
+
+      <.form
+        for={@professional_timezone_form}
+        id="professional-timezone-form"
+        phx-submit="save_professional_timezone"
+        class="pta-nudge pta-nudge--timezone"
+      >
+        <div class="pta-nudge__label">
+          <.icon name="hero-clock" class="pta-nudge__icon" />
+          <span>Zona Horaria</span>
+        </div>
+
+        <p class="pta-hint pta-hint--xs" style="margin-bottom:10px;">
+          Zona horaria por defecto para tus nuevos pacientes.
+        </p>
+        <.input
+          type="text"
+          id="professional-timezone-input"
+          field={@professional_timezone_form[:timezone]}
+          class="text-input"
+          aria-label="Zona horaria del profesional"
+          placeholder="Ej: America/Argentina/Buenos_Aires o Etc/UTC"
         />
         <button type="submit" class="pta-nudge__submit">Actualizar</button>
       </.form>

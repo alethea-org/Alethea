@@ -54,6 +54,11 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:bot_settings_open, false)
       |> assign(:crisis_form, to_form(%{"crisis_message" => professional.crisis_message}))
       |> assign(:welcome_form, to_form(%{"welcome_message" => professional.welcome_message}))
+      |> assign(
+        :professional_timezone_form,
+        to_form(%{"timezone" => professional.timezone || "Etc/UTC"})
+      )
+      |> assign(:patient_timezone_form, nil)
 
     # Telegram invite wiring (feature: patient telegram invites).
     # Real mode resolves the foundation professional once per session
@@ -101,6 +106,7 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:picker, picker_from_params(params))
     |> assign(:by_day, by_day(socket.assigns.patients))
     |> assign(:selected_patient, nil)
+    |> assign(:patient_timezone_form, nil)
     |> assign(:chat_decrypted, false)
     |> assign(:target_behaviors_empty?, true)
     |> stream(:decrypted_messages, [], reset: true)
@@ -280,6 +286,143 @@ defmodule AletheaWeb.DashboardLive do
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Error al guardar el mensaje.")}
+    end
+  end
+
+  def handle_event("save_professional_timezone", params, socket) do
+    timezone = params["timezone"] || get_in(params, ["professional", "timezone"]) || ""
+    professional = socket.assigns.current_professional
+
+    if socket.assigns.use_mock_data do
+      if Alethea.Accounts.Timezone.valid?(timezone) do
+        updated_professional = %{professional | timezone: timezone}
+
+        socket =
+          socket
+          |> put_flash(:info, "Zona horaria del profesional actualizada.")
+          |> assign(:current_professional, updated_professional)
+          |> assign(
+            :professional_timezone_form,
+            to_form(%{"timezone" => updated_professional.timezone})
+          )
+
+        {:noreply, socket}
+      else
+        socket =
+          socket
+          |> put_flash(:error, "Zona horaria inválida.")
+          |> assign(
+            :professional_timezone_form,
+            to_form(%{"timezone" => professional.timezone || "Etc/UTC"})
+          )
+
+        {:noreply, socket}
+      end
+    else
+      case Accounts.update_professional(professional, %{timezone: timezone}) do
+        {:ok, updated_professional} ->
+          socket =
+            socket
+            |> put_flash(:info, "Zona horaria del profesional actualizada.")
+            |> assign(:current_professional, updated_professional)
+            |> assign(
+              :professional_timezone_form,
+              to_form(%{"timezone" => updated_professional.timezone})
+            )
+
+          {:noreply, socket}
+
+        {:error, _changeset} ->
+          socket =
+            socket
+            |> put_flash(:error, "Zona horaria inválida.")
+            |> assign(
+              :professional_timezone_form,
+              to_form(%{"timezone" => professional.timezone || "Etc/UTC"})
+            )
+
+          {:noreply, socket}
+      end
+    end
+  end
+
+  def handle_event("save_patient_timezone", params, socket) do
+    timezone = params["timezone"] || get_in(params, ["patient", "timezone"]) || ""
+    patient = socket.assigns.selected_patient
+
+    cond do
+      is_nil(patient) ->
+        {:noreply, put_flash(socket, :error, "No hay ningún paciente seleccionado.")}
+
+      socket.assigns.use_mock_data ->
+        if Alethea.Accounts.Timezone.valid?(timezone) do
+          updated_patient = %{patient | timezone: timezone}
+
+          patients =
+            Enum.map(socket.assigns.patients, fn p ->
+              if p.id == patient.id, do: updated_patient, else: p
+            end)
+
+          socket =
+            socket
+            |> put_flash(:info, "Zona horaria del paciente actualizada.")
+            |> assign(:selected_patient, updated_patient)
+            |> assign(:patients, patients)
+            |> assign(
+              :patient_timezone_form,
+              to_form(%{"timezone" => updated_patient.timezone})
+            )
+
+          {:noreply, socket}
+        else
+          socket =
+            socket
+            |> put_flash(:error, "Zona horaria inválida.")
+            |> assign(
+              :patient_timezone_form,
+              to_form(%{"timezone" => patient.timezone || "Etc/UTC"})
+            )
+
+          {:noreply, socket}
+        end
+
+      true ->
+        case Accounts.get_patient_for_professional(
+               socket.assigns.current_professional.id,
+               patient.id
+             ) do
+          nil ->
+            {:noreply, put_flash(socket, :error, "Paciente no autorizado.")}
+
+          authorized_patient ->
+            case Accounts.update_patient(authorized_patient, %{timezone: timezone}) do
+              {:ok, updated_patient} ->
+                patients = Accounts.list_patients(socket.assigns.current_professional.id)
+
+                socket =
+                  socket
+                  |> put_flash(:info, "Zona horaria del paciente actualizada.")
+                  |> assign(:selected_patient, updated_patient)
+                  |> assign(:patients, patients)
+                  |> assign(
+                    :patient_timezone_form,
+                    to_form(%{"timezone" => updated_patient.timezone})
+                  )
+
+                {:noreply, socket}
+
+              {:error, _changeset} ->
+                socket =
+                  socket
+                  |> put_flash(:error, "Zona horaria inválida.")
+                  |> assign(
+                    :patient_timezone_form,
+                    to_form(%{"timezone" => authorized_patient.timezone || "Etc/UTC"})
+                  )
+
+                {:noreply, socket}
+            end
+        end
     end
   end
 
@@ -550,6 +693,10 @@ defmodule AletheaWeb.DashboardLive do
 
     socket
     |> assign(:selected_patient, patient)
+    |> assign(
+      :patient_timezone_form,
+      to_form(%{"timezone" => patient.timezone || "Etc/UTC"})
+    )
     |> assign(:weekly_summary, weekly_summary)
     |> assign(:session_summaries, session_summaries)
     |> assign(:emotion_rows, emotion_rows)
