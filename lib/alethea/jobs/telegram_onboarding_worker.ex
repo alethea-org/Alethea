@@ -25,13 +25,15 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
        without a professional pre-minted link), skip straight to the
        `:expired`-style rejection reply. There is nothing to verify.
     2. `Accounts.verify_patient_auth_code(token, ip, kind: kind)`:
-       - `:ok` → `Accounts.consume_patient_auth_code(token, chat_id_hash, kind: kind)`
-         atomically binds the patient and marks the code used.
+       - `:ok` → `Accounts.consume_patient_auth_code(token, chat_id_hash, kind: kind, chat_id: chat_id)`
+         atomically encrypts `chat_id` under the patient's DEK, binds `chat_id_hash`,
+         and marks the code used in one transaction (ADR-011, #438).
          - `{:ok, patient}` → enqueue the personality-aware welcome.
          - `{:error, :chat_bound_to_other_patient}` → enqueue the
            collision reply (REQ-C4-reject-chat-bound-to-other-patient).
          - `{:error, :already_used}` → enqueue the already-used reply
            (a race between verify and consume).
+         - `{:error, reason}` → retryable encryption/link failure (surfaced to Oban).
        - `:expired` / `:already_used` / `:rate_limited` → enqueue the
          matching localized reply. No bind.
 
@@ -91,8 +93,6 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     hash_prefix = LogRedactor.prefix(chat_id_hash)
 
     handle_token(token, kind, ip, chat_id, chat_id_hash, hash_prefix)
-
-    :ok
   end
 
   # Cold-open: the patient sent `/start` with no token (no professional
@@ -104,6 +104,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
     )
 
     enqueue_reply(chat_id, chat_id_hash, failure_text(:expired))
+    :ok
   end
 
   defp handle_token(token, kind, ip, chat_id, chat_id_hash, hash_prefix) do
@@ -115,21 +116,39 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
         Logger.info("TelegramOnboardingWorker: rejected (#{failure}, hash_prefix=#{hash_prefix})")
 
         enqueue_reply(chat_id, chat_id_hash, failure_text(failure))
+        :ok
     end
   end
 
   defp handle_verified(token, kind, chat_id, chat_id_hash, hash_prefix) do
-    case Accounts.consume_patient_auth_code(token, chat_id_hash, kind: kind) do
+    case Accounts.consume_patient_auth_code(token, chat_id_hash, kind: kind, chat_id: chat_id) do
       {:ok, patient} ->
         Logger.info("TelegramOnboardingWorker: bound chat (hash_prefix=#{hash_prefix})")
         enqueue_reply(chat_id, chat_id_hash, welcome_text(patient), patient.id)
+        :ok
 
-      {:error, reason} ->
+      {:error, :chat_bound_to_other_patient} ->
         Logger.info(
-          "TelegramOnboardingWorker: consume rejected (#{safe_error_reason(reason)}, hash_prefix=#{hash_prefix})"
+          "TelegramOnboardingWorker: consume rejected (:chat_bound_to_other_patient, hash_prefix=#{hash_prefix})"
         )
 
-        enqueue_reply(chat_id, chat_id_hash, failure_text(reason))
+        enqueue_reply(chat_id, chat_id_hash, failure_text(:chat_bound_to_other_patient))
+        :ok
+
+      {:error, :already_used} ->
+        Logger.info(
+          "TelegramOnboardingWorker: consume rejected (:already_used, hash_prefix=#{hash_prefix})"
+        )
+
+        enqueue_reply(chat_id, chat_id_hash, failure_text(:already_used))
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "TelegramOnboardingWorker: consume failed (reason=#{safe_error_reason(reason)}, hash_prefix=#{hash_prefix})"
+        )
+
+        {:error, reason}
     end
   end
 

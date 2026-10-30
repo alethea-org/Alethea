@@ -68,6 +68,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     setup do
       professional = professional_fixture()
       patient = patient_fixture(professional, %{profile_name: "Ana Gómez"})
+      patient = bind_patient_to_legacy_professional(patient)
       {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
       %{patient: patient, auth_code: auth_code}
     end
@@ -120,6 +121,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     test "falls back to a generic greeting when the patient has no first name" do
       professional = professional_fixture()
       patient = patient_fixture(professional)
+      patient = bind_patient_to_legacy_professional(patient)
       {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
 
       job = %Oban.Job{
@@ -455,7 +457,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert outbound_job.args["body"] == "Hola Bienvenido a tu espacio."
     end
 
-    test "does not log a warning when the patient simply has no legacy bridge yet (:not_linked)" do
+    test "fails with retryable error and does not bind when the patient has no legacy bridge yet (:not_linked)" do
       professional = professional_fixture()
       patient = patient_fixture(professional)
       {:ok, auth_code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
@@ -464,12 +466,16 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
         args: %{"telegram_update_id" => 1, "token" => auth_code.code, "chat_id" => @chat_id}
       }
 
-      log =
-        capture_log(fn ->
-          assert :ok = TelegramOnboardingWorker.perform(job)
-        end)
+      assert {:error, :patient_not_linked} = TelegramOnboardingWorker.perform(job)
 
-      refute log =~ "unexpected failure resolving custom welcome_message"
+      reloaded_patient = Repo.get!(Patient, patient.id)
+      assert reloaded_patient.telegram_chat_id_hash == nil
+      assert reloaded_patient.encrypted_telegram_chat_id == nil
+
+      reloaded_code = Repo.get!(PatientAuthCode, auth_code.id)
+      assert reloaded_code.used_at == nil
+
+      refute_enqueued(worker: TelegramOutboundWorker)
     end
 
     # No integration test constructs the "unexpected failure" branch
@@ -578,6 +584,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       {:ok, _} = Patient.update_patient(patient_a, %{telegram_chat_id_hash: @chat_id_hash})
 
       patient_b = patient_fixture(professional)
+      patient_b = bind_patient_to_legacy_professional(patient_b)
 
       {:ok, auth_code_b} =
         PatientAuthCode.create_patient_auth_code(patient_b.id, kind: "deep_link")
@@ -604,6 +611,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     test "same patient rebinding their own chat succeeds normally" do
       professional = professional_fixture()
       patient = patient_fixture(professional)
+      patient = bind_patient_to_legacy_professional(patient)
       old_hash = String.duplicate("z", 64)
       {:ok, _} = Patient.update_patient(patient, %{telegram_chat_id_hash: old_hash})
 
@@ -666,7 +674,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
   # patient.
   # ----------------------------------------------------------------
 
-  defp bind_patient_to_legacy_professional(foundation_patient, welcome_message) do
+  defp bind_patient_to_legacy_professional(foundation_patient, welcome_message \\ nil) do
     legacy_professional = insert_legacy_professional_with_welcome_message(welcome_message)
     legacy_patient = insert_legacy_patient(legacy_professional, "alias-#{unique_int()}")
 

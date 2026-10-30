@@ -60,6 +60,12 @@ defmodule Alethea.Foundation.Accounts.Patient do
     # "at most one patient per hash" at the DB layer.
     field :telegram_chat_id_hash, :string
 
+    # ADR-011 (#438): Telegram chat_id encrypted with the patient's
+    # DEK. Nullable binary, never cast through generic attrs (programmatic
+    # update only). Cryptographic erasure of the patient's DEK renders
+    # this value permanently unrecoverable.
+    field :encrypted_telegram_chat_id, :binary
+
     field :profile_name, :string
     field :profile_birth_date, :date
     field :profile_gender, :string
