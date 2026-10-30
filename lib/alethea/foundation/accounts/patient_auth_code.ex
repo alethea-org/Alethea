@@ -265,6 +265,14 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   Atomically binds `chat_id_hash` onto the auth code's patient AND
   marks the code used, in a single transaction.
 
+  ## Options
+
+    - `:kind` (required) — `"deep_link"` or `"six_digit"`.
+    - `:chat_id` (optional) — Telegram raw chat ID (`integer()` or numeric
+      `binary()`). When provided, it is atomically encrypted under the patient's
+      existing DEK (via linked legacy patient) and stored in
+      `encrypted_telegram_chat_id` within the same transaction (ADR-011, #438).
+
   Returns:
     - `{:ok, %Patient{}}` — the (now-bound) patient row.
     - `{:error, :already_used}` — the code was already consumed.
@@ -274,6 +282,15 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
       bind). The code is NOT marked used — the transaction rolled back
       — so it stays retryable once the collision is resolved
       (REQ-C4-reject-chat-bound-to-other-patient).
+    - `{:error, :invalid_chat_id}` — caller supplied an invalid or non-numeric
+      `chat_id`.
+    - `{:error, :patient_not_linked}` — `chat_id` was supplied but the patient has
+      no `legacy_patient_id` bridge.
+    - `{:error, :missing_encryption_key}` — `chat_id` was supplied but the patient's
+      encryption key cannot be loaded.
+    - `{:error, reason}` — any encryption or changeset failure. In all error cases,
+      the transaction rolls back: the auth code remains unused and the hash remains
+      unbound.
 
   A same-patient rebind (the auth code's own patient updating its
   `telegram_chat_id_hash` to a new value) never hits the unique index
@@ -281,42 +298,104 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   """
   @spec consume_patient_auth_code(String.t(), String.t(), keyword()) ::
           {:ok, Patient.t()}
-          | {:error, :already_used | :chat_bound_to_other_patient | Ecto.Changeset.t()}
+          | {:error, :already_used | :chat_bound_to_other_patient | Ecto.Changeset.t() | atom()}
   def consume_patient_auth_code(code, chat_id_hash, opts) do
     kind = Keyword.fetch!(opts, :kind)
-    used_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    raw_chat_id = Keyword.get(opts, :chat_id)
 
-    Ecto.Multi.new()
-    |> Ecto.Multi.run(:auth_code, fn repo, _changes ->
-      case fetch_by_code_and_kind_for_update(repo, code, kind) do
-        nil -> {:error, :already_used}
-        %__MODULE__{used_at: %DateTime{}} -> {:error, :already_used}
-        auth_code -> {:ok, auth_code}
+    with {:ok, chat_id_int} <- validate_chat_id(raw_chat_id) do
+      used_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      Ecto.Multi.new()
+      |> Ecto.Multi.run(:auth_code, fn repo, _changes ->
+        case fetch_by_code_and_kind_for_update(repo, code, kind) do
+          nil -> {:error, :already_used}
+          %__MODULE__{used_at: %DateTime{}} -> {:error, :already_used}
+          auth_code -> {:ok, auth_code}
+        end
+      end)
+      |> Ecto.Multi.run(:patient, fn repo, %{auth_code: auth_code} ->
+        {:ok, repo.get!(Patient, auth_code.patient_id)}
+      end)
+      |> maybe_encrypt_chat_id(chat_id_int)
+      |> Ecto.Multi.update(:bind, fn changes ->
+        patient = changes.patient
+        changeset = Patient.changeset(patient, %{telegram_chat_id_hash: chat_id_hash})
+
+        case Map.get(changes, :encrypted_chat_id) do
+          nil ->
+            changeset
+
+          ciphertext ->
+            Ecto.Changeset.put_change(changeset, :encrypted_telegram_chat_id, ciphertext)
+        end
+      end)
+      |> Ecto.Multi.update(:consume, fn %{auth_code: auth_code} ->
+        changeset(auth_code, %{used_at: used_at})
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{bind: patient}} ->
+          {:ok, patient}
+
+        {:error, :auth_code, :already_used, _changes} ->
+          {:error, :already_used}
+
+        {:error, :bind, %Ecto.Changeset{} = changeset, _changes} ->
+          if chat_id_hash_taken?(changeset) do
+            {:error, :chat_bound_to_other_patient}
+          else
+            {:error, changeset}
+          end
+
+        {:error, _step, reason, _changes} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp validate_chat_id(nil), do: {:ok, nil}
+  defp validate_chat_id(id) when is_integer(id), do: {:ok, id}
+
+  defp validate_chat_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {int, ""} -> {:ok, int}
+      _ -> {:error, :invalid_chat_id}
+    end
+  end
+
+  defp validate_chat_id(_), do: {:error, :invalid_chat_id}
+
+  defp maybe_encrypt_chat_id(multi, nil), do: multi
+
+  defp maybe_encrypt_chat_id(multi, chat_id_int) do
+    Ecto.Multi.run(multi, :encrypted_chat_id, fn _repo, %{patient: patient} ->
+      with {:ok, legacy_patient} <- resolve_legacy_patient_for_patient(patient),
+           {:ok, dek} <-
+             get_patient_dek(legacy_patient, "telegram_chat_id_encryption"),
+           {:ok, ciphertext} <-
+             Alethea.Encryption.PatientVault.encrypt(Integer.to_string(chat_id_int), dek) do
+        {:ok, ciphertext}
+      else
+        :not_linked -> {:error, :patient_not_linked}
+        {:error, reason} -> {:error, reason}
       end
     end)
-    |> Ecto.Multi.run(:patient, fn repo, %{auth_code: auth_code} ->
-      {:ok, repo.get!(Patient, auth_code.patient_id)}
-    end)
-    |> Ecto.Multi.update(:bind, fn %{patient: patient} ->
-      Patient.changeset(patient, %{telegram_chat_id_hash: chat_id_hash})
-    end)
-    |> Ecto.Multi.update(:consume, fn %{auth_code: auth_code} ->
-      changeset(auth_code, %{used_at: used_at})
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{bind: patient}} ->
-        {:ok, patient}
+  end
 
-      {:error, :auth_code, :already_used, _changes} ->
-        {:error, :already_used}
+  defp get_patient_dek(legacy_patient, reason) do
+    case legacy_patient.encryption_key_id do
+      nil -> {:error, :missing_encryption_key}
+      _ -> Alethea.Clinical.patient_dek(legacy_patient, reason)
+    end
+  end
 
-      {:error, :bind, %Ecto.Changeset{} = changeset, _changes} ->
-        if chat_id_hash_taken?(changeset) do
-          {:error, :chat_bound_to_other_patient}
-        else
-          {:error, changeset}
-        end
+  defp resolve_legacy_patient_for_patient(%Patient{legacy_patient_id: nil}), do: :not_linked
+
+  defp resolve_legacy_patient_for_patient(%Patient{legacy_patient_id: legacy_id}) do
+    case Repo.get(Alethea.Accounts.Patient, legacy_id) do
+      nil -> {:error, :legacy_not_found}
+      %Alethea.Accounts.Patient{} = legacy -> {:ok, legacy}
     end
   end
 
