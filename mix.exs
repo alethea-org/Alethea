@@ -55,6 +55,7 @@ defmodule Alethea.MixProject do
       {:bandit, "~> 1.5"},
 
       # Alethea specialized deps
+      {:tz, "~> 0.28"},
       {:oban, "~> 2.19"},
       {:cloak_ecto, "~> 1.3"},
       {:langchain, "~> 0.3.0"},
