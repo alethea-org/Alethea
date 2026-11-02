@@ -758,6 +758,36 @@ defmodule Alethea.Clinical do
   end
 
   @doc """
+  Claims the delivery of a persisted trigger message for one execution of the
+  delivery job (Issue #440). Unlike conversational replies, a trigger is proactive
+  and must never be superseded by newer uncovered inbounds.
+
+  Atomically moves delivery_state from "pending" to "sending".
+  Returns `:claimed` to exactly one caller, or `{:not_claimed, state}`.
+  """
+  @spec claim_trigger_delivery(binary()) ::
+          :claimed | {:not_claimed, telegram_delivery_state()}
+  def claim_trigger_delivery(message_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    from(m in Message,
+      where: m.id == ^message_id and m.delivery_state == "pending",
+      select: m.delivery_state,
+      update: [
+        set: [
+          updated_at: ^now,
+          delivery_state: "sending"
+        ]
+      ]
+    )
+    |> Repo.update_all([])
+    |> case do
+      {1, ["sending"]} -> :claimed
+      {0, []} -> {:not_claimed, telegram_delivery_state(message_id)}
+    end
+  end
+
+  @doc """
   Returns the delivery state of a message, `nil` when it is untracked or
   does not exist.
   """
