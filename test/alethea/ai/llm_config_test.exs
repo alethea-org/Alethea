@@ -7,7 +7,13 @@ defmodule Alethea.AI.LLMConfigTest do
   setup do
     originals =
       Map.new(
-        [GuidedConversationChain, Alethea.AI.Chains.RunningSummaryChain, LLMConfig, :env],
+        [
+          GuidedConversationChain,
+          Alethea.AI.Chains.RunningSummaryChain,
+          Alethea.AI.Chains.TriggerPreviewChain,
+          LLMConfig,
+          :env
+        ],
         &{&1, Application.fetch_env(:alethea, &1)}
       )
 
@@ -42,6 +48,19 @@ defmodule Alethea.AI.LLMConfigTest do
       assert config.provider == :cloud
     end
 
+    test "consumes trigger_preview chain configuration" do
+      Application.put_env(:alethea, Alethea.AI.Chains.TriggerPreviewChain,
+        provider: :local,
+        model: "phi4-mini:triggers",
+        local: [endpoint_url: "http://ollama.triggers.test:11434"]
+      )
+
+      config = LLMConfig.get(:trigger_preview)
+
+      assert config.model == "phi4-mini:triggers"
+      assert config.endpoint_url == "http://ollama.triggers.test:11434"
+    end
+
     test "consumes the guided conversation module configuration" do
       Application.put_env(:alethea, GuidedConversationChain,
         provider: :local,
@@ -60,7 +79,13 @@ defmodule Alethea.AI.LLMConfigTest do
         local: [endpoint_url: "http://llm.internal.test:11434"]
       )
 
-      for chain <- [:session_summary, :weekly_summary, :pattern_proposal, :consultation_synthesis] do
+      for chain <- [
+            :session_summary,
+            :weekly_summary,
+            :pattern_proposal,
+            :consultation_synthesis,
+            :trigger_preview
+          ] do
         config = LLMConfig.get(chain)
 
         assert config.provider == :local

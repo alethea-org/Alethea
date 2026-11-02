@@ -56,6 +56,9 @@ defmodule Alethea.Clinical.Message do
     # single source of truth the burst worker scans. Set
     # programmatically through `Alethea.Clinical` (never cast).
     belongs_to(:replied_by_message, __MODULE__)
+    # Trigger provenance (#440): set programmatically at trusted scheduled
+    # firing construction (never cast from untrusted input).
+    belongs_to(:trigger, Alethea.Triggers.Trigger)
     has_many(:ai_diagnoses, Alethea.AI.Diagnosis)
     has_one(:emotion_analysis, Alethea.Clinical.EmotionAnalysis)
 

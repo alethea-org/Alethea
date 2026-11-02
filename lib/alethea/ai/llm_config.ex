@@ -48,6 +48,7 @@ defmodule Alethea.AI.LLMConfig do
           | :consultation_hypothesis
           | :functional_analysis_draft
           | :running_summary
+          | :trigger_preview
 
   @type config :: %__MODULE__.Config{
           provider: provider(),
@@ -338,6 +339,9 @@ defmodule Alethea.AI.LLMConfig do
 
   defp chain_module(:functional_analysis_draft),
     do: Alethea.AI.Chains.FunctionalAnalysisDraftChain
+
+  defp chain_module(:trigger_preview),
+    do: Alethea.AI.Chains.TriggerPreviewChain
 
   defp build_retry_config(global, chain, overrides) do
     retry_enabled =

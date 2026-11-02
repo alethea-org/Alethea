@@ -116,6 +116,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   require Logger
 
   alias Alethea.Clinical
+  alias Alethea.Clinical.Message
   alias Alethea.Telegram.{Pacer, Client, LogRedactor}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Jobs.TelegramBurstReplyWorker
@@ -129,11 +130,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{id: job_id, args: args, attempt: _oban_attempt, priority: oban_priority}) do
-    chat_id = Map.fetch!(args, "chat_id")
-    chat_id_hash = Map.fetch!(args, "chat_id_hash")
-    body = Map.fetch!(args, "body")
     attempt = Map.get(args, "_attempt", 1)
-    # The `lane` (`:safe | :crisis`) and `priority` fields are
+    # The `lane` (`:safe | :crisis | :trigger`) and `priority` fields are
     # preserved across retries so a crisis retry stays on the
     # `:telegram_outbound_crisis` lane AND keeps its Oban priority
     # (REQ-C7-crisis-priority-lane — the crisis lane cannot be starved
@@ -142,61 +140,61 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     # Prefer the in-args `priority` (the Oban job's `priority:` is the
     # authoritative value when the worker re-inserts via `new/2`).
     priority = Map.get(args, "priority", oban_priority)
-    # `patient_id` is the foundation Patient's id (UUID). It is
-    # forwarded from `TelegramMessageWorker` so the crisis dead-letter
-    # PubSub broadcast can carry the operator-visible identifier
-    # (REQ-C7-crisis-priority-lane + TASK-3b-4 crisis clinical-incident
-    # signal). Nil when the worker is invoked without the patient
-    # context (e.g., a direct test invocation, or a future admin
-    # retry path that doesn't have the patient in scope).
-    patient_id = Map.get(args, "patient_id")
     message_id = Map.get(args, "message_id")
 
-    # 1. Pacer acquire. Blocks until tokens are available (1 msg/s/chat
-    #    AND 30 msg/s global). The Pacer does NOT raise — it sleeps
-    #    inside the GenServer and returns `:ok` when the token is
-    #    granted. **This call is invariant across lanes** — the crisis
-    #    lane MUST also acquire a Pacer token; the rate-limit is the
-    #    safety net that REQ-C7-crisis-priority-lane depends on.
-    Pacer.acquire(chat_id_hash)
+    with {:ok, resolved} <- resolve_execution_payload(args, lane, message_id) do
+      chat_id = resolved.chat_id
+      chat_id_hash = resolved.chat_id_hash
+      body = resolved.body
+      patient_id = resolved.patient_id
+      resolved_lane = resolved.lane
 
-    # 2. Decide whether this execution may send (#390). Done after the
-    #    Pacer wait so a claim is held for the send only.
-    case begin_delivery(message_id, lane, %{
-           patient_id: patient_id,
-           chat_id: chat_id,
-           chat_id_hash: chat_id_hash
-         }) do
-      {:skip, state} ->
-        Logger.info(
-          "TelegramOutboundWorker: reply not sent, delivery already decided " <>
-            "(chat_id_hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, delivery_state=#{state})"
-        )
+      # 1. Pacer acquire. Blocks until tokens are available (1 msg/s/chat
+      #    AND 30 msg/s global). The Pacer does NOT raise — it sleeps
+      #    inside the GenServer and returns `:ok` when the token is
+      #    granted. **This call is invariant across lanes** — the crisis
+      #    lane MUST also acquire a Pacer token; the rate-limit is the
+      #    safety net that REQ-C7-crisis-priority-lane depends on.
+      Pacer.acquire(chat_id_hash)
 
-        :ok
+      # 2. Decide whether this execution may send (#390, #440). Done after the
+      #    Pacer wait so a claim is held for the send only.
+      case begin_delivery(message_id, resolved_lane, %{
+             patient_id: patient_id,
+             chat_id: chat_id,
+             chat_id_hash: chat_id_hash
+           }) do
+        {:skip, state} ->
+          Logger.info(
+            "TelegramOutboundWorker: reply not sent, delivery already decided " <>
+              "(chat_id_hash_prefix=#{LogRedactor.prefix(chat_id_hash)}, delivery_state=#{state})"
+          )
 
-      delivery ->
-        # 3. Send. A session goodbye first records that the send is
-        #    starting (see "Send-start marker" in the moduledoc).
-        mark_send_started(job_id, args)
+          :ok
 
-        case telegram_client().send_message(chat_id, body) do
-          {:ok, telegram_message_id} ->
-            record_delivery(delivery, message_id, {:sent, telegram_message_id})
-            :ok
+        delivery ->
+          # 3. Send. A session goodbye first records that the send is
+          #    starting (see "Send-start marker" in the moduledoc).
+          mark_send_started(job_id, args)
 
-          {:error, reason} ->
-            handle_send_error(reason, delivery, %{
-              args: args,
-              attempt: attempt,
-              lane: lane,
-              priority: priority,
-              chat_id_hash: chat_id_hash,
-              patient_id: patient_id,
-              message_id: message_id,
-              body: body
-            })
-        end
+          case telegram_client().send_message(chat_id, body) do
+            {:ok, telegram_message_id} ->
+              record_delivery(delivery, message_id, {:sent, telegram_message_id})
+              :ok
+
+            {:error, reason} ->
+              handle_send_error(reason, delivery, %{
+                args: args,
+                attempt: attempt,
+                lane: resolved_lane,
+                priority: priority,
+                chat_id_hash: chat_id_hash,
+                patient_id: patient_id,
+                message_id: message_id,
+                body: body
+              })
+          end
+      end
     end
   end
 
@@ -319,10 +317,72 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   defp begin_delivery(message_id, lane, arm_ctx) do
     cond do
       not tracked_message_id?(message_id) -> :untracked
+      trigger_lane?(lane) -> begin_trigger_delivery(message_id)
       crisis_lane?(lane) -> begin_crisis_delivery(message_id)
       true -> begin_journaling_delivery(message_id, arm_ctx)
     end
   end
+
+  defp trigger_lane?(lane), do: lane == :trigger or lane == "trigger"
+
+  defp trigger_job?(args, lane) do
+    trigger_lane?(lane) or Map.has_key?(args, "trigger_id")
+  end
+
+  defp begin_trigger_delivery(message_id) do
+    case Clinical.claim_trigger_delivery(message_id) do
+      :claimed -> :claimed
+      {:not_claimed, nil} -> :untracked
+      {:not_claimed, state} -> {:skip, state}
+    end
+  end
+
+  defp resolve_execution_payload(args, lane, message_id) do
+    if trigger_job?(args, lane) do
+      resolve_trigger_payload(message_id)
+    else
+      chat_id = Map.fetch!(args, "chat_id")
+      chat_id_hash = Map.fetch!(args, "chat_id_hash")
+      body = Map.fetch!(args, "body")
+      patient_id = Map.get(args, "patient_id")
+
+      {:ok,
+       %{
+         chat_id: chat_id,
+         chat_id_hash: chat_id_hash,
+         body: body,
+         patient_id: patient_id,
+         lane: lane
+       }}
+    end
+  end
+
+  defp resolve_trigger_payload(message_id) when is_binary(message_id) do
+    with %Message{} = message <- Repo.get(Message, message_id),
+         %Alethea.Foundation.Accounts.Patient{} = foundation_patient <-
+           Repo.get_by(Alethea.Foundation.Accounts.Patient, legacy_patient_id: message.patient_id),
+         chat_id_hash when is_binary(chat_id_hash) <- foundation_patient.telegram_chat_id_hash,
+         {:ok, chat_id} <-
+           Alethea.Foundation.Accounts.decrypted_telegram_chat_id(foundation_patient),
+         {:ok, legacy_patient} <- Alethea.Foundation.Accounts.legacy_patient(foundation_patient),
+         {:ok, dek} <- Clinical.patient_dek(legacy_patient, "trigger_outbound_delivery"),
+         {:ok, body} <- Alethea.Encryption.PatientVault.decrypt(message.encrypted_content, dek) do
+      {:ok,
+       %{
+         chat_id: chat_id,
+         chat_id_hash: chat_id_hash,
+         body: body,
+         patient_id: foundation_patient.id,
+         lane: :trigger
+       }}
+    else
+      nil -> {:error, :message_or_patient_not_found}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :resolution_failed}
+    end
+  end
+
+  defp resolve_trigger_payload(_), do: {:error, :missing_message_id}
 
   defp begin_crisis_delivery(message_id) do
     case Clinical.telegram_delivery_state(message_id) do
@@ -533,7 +593,15 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   defp reschedule(args, next_attempt, delay_ms, lane, priority) do
     scheduled_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
-    new_args = Map.put(args, "_attempt", next_attempt)
+
+    new_args =
+      if trigger_lane?(lane) do
+        args
+        |> Map.take(["trigger_id", "message_id", "lane", "priority"])
+        |> Map.put("_attempt", next_attempt)
+      else
+        Map.put(args, "_attempt", next_attempt)
+      end
 
     # The queue is selected by the lane. Crisis retries stay on the
     # crisis lane (REQ-C7-crisis-priority-lane); safe retries stay on
