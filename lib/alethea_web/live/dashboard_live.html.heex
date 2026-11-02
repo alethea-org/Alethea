@@ -131,6 +131,13 @@
           Notas clínicas
         </.link>
         <.link
+          id="patient-triggers-link"
+          navigate={~p"/patients/#{@selected_patient.id}/triggers"}
+          class="button-secondary button-secondary--sm"
+        >
+          Triggers
+        </.link>
+        <.link
           id="new-target-behavior-link"
           navigate={~p"/patients/#{@selected_patient.id}/target_behaviors/new"}
           class="button-primary button-primary--sm"
