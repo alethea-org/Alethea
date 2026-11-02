@@ -457,8 +457,11 @@ jobs:
             while ((m = pattern.exec(body)) !== null) refs.add(parseInt(m[1], 10));
             if (refs.size === 0) return;
 
-            const m = (env.ROTA_CONTENT || '').match(/current_po:\s*(\S+)/);
-            const currentPO = m ? m[1].replace(/^@/, '').replace(/["']/g, '') : null;
+            const rotaMatch = (process.env.ROTA_CONTENT || '')
+              .match(/current_po:\s*(\S+)/);
+            const currentPO = rotaMatch
+              ? rotaMatch[1].replace(/^@/, '').replace(/["']/g, '')
+              : null;
 
             for (const issueNumber of refs) {
               try {
