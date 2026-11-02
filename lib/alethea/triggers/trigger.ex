@@ -13,6 +13,11 @@ defmodule Alethea.Triggers.Trigger do
     field :status, :string, default: "active"
     field :encryption_version, :integer, default: 1
 
+    field :schedule_type, :string, default: "once"
+    field :time, :time
+    field :weekdays, {:array, :integer}
+    field :end_date, :date
+
     field :decrypted_instruction, :string, virtual: true
     field :decrypted_draft_message, :string, virtual: true
     field :decrypted_approved_text, :string, virtual: true
@@ -35,7 +40,11 @@ defmodule Alethea.Triggers.Trigger do
       :scheduled_at,
       :timezone,
       :status,
-      :encryption_version
+      :encryption_version,
+      :schedule_type,
+      :time,
+      :weekdays,
+      :end_date
     ])
     |> validate_required([
       :patient_id,
@@ -45,8 +54,37 @@ defmodule Alethea.Triggers.Trigger do
       :approved_text,
       :scheduled_at,
       :timezone,
-      :status
+      :status,
+      :schedule_type
     ])
+    |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
     |> validate_inclusion(:status, ["active", "fired"])
+    |> validate_schedule_fields()
+  end
+
+  defp validate_schedule_fields(changeset) do
+    case get_field(changeset, :schedule_type) do
+      "daily" ->
+        validate_required(changeset, [:time])
+
+      "weekly" ->
+        changeset
+        |> validate_required([:time, :weekdays])
+        |> validate_change(:weekdays, fn :weekdays, days ->
+          cond do
+            not is_list(days) or length(days) == 0 ->
+              [weekdays: "debe incluir al menos un día de la semana"]
+
+            Enum.any?(days, &(&1 not in 1..7)) ->
+              [weekdays: "contiene días inválidos (deben ser del 1 al 7)"]
+
+            true ->
+              []
+          end
+        end)
+
+      _ ->
+        changeset
+    end
   end
 end

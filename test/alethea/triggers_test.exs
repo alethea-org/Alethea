@@ -100,6 +100,91 @@ defmodule Alethea.TriggersTest do
       refute_enqueued(worker: ActiveTriggerWorker)
     end
 
+    test "creates daily trigger with optional end_date",
+         %{professional: professional, patient: patient} do
+      time = ~T[15:30:00]
+      end_date = Date.utc_today() |> Date.add(10)
+      instruction = "Instruccion diaria"
+      approved_text = "Texto diario para paciente"
+
+      assert {:ok, trigger} =
+               Triggers.create_and_approve_trigger(professional, patient.id, %{
+                 schedule_type: "daily",
+                 time: time,
+                 end_date: end_date,
+                 instruction: instruction,
+                 approved_text: approved_text
+               })
+
+      assert trigger.status == "active"
+      assert trigger.schedule_type == "daily"
+      assert trigger.time == time
+      assert trigger.end_date == end_date
+      assert trigger.scheduled_at != nil
+
+      assert_enqueued(
+        worker: ActiveTriggerWorker,
+        args: %{"trigger_id" => trigger.id}
+      )
+    end
+
+    test "creates weekly trigger with weekdays and optional end_date",
+         %{professional: professional, patient: patient} do
+      time = ~T[10:00:00]
+      weekdays = [1, 3, 5]
+      end_date = Date.utc_today() |> Date.add(30)
+      instruction = "Instruccion semanal"
+      approved_text = "Texto semanal para paciente"
+
+      assert {:ok, trigger} =
+               Triggers.create_and_approve_trigger(professional, patient.id, %{
+                 schedule_type: "weekly",
+                 time: time,
+                 weekdays: weekdays,
+                 end_date: end_date,
+                 instruction: instruction,
+                 approved_text: approved_text
+               })
+
+      assert trigger.status == "active"
+      assert trigger.schedule_type == "weekly"
+      assert trigger.time == time
+      assert trigger.weekdays == weekdays
+      assert trigger.end_date == end_date
+      assert trigger.scheduled_at != nil
+
+      assert_enqueued(
+        worker: ActiveTriggerWorker,
+        args: %{"trigger_id" => trigger.id}
+      )
+    end
+
+    test "rejects weekly trigger with empty weekdays",
+         %{professional: professional, patient: patient} do
+      assert {:error, {:empty_weekdays, _msg}} =
+               Triggers.create_and_approve_trigger(professional, patient.id, %{
+                 schedule_type: "weekly",
+                 time: ~T[10:00:00],
+                 weekdays: [],
+                 instruction: "Instruccion",
+                 approved_text: "Texto"
+               })
+    end
+
+    test "rejects trigger if end_date is before first scheduled occurrence",
+         %{professional: professional, patient: patient} do
+      past_end_date = Date.utc_today() |> Date.add(-1)
+
+      assert {:error, {:invalid_end_date, _msg}} =
+               Triggers.create_and_approve_trigger(professional, patient.id, %{
+                 schedule_type: "daily",
+                 time: ~T[10:00:00],
+                 end_date: past_end_date,
+                 instruction: "Instruccion",
+                 approved_text: "Texto"
+               })
+    end
+
     test "Message.changeset does not cast trigger_id from untrusted attrs (B5)" do
       untrusted_id = Ecto.UUID.generate()
 
