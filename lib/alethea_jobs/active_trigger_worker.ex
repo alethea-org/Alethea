@@ -1,11 +1,12 @@
 defmodule AletheaJobs.ActiveTriggerWorker do
   @moduledoc """
-  Oban worker that fires at the scheduled time of an active one-shot trigger (Issue #440, S3/S6).
+  Oban worker that fires at the scheduled time of an active trigger (Issues #440, #441).
+  Supports one-shot, daily, and weekly schedules until optional end_date.
   """
   use Oban.Worker,
     queue: :schedulers,
     max_attempts: 1,
-    unique: [keys: [:trigger_id], period: :infinity]
+    unique: [keys: [:trigger_id], states: [:scheduled, :available, :retryable]]
 
   import Ecto.Query
 
@@ -13,6 +14,7 @@ defmodule AletheaJobs.ActiveTriggerWorker do
   alias Alethea.Clinical.Message
   alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Repo
+  alias Alethea.Triggers
   alias Alethea.Triggers.{Trigger, TriggerFiring}
 
   @impl Oban.Worker
@@ -29,7 +31,10 @@ defmodule AletheaJobs.ActiveTriggerWorker do
             delay = max(DateTime.diff(trigger.scheduled_at, now, :second), 1)
             Repo.rollback({:snooze, delay})
           else
-            case Repo.get_by(TriggerFiring, trigger_id: trigger.id) do
+            case Repo.get_by(TriggerFiring,
+                   trigger_id: trigger.id,
+                   scheduled_at: trigger.scheduled_at
+                 ) do
               nil ->
                 now_sec = DateTime.truncate(now, :second)
 
@@ -53,13 +58,27 @@ defmodule AletheaJobs.ActiveTriggerWorker do
                        trigger_id: trigger.id,
                        message_id: message.id,
                        status: "fired",
-                       fired_at: now_sec
+                       fired_at: now_sec,
+                       scheduled_at: trigger.scheduled_at
                      })
                      |> Repo.insert() do
                   {:ok, _firing} ->
-                    trigger
-                    |> Trigger.changeset(%{status: "fired"})
-                    |> Repo.update!()
+                    # Recurrence check: schedule next occurrence or finish trigger
+                    case Triggers.next_occurrence(trigger, trigger.scheduled_at) do
+                      {:ok, next_instant} ->
+                        trigger
+                        |> Trigger.changeset(%{scheduled_at: next_instant})
+                        |> Repo.update!()
+
+                        %{"trigger_id" => trigger.id}
+                        |> __MODULE__.new(scheduled_at: next_instant)
+                        |> Oban.insert!()
+
+                      :none ->
+                        trigger
+                        |> Trigger.changeset(%{status: "fired"})
+                        |> Repo.update!()
+                    end
 
                     %AuditLog{}
                     |> AuditLog.changeset(%{
@@ -81,9 +100,14 @@ defmodule AletheaJobs.ActiveTriggerWorker do
 
                     :ok
 
-                  {:error, %Ecto.Changeset{errors: [trigger_id: _]}} ->
-                    # B3: Concurrency defense against duplicate insert race
-                    Repo.rollback(:already_fired)
+                  {:error, %Ecto.Changeset{errors: errors}} ->
+                    if Keyword.has_key?(errors, :trigger_id) or
+                         Keyword.has_key?(errors, :trigger_id_scheduled_at) do
+                      # B3: Concurrency defense against duplicate insert race
+                      Repo.rollback(:already_fired)
+                    else
+                      Repo.rollback({:firing_insert_error, errors})
+                    end
                 end
 
               _already_fired ->
