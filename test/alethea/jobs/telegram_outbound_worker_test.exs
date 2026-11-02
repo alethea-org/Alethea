@@ -231,6 +231,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     test "5xx error triggers exponential backoff (attempt 1 → ~1s, attempt 2 → ~2s)" do
       Fake.queue_responses([{:error, {:server_error, 503}}])
 
+      before = DateTime.utc_now()
       assert :ok = perform(build_args())
 
       [%Oban.Job{scheduled_at: scheduled_at}] =
@@ -239,7 +240,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
             where: j.worker == "Alethea.Jobs.TelegramOutboundWorker" and j.state == "scheduled"
         )
 
-      delta = DateTime.diff(scheduled_at, DateTime.utc_now(), :millisecond)
+      delta = DateTime.diff(scheduled_at, before, :millisecond)
       # attempt 1 base = 1_000 ms ± 25% jitter
       assert_in_delta delta, 1_000, 250
     end
@@ -897,6 +898,74 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       assert lane_priority.(:crisis) < lane_priority.(:safe),
              "in Oban, lower priority numbers = higher priority; the crisis " <>
                "lane must have a lower numeric priority than the safe lane"
+    end
+  end
+
+  describe "perform/1 — trigger lane (Issue #440)" do
+    test "resolves payload lazily from IDs, sends message via Fake client, and records delivery without journaling supersession even with newer inbounds" do
+      patient = bind_patient("trigger_hash" |> String.pad_trailing(64, "0"))
+
+      {:ok, _} =
+        Alethea.Foundation.Accounts.store_encrypted_telegram_chat_id(
+          patient.foundation_patient,
+          patient.chat_id
+        )
+
+      {:ok, dek} = Clinical.patient_dek(patient.legacy_patient, "test_trigger")
+
+      {:ok, enc_text} =
+        Alethea.Encryption.PatientVault.encrypt("Mensaje proactivo del trigger", dek)
+
+      trigger =
+        %Alethea.Triggers.Trigger{}
+        |> Alethea.Triggers.Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          status: "active"
+        })
+        |> Repo.insert!()
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: DateTime.utc_now() |> DateTime.truncate(:second),
+          trigger_id: trigger.id
+        })
+        |> Repo.insert!()
+
+      Repo.update_all(from(m in Message, where: m.id == ^message.id),
+        set: [delivery_state: "pending"]
+      )
+
+      {:ok, _newer_inbound} =
+        Clinical.save_telegram_message(
+          patient.foundation_patient,
+          "inbound más reciente",
+          "inbound",
+          "spontaneous",
+          "999"
+        )
+
+      args = %{
+        "trigger_id" => trigger.id,
+        "message_id" => message.id,
+        "lane" => "trigger"
+      }
+
+      assert :ok = perform(args)
+
+      expected_chat_id = patient.chat_id
+      assert [%{chat_id: ^expected_chat_id, text: "Mensaje proactivo del trigger"}] = Fake.sends()
+      assert Repo.get!(Message, message.id).delivery_state == "sent"
     end
   end
 
