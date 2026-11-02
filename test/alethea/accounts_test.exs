@@ -228,4 +228,133 @@ defmodule Alethea.AccountsTest do
       assert {:ok, ^plaintext} = Clinical.decrypt_message_content(message, patient_dek_before)
     end
   end
+
+  describe "patient timezone inheritance and update (Issue #439, S1, S2, S3, S4)" do
+    test "update_patient/2 preserves its atom-key whitelist", %{professional: pro, kek: kek} do
+      {:ok, patient} =
+        Accounts.create_patient(%{alias: "Whitelist", professional_id: pro.id}, kek)
+
+      assert {:ok, unchanged} =
+               Accounts.update_patient(patient, %{"urgent_intervention" => true})
+
+      refute unchanged.urgent_intervention
+      refute Accounts.get_patient!(patient.id).urgent_intervention
+    end
+
+    test "create_patient/2 inherits owning professional's default timezone", %{
+      professional: pro,
+      kek: kek
+    } do
+      assert {:ok, patient} =
+               Accounts.create_patient(
+                 %{"alias" => "Pat Def TZ", "professional_id" => pro.id},
+                 kek
+               )
+
+      assert patient.timezone == "Etc/UTC"
+    end
+
+    test "create_patient/2 inherits owning professional's custom non-UTC timezone", %{
+      professional: pro,
+      kek: kek
+    } do
+      {:ok, updated_pro} =
+        Accounts.update_professional(pro, %{timezone: "America/Argentina/Buenos_Aires"})
+
+      assert {:ok, patient} =
+               Accounts.create_patient(
+                 %{"alias" => "Pat BA TZ", "professional_id" => updated_pro.id},
+                 kek
+               )
+
+      assert patient.timezone == "America/Argentina/Buenos_Aires"
+    end
+
+    test "create_patient/1 fallback inherits owning professional's timezone", %{
+      professional: pro
+    } do
+      {:ok, updated_pro} =
+        Accounts.update_professional(pro, %{timezone: "Europe/Madrid"})
+
+      assert {:ok, patient} =
+               Accounts.create_patient(%{
+                 alias: "Pat Fallback",
+                 professional_id: updated_pro.id
+               })
+
+      assert patient.timezone == "Europe/Madrid"
+    end
+
+    test "subsequent professional timezone updates do not rewrite existing patients", %{
+      professional: pro,
+      kek: kek
+    } do
+      {:ok, updated_pro} =
+        Accounts.update_professional(pro, %{timezone: "America/Argentina/Buenos_Aires"})
+
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{"alias" => "Pat Stable TZ", "professional_id" => updated_pro.id},
+          kek
+        )
+
+      assert patient.timezone == "America/Argentina/Buenos_Aires"
+
+      {:ok, _pro_changed} =
+        Accounts.update_professional(updated_pro, %{timezone: "Europe/Madrid"})
+
+      reloaded_patient = Accounts.get_patient!(patient.id)
+      assert reloaded_patient.timezone == "America/Argentina/Buenos_Aires"
+    end
+
+    test "update_patient/2 updates patient timezone with valid IANA timezone", %{
+      professional: pro,
+      kek: kek
+    } do
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{"alias" => "Pat TZ Edit", "professional_id" => pro.id},
+          kek
+        )
+
+      assert {:ok, updated} = Accounts.update_patient(patient, %{timezone: "America/Santiago"})
+      assert updated.timezone == "America/Santiago"
+      assert Accounts.get_patient!(patient.id).timezone == "America/Santiago"
+    end
+
+    test "update_patient/2 rejects invalid timezone and leaves state unchanged", %{
+      professional: pro,
+      kek: kek
+    } do
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{"alias" => "Pat TZ Reject", "professional_id" => pro.id},
+          kek
+        )
+
+      assert {:error, changeset} = Accounts.update_patient(patient, %{timezone: "Invalid/Zone"})
+      assert %{timezone: [_error]} = errors_on(changeset)
+      assert Accounts.get_patient!(patient.id).timezone == "Etc/UTC"
+    end
+
+    test "convert_patient_local_to_utc/3 converts local date/time in patient timezone to UTC", %{
+      professional: pro,
+      kek: kek
+    } do
+      {:ok, updated_pro} =
+        Accounts.update_professional(pro, %{timezone: "America/Argentina/Buenos_Aires"})
+
+      {:ok, patient} =
+        Accounts.create_patient(
+          %{"alias" => "Pat Convert", "professional_id" => updated_pro.id},
+          kek
+        )
+
+      date = ~D[2024-04-10]
+      time = ~T[15:00:00]
+
+      assert {:ok, utc_dt} = Accounts.convert_patient_local_to_utc(patient, date, time)
+      assert utc_dt == ~U[2024-04-10 18:00:00Z]
+    end
+  end
 end
