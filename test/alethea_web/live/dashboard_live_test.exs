@@ -1202,4 +1202,125 @@ defmodule AletheaWeb.DashboardLiveTest do
       assert has_element?(view, "#crisis-message-form textarea", "Estoy acá, no estás solo.")
     end
   end
+
+  describe "timezone management (Issue #439, S1, S3, S5)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional, %{alias: "Paciente Zona Horaria"})
+      %{patient: patient}
+    end
+
+    test "professional timezone form persists valid IANA timezone", %{
+      conn: conn,
+      professional: professional
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      view
+      |> form("#professional-timezone-form", %{timezone: "America/Argentina/Buenos_Aires"})
+      |> render_submit()
+
+      assert render(view) =~ "Zona horaria del profesional actualizada."
+
+      assert Accounts.get_professional!(professional.id).timezone ==
+               "America/Argentina/Buenos_Aires"
+    end
+
+    test "professional timezone form rejects invalid timezone and preserves persisted value", %{
+      conn: conn,
+      professional: professional
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      view
+      |> form("#professional-timezone-form", %{timezone: "Invalid/Zone"})
+      |> render_submit()
+
+      assert render(view) =~ "Zona horaria inválida."
+      assert Accounts.get_professional!(professional.id).timezone == "Etc/UTC"
+    end
+
+    test "patient timezone form persists valid IANA timezone in real mode", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      assert has_element?(view, "#patient-timezone-form")
+
+      view
+      |> form("#patient-timezone-form", %{timezone: "Europe/Madrid"})
+      |> render_submit()
+
+      assert render(view) =~ "Zona horaria del paciente actualizada."
+      assert Accounts.get_patient!(patient.id).timezone == "Europe/Madrid"
+    end
+
+    test "patient timezone form rejects invalid timezone and leaves state unchanged", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      view
+      |> form("#patient-timezone-form", %{timezone: "Invalid/Zone"})
+      |> render_submit()
+
+      assert render(view) =~ "Zona horaria inválida."
+      assert Accounts.get_patient!(patient.id).timezone == "Etc/UTC"
+    end
+
+    test "patient timezone update ignores client patient_id param and binds to socket owner", %{
+      conn: conn,
+      patient: patient,
+      professional: _professional
+    } do
+      # Create another professional and patient
+      {:ok, other_pro} =
+        Accounts.create_professional(%{
+          email: "other-pro-#{System.unique_integer([:positive])}@alethea.com",
+          password: "supersecret12",
+          full_name: "Dr. Other"
+        })
+
+      other_patient = legacy_patient_fixture(other_pro, %{alias: "Foreign Patient"})
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+
+      # Maliciously attempt to pass other_patient.id in params
+      view
+      |> element("#patient-timezone-form")
+      |> render_submit(%{
+        "timezone" => "America/Sao_Paulo",
+        "id" => other_patient.id,
+        "patient_id" => other_patient.id
+      })
+
+      # Only selected_patient owned by socket professional is updated
+      assert Accounts.get_patient!(patient.id).timezone == "America/Sao_Paulo"
+      assert Accounts.get_patient!(other_patient.id).timezone == "Etc/UTC"
+    end
+
+    test "mock mode updates patient and professional timezone in memory without DB write", %{
+      conn: conn
+    } do
+      Application.put_env(:alethea, :use_mock_data, true)
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      view
+      |> form("#professional-timezone-form", %{timezone: "America/Bogota"})
+      |> render_submit()
+
+      assert render(view) =~ "Zona horaria del profesional actualizada."
+
+      view
+      |> form("#patient-timezone-form", %{timezone: "America/Lima"})
+      |> render_submit()
+
+      assert render(view) =~ "Zona horaria del paciente actualizada."
+    end
+  end
 end

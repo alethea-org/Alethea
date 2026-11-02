@@ -5,7 +5,7 @@ defmodule Alethea.Accounts do
 
   import Ecto.Query, warn: false
   alias Alethea.Repo
-  alias Alethea.Accounts.{Professional, Patient, EncryptionKey}
+  alias Alethea.Accounts.{Professional, Patient, EncryptionKey, PatientTimezone}
   alias Alethea.Encryption.{PatientVault, ProfessionalKek}
 
   @remember_token_bytes 32
@@ -182,6 +182,10 @@ defmodule Alethea.Accounts do
     |> Repo.update()
   end
 
+  def update_patient_timezone(%Patient{} = patient, timezone) do
+    update_patient(patient, %{timezone: timezone})
+  end
+
   def update_patient(%Patient{} = patient, attrs) when is_map(attrs) do
     allowed_attrs =
       Map.take(attrs, [
@@ -189,13 +193,21 @@ defmodule Alethea.Accounts do
         :terms_accepted,
         :status,
         :session_day_of_week,
-        :session_time
+        :session_time,
+        :timezone
       ])
 
     patient
     |> Patient.changeset(allowed_attrs)
     |> Repo.update()
   end
+
+  @doc """
+  Converts a patient's local date and time to UTC using their timezone.
+  """
+  defdelegate convert_patient_local_to_utc(patient, date, time),
+    to: PatientTimezone,
+    as: :convert_to_utc
 
   @doc """
   Archives a patient (soft delete). Sets status to "archived".
@@ -302,6 +314,7 @@ defmodule Alethea.Accounts do
   def create_patient(attrs, kek_bytes) when is_binary(kek_bytes) do
     # Normalizar attrs a string keys para evitar mixed keys
     attrs = for {k, v} <- attrs, into: %{}, do: {to_string(k), v}
+    attrs = maybe_inherit_professional_timezone(attrs)
 
     # 1. Generar DEK
     dek_bytes = :crypto.strong_rand_bytes(32)
@@ -355,9 +368,54 @@ defmodule Alethea.Accounts do
 
   # Fallback para tests antiguos o creación sin KEK (deprecated)
   def create_patient(attrs) do
+    attrs = maybe_inherit_professional_timezone(attrs)
+
     %Patient{}
     |> Patient.changeset(attrs)
     |> Repo.insert()
+  end
+
+  defp maybe_inherit_professional_timezone(attrs) when is_map(attrs) do
+    has_timezone? =
+      case Map.fetch(attrs, "timezone") do
+        {:ok, val} when not is_nil(val) and val != "" ->
+          true
+
+        _ ->
+          case Map.fetch(attrs, :timezone) do
+            {:ok, val} when not is_nil(val) and val != "" -> true
+            _ -> false
+          end
+      end
+
+    if has_timezone? do
+      attrs
+    else
+      pro_id = Map.get(attrs, "professional_id") || Map.get(attrs, :professional_id)
+
+      timezone =
+        case pro_id do
+          id when is_binary(id) ->
+            case Repo.get(Professional, id) do
+              %Professional{timezone: tz} when is_binary(tz) and tz != "" -> tz
+              _ -> "Etc/UTC"
+            end
+
+          _ ->
+            "Etc/UTC"
+        end
+
+      cond do
+        Map.has_key?(attrs, "professional_id") ->
+          Map.put(attrs, "timezone", timezone)
+
+        Map.has_key?(attrs, :professional_id) ->
+          Map.put(attrs, :timezone, timezone)
+
+        true ->
+          Map.put(attrs, "timezone", timezone)
+      end
+    end
   end
 
   defp rotate_remember_token(old_token_hash) do
