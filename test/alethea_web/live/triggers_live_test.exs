@@ -476,5 +476,184 @@ defmodule AletheaWeb.TriggersLiveTest do
       assert render(msg_view) =~ "Mensaje veraz"
       assert render(msg_view) =~ "sent"
     end
+
+    test "switching recurrence updates schedule controls in form",
+         %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      # Initially "once"
+      assert has_element?(view, "#trigger-date-input")
+      refute has_element?(view, "#trigger-weekdays-selector")
+      refute has_element?(view, "#trigger-end-date-input")
+
+      # Switch to "daily"
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "instruction" => "Instruccion",
+          "schedule_type" => "daily",
+          "time" => "15:00"
+        }
+      })
+      |> render_change()
+
+      refute has_element?(view, "#trigger-date-input")
+      assert has_element?(view, "#trigger-time-input")
+      assert has_element?(view, "#trigger-end-date-input")
+      refute has_element?(view, "#trigger-weekdays-selector")
+
+      # Switch to "weekly"
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "instruction" => "Instruccion",
+          "schedule_type" => "weekly",
+          "time" => "15:00"
+        }
+      })
+      |> render_change()
+
+      refute has_element?(view, "#trigger-date-input")
+      assert has_element?(view, "#trigger-time-input")
+      assert has_element?(view, "#trigger-end-date-input")
+      assert has_element?(view, "#trigger-weekdays-selector")
+      assert has_element?(view, "#trigger-weekday-1")
+      assert has_element?(view, "#trigger-weekday-3")
+    end
+
+    test "configures and approves daily trigger with end date",
+         %{conn: conn, patient: patient} do
+      Application.put_env(:alethea, :trigger_preview_chain, Alethea.AI.TriggerPreviewChainMock)
+
+      expect(Alethea.AI.TriggerPreviewChainMock, :run, fn %{instruction: "Hacer ejercicio"} ->
+        {:ok, %{draft: "Hola! ¿Pudiste hacer tu ejercicio hoy?"}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      end_date = Date.utc_today() |> Date.add(14) |> Date.to_iso8601()
+
+      # First switch frequency to daily so end_date input is rendered
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "schedule_type" => "daily"
+        }
+      })
+      |> render_change()
+
+      # Now fill in full form with end_date
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "instruction" => "Hacer ejercicio",
+          "schedule_type" => "daily",
+          "time" => "18:00",
+          "end_date" => end_date
+        }
+      })
+      |> render_change()
+
+      view |> element("#generate-preview-button") |> render_click()
+      assert has_element?(view, "#trigger-preview-card")
+
+      view |> element("#approve-trigger-button") |> render_click()
+
+      # Flash success
+      html = render(view)
+      assert html =~ "Trigger programado exitosamente."
+
+      # Trigger appears in active triggers list with "Diario" badge and end date
+      assert html =~ "Diario"
+      assert html =~ "Hasta:"
+
+      # Verify persisted trigger
+      trigger = Repo.one(Alethea.Triggers.Trigger)
+      assert trigger.schedule_type == "daily"
+      assert trigger.end_date != nil
+      assert trigger.status == "active"
+    end
+
+    test "configures and approves weekly trigger with weekdays and end date",
+         %{conn: conn, patient: patient} do
+      Application.put_env(:alethea, :trigger_preview_chain, Alethea.AI.TriggerPreviewChainMock)
+
+      expect(Alethea.AI.TriggerPreviewChainMock, :run, fn %{instruction: "Revisar notas"} ->
+        {:ok, %{draft: "Hola! Recuerda revisar tus notas de terapia."}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      end_date = Date.utc_today() |> Date.add(30) |> Date.to_iso8601()
+
+      # First switch frequency to weekly so weekdays and end_date inputs are rendered
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "schedule_type" => "weekly"
+        }
+      })
+      |> render_change()
+
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "instruction" => "Revisar notas",
+          "schedule_type" => "weekly",
+          "time" => "11:00",
+          "weekdays" => ["1", "3", "5"],
+          "end_date" => end_date
+        }
+      })
+      |> render_change()
+
+      view |> element("#generate-preview-button") |> render_click()
+      assert has_element?(view, "#trigger-preview-card")
+
+      view |> element("#approve-trigger-button") |> render_click()
+
+      html = render(view)
+      assert html =~ "Trigger programado exitosamente."
+      assert html =~ "Semanal (Lun, Mié, Vie)"
+      assert html =~ "Hasta:"
+
+      trigger = Repo.one(Alethea.Triggers.Trigger)
+      assert trigger.schedule_type == "weekly"
+      assert trigger.weekdays == [1, 3, 5]
+    end
+
+    test "validates missing weekdays on weekly trigger approval",
+         %{conn: conn, patient: patient} do
+      Application.put_env(:alethea, :trigger_preview_chain, Alethea.AI.TriggerPreviewChainMock)
+
+      expect(Alethea.AI.TriggerPreviewChainMock, :run, fn _ ->
+        {:ok, %{draft: "Borrador semanal"}}
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      # First switch frequency to weekly
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "schedule_type" => "weekly"
+        }
+      })
+      |> render_change()
+
+      view
+      |> form("#trigger-form", %{
+        "trigger" => %{
+          "instruction" => "Instruccion semanal sin dias",
+          "schedule_type" => "weekly",
+          "time" => "11:00"
+        }
+      })
+      |> render_change()
+
+      view |> element("#generate-preview-button") |> render_click()
+      html = view |> element("#approve-trigger-button") |> render_click()
+      assert html =~ "Debes seleccionar al menos un día de la semana."
+    end
   end
 end
