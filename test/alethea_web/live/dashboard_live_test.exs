@@ -843,6 +843,7 @@ defmodule AletheaWeb.DashboardLiveTest do
              )
 
       assert has_element?(view, "#patient-record-actions #patient-clinical-notes-link")
+      assert has_element?(view, "#patient-record-actions #patient-triggers-link")
     end
 
     test "resets the behavior stream when patient selection changes", %{
