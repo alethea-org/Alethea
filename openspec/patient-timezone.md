@@ -5,7 +5,7 @@
 This specification documents the timezone model introduced for patients and professionals (Issue #439, S1-S6).
 It establishes:
 1. Timezone persistence and inheritance on `Alethea.Accounts.Professional` and `Alethea.Accounts.Patient`.
-2. Domain update flows for professionals and patients.
+2. Domain update flows and dashboard edit paths for professionals and patients.
 3. Domain conversion contracts for mapping local wall times to UTC, including daylight saving time (DST) transitions.
 4. Scope boundary excluding session schedule UTC migration.
 5. Manual update policy for the `tz` dependency.
@@ -28,6 +28,17 @@ It establishes:
 - Patient timezone persists via `Alethea.Accounts.update_patient/2` (atom-key attributes) or `Alethea.Accounts.update_patient_timezone/2`.
 - Both schemas use `Alethea.Accounts.Timezone.validate_timezone/2` to reject invalid or blank IANA identifiers without changing persisted state.
 - Callers must resolve the patient using the authenticated professional's ownership scope before updating it.
+
+---
+
+## Dashboard Edit Paths
+
+- Professional settings: open `#bot-settings` and submit `#professional-timezone-form` (`save_professional_timezone`). This changes the default for future patients only.
+- Patient briefing: submit `#patient-timezone-form` (`save_patient_timezone`) for the selected patient.
+- Both forms reject invalid or blank timezone inputs with an error flash, leave persisted state unchanged, and reset to the persisted value.
+- Patient updates resolve ownership via `Accounts.get_patient_for_professional/2` using the authenticated professional and socket-selected patient. Client-supplied patient IDs are ignored.
+- Mock mode updates assigns in memory only, without writing patient or professional timezones to the database.
+- Existing session scheduling remains UTC; the patient timezone is the reference for future active triggers, not a reinterpretation of the session time.
 
 ---
 
