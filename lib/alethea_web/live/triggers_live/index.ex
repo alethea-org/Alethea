@@ -1,8 +1,9 @@
 defmodule AletheaWeb.TriggersLive.Index do
   @moduledoc """
-  Patient-scoped triggers management page (Issue #440, S1-S10).
-  Allows the owning professional to view active triggers, generate clinically neutral
-  previews, approve/schedule one-shot triggers, and inspect firing history.
+  Patient-scoped triggers management page (Issue #440, #442).
+  Allows the owning professional to view active/inactive/fired triggers, generate clinically
+  neutral previews, approve/schedule triggers, edit instructions with server-owned reapproval,
+  activate/deactivate triggers, and inspect firing history.
   """
   use AletheaWeb, :live_view
 
@@ -16,7 +17,7 @@ defmodule AletheaWeb.TriggersLive.Index do
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          %Accounts.Patient{} = patient <-
            Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
-      with {:ok, active_triggers} <- Triggers.list_active_triggers(professional, patient.id),
+      with {:ok, triggers} <- Triggers.list_triggers(professional, patient.id),
            {:ok, firings} <- Triggers.list_firings(professional, patient.id) do
         socket =
           socket
@@ -26,6 +27,13 @@ defmodule AletheaWeb.TriggersLive.Index do
           |> assign(:preview_draft, nil)
           |> assign(:preview_instruction, nil)
           |> assign(:approving, false)
+          |> assign(:editing_trigger_id, nil)
+          |> assign(:edit_form, nil)
+          |> assign(:edit_preview_draft, nil)
+          |> assign(:edit_preview_revision, nil)
+          |> assign(:edit_preview_instruction, nil)
+          |> assign(:edit_preview_trigger_id, nil)
+          |> assign(:edit_approving, false)
           |> assign(
             :form,
             to_form(
@@ -40,9 +48,9 @@ defmodule AletheaWeb.TriggersLive.Index do
               as: "trigger"
             )
           )
-          |> assign(:active_triggers_empty?, active_triggers == [])
+          |> assign(:active_triggers_empty?, triggers == [])
           |> assign(:firings_empty?, firings == [])
-          |> stream(:active_triggers, active_triggers)
+          |> stream(:active_triggers, triggers)
           |> stream(:firings, firings)
 
         {:ok, socket}
@@ -134,7 +142,7 @@ defmodule AletheaWeb.TriggersLive.Index do
       {:noreply, socket}
     else
       preview_draft = socket.assigns.preview_draft
-      preview_instruction = socket.assigns[:preview_instruction]
+      preview_instruction = socket.assigns.preview_instruction
       params = socket.assigns.form.params || %{}
       instruction = Map.get(params, "instruction", "") |> String.trim()
       schedule_type = Map.get(params, "schedule_type", "once")
@@ -264,6 +272,405 @@ defmodule AletheaWeb.TriggersLive.Index do
                |> put_flash(
                  :error,
                  "No se pudo programar el trigger. Revisa los datos e inténtalo nuevamente."
+               )}
+          end
+      end
+    end
+  end
+
+  def handle_event("deactivate_trigger", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+
+    case Triggers.deactivate_trigger(professional, patient.id, trigger_id) do
+      {:ok, updated_trigger} ->
+        {:noreply,
+         socket
+         |> stream_insert(:active_triggers, updated_trigger)
+         |> put_flash(:info, "Trigger desactivado.")}
+
+      {:error, :already_fired} ->
+        {:noreply,
+         put_flash(socket, :error, "El trigger ya fue ejecutado y no puede ser modificado.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo desactivar el trigger.")}
+    end
+  end
+
+  def handle_event("activate_trigger", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+
+    case Triggers.activate_trigger(professional, patient.id, trigger_id) do
+      {:ok, updated_trigger} ->
+        {:noreply,
+         socket
+         |> stream_insert(:active_triggers, updated_trigger)
+         |> put_flash(:info, "Trigger activado exitosamente.")}
+
+      {:error, :unapproved} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "No se puede activar un trigger sin mensaje aprobado. Genera y aprueba una vista previa primero."
+         )}
+
+      {:error, {:expired_schedule, msg}} ->
+        {:noreply, put_flash(socket, :error, msg)}
+
+      {:error, {:end_date_passed, msg}} ->
+        {:noreply, put_flash(socket, :error, msg)}
+
+      {:error, :already_fired} ->
+        {:noreply,
+         put_flash(socket, :error, "El trigger ya fue ejecutado y no puede ser modificado.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo activar el trigger.")}
+    end
+  end
+
+  def handle_event("edit_trigger", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+    previous_id = socket.assigns[:editing_trigger_id]
+
+    case Triggers.get_trigger(professional, patient.id, trigger_id) do
+      {:ok, trigger} ->
+        socket =
+          if previous_id != nil and previous_id != trigger_id do
+            case Triggers.get_trigger(professional, patient.id, previous_id) do
+              {:ok, prev_trigger} -> stream_insert(socket, :active_triggers, prev_trigger)
+              _ -> socket
+            end
+          else
+            socket
+          end
+
+        form =
+          to_form(
+            %{"instruction" => trigger.decrypted_instruction || ""},
+            as: "edit_trigger"
+          )
+
+        {:noreply,
+         socket
+         |> assign(:editing_trigger_id, trigger.id)
+         |> assign(:edit_form, form)
+         |> assign(:edit_preview_draft, nil)
+         |> assign(:edit_preview_revision, nil)
+         |> assign(:edit_preview_instruction, nil)
+         |> assign(:edit_preview_trigger_id, nil)
+         |> assign(:edit_approving, false)
+         |> stream_insert(:active_triggers, trigger)}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+    end
+  end
+
+  def handle_event("cancel_edit", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+
+    socket =
+      socket
+      |> assign(:editing_trigger_id, nil)
+      |> assign(:edit_form, nil)
+      |> assign(:edit_preview_draft, nil)
+      |> assign(:edit_preview_revision, nil)
+      |> assign(:edit_preview_instruction, nil)
+      |> assign(:edit_preview_trigger_id, nil)
+      |> assign(:edit_approving, false)
+
+    case Triggers.get_trigger(professional, patient.id, trigger_id) do
+      {:ok, trigger} ->
+        {:noreply, stream_insert(socket, :active_triggers, trigger)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("validate_edit", %{"edit_trigger" => params}, socket) do
+    new_instruction = Map.get(params, "instruction", "") |> String.trim()
+    preview_instruction = socket.assigns[:edit_preview_instruction]
+    trigger_id = socket.assigns[:editing_trigger_id]
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+
+    # Invalidate displayed preview if instruction differs from preview snapshot
+    socket =
+      if preview_instruction != nil and preview_instruction != new_instruction do
+        s =
+          socket
+          |> assign(:edit_preview_draft, nil)
+          |> assign(:edit_preview_revision, nil)
+          |> assign(:edit_preview_instruction, nil)
+          |> assign(:edit_preview_trigger_id, nil)
+
+        case Triggers.get_trigger(professional, patient.id, trigger_id) do
+          {:ok, trigger} -> stream_insert(s, :active_triggers, trigger)
+          _ -> s
+        end
+      else
+        socket
+      end
+
+    {:noreply, assign(socket, :edit_form, to_form(params, as: "edit_trigger"))}
+  end
+
+  def handle_event("save_and_preview_edit", params, socket) do
+    trigger_id =
+      Map.get(params, "trigger_id") ||
+        Map.get(params, "id") ||
+        socket.assigns[:editing_trigger_id]
+
+    edit_params = Map.get(params, "edit_trigger") || %{}
+    new_instruction = Map.get(edit_params, "instruction", "") |> String.trim()
+
+    cond do
+      is_nil(trigger_id) ->
+        {:noreply, socket}
+
+      new_instruction == "" ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "La instrucción no puede estar vacía.")
+         |> assign(:edit_form, to_form(edit_params, as: "edit_trigger"))}
+
+      true ->
+        professional = socket.assigns.current_professional
+        patient = socket.assigns.patient
+
+        # Security guarantee: Persist instruction edit FIRST in DB
+        # Clears old approval, increments approval_revision, deletes pending scheduled jobs
+        case Triggers.update_trigger_instruction(
+               professional,
+               patient.id,
+               trigger_id,
+               new_instruction
+             ) do
+          {:ok, updated_trigger} ->
+            socket =
+              socket
+              |> stream_insert(:active_triggers, updated_trigger)
+              |> assign(:edit_form, to_form(edit_params, as: "edit_trigger"))
+
+            # Step 2: Preview generation uses current server-fetched instruction and its positive approval_revision snapshot
+            case Triggers.generate_preview(
+                   professional,
+                   patient.id,
+                   updated_trigger.decrypted_instruction
+                 ) do
+              {:ok, %{draft: draft}} ->
+                {:noreply,
+                 socket
+                 |> assign(:edit_preview_draft, draft)
+                 |> assign(:edit_preview_revision, updated_trigger.approval_revision)
+                 |> assign(:edit_preview_instruction, updated_trigger.decrypted_instruction)
+                 |> assign(:edit_preview_trigger_id, updated_trigger.id)
+                 |> put_flash(:info, "Vista previa generada.")}
+
+              {:error, :unauthorized} ->
+                {:noreply,
+                 socket
+                 |> assign(:edit_preview_draft, nil)
+                 |> assign(:edit_preview_revision, nil)
+                 |> assign(:edit_preview_instruction, nil)
+                 |> assign(:edit_preview_trigger_id, nil)
+                 |> put_flash(:error, "No estás autorizado para generar vistas previas.")}
+
+              {:error, _reason} ->
+                {:noreply,
+                 socket
+                 |> assign(:edit_preview_draft, nil)
+                 |> assign(:edit_preview_revision, nil)
+                 |> assign(:edit_preview_instruction, nil)
+                 |> assign(:edit_preview_trigger_id, nil)
+                 |> put_flash(
+                   :error,
+                   "No se pudo generar la vista previa. La instrucción fue guardada, pero requiere aprobación antes de enviar."
+                 )}
+            end
+
+          {:error, :empty_instruction} ->
+            {:noreply, put_flash(socket, :error, "La instrucción no puede estar vacía.")}
+
+          {:error, :already_fired} ->
+            {:noreply,
+             put_flash(socket, :error, "El trigger ya fue ejecutado y no puede ser modificado.")}
+
+          {:error, :unauthorized} ->
+            {:noreply,
+             put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+          {:error, :not_found} ->
+            {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "No se pudo actualizar la instrucción.")}
+        end
+    end
+  end
+
+  def handle_event("approve_edit", params, socket) do
+    trigger_id =
+      Map.get(params, "id") ||
+        Map.get(params, "trigger_id") ||
+        socket.assigns[:editing_trigger_id]
+
+    if socket.assigns[:edit_approving] do
+      {:noreply, socket}
+    else
+      preview_draft = socket.assigns[:edit_preview_draft]
+      preview_revision = socket.assigns[:edit_preview_revision]
+      preview_instruction = socket.assigns[:edit_preview_instruction]
+      preview_trigger_id = socket.assigns[:edit_preview_trigger_id]
+
+      cond do
+        is_nil(trigger_id) ->
+          {:noreply, socket}
+
+        is_nil(preview_draft) or String.trim(preview_draft) == "" or
+          is_nil(preview_revision) or preview_trigger_id != trigger_id ->
+          {:noreply,
+           put_flash(socket, :error, "Debes generar una vista previa antes de aprobar.")}
+
+        true ->
+          professional = socket.assigns.current_professional
+          patient = socket.assigns.patient
+
+          # Bind expected_revision and expected_instruction strictly from server-owned state
+          # Never trust client approved_text/expected_revision params
+          attrs = %{
+            "expected_revision" => preview_revision,
+            "expected_instruction" => preview_instruction,
+            "approved_text" => preview_draft,
+            "draft_message" => preview_draft
+          }
+
+          socket = assign(socket, :edit_approving, true)
+
+          case Triggers.reapprove_trigger(professional, patient.id, trigger_id, attrs) do
+            {:ok, reapproved_trigger} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> assign(:editing_trigger_id, nil)
+               |> assign(:edit_form, nil)
+               |> assign(:edit_preview_draft, nil)
+               |> assign(:edit_preview_revision, nil)
+               |> assign(:edit_preview_instruction, nil)
+               |> assign(:edit_preview_trigger_id, nil)
+               |> stream_insert(:active_triggers, reapproved_trigger)
+               |> put_flash(:info, "Trigger actualizado y aprobado exitosamente.")}
+
+            {:error, :stale_revision} ->
+              socket =
+                socket
+                |> assign(:edit_approving, false)
+                |> assign(:edit_preview_draft, nil)
+                |> assign(:edit_preview_revision, nil)
+                |> assign(:edit_preview_instruction, nil)
+                |> assign(:edit_preview_trigger_id, nil)
+                |> put_flash(
+                  :error,
+                  "El trigger fue modificado concurrentemente. Debes generar una nueva vista previa antes de aprobar."
+                )
+
+              case Triggers.get_trigger(professional, patient.id, trigger_id) do
+                {:ok, trigger} -> {:noreply, stream_insert(socket, :active_triggers, trigger)}
+                _ -> {:noreply, socket}
+              end
+
+            {:error, :stale_instruction} ->
+              socket =
+                socket
+                |> assign(:edit_approving, false)
+                |> assign(:edit_preview_draft, nil)
+                |> assign(:edit_preview_revision, nil)
+                |> assign(:edit_preview_instruction, nil)
+                |> assign(:edit_preview_trigger_id, nil)
+                |> put_flash(
+                  :error,
+                  "La instrucción del trigger cambió. Debes generar una nueva vista previa antes de aprobar."
+                )
+
+              case Triggers.get_trigger(professional, patient.id, trigger_id) do
+                {:ok, trigger} -> {:noreply, stream_insert(socket, :active_triggers, trigger)}
+                _ -> {:noreply, socket}
+              end
+
+            {:error, {:expired_schedule, msg}} ->
+              {:noreply, socket |> assign(:edit_approving, false) |> put_flash(:error, msg)}
+
+            {:error, {:end_date_passed, msg}} ->
+              {:noreply, socket |> assign(:edit_approving, false) |> put_flash(:error, msg)}
+
+            {:error, :missing_expected_revision} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> put_flash(
+                 :error,
+                 "Falta la revisión de vista previa. Genera una nueva vista previa antes de aprobar."
+               )}
+
+            {:error, :empty_approved_text} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> put_flash(:error, "El texto aprobado no puede estar vacío.")}
+
+            {:error, :already_fired} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> put_flash(
+                 :error,
+                 "El trigger ya fue ejecutado y no puede ser modificado."
+               )}
+
+            {:error, :unauthorized} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> put_flash(
+                 :error,
+                 "No estás autorizado para modificar este trigger."
+               )}
+
+            {:error, :not_found} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> put_flash(:error, "Trigger no encontrado.")}
+
+            {:error, _reason} ->
+              {:noreply,
+               socket
+               |> assign(:edit_approving, false)
+               |> put_flash(
+                 :error,
+                 "No se pudo aprobar el trigger. Inténtalo nuevamente."
                )}
           end
       end
@@ -479,7 +886,7 @@ defmodule AletheaWeb.TriggersLive.Index do
           </div>
         </div>
 
-        <%!-- Lista de Triggers Activos --%>
+        <%!-- Lista de Triggers Activos / Gestionables --%>
         <div>
           <h2 class="pt-h2" style="margin-bottom: 16px;">Triggers programados</h2>
 
@@ -500,35 +907,190 @@ defmodule AletheaWeb.TriggersLive.Index do
             >
               <div id={"active-trigger-#{trigger.id}"}>
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
-                  <div>
-                    <span class="pt-pill pt-pill--active">Activo</span>
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;">
+                    <%= cond do %>
+                      <% trigger.status == "active" -> %>
+                        <span
+                          id={"trigger-status-badge-#{trigger.id}"}
+                          class="pt-pill pt-pill--active"
+                        >
+                          Activo
+                        </span>
+                      <% trigger.status == "inactive" -> %>
+                        <span
+                          id={"trigger-status-badge-#{trigger.id}"}
+                          class="pt-pill pt-pill--inactive"
+                        >
+                          Inactivo
+                        </span>
+                      <% trigger.status == "fired" -> %>
+                        <span id={"trigger-status-badge-#{trigger.id}"} class="pt-pill">
+                          Finalizado
+                        </span>
+                      <% true -> %>
+                        <span id={"trigger-status-badge-#{trigger.id}"} class="pt-pill">
+                          {trigger.status}
+                        </span>
+                    <% end %>
+
+                    <%= if is_nil(trigger.approved_text) do %>
+                      <span
+                        id={"trigger-approval-badge-#{trigger.id}"}
+                        class="pt-pill pt-pill--warning"
+                      >
+                        Requiere aprobación
+                      </span>
+                    <% end %>
+
                     <span
                       id={"trigger-schedule-badge-#{trigger.id}"}
                       class="pt-pill"
-                      style="margin-left: 6px; font-size: 0.85em; background: var(--color-surface-subtle);"
+                      style="font-size: 0.85em; background: var(--color-surface-subtle);"
                     >
                       {Triggers.schedule_badge(trigger)}
                     </span>
-                    <span class="pt-muted" style="margin-left: 8px; font-size: 0.85em;">
+                    <span class="pt-muted" style="margin-left: 4px; font-size: 0.85em;">
                       Próximo envío: {format_datetime(trigger.scheduled_at)}
                     </span>
                     <%= if trigger.end_date do %>
                       <span
                         id={"trigger-end-date-#{trigger.id}"}
                         class="pt-muted"
-                        style="margin-left: 8px; font-size: 0.85em;"
+                        style="font-size: 0.85em;"
                       >
                         · Hasta: {format_date(trigger.end_date)}
                       </span>
                     <% end %>
                   </div>
+
+                  <%!-- Acciones sobre el trigger --%>
+                  <div class="trigger-actions" style="display: flex; gap: 6px; align-items: center;">
+                    <%= if trigger.status != "fired" do %>
+                      <%= if @editing_trigger_id != trigger.id do %>
+                        <button
+                          type="button"
+                          id={"edit-trigger-button-#{trigger.id}"}
+                          phx-click="edit_trigger"
+                          phx-value-id={trigger.id}
+                          class="button-secondary button-secondary--sm"
+                        >
+                          Editar
+                        </button>
+
+                        <%= if trigger.status == "active" do %>
+                          <button
+                            type="button"
+                            id={"deactivate-trigger-button-#{trigger.id}"}
+                            phx-click="deactivate_trigger"
+                            phx-value-id={trigger.id}
+                            class="button-secondary button-secondary--sm text-amber-600 hover:text-amber-700"
+                          >
+                            Desactivar
+                          </button>
+                        <% else %>
+                          <button
+                            type="button"
+                            id={"activate-trigger-button-#{trigger.id}"}
+                            phx-click="activate_trigger"
+                            phx-value-id={trigger.id}
+                            class="button-secondary button-secondary--sm text-emerald-600 hover:text-emerald-700"
+                          >
+                            Activar
+                          </button>
+                        <% end %>
+                      <% end %>
+                    <% end %>
+                  </div>
                 </div>
+
                 <p style="font-size: 1em; margin-bottom: 6px;">
-                  <strong>Mensaje aprobado:</strong> {trigger.decrypted_approved_text || "(Cifrado)"}
+                  <strong>Mensaje aprobado:</strong>
+                  <%= if trigger.decrypted_approved_text do %>
+                    {trigger.decrypted_approved_text}
+                  <% else %>
+                    <span class="pt-muted italic">Pendiente de aprobación</span>
+                  <% end %>
                 </p>
                 <p class="pt-muted" style="font-size: 0.85em;">
                   <em>Instrucción original:</em> {trigger.decrypted_instruction || "(Cifrada)"}
                 </p>
+
+                <%!-- Formulario de edición inline cuando @editing_trigger_id == trigger.id --%>
+                <%= if @editing_trigger_id == trigger.id and @edit_form do %>
+                  <div
+                    id={"edit-trigger-section-#{trigger.id}"}
+                    style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border);"
+                  >
+                    <.form
+                      for={@edit_form}
+                      id={"edit-trigger-form-#{trigger.id}"}
+                      phx-change="validate_edit"
+                      phx-submit="save_and_preview_edit"
+                    >
+                      <input type="hidden" name="trigger_id" value={trigger.id} />
+                      <.input
+                        id={"edit-instruction-input-#{trigger.id}"}
+                        field={@edit_form[:instruction]}
+                        type="textarea"
+                        label="Instrucción terapéutica"
+                        rows="3"
+                        required
+                      />
+
+                      <div class="form-actions" style="margin-top: 12px; display: flex; gap: 8px;">
+                        <button
+                          type="submit"
+                          id={"generate-edit-preview-button-#{trigger.id}"}
+                          class="button-secondary button-secondary--sm"
+                        >
+                          <.icon name="hero-sparkles" class="size-4" style="margin-right: 4px;" />
+                          Generar vista previa
+                        </button>
+                        <button
+                          type="button"
+                          id={"cancel-edit-button-#{trigger.id}"}
+                          phx-click="cancel_edit"
+                          phx-value-id={trigger.id}
+                          class="button-secondary button-secondary--sm"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </.form>
+
+                    <%!-- Card de Vista Previa Aprobatoria para Edit --%>
+                    <%= if @edit_preview_trigger_id == trigger.id and @edit_preview_draft do %>
+                      <div
+                        id={"edit-preview-card-#{trigger.id}"}
+                        class="pt-card"
+                        style="margin-top: 16px; border-left: 4px solid var(--color-primary); background: var(--color-surface-subtle); padding: 12px;"
+                      >
+                        <div class="pt-card__head" style="margin-bottom: 8px;">
+                          <span class="pt-h3">Nueva vista previa del mensaje</span>
+                        </div>
+                        <div class="pt-card__body">
+                          <p
+                            id={"edit-preview-draft-#{trigger.id}"}
+                            style="font-size: 1.05em; line-height: 1.5; margin-bottom: 12px;"
+                          >
+                            {@edit_preview_draft}
+                          </p>
+                          <button
+                            type="button"
+                            id={"approve-edit-button-#{trigger.id}"}
+                            phx-click="approve_edit"
+                            phx-value-id={trigger.id}
+                            phx-disable-with="Aprobando..."
+                            class="button-primary button-primary--sm"
+                          >
+                            <.icon name="hero-check" class="size-4" style="margin-right: 4px;" />
+                            Aprobar cambio
+                          </button>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
               </div>
             </div>
           </div>

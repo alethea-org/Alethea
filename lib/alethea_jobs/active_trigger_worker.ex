@@ -23,7 +23,8 @@ defmodule AletheaJobs.ActiveTriggerWorker do
       query = from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")
 
       case Repo.one(query) do
-        %Trigger{status: "active"} = trigger ->
+        %Trigger{status: "active", approved_text: approved_text} = trigger
+        when not is_nil(approved_text) ->
           now = DateTime.utc_now()
 
           # B1: Verify scheduled_at against actual clock before ANY mutation
@@ -93,7 +94,8 @@ defmodule AletheaJobs.ActiveTriggerWorker do
                     %{
                       "trigger_id" => trigger.id,
                       "message_id" => message.id,
-                      "lane" => "trigger"
+                      "lane" => "trigger",
+                      "approval_revision" => trigger.approval_revision
                     }
                     |> TelegramOutboundWorker.new()
                     |> Oban.insert!()
