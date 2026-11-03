@@ -12,6 +12,7 @@ defmodule Alethea.Triggers.Trigger do
     field :timezone, :string
     field :status, :string, default: "active"
     field :encryption_version, :integer, default: 1
+    field :approval_revision, :integer, default: 1
 
     field :schedule_type, :string, default: "once"
     field :time, :time
@@ -41,6 +42,7 @@ defmodule Alethea.Triggers.Trigger do
       :timezone,
       :status,
       :encryption_version,
+      :approval_revision,
       :schedule_type,
       :time,
       :weekdays,
@@ -50,15 +52,13 @@ defmodule Alethea.Triggers.Trigger do
       :patient_id,
       :professional_id,
       :instruction,
-      :draft_message,
-      :approved_text,
       :scheduled_at,
       :timezone,
       :status,
       :schedule_type
     ])
     |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
-    |> validate_inclusion(:status, ["active", "fired"])
+    |> validate_inclusion(:status, ["active", "inactive", "fired"])
     |> validate_schedule_fields()
   end
 
