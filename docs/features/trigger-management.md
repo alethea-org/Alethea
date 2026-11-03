@@ -89,6 +89,16 @@ The `status` field on `Alethea.Triggers.Trigger` supports:
 - **Signature**: `list_active_triggers(professional, patient_id) :: {:ok, [Trigger.t()]} | {:error, :unauthorized}`
 - **Behavior**: Preserves existing contract, returning only triggers where `status == "active" and not is_nil(approved_text)`.
 
+### 7. `get_trigger_summary/2` (and delegate `get_triggers_summary/2`)
+- **Signature**: `get_trigger_summary(professional, patient_id) :: {:ok, map()} | {:error, :unauthorized}`
+- **Behavior**:
+  - Enforces therapist-patient ownership authorization (S5).
+  - Queries aggregate trigger counts directly at the database level via SQL `COUNT` and conditional fragments (`CASE WHEN`).
+  - Aggregates counts without decrypting sensitive patient PHI (`instruction`, `approved_text`).
+  - Groups counts by **kind** (`active` scheduled triggers vs `reactive` event-based triggers) and persisted **status** (`active`, `inactive`, `fired`).
+  - Reports `needs_approval` (`approved_text IS NULL and status != 'fired'`) as a distinct metric without double-counting status or kind totals.
+  - Returns `{:error, :unauthorized}` for foreign therapists or invalid UUIDs.
+
 ## Execution and Worker Guards
 
 ### `ActiveTriggerWorker`
@@ -132,3 +142,15 @@ The triggers management LiveView (`AletheaWeb.TriggersLive.Index`) provides ther
 - **Approval (`Aprobar cambio`)**: Calls `Triggers.reapprove_trigger/4` binding the server-owned revision snapshot. If a concurrent edit occurred, a `:stale_revision` error is caught and displayed, requiring a fresh preview.
 - **Inactive State Preservation**: If an inactive trigger is edited and reapproved, its status remains `inactive` until the therapist explicitly clicks `Activar`.
 - **Param Change Invalidation**: Modifying the instruction text invalidates any previously displayed preview draft immediately.
+
+## Dashboard Triggers Summary Card (Issue #442 — T3, S4-S5)
+
+The clinical dashboard (`AletheaWeb.DashboardLive`) embeds an editorial triggers summary card (`#triggers-summary-card`) within the selected patient's briefing:
+- **Owner-Scoped & Privacy-Safe**: Trigger counts are loaded via `Triggers.get_trigger_summary/2` without decrypting PHI. Counts are strictly isolated to the authorized patient and reset whenever the patient selection changes.
+- **Direct Navigation**: The card header provides a direct link (`#triggers-card-manage-link`) to `~p"/patients/#{@selected_patient.id}/triggers"`, alongside the existing patient briefing action cluster (`#patient-triggers-link`).
+- **Kind vs Status Distinction**:
+  - Distinguishes trigger **kind** (`Tipo: Activos (programados)` vs `Tipo: Reactivos`) from trigger **status** (`Estado: Activo`, `Estado: Inactivo`, `Estado: Finalizado`).
+  - Existing database records correspond to active-kind (scheduled) triggers; reactive-kind rows are legitimately zero and marked as not yet configurable.
+  - Approval-required triggers (`Requieren aprobación`) are displayed separately (`#trigger-metric-needs-approval`), avoiding inflated or double-counted totals.
+- **Useful Empty State**: When a patient has no triggers configured, the card presents an informative empty state (`#triggers-summary-empty`) while maintaining accessible zero metrics (`#trigger-metric-active`, etc.) and a direct link to trigger management.
+- **Dynamic Refresh**: Navigating between patients or returning to the dashboard after creating, deactivating, or editing triggers immediately reloads fresh counts from the database without count leakage from prior sessions or foreign patients.

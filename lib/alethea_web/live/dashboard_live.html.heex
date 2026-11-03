@@ -259,6 +259,139 @@
         </article>
       </div>
     </section>
+    <%!-- Triggers summary card (Issue #442 — T3 S4) --%>
+    <section id="triggers-summary-card" class="pt-card">
+      <div class="pt-card__head">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="pt-h2">Disparadores (Triggers)</span>
+          <span
+            :if={@trigger_summary}
+            id="triggers-total-badge"
+            class="pt-pill"
+          >
+            Total: {@trigger_summary.total}
+          </span>
+        </div>
+        <.link
+          id="triggers-card-manage-link"
+          navigate={~p"/patients/#{@selected_patient.id}/triggers"}
+          class="button-secondary button-secondary--sm"
+        >
+          Gestionar triggers
+        </.link>
+      </div>
+
+      <div class="pt-card__body">
+        <div id="triggers-status-metrics" class="pta-metrics" style="margin-bottom:16px;">
+          <.metric_tile
+            id="trigger-metric-active"
+            label="Estado: Activos"
+            value={format_count(@trigger_summary && @trigger_summary.by_status.active)}
+          />
+          <.metric_tile
+            id="trigger-metric-inactive"
+            label="Estado: Inactivos"
+            value={format_count(@trigger_summary && @trigger_summary.by_status.inactive)}
+          />
+          <.metric_tile
+            id="trigger-metric-fired"
+            label="Estado: Finalizados"
+            value={format_count(@trigger_summary && @trigger_summary.by_status.fired)}
+          />
+          <div
+            :if={@trigger_summary && @trigger_summary.needs_approval > 0}
+            id="trigger-metric-needs-approval"
+            class="pta-metric"
+          >
+            <div class="pta-metric__label">Requieren aprobación</div>
+            <div class="pta-metric__value">{@trigger_summary.needs_approval}</div>
+          </div>
+        </div>
+
+        <div
+          :if={is_nil(@trigger_summary) || @trigger_summary.total == 0}
+          id="triggers-summary-empty"
+          class="empty-state"
+          style="margin-top:12px;"
+        >
+          <p class="empty-state__text" style="margin-bottom:0;">
+            Sin disparadores configurados aún. Podés crear disparadores desde la sección de gestión.
+          </p>
+        </div>
+
+        <div
+          :if={@trigger_summary && @trigger_summary.total > 0}
+          id="triggers-kind-breakdown"
+          style="display:flex; flex-direction:column; gap:12px;"
+        >
+          <div
+            id="trigger-kind-active"
+            class="pta-timeline__item"
+            style="padding:12px; border-radius:6px; background:var(--color-surface-subtle, rgba(0,0,0,0.02));"
+          >
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+              <div>
+                <strong style="font-size:14px;">Tipo: Activos (programados)</strong>
+                <span class="pt-muted" style="font-size:12px; margin-left:6px;">
+                  Disparadores basados en horario
+                </span>
+              </div>
+              <span id="trigger-kind-active-total" class="pt-pill pt-pill--active">
+                Total: {@trigger_summary.active_kind.total}
+              </span>
+            </div>
+            <div style="display:flex; gap:16px; font-size:13px; flex-wrap:wrap;" class="pt-muted">
+              <span id="trigger-kind-active-status-active">
+                Activos: <strong>{@trigger_summary.active_kind.active}</strong>
+              </span>
+              <span id="trigger-kind-active-status-inactive">
+                Inactivos: <strong>{@trigger_summary.active_kind.inactive}</strong>
+              </span>
+              <span id="trigger-kind-active-status-fired">
+                Finalizados: <strong>{@trigger_summary.active_kind.fired}</strong>
+              </span>
+              <span
+                :if={@trigger_summary.active_kind.needs_approval > 0}
+                id="trigger-kind-active-needs-approval"
+                class="pt-pill pt-pill--warning"
+                style="font-size:11px;"
+              >
+                Requieren aprobación: {@trigger_summary.active_kind.needs_approval}
+              </span>
+            </div>
+          </div>
+
+          <div
+            id="trigger-kind-reactive"
+            class="pta-timeline__item"
+            style="padding:12px; border-radius:6px; background:var(--color-surface-subtle, rgba(0,0,0,0.02)); opacity:0.8;"
+          >
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+              <div>
+                <strong style="font-size:14px;">Tipo: Reactivos</strong>
+                <span class="pt-muted" style="font-size:12px; margin-left:6px;">
+                  Disparadores basados en eventos (no configurables aún)
+                </span>
+              </div>
+              <span id="trigger-kind-reactive-total" class="pt-pill">
+                Total: {@trigger_summary.reactive_kind.total}
+              </span>
+            </div>
+            <div style="display:flex; gap:16px; font-size:13px; flex-wrap:wrap;" class="pt-muted">
+              <span id="trigger-kind-reactive-status-active">
+                Activos: <strong>{@trigger_summary.reactive_kind.active}</strong>
+              </span>
+              <span id="trigger-kind-reactive-status-inactive">
+                Inactivos: <strong>{@trigger_summary.reactive_kind.inactive}</strong>
+              </span>
+              <span id="trigger-kind-reactive-status-fired">
+                Finalizados: <strong>{@trigger_summary.reactive_kind.fired}</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
     <%!-- Emotion trends — one meter per emotion --%>
     <div :if={@emotion_rows != []} id="emotion-trends" class="pt-card">
       <div class="pt-card__head">

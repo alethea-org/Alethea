@@ -10,6 +10,7 @@ defmodule AletheaWeb.DashboardLive do
   alias AletheaWeb.DashboardLive.Components.NotificationCenter
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Foundation.Accounts.BotConfig
+  alias Alethea.Triggers
 
   def mount(_params, %{"professional_id" => id}, socket) do
     if connected?(socket) do
@@ -59,6 +60,7 @@ defmodule AletheaWeb.DashboardLive do
         to_form(%{"timezone" => professional.timezone || "Etc/UTC"})
       )
       |> assign(:patient_timezone_form, nil)
+      |> assign(:trigger_summary, nil)
 
     # Telegram invite wiring (feature: patient telegram invites).
     # Real mode resolves the foundation professional once per session
@@ -109,6 +111,7 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:patient_timezone_form, nil)
     |> assign(:chat_decrypted, false)
     |> assign(:target_behaviors_empty?, true)
+    |> assign(:trigger_summary, nil)
     |> stream(:decrypted_messages, [], reset: true)
     |> stream(:target_behaviors, [], reset: true)
   end
@@ -691,6 +694,16 @@ defmodule AletheaWeb.DashboardLive do
         Alethea.Clinical.list_daily_emotion_scores(patient.id, seven_days_ago)
       end
 
+    trigger_summary =
+      if use_mock? or not is_valid_uuid?(patient.id) do
+        default_trigger_summary()
+      else
+        case Triggers.get_trigger_summary(socket.assigns.current_professional, patient.id) do
+          {:ok, summary} -> summary
+          _ -> default_trigger_summary()
+        end
+      end
+
     socket
     |> assign(:selected_patient, patient)
     |> assign(
@@ -702,6 +715,7 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:emotion_rows, emotion_rows)
     |> assign(:emotion_chart_data, emotion_chart_data)
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
+    |> assign(:trigger_summary, trigger_summary)
   end
 
   defp load_target_behaviors(socket, patient) do
@@ -719,6 +733,40 @@ defmodule AletheaWeb.DashboardLive do
       {:ok, target_behaviors} -> target_behaviors
       {:error, _reason} -> []
     end
+  end
+
+  defp default_trigger_summary do
+    active_kind = %{
+      total: 0,
+      active: 0,
+      inactive: 0,
+      fired: 0,
+      needs_approval: 0
+    }
+
+    reactive_kind = %{
+      total: 0,
+      active: 0,
+      inactive: 0,
+      fired: 0,
+      needs_approval: 0
+    }
+
+    %{
+      total: 0,
+      by_kind: %{
+        active: active_kind,
+        reactive: reactive_kind
+      },
+      by_status: %{
+        active: 0,
+        inactive: 0,
+        fired: 0
+      },
+      active_kind: active_kind,
+      reactive_kind: reactive_kind,
+      needs_approval: 0
+    }
   end
 
   def handle_info(
