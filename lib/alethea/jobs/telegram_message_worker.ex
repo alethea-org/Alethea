@@ -1066,6 +1066,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
               {:created, outbound, released}
 
             {:error, :reply_already_exists} ->
+              ensure_existing_crisis_urgent!(legacy_patient)
+              Alethea.Triggers.pause_active_triggers_for_crisis(legacy_patient.id)
               {:resumed, fetch_winning_reply!(inbound.id, hash_prefix), 0}
 
             {:error, reason} ->

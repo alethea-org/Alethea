@@ -94,6 +94,32 @@ defmodule Alethea.Jobs.TelegramMessageWorkerCrisisTriggersTest do
                professional_id: professional.id
              )
     end
+
+    test "pauses triggers even on replay when reply already exists (TR-02)",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(2)
+
+      # First inbound message arrives
+      assert :ok = perform_crisis_inbound()
+
+      # Now patient creates an active trigger after the initial reply row existed
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Recordar respiración",
+          approved_text: "Hola, recuerda respirar.",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      assert Repo.get!(Trigger, trigger.id).status == "active"
+
+      # Re-execute crisis inbound (hits existing reply branch / collision)
+      assert :ok = perform_crisis_inbound()
+
+      # Trigger must be moved to paused_by_crisis
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_crisis"
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+    end
   end
 
   defp perform_crisis_inbound do

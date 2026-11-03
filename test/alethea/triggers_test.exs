@@ -490,6 +490,34 @@ defmodule Alethea.TriggersTest do
       assert {:error, :paused_by_crisis} =
                Triggers.activate_trigger(professional, patient.id, trigger.id)
     end
+
+    test "deactivate_trigger safely deactivates paused_by_crisis triggers (CORR-01)",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_crisis(patient.id)
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_crisis"
+
+      assert {:ok, deactivated} =
+               Triggers.deactivate_trigger(professional, patient.id, trigger.id)
+
+      assert deactivated.status == "inactive"
+      assert Repo.get!(Trigger, trigger.id).status == "inactive"
+
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_deactivated",
+               professional_id: professional.id
+             )
+    end
   end
 
   describe "list_active_triggers/2 and get_trigger/3" do
