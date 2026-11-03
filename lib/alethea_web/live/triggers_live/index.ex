@@ -31,8 +31,11 @@ defmodule AletheaWeb.TriggersLive.Index do
             to_form(
               %{
                 "instruction" => "",
+                "schedule_type" => "once",
                 "date" => "",
-                "time" => ""
+                "time" => "",
+                "weekdays" => [],
+                "end_date" => ""
               },
               as: "trigger"
             )
@@ -134,8 +137,11 @@ defmodule AletheaWeb.TriggersLive.Index do
       preview_instruction = socket.assigns[:preview_instruction]
       params = socket.assigns.form.params || %{}
       instruction = Map.get(params, "instruction", "") |> String.trim()
+      schedule_type = Map.get(params, "schedule_type", "once")
       date = Map.get(params, "date", "")
       time = Map.get(params, "time", "")
+      weekdays = Map.get(params, "weekdays", [])
+      end_date = Map.get(params, "end_date", "")
 
       cond do
         is_nil(preview_draft) or String.trim(preview_draft) == "" ->
@@ -155,8 +161,14 @@ defmodule AletheaWeb.TriggersLive.Index do
         instruction == "" ->
           {:noreply, put_flash(socket, :error, "La instrucción no puede estar vacía.")}
 
-        date == "" or time == "" ->
+        schedule_type == "once" and (date == "" or time == "") ->
           {:noreply, put_flash(socket, :error, "Debes especificar fecha y hora.")}
+
+        schedule_type in ["daily", "weekly"] and time == "" ->
+          {:noreply, put_flash(socket, :error, "Debes especificar la hora de envío.")}
+
+        schedule_type == "weekly" and (is_nil(weekdays) or weekdays == []) ->
+          {:noreply, put_flash(socket, :error, "Debes seleccionar al menos un día de la semana.")}
 
         true ->
           professional = socket.assigns.current_professional
@@ -166,8 +178,11 @@ defmodule AletheaWeb.TriggersLive.Index do
             "instruction" => instruction,
             "draft_message" => preview_draft,
             "approved_text" => preview_draft,
+            "schedule_type" => schedule_type,
             "date" => date,
-            "time" => time
+            "time" => time,
+            "weekdays" => weekdays,
+            "end_date" => end_date
           }
 
           socket = assign(socket, :approving, true)
@@ -183,7 +198,17 @@ defmodule AletheaWeb.TriggersLive.Index do
                |> assign(:preview_instruction, nil)
                |> assign(
                  :form,
-                 to_form(%{"instruction" => "", "date" => "", "time" => ""}, as: "trigger")
+                 to_form(
+                   %{
+                     "instruction" => "",
+                     "schedule_type" => "once",
+                     "date" => "",
+                     "time" => "",
+                     "weekdays" => [],
+                     "end_date" => ""
+                   },
+                   as: "trigger"
+                 )
                )
                |> put_flash(:info, "Trigger programado exitosamente.")}
 
@@ -192,6 +217,27 @@ defmodule AletheaWeb.TriggersLive.Index do
 
             {:error, {:ambiguous, msg}} ->
               {:noreply, socket |> assign(:approving, false) |> put_flash(:error, msg)}
+
+            {:error, {:invalid_end_date, msg}} ->
+              {:noreply, socket |> assign(:approving, false) |> put_flash(:error, msg)}
+
+            {:error, :invalid_end_date} ->
+              {:noreply,
+               socket
+               |> assign(:approving, false)
+               |> put_flash(
+                 :error,
+                 "La fecha de fin no puede ser anterior al primer envío."
+               )}
+
+            {:error, {:empty_weekdays, msg}} ->
+              {:noreply, socket |> assign(:approving, false) |> put_flash(:error, msg)}
+
+            {:error, :empty_weekdays} ->
+              {:noreply,
+               socket
+               |> assign(:approving, false)
+               |> put_flash(:error, "Debes seleccionar al menos un día de la semana.")}
 
             {:error, :past_schedule} ->
               {:noreply,
@@ -229,6 +275,12 @@ defmodule AletheaWeb.TriggersLive.Index do
   end
 
   defp format_datetime(nil), do: ""
+
+  defp format_date(%Date{} = d) do
+    Calendar.strftime(d, "%d/%m/%Y")
+  end
+
+  defp format_date(_), do: ""
 
   @impl true
   def render(assigns) do
@@ -306,22 +358,80 @@ defmodule AletheaWeb.TriggersLive.Index do
                 required
               />
 
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px;">
+              <div style="margin-top: 12px;">
                 <.input
-                  id="trigger-date-input"
-                  field={@form[:date]}
-                  type="date"
-                  label="Fecha de envío"
-                  required
-                />
-                <.input
-                  id="trigger-time-input"
-                  field={@form[:time]}
-                  type="time"
-                  label={"Hora de envío (#{@patient.timezone || "America/Santiago"})"}
-                  required
+                  id="trigger-schedule-type-select"
+                  field={@form[:schedule_type]}
+                  type="select"
+                  label="Frecuencia"
+                  options={[
+                    {"Una sola vez", "once"},
+                    {"Diario", "daily"},
+                    {"Semanal", "weekly"}
+                  ]}
                 />
               </div>
+
+              <%= if (@form[:schedule_type].value || "once") == "weekly" do %>
+                <div id="trigger-weekdays-selector" style="margin-top: 12px;">
+                  <label class="block text-sm font-semibold leading-6 mb-1">Días de la semana</label>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <%= for {day_name, day_num} <- [{"Lun", 1}, {"Mar", 2}, {"Mié", 3}, {"Jue", 4}, {"Vie", 5}, {"Sáb", 6}, {"Dom", 7}] do %>
+                      <label
+                        class="pt-weekday-checkbox"
+                        style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 6px; cursor: pointer; font-size: 0.9em;"
+                      >
+                        <input
+                          type="checkbox"
+                          id={"trigger-weekday-#{day_num}"}
+                          name="trigger[weekdays][]"
+                          value={to_string(day_num)}
+                          checked={
+                            to_string(day_num) in (List.wrap(@form[:weekdays].value)
+                                                   |> Enum.map(&to_string/1))
+                          }
+                        />
+                        <span>{day_name}</span>
+                      </label>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <%= if (@form[:schedule_type].value || "once") == "once" do %>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px;">
+                  <.input
+                    id="trigger-date-input"
+                    field={@form[:date]}
+                    type="date"
+                    label="Fecha de envío"
+                    required
+                  />
+                  <.input
+                    id="trigger-time-input"
+                    field={@form[:time]}
+                    type="time"
+                    label={"Hora de envío (#{@patient.timezone || "America/Santiago"})"}
+                    required
+                  />
+                </div>
+              <% else %>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px;">
+                  <.input
+                    id="trigger-time-input"
+                    field={@form[:time]}
+                    type="time"
+                    label={"Hora de envío (#{@patient.timezone || "America/Santiago"})"}
+                    required
+                  />
+                  <.input
+                    id="trigger-end-date-input"
+                    field={@form[:end_date]}
+                    type="date"
+                    label="Fecha de fin (opcional)"
+                  />
+                </div>
+              <% end %>
 
               <div class="form-actions" style="margin-top: 16px; display: flex; gap: 8px;">
                 <button
@@ -392,9 +502,25 @@ defmodule AletheaWeb.TriggersLive.Index do
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
                   <div>
                     <span class="pt-pill pt-pill--active">Activo</span>
-                    <span class="pt-muted" style="margin-left: 8px; font-size: 0.85em;">
-                      Programado para: {format_datetime(trigger.scheduled_at)}
+                    <span
+                      id={"trigger-schedule-badge-#{trigger.id}"}
+                      class="pt-pill"
+                      style="margin-left: 6px; font-size: 0.85em; background: var(--color-surface-subtle);"
+                    >
+                      {Triggers.schedule_badge(trigger)}
                     </span>
+                    <span class="pt-muted" style="margin-left: 8px; font-size: 0.85em;">
+                      Próximo envío: {format_datetime(trigger.scheduled_at)}
+                    </span>
+                    <%= if trigger.end_date do %>
+                      <span
+                        id={"trigger-end-date-#{trigger.id}"}
+                        class="pt-muted"
+                        style="margin-left: 8px; font-size: 0.85em;"
+                      >
+                        · Hasta: {format_date(trigger.end_date)}
+                      </span>
+                    <% end %>
                   </div>
                 </div>
                 <p style="font-size: 1em; margin-bottom: 6px;">

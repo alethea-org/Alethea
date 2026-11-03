@@ -6,14 +6,26 @@ defmodule Alethea.Triggers do
   import Ecto.Query
 
   alias Alethea.Accounts
-  alias Alethea.Accounts.{AuditLog, PatientTimezone}
+  alias Alethea.Accounts.AuditLog
   alias Alethea.AI.Chains.TriggerPreviewChain
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
-  alias Alethea.Triggers.{Trigger, TriggerFiring}
+  alias Alethea.Triggers.{Schedule, Trigger, TriggerFiring}
   alias AletheaJobs.ActiveTriggerWorker
+
+  @doc """
+  Computes the next occurrence for an active trigger after `from_utc`.
+  Delegates to `Alethea.Triggers.Schedule.next_occurrence/2`.
+  """
+  defdelegate next_occurrence(trigger, from_utc), to: Schedule
+
+  @doc """
+  Returns a human-readable badge label for a trigger schedule.
+  Delegates to `Alethea.Triggers.Schedule.schedule_badge/1`.
+  """
+  defdelegate schedule_badge(trigger), to: Schedule
 
   @doc """
   Generates a clinically neutral preview message from an instruction.
@@ -37,7 +49,7 @@ defmodule Alethea.Triggers do
   end
 
   @doc """
-  Creates and approves a one-shot trigger in a single transaction,
+  Creates and approves an active trigger (one-shot, daily, or weekly) in a single transaction,
   encrypting its content per patient, writing audit logs, and scheduling
   an ActiveTriggerWorker Oban job.
   """
@@ -45,12 +57,13 @@ defmodule Alethea.Triggers do
           {:ok, Trigger.t()} | {:error, term()}
   def create_and_approve_trigger(%Accounts.Professional{} = professional, patient_id, attrs)
       when is_binary(patient_id) and is_map(attrs) do
+    schedule_type =
+      Map.get(attrs, :schedule_type) || Map.get(attrs, "schedule_type") || "once"
+
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          %Accounts.Patient{} = patient <-
            Accounts.get_patient_for_professional(professional.id, valid_patient_id),
-         {:ok, date, time} <- parse_date_time(attrs),
-         {:ok, scheduled_at} <- resolve_utc_instant(patient, date, time),
-         :ok <- validate_future_instant(scheduled_at),
+         {:ok, schedule_info} <- Schedule.initial_occurrence(patient, schedule_type, attrs),
          {:ok, instruction, draft_message, approved_text} <- validate_and_extract_texts(attrs),
          {:ok, dek} <- Clinical.patient_dek(patient, "trigger_creation"),
          {:ok, enc_instruction} <- PatientVault.encrypt(instruction, dek),
@@ -63,7 +76,11 @@ defmodule Alethea.Triggers do
           instruction: enc_instruction,
           draft_message: enc_draft,
           approved_text: enc_approved,
-          scheduled_at: scheduled_at,
+          scheduled_at: schedule_info.scheduled_at,
+          schedule_type: schedule_info.schedule_type,
+          time: schedule_info.time,
+          weekdays: schedule_info.weekdays,
+          end_date: schedule_info.end_date,
           timezone: patient.timezone || "America/Santiago",
           status: "active"
         }
@@ -79,7 +96,7 @@ defmodule Alethea.Triggers do
 
         # Schedule Oban job with only ID in args
         %{"trigger_id" => trigger.id}
-        |> ActiveTriggerWorker.new(scheduled_at: scheduled_at)
+        |> ActiveTriggerWorker.new(scheduled_at: schedule_info.scheduled_at)
         |> Oban.insert!()
 
         %{
@@ -225,75 +242,6 @@ defmodule Alethea.Triggers do
   end
 
   # --- Internal Helpers ---
-
-  defp parse_date_time(%{date: %Date{} = d, time: %Time{} = t}), do: {:ok, d, t}
-
-  defp parse_date_time(%{"date" => d, "time" => t}) do
-    with {:ok, date} <- Date.from_iso8601(d),
-         {:ok, time} <- parse_time_string(t) do
-      {:ok, date, time}
-    else
-      _ -> {:error, :invalid_date_time}
-    end
-  end
-
-  defp parse_date_time(%{date: d, time: t}) when is_binary(d) and is_binary(t) do
-    parse_date_time(%{"date" => d, "time" => t})
-  end
-
-  defp parse_date_time(_), do: {:error, :invalid_date_time}
-
-  defp parse_time_string(str) do
-    case Time.from_iso8601(str) do
-      {:ok, time} ->
-        {:ok, time}
-
-      {:error, _} ->
-        case String.split(str, ":") do
-          [h, m] ->
-            with {hh, ""} <- Integer.parse(h),
-                 {mm, ""} <- Integer.parse(m),
-                 {:ok, time} <- Time.new(hh, mm, 0) do
-              {:ok, time}
-            else
-              _ -> {:error, :invalid_time}
-            end
-
-          _ ->
-            {:error, :invalid_time}
-        end
-    end
-  end
-
-  defp resolve_utc_instant(patient, date, time) do
-    case PatientTimezone.convert_to_utc(patient, date, time) do
-      {:ok, %DateTime{} = utc} ->
-        {:ok, DateTime.truncate(utc, :second)}
-
-      {:gap, _dt1, _dt2} ->
-        {:error,
-         {:gap,
-          "La hora ingresada no existe debido al cambio de horario de verano en la zona horaria del paciente."}}
-
-      {:ambiguous, _dt1, _dt2} ->
-        {:error,
-         {:ambiguous,
-          "La hora ingresada es ambigua debido al cambio de horario en la zona horaria del paciente."}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp validate_future_instant(%DateTime{} = dt) do
-    now = DateTime.utc_now()
-
-    if DateTime.compare(dt, now) == :gt do
-      :ok
-    else
-      {:error, :past_schedule}
-    end
-  end
 
   defp validate_and_extract_texts(attrs) do
     instruction =

@@ -54,8 +54,14 @@ The tracer bullet covers the full path end-to-end:
 - Unlike conversational replies, proactive triggers do not use conversational journaling supersession; `Clinical.claim_trigger_delivery/1` atomically transitions `delivery_state` from `"pending"` to `"sending"`.
 - Existing `:safe`, `:crisis`, and default/goodbye behaviors remain unmodified.
 
-## Scope Exclusions (Deferred to Issues #441–#448, #452)
-- Recurrent triggers (#441)
+### 6. Recurrent Schedules and Firing Lifecycle (Issue #441)
+- Active triggers support `once`, `daily`, and `weekly` schedules with an optional `end_date`.
+- Initial occurrence and subsequent firings are calculated in the patient's configured timezone across Daylight Saving Time (DST) changes using `Alethea.Triggers.Schedule`.
+- After each firing, `ActiveTriggerWorker` calculates the next occurrence instant. If the next occurrence is on or before `end_date` (or `end_date` is omitted), `trigger.scheduled_at` advances and a new Oban job is enqueued on `:schedulers`.
+- When `end_date` is reached (no further occurrences possible), `trigger.status` transitions to `"fired"` and scheduling ceases.
+- Concurrency defense: `trigger_firings` unique index on `[:trigger_id, :scheduled_at]` ensures each scheduled occurrence fires at most once, and row-level locking `FOR UPDATE` prevents race conditions.
+
+## Scope Exclusions (Deferred to Issues #442–#448, #452)
 - Editing, status toggles, dashboard trigger counts (#442)
 - Crisis pause and resumption (#443)
 - Session deferral and daily limit caps (#444)
