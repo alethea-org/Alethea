@@ -176,6 +176,85 @@ defmodule Alethea.Triggers do
   end
 
   @doc """
+  Returns an owner-scoped summary of trigger counts grouped by kind and status for a given patient.
+  Aggregates counts at the database level without decrypting PHI.
+  """
+  @spec get_trigger_summary(Accounts.Professional.t(), binary()) ::
+          {:ok, map()} | {:error, :unauthorized}
+  def get_trigger_summary(%Accounts.Professional{} = professional, patient_id)
+      when is_binary(patient_id) do
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         %Accounts.Patient{} <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
+      query =
+        from(t in Trigger,
+          where: t.patient_id == ^valid_patient_id,
+          select: %{
+            total: count(t.id),
+            active: count(fragment("CASE WHEN ? = 'active' THEN 1 END", t.status)),
+            inactive: count(fragment("CASE WHEN ? = 'inactive' THEN 1 END", t.status)),
+            fired: count(fragment("CASE WHEN ? = 'fired' THEN 1 END", t.status)),
+            needs_approval:
+              count(
+                fragment(
+                  "CASE WHEN ? IS NULL AND ? != 'fired' THEN 1 END",
+                  t.approved_text,
+                  t.status
+                )
+              )
+          }
+        )
+
+      stats = Repo.one(query) || %{total: 0, active: 0, inactive: 0, fired: 0, needs_approval: 0}
+
+      active_kind = %{
+        total: stats.total,
+        active: stats.active,
+        inactive: stats.inactive,
+        fired: stats.fired,
+        needs_approval: stats.needs_approval
+      }
+
+      reactive_kind = %{
+        total: 0,
+        active: 0,
+        inactive: 0,
+        fired: 0,
+        needs_approval: 0
+      }
+
+      summary = %{
+        total: stats.total,
+        by_kind: %{
+          active: active_kind,
+          reactive: reactive_kind
+        },
+        by_status: %{
+          active: stats.active,
+          inactive: stats.inactive,
+          fired: stats.fired
+        },
+        active_kind: active_kind,
+        reactive_kind: reactive_kind,
+        needs_approval: stats.needs_approval
+      }
+
+      {:ok, summary}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  def get_trigger_summary(_professional, _patient_id), do: {:error, :unauthorized}
+
+  @doc """
+  Plural delegate for `get_trigger_summary/2`.
+  """
+  defdelegate get_triggers_summary(professional, patient_id),
+    to: __MODULE__,
+    as: :get_trigger_summary
+
+  @doc """
   Deactivates an active trigger without deleting it (S1).
   Removes any scheduled Oban jobs and records an audit log entry.
   """
