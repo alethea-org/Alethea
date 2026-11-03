@@ -61,10 +61,17 @@ The tracer bullet covers the full path end-to-end:
 - When `end_date` is reached (no further occurrences possible), `trigger.status` transitions to `"fired"` and scheduling ceases.
 - Concurrency defense: `trigger_firings` unique index on `[:trigger_id, :scheduled_at]` ensures each scheduled occurrence fires at most once, and row-level locking `FOR UPDATE` prevents race conditions.
 
+### 7. Session Deferral (Issue #444)
+- A due active trigger waits while a session is open, inbound burst messages lack reply coverage, or an ordinary burst reply is pending delivery.
+- Session closure remains owned by `SessionTimeoutWorker`; the trigger worker does not run a separate inactivity timer.
+- The same job snoozes for up to 60 seconds at a time, capped at the original `scheduled_at` plus one hour. Closing the session and resolving pending replies releases it on the next poll.
+- At the one-hour boundary the trigger may fire even if journaling is still open. Crisis and approval guards continue to apply.
+- Deferral creates no message, firing, audit event, or outbound job and never advances the occurrence or resets its deadline.
+
 ## Scope Exclusions (Deferred to Issues #442–#448, #452)
 - Editing, status toggles, dashboard trigger counts (#442)
 - Crisis pause and resumption (#443)
-- Session deferral and daily limit caps (#444)
+- Daily limit caps (remaining #444 work)
 - Delivery failure counters and retry history handling (#445)
 - Patient-initiated pause/opt-out notices (#446)
 - ELICITED message classification (#447)
