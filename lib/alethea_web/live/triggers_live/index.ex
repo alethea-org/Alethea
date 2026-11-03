@@ -974,7 +974,6 @@ defmodule AletheaWeb.TriggersLive.Index do
                           phx-value-id={trigger.id}
                           class="button-secondary button-secondary--sm"
                         >
-                          <.icon name="hero-pencil" class="size-4" style="margin-right: 4px;" />
                           Editar
                         </button>
 
@@ -986,7 +985,6 @@ defmodule AletheaWeb.TriggersLive.Index do
                             phx-value-id={trigger.id}
                             class="button-secondary button-secondary--sm text-amber-600 hover:text-amber-700"
                           >
-                            <.icon name="hero-pause" class="size-4" style="margin-right: 4px;" />
                             Desactivar
                           </button>
                         <% else %>
@@ -997,7 +995,6 @@ defmodule AletheaWeb.TriggersLive.Index do
                             phx-value-id={trigger.id}
                             class="button-secondary button-secondary--sm text-emerald-600 hover:text-emerald-700"
                           >
-                            <.icon name="hero-play" class="size-4" style="margin-right: 4px;" />
                             Activar
                           </button>
                         <% end %>
