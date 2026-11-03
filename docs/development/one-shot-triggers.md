@@ -68,10 +68,18 @@ The tracer bullet covers the full path end-to-end:
 - At the one-hour boundary the trigger may fire even if journaling is still open. Crisis and approval guards continue to apply.
 - Deferral creates no message, firing, audit event, or outbound job and never advances the occurrence or resets its deadline.
 
-## Scope Exclusions (Deferred to Issues #442–#448, #452)
+### 8. Daily Send Cap and Skipped History (Issue #444 — S2, S4)
+- Active sends are capped at a globally configured 5 sends per patient per calendar day in the patient's configured timezone (`patient.timezone`), defaulting to 5 via `:alethea, :active_trigger_daily_cap`.
+- Day boundaries and DST transitions: `Triggers.local_day_utc_range/2` calculates contiguous `[start_utc, end_utc)` bounds in the patient's timezone. During DST midnight spring-forward gaps (e.g. 00:00 jumping to 01:00 in America/Santiago), the boundary resolves to the first valid instant of the new day (e.g. 01:00 local / 04:00 UTC) for both the end of the preceding day and the start of the next day, avoiding dropped last-second firings or gap omissions. During midnight fall-back ambiguities, the earlier midnight instant is consistently selected on both adjacent boundaries to prevent day overlap.
+- Concurrency and lock order: `ActiveTriggerWorker` locks the patient conversation first via `Clinical.lock_patient_conversation!/1` before acquiring the row-level `FOR UPDATE` lock on the trigger, preserving the global lock hierarchy (Patient -> Trigger -> Message) and serializing concurrent trigger evaluations for the same patient without deadlock.
+- The 6th send of the day (and subsequent attempts exceeding the cap) is suppressed: no `Message` record is created, and no `TelegramOutboundWorker` job is enqueued.
+- Truthful skipped history: `TriggerFiring` records `status: "skipped"` with `message_id: nil`. In the clinical history LiveView, it renders an `"Omitido"` badge without a broken message link.
+- Recurrence handling: skipped occurrences advance via `Triggers.next_occurrence/2`. One-shot triggers are consumed (`trigger.status = "fired"`), and recurring triggers advance to their next occurrence.
+- Content-free audit: `Triggers.insert_content_free_audit!(trigger.professional_id, trigger.id, "trigger_skipped")` logs the event without PHI.
+
+## Scope Exclusions (Deferred to Issues #445–#448, #452)
 - Editing, status toggles, dashboard trigger counts (#442)
 - Crisis pause and resumption (#443)
-- Daily limit caps (remaining #444 work)
 - Delivery failure counters and retry history handling (#445)
 - Patient-initiated pause/opt-out notices (#446)
 - ELICITED message classification (#447)

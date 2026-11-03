@@ -1177,10 +1177,13 @@ defmodule AletheaWeb.TriggersLive.Index do
             >
               <div id={"firing-#{firing.id}"}>
                 <div style="margin-bottom: 4px;">
-                  <%= if firing.message && firing.message.delivery_state == "sent" do %>
-                    <span class="pt-pill pt-pill--sent">Enviado</span>
-                  <% else %>
-                    <span class="pt-pill pt-pill--queued">En cola</span>
+                  <%= cond do %>
+                    <% firing.status == "skipped" -> %>
+                      <span class="pt-pill pt-pill--neutral">Omitido</span>
+                    <% firing.message && firing.message.delivery_state == "sent" -> %>
+                      <span class="pt-pill pt-pill--sent">Enviado</span>
+                    <% true -> %>
+                      <span class="pt-pill pt-pill--queued">En cola</span>
                   <% end %>
                   <span class="pt-muted" style="margin-left: 8px; font-size: 0.85em;">
                     Disparado el: {format_datetime(firing.fired_at)}
@@ -1192,13 +1195,15 @@ defmodule AletheaWeb.TriggersLive.Index do
               </div>
 
               <div>
-                <.link
-                  id={"firing-message-link-#{firing.id}"}
-                  navigate={~p"/patients/#{@patient.id}/triggers/messages/#{firing.message_id}"}
-                  class="button-secondary button-secondary--sm"
-                >
-                  Ver mensaje
-                </.link>
+                <%= if firing.message_id do %>
+                  <.link
+                    id={"firing-message-link-#{firing.id}"}
+                    navigate={~p"/patients/#{@patient.id}/triggers/messages/#{firing.message_id}"}
+                    class="button-secondary button-secondary--sm"
+                  >
+                    Ver mensaje
+                  </.link>
+                <% end %>
               </div>
             </div>
           </div>

@@ -165,6 +165,9 @@ config :alethea, :retention_sweep_enabled, false
 # can only lengthen this (AD3: `GREATEST`), never shorten it.
 config :alethea, :retention_baseline_days, 3650
 
+# Cap for active trigger sends per patient per calendar day (Issue #444, S2, S4)
+config :alethea, :active_trigger_daily_cap, 5
+
 # Global configuration for LangChain chains
 #
 # `max_tokens` is the journaling reply-length bound (#392): replies are
