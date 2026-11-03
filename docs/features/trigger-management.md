@@ -105,3 +105,30 @@ The `status` field on `Alethea.Triggers.Trigger` supports:
   4. If all checks pass: invokes `Clinical.claim_trigger_delivery/1`.
 - Any skipped delivery exits `:ok` without calling `Client.send_message/2`, ensuring previously enqueued or retrying jobs do not emit messages after deactivation, instruction edits, or concurrent re-approval.
 - Boundary note: Once an outbound request has passed this gate and has been issued to the Telegram client API, it is in flight and cannot be retracted by the local system.
+
+## User-Facing LiveView Workflow (Issue #442 — T2)
+
+The triggers management LiveView (`AletheaWeb.TriggersLive.Index`) provides therapists with direct controls to manage trigger lifecycles and edit therapeutic instructions safely.
+
+### 1. Trigger Statuses and Visibility
+- **Triggers List**: Lists all patient triggers (active, inactive, unapproved, and completed/fired) using `Triggers.list_triggers/2`.
+- **Status Badges**:
+  - `Activo` (`pt-pill pt-pill--active`): Active trigger with scheduled future occurrence.
+  - `Inactivo` (`pt-pill pt-pill--inactive`): Suspended trigger; will not fire while inactive.
+  - `Finalizado` (`pt-pill`): Trigger has already fired or completed its recurring schedule; rendered read-only without edit or toggle buttons.
+  - `Requiere aprobación` (`pt-pill pt-pill--warning`): Trigger's instruction was modified or lacks an approved message. No sends can occur while unapproved.
+
+### 2. Activation and Deactivation Controls
+- **Deactivating (`Desactivar`)**: Clicking `Desactivar` suspends the trigger, transitions its status to `inactive`, prunes pending scheduled Oban jobs, and writes an audit log entry.
+- **Activating (`Activar`)**: Clicking `Activar` transitions an inactive trigger back to `active`.
+  - For `once` schedules: verifies the scheduled time is in the future. If expired, displays an actionable error asking the therapist to create a new trigger with a future time.
+  - For `daily`/`weekly` recurring schedules: recomputes the next future occurrence in the patient's timezone without missed-send catchup. If the end date has expired, returns an actionable error.
+  - For unapproved triggers: activation is blocked with an error requiring the therapist to generate and approve a preview first.
+
+### 3. Instruction Editing and Re-Approval Lifecycle
+- **Inline Edit (`Editar`)**: Opens the instruction edit form for any non-fired trigger.
+- **Persist-First Guarantee**: Submitting an edited instruction or generating a preview persists the new instruction in the database **first**, clearing `approved_text` and `draft_message`, incrementing `approval_revision`, and pruning scheduled jobs. Even if preview draft generation fails or the therapist leaves the page, the trigger cannot fire with outdated content.
+- **Server-Owned Preview Snapshot**: The generated preview draft and its snapshot revision (`expected_revision`) are held in server assigns, not client parameters.
+- **Approval (`Aprobar cambio`)**: Calls `Triggers.reapprove_trigger/4` binding the server-owned revision snapshot. If a concurrent edit occurred, a `:stale_revision` error is caught and displayed, requiring a fresh preview.
+- **Inactive State Preservation**: If an inactive trigger is edited and reapproved, its status remains `inactive` until the therapist explicitly clicks `Activar`.
+- **Param Change Invalidation**: Modifying the instruction text invalidates any previously displayed preview draft immediately.
