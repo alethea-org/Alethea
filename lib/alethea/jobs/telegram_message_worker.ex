@@ -1013,12 +1013,15 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
           # delivery state, but still apply the existing urgent-intervention
           # side effect. Never create a second reply or diagnosis on replay.
           ensure_existing_crisis_urgent!(legacy_patient)
+          Alethea.Triggers.pause_active_triggers_for_crisis(legacy_patient.id)
           {:resumed, existing, 0}
 
         nil ->
           Repo.transaction(fn ->
             with {:ok, _updated_patient} <-
                    Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true}),
+                 {:ok, _paused_count} <-
+                   Alethea.Triggers.pause_active_triggers_for_crisis(legacy_patient.id),
                  {:ok, _diagnosis} <-
                    Clinical.save_ai_diagnosis(inbound.id, %{
                      response: crisis_text,
@@ -1063,6 +1066,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
               {:created, outbound, released}
 
             {:error, :reply_already_exists} ->
+              ensure_existing_crisis_urgent!(legacy_patient)
+              Alethea.Triggers.pause_active_triggers_for_crisis(legacy_patient.id)
               {:resumed, fetch_winning_reply!(inbound.id, hash_prefix), 0}
 
             {:error, reason} ->

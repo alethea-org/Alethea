@@ -347,16 +347,25 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
             %Alethea.Triggers.Trigger{status: "inactive"} ->
               {:skip, "trigger_inactive"}
 
+            %Alethea.Triggers.Trigger{status: "paused_by_crisis"} ->
+              {:skip, "trigger_paused_by_crisis"}
+
             %Alethea.Triggers.Trigger{approved_text: nil} ->
               {:skip, "trigger_unapproved"}
 
             %Alethea.Triggers.Trigger{} = trigger ->
-              job_revision = Map.get(args, "approval_revision") || 1
+              patient = Repo.get(Alethea.Accounts.Patient, trigger.patient_id)
 
-              if (trigger.approval_revision || 1) != job_revision do
-                {:skip, "trigger_stale_revision"}
+              if patient && patient.urgent_intervention do
+                {:skip, "patient_under_urgent_intervention"}
               else
-                claim_trigger_message(message_id)
+                job_revision = Map.get(args, "approval_revision") || 1
+
+                if (trigger.approval_revision || 1) != job_revision do
+                  {:skip, "trigger_stale_revision"}
+                else
+                  claim_trigger_message(message_id)
+                end
               end
           end
         end)

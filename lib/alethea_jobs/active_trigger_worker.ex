@@ -25,95 +25,114 @@ defmodule AletheaJobs.ActiveTriggerWorker do
       case Repo.one(query) do
         %Trigger{status: "active", approved_text: approved_text} = trigger
         when not is_nil(approved_text) ->
-          now = DateTime.utc_now()
+          patient = Repo.get(Alethea.Accounts.Patient, trigger.patient_id)
 
-          # B1: Verify scheduled_at against actual clock before ANY mutation
-          if DateTime.compare(trigger.scheduled_at, now) == :gt do
-            delay = max(DateTime.diff(trigger.scheduled_at, now, :second), 1)
-            Repo.rollback({:snooze, delay})
+          if patient && patient.urgent_intervention do
+            # S2: A due firing for a patient under urgent intervention is not sent
+            trigger
+            |> Trigger.changeset(%{status: "paused_by_crisis"})
+            |> Repo.update!()
+
+            Triggers.delete_scheduled_jobs(trigger.id)
+
+            Triggers.insert_content_free_audit!(
+              trigger.professional_id,
+              trigger.id,
+              "trigger_paused_by_crisis"
+            )
+
+            :ok
           else
-            case Repo.get_by(TriggerFiring,
-                   trigger_id: trigger.id,
-                   scheduled_at: trigger.scheduled_at
-                 ) do
-              nil ->
-                now_sec = DateTime.truncate(now, :second)
+            now = DateTime.utc_now()
 
-                # B5: Set trigger_id programmatically, not from untrusted changeset attrs
-                message =
-                  %Message{}
-                  |> Message.changeset(%{
-                    patient_id: trigger.patient_id,
-                    direction: "outbound",
-                    behavior_type: "spontaneous",
-                    encrypted_content: trigger.approved_text,
-                    timestamp: now_sec
-                  })
-                  |> Ecto.Changeset.put_change(:delivery_state, "pending")
-                  |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
-                  |> Repo.insert!()
+            # B1: Verify scheduled_at against actual clock before ANY mutation
+            if DateTime.compare(trigger.scheduled_at, now) == :gt do
+              delay = max(DateTime.diff(trigger.scheduled_at, now, :second), 1)
+              Repo.rollback({:snooze, delay})
+            else
+              case Repo.get_by(TriggerFiring,
+                     trigger_id: trigger.id,
+                     scheduled_at: trigger.scheduled_at
+                   ) do
+                nil ->
+                  now_sec = DateTime.truncate(now, :second)
 
-                # B4: Truthful firing status "fired" (not "sent") before Telegram ack
-                case %TriggerFiring{}
-                     |> TriggerFiring.changeset(%{
-                       trigger_id: trigger.id,
-                       message_id: message.id,
-                       status: "fired",
-                       fired_at: now_sec,
-                       scheduled_at: trigger.scheduled_at
-                     })
-                     |> Repo.insert() do
-                  {:ok, _firing} ->
-                    # Recurrence check: schedule next occurrence or finish trigger
-                    case Triggers.next_occurrence(trigger, trigger.scheduled_at) do
-                      {:ok, next_instant} ->
-                        trigger
-                        |> Trigger.changeset(%{scheduled_at: next_instant})
-                        |> Repo.update!()
-
-                        %{"trigger_id" => trigger.id}
-                        |> __MODULE__.new(scheduled_at: next_instant)
-                        |> Oban.insert!()
-
-                      :none ->
-                        trigger
-                        |> Trigger.changeset(%{status: "fired"})
-                        |> Repo.update!()
-                    end
-
-                    %AuditLog{}
-                    |> AuditLog.changeset(%{
-                      professional_id: trigger.professional_id,
-                      action: "trigger_fired",
-                      resource_type: "trigger",
-                      resource_id: trigger.id,
-                      details: %{}
+                  # B5: Set trigger_id programmatically, not from untrusted changeset attrs
+                  message =
+                    %Message{}
+                    |> Message.changeset(%{
+                      patient_id: trigger.patient_id,
+                      direction: "outbound",
+                      behavior_type: "spontaneous",
+                      encrypted_content: trigger.approved_text,
+                      timestamp: now_sec
                     })
+                    |> Ecto.Changeset.put_change(:delivery_state, "pending")
+                    |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
                     |> Repo.insert!()
 
-                    %{
-                      "trigger_id" => trigger.id,
-                      "message_id" => message.id,
-                      "lane" => "trigger",
-                      "approval_revision" => trigger.approval_revision
-                    }
-                    |> TelegramOutboundWorker.new()
-                    |> Oban.insert!()
+                  # B4: Truthful firing status "fired" (not "sent") before Telegram ack
+                  case %TriggerFiring{}
+                       |> TriggerFiring.changeset(%{
+                         trigger_id: trigger.id,
+                         message_id: message.id,
+                         status: "fired",
+                         fired_at: now_sec,
+                         scheduled_at: trigger.scheduled_at
+                       })
+                       |> Repo.insert() do
+                    {:ok, _firing} ->
+                      # Recurrence check: schedule next occurrence or finish trigger
+                      case Triggers.next_occurrence(trigger, trigger.scheduled_at) do
+                        {:ok, next_instant} ->
+                          trigger
+                          |> Trigger.changeset(%{scheduled_at: next_instant})
+                          |> Repo.update!()
 
-                    :ok
+                          %{"trigger_id" => trigger.id}
+                          |> __MODULE__.new(scheduled_at: next_instant)
+                          |> Oban.insert!()
 
-                  {:error, %Ecto.Changeset{errors: errors}} ->
-                    if Keyword.has_key?(errors, :trigger_id) or
-                         Keyword.has_key?(errors, :trigger_id_scheduled_at) do
-                      # B3: Concurrency defense against duplicate insert race
-                      Repo.rollback(:already_fired)
-                    else
-                      Repo.rollback({:firing_insert_error, errors})
-                    end
-                end
+                        :none ->
+                          trigger
+                          |> Trigger.changeset(%{status: "fired"})
+                          |> Repo.update!()
+                      end
 
-              _already_fired ->
-                :ok
+                      %AuditLog{}
+                      |> AuditLog.changeset(%{
+                        professional_id: trigger.professional_id,
+                        action: "trigger_fired",
+                        resource_type: "trigger",
+                        resource_id: trigger.id,
+                        details: %{}
+                      })
+                      |> Repo.insert!()
+
+                      %{
+                        "trigger_id" => trigger.id,
+                        "message_id" => message.id,
+                        "lane" => "trigger",
+                        "approval_revision" => trigger.approval_revision
+                      }
+                      |> TelegramOutboundWorker.new()
+                      |> Oban.insert!()
+
+                      :ok
+
+                    {:error, %Ecto.Changeset{errors: errors}} ->
+                      if Keyword.has_key?(errors, :trigger_id) or
+                           Keyword.has_key?(errors, :trigger_id_scheduled_at) do
+                        # B3: Concurrency defense against duplicate insert race
+                        Repo.rollback(:already_fired)
+                      else
+                        Repo.rollback({:firing_insert_error, errors})
+                      end
+                  end
+
+                _already_fired ->
+                  :ok
+              end
             end
           end
 

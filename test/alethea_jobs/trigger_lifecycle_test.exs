@@ -98,5 +98,98 @@ defmodule AletheaJobs.TriggerLifecycleTest do
       assert Repo.aggregate(TriggerFiring, :count, :id) == 0
       refute_enqueued(worker: TelegramOutboundWorker)
     end
+
+    test "trigger with status paused_by_crisis never fires when worker runs at due time (Issue #443)",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Recordar hidratación",
+          approved_text: "Hola! Recuerda beber agua hoy.",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      # Trigger is paused by crisis
+      trigger
+      |> Ecto.Changeset.change(%{status: "paused_by_crisis"})
+      |> Repo.update!()
+
+      # Make trigger due
+      due_at = DateTime.utc_now() |> DateTime.add(-10, :second) |> DateTime.truncate(:second)
+
+      trigger
+      |> Ecto.Changeset.change(%{scheduled_at: due_at})
+      |> Repo.update!()
+
+      Repo.delete_all(Oban.Job)
+
+      # Run worker
+      assert :ok = perform_job(ActiveTriggerWorker, %{"trigger_id" => trigger.id})
+
+      # Trigger status remains paused_by_crisis
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_crisis"
+
+      # No message, firing, outbound job or trigger_fired audit log created
+      assert Repo.aggregate(Message, :count, :id) == 0
+      assert Repo.aggregate(TriggerFiring, :count, :id) == 0
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      refute Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_fired"
+             )
+    end
+
+    test "due firing for patient under urgent intervention is not sent and pauses trigger (Issue #443)",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Recordar hidratación",
+          approved_text: "Hola! Recuerda beber agua hoy.",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      # Mark patient under urgent intervention
+      patient
+      |> Ecto.Changeset.change(%{urgent_intervention: true})
+      |> Repo.update!()
+
+      # Make trigger due
+      due_at = DateTime.utc_now() |> DateTime.add(-10, :second) |> DateTime.truncate(:second)
+
+      trigger
+      |> Ecto.Changeset.change(%{scheduled_at: due_at})
+      |> Repo.update!()
+
+      Repo.delete_all(Oban.Job)
+
+      # Run worker
+      assert :ok = perform_job(ActiveTriggerWorker, %{"trigger_id" => trigger.id})
+
+      # Trigger was moved to paused_by_crisis
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_crisis"
+
+      # No message, firing, outbound job or trigger_fired audit log created
+      assert Repo.aggregate(Message, :count, :id) == 0
+      assert Repo.aggregate(TriggerFiring, :count, :id) == 0
+      refute_enqueued(worker: TelegramOutboundWorker)
+
+      refute Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_fired"
+             )
+
+      # Trigger pause was audited
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_paused_by_crisis",
+               professional_id: professional.id
+             )
+    end
   end
 end
