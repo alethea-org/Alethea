@@ -344,6 +344,46 @@ defmodule AletheaWeb.TriggersLive.Index do
     end
   end
 
+  def handle_event("resume_trigger", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+
+    case Triggers.resume_trigger(professional, patient.id, trigger_id) do
+      {:ok, updated_trigger} ->
+        {:noreply,
+         socket
+         |> stream_insert(:active_triggers, updated_trigger)
+         |> put_flash(:info, "Trigger reanudado exitosamente.")}
+
+      {:error, :unapproved} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "No se puede reanudar un trigger sin mensaje aprobado. Genera y aprueba una vista previa primero."
+         )}
+
+      {:error, {:expired_schedule, msg}} ->
+        {:noreply, put_flash(socket, :error, msg)}
+
+      {:error, {:end_date_passed, msg}} ->
+        {:noreply, put_flash(socket, :error, msg)}
+
+      {:error, :already_fired} ->
+        {:noreply,
+         put_flash(socket, :error, "El trigger ya fue ejecutado y no puede ser modificado.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo reanudar el trigger.")}
+    end
+  end
+
   def handle_event("edit_trigger", %{"id" => trigger_id}, socket) do
     professional = socket.assigns.current_professional
     patient = socket.assigns.patient
@@ -923,6 +963,13 @@ defmodule AletheaWeb.TriggersLive.Index do
                         >
                           Inactivo
                         </span>
+                      <% trigger.status == "paused_by_crisis" -> %>
+                        <span
+                          id={"trigger-status-badge-#{trigger.id}"}
+                          class="pt-pill pt-pill--risk"
+                        >
+                          Pausado por crisis
+                        </span>
                       <% trigger.status == "fired" -> %>
                         <span id={"trigger-status-badge-#{trigger.id}"} class="pt-pill">
                           Finalizado
@@ -977,26 +1024,37 @@ defmodule AletheaWeb.TriggersLive.Index do
                           Editar
                         </button>
 
-                        <%= if trigger.status == "active" do %>
-                          <button
-                            type="button"
-                            id={"deactivate-trigger-button-#{trigger.id}"}
-                            phx-click="deactivate_trigger"
-                            phx-value-id={trigger.id}
-                            class="button-secondary button-secondary--sm text-amber-600 hover:text-amber-700"
-                          >
-                            Desactivar
-                          </button>
-                        <% else %>
-                          <button
-                            type="button"
-                            id={"activate-trigger-button-#{trigger.id}"}
-                            phx-click="activate_trigger"
-                            phx-value-id={trigger.id}
-                            class="button-secondary button-secondary--sm text-emerald-600 hover:text-emerald-700"
-                          >
-                            Activar
-                          </button>
+                        <%= cond do %>
+                          <% trigger.status == "active" -> %>
+                            <button
+                              type="button"
+                              id={"deactivate-trigger-button-#{trigger.id}"}
+                              phx-click="deactivate_trigger"
+                              phx-value-id={trigger.id}
+                              class="button-secondary button-secondary--sm text-amber-600 hover:text-amber-700"
+                            >
+                              Desactivar
+                            </button>
+                          <% trigger.status == "paused_by_crisis" -> %>
+                            <button
+                              type="button"
+                              id={"resume-trigger-button-#{trigger.id}"}
+                              phx-click="resume_trigger"
+                              phx-value-id={trigger.id}
+                              class="button-secondary button-secondary--sm text-emerald-600 hover:text-emerald-700"
+                            >
+                              Reanudar
+                            </button>
+                          <% true -> %>
+                            <button
+                              type="button"
+                              id={"activate-trigger-button-#{trigger.id}"}
+                              phx-click="activate_trigger"
+                              phx-value-id={trigger.id}
+                              class="button-secondary button-secondary--sm text-emerald-600 hover:text-emerald-700"
+                            >
+                              Activar
+                            </button>
                         <% end %>
                       <% end %>
                     <% end %>

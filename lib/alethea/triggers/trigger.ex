@@ -58,7 +58,7 @@ defmodule Alethea.Triggers.Trigger do
       :schedule_type
     ])
     |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
-    |> validate_inclusion(:status, ["active", "inactive", "fired"])
+    |> validate_inclusion(:status, ["active", "inactive", "fired", "paused_by_crisis"])
     |> validate_schedule_fields()
   end
 

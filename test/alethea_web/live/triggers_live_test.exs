@@ -655,5 +655,45 @@ defmodule AletheaWeb.TriggersLiveTest do
       html = view |> element("#approve-trigger-button") |> render_click()
       assert html =~ "Debes seleccionar al menos un día de la semana."
     end
+
+    test "displays paused-by-crisis badge and allows professional to resume (Issue #443)",
+         %{conn: conn, professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion de prueba",
+          approved_text: "Mensaje aprobado para reanudar",
+          date: future_date,
+          time: ~T[15:00:00]
+        })
+
+      # Pause by crisis
+      trigger
+      |> Ecto.Changeset.change(%{status: "paused_by_crisis"})
+      |> Repo.update!()
+
+      Repo.delete_all(Oban.Job)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#trigger-status-badge-#{trigger.id}", "Pausado por crisis")
+      assert has_element?(view, "#resume-trigger-button-#{trigger.id}", "Reanudar")
+      refute has_element?(view, "#deactivate-trigger-button-#{trigger.id}")
+      refute has_element?(view, "#activate-trigger-button-#{trigger.id}")
+
+      # Professional clicks Reanudar
+      view
+      |> element("#resume-trigger-button-#{trigger.id}")
+      |> render_click()
+
+      assert has_element?(view, "#trigger-status-badge-#{trigger.id}", "Activo")
+      assert has_element?(view, "#deactivate-trigger-button-#{trigger.id}")
+      refute has_element?(view, "#resume-trigger-button-#{trigger.id}")
+
+      assert render(view) =~ "Trigger reanudado exitosamente."
+      assert Repo.get!(Alethea.Triggers.Trigger, trigger.id).status == "active"
+      assert_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+    end
   end
 end

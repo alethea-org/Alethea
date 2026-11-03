@@ -464,6 +464,112 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
       assert Repo.get!(Message, msg.id).delivery_state == "pending"
       assert Repo.get!(Trigger, tr.id).approved_text == nil
     end
+
+    test "skips delivery when trigger is paused_by_crisis (Issue #443)", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          status: "paused_by_crisis",
+          approval_revision: 1
+        })
+        |> Repo.insert!()
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      Repo.update_all(from(m in Message, where: m.id == ^message.id),
+        set: [delivery_state: "pending"]
+      )
+
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: %{
+                   "trigger_id" => trigger.id,
+                   "message_id" => message.id,
+                   "lane" => "trigger",
+                   "approval_revision" => 1
+                 },
+                 attempt: 1,
+                 priority: 0
+               })
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, message.id).delivery_state == "pending"
+    end
+
+    test "skips delivery when patient is under urgent intervention (Issue #443)", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          status: "active",
+          approval_revision: 1
+        })
+        |> Repo.insert!()
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      Repo.update_all(from(m in Message, where: m.id == ^message.id),
+        set: [delivery_state: "pending"]
+      )
+
+      patient.legacy_patient
+      |> Ecto.Changeset.change(%{urgent_intervention: true})
+      |> Repo.update!()
+
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: %{
+                   "trigger_id" => trigger.id,
+                   "message_id" => message.id,
+                   "lane" => "trigger",
+                   "approval_revision" => 1
+                 },
+                 attempt: 1,
+                 priority: 0
+               })
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, message.id).delivery_state == "pending"
+    end
   end
 
   defp await_trigger_lock_waiter(worker_pid, holder_pid, deadline \\ nil) do

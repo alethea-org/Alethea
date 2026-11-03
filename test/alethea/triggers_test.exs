@@ -337,6 +337,161 @@ defmodule Alethea.TriggersTest do
     end
   end
 
+  describe "pause_active_triggers_for_crisis/1 and resume_trigger/3 (Issue #443)" do
+    test "pauses all active triggers for a patient on crisis, deletes scheduled jobs, and audits",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger1} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion 1",
+          approved_text: "Texto 1",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, trigger2} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion 2",
+          approved_text: "Texto 2",
+          schedule_type: "daily",
+          time: ~T[11:00:00]
+        })
+
+      # Create an inactive trigger for same patient
+      {:ok, trigger3} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion 3",
+          approved_text: "Texto 3",
+          date: future_date,
+          time: ~T[12:00:00]
+        })
+
+      {:ok, _} = Triggers.deactivate_trigger(professional, patient.id, trigger3.id)
+
+      assert_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger1.id})
+      assert_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger2.id})
+
+      assert {:ok, 2} = Triggers.pause_active_triggers_for_crisis(patient.id)
+
+      # Active triggers moved to paused_by_crisis
+      assert Repo.get!(Trigger, trigger1.id).status == "paused_by_crisis"
+      assert Repo.get!(Trigger, trigger2.id).status == "paused_by_crisis"
+
+      # Inactive trigger remains inactive
+      assert Repo.get!(Trigger, trigger3.id).status == "inactive"
+
+      # Scheduled jobs were deleted
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger1.id})
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger2.id})
+
+      # Audit logs were written
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger1.id,
+               action: "trigger_paused_by_crisis",
+               professional_id: professional.id
+             )
+
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger2.id,
+               action: "trigger_paused_by_crisis",
+               professional_id: professional.id
+             )
+    end
+
+    test "resumes a paused-by-crisis trigger for owning professional, reschedules job, and audits",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_crisis(patient.id)
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_crisis"
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+
+      # Resume trigger
+      assert {:ok, resumed} = Triggers.resume_trigger(professional, patient.id, trigger.id)
+      assert resumed.status == "active"
+      assert Repo.get!(Trigger, trigger.id).status == "active"
+
+      assert_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_resumed",
+               professional_id: professional.id
+             )
+    end
+
+    test "cannot be resumed by a non-owning professional",
+         %{professional: professional, patient: patient} do
+      other = fixture_professional_and_patient()
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_crisis(patient.id)
+
+      assert {:error, :unauthorized} =
+               Triggers.resume_trigger(other.professional, patient.id, trigger.id)
+    end
+
+    test "cannot resume expired one-shot trigger",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_crisis(patient.id)
+
+      # Expire scheduled_at
+      past_dt = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      trigger
+      |> Ecto.Changeset.change(%{scheduled_at: past_dt})
+      |> Repo.update!()
+
+      assert {:error, {:expired_schedule, _msg}} =
+               Triggers.resume_trigger(professional, patient.id, trigger.id)
+    end
+
+    test "activate_trigger rejects paused_by_crisis triggers",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_crisis(patient.id)
+
+      assert {:error, :paused_by_crisis} =
+               Triggers.activate_trigger(professional, patient.id, trigger.id)
+    end
+  end
+
   describe "list_active_triggers/2 and get_trigger/3" do
     test "lists and retrieves triggers with decrypted fields for owner",
          %{professional: professional, patient: patient} do

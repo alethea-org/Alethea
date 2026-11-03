@@ -194,6 +194,8 @@ defmodule Alethea.Triggers do
             active: count(fragment("CASE WHEN ? = 'active' THEN 1 END", t.status)),
             inactive: count(fragment("CASE WHEN ? = 'inactive' THEN 1 END", t.status)),
             fired: count(fragment("CASE WHEN ? = 'fired' THEN 1 END", t.status)),
+            paused_by_crisis:
+              count(fragment("CASE WHEN ? = 'paused_by_crisis' THEN 1 END", t.status)),
             needs_approval:
               count(
                 fragment(
@@ -205,13 +207,16 @@ defmodule Alethea.Triggers do
           }
         )
 
-      stats = Repo.one(query) || %{total: 0, active: 0, inactive: 0, fired: 0, needs_approval: 0}
+      stats =
+        Repo.one(query) ||
+          %{total: 0, active: 0, inactive: 0, fired: 0, paused_by_crisis: 0, needs_approval: 0}
 
       active_kind = %{
         total: stats.total,
         active: stats.active,
         inactive: stats.inactive,
         fired: stats.fired,
+        paused_by_crisis: stats.paused_by_crisis,
         needs_approval: stats.needs_approval
       }
 
@@ -220,6 +225,7 @@ defmodule Alethea.Triggers do
         active: 0,
         inactive: 0,
         fired: 0,
+        paused_by_crisis: 0,
         needs_approval: 0
       }
 
@@ -232,7 +238,8 @@ defmodule Alethea.Triggers do
         by_status: %{
           active: stats.active,
           inactive: stats.inactive,
-          fired: stats.fired
+          fired: stats.fired,
+          paused_by_crisis: stats.paused_by_crisis
         },
         active_kind: active_kind,
         reactive_kind: reactive_kind,
@@ -308,6 +315,7 @@ defmodule Alethea.Triggers do
   For one-shot triggers, returns an actionable error if the schedule expired.
   For recurring triggers, recomputes the next future occurrence in the patient's timezone
   without missed-send catchup, and schedules a new ActiveTriggerWorker Oban job.
+  Rejects triggers paused by crisis (which must be resumed via `resume_trigger/3`).
   """
   @spec activate_trigger(Accounts.Professional.t(), binary(), binary()) ::
           {:ok, Trigger.t()} | {:error, term()}
@@ -335,78 +343,105 @@ defmodule Alethea.Triggers do
           %Trigger{approved_text: nil} ->
             Repo.rollback(:unapproved)
 
+          %Trigger{status: "paused_by_crisis"} ->
+            Repo.rollback(:paused_by_crisis)
+
           %Trigger{status: "active"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
 
           %Trigger{status: "inactive"} = trigger ->
-            now = DateTime.utc_now()
-
-            case trigger.schedule_type do
-              "once" ->
-                if DateTime.compare(trigger.scheduled_at, now) != :gt do
-                  Repo.rollback(
-                    {:expired_schedule,
-                     "El horario programado ya venció. Para programar un nuevo envío, crea un nuevo trigger con un horario futuro."}
-                  )
-                else
-                  updated =
-                    trigger
-                    |> Trigger.changeset(%{status: "active"})
-                    |> Repo.update!()
-
-                  delete_scheduled_jobs(trigger.id)
-
-                  %{"trigger_id" => trigger.id}
-                  |> ActiveTriggerWorker.new(scheduled_at: trigger.scheduled_at)
-                  |> Oban.insert!()
-
-                  insert_content_free_audit!(professional.id, trigger.id, "trigger_activated")
-
-                  decrypt_trigger_fields(updated, dek)
-                end
-
-              recurring when recurring in ["daily", "weekly"] ->
-                attrs = %{
-                  time: trigger.time,
-                  weekdays: trigger.weekdays,
-                  end_date: trigger.end_date
-                }
-
-                patient_tz = %{timezone: trigger.timezone}
-
-                case Schedule.initial_occurrence(patient_tz, recurring, attrs, now) do
-                  {:ok, %{scheduled_at: next_scheduled_at}} ->
-                    updated =
-                      trigger
-                      |> Trigger.changeset(%{status: "active", scheduled_at: next_scheduled_at})
-                      |> Repo.update!()
-
-                    delete_scheduled_jobs(trigger.id)
-
-                    %{"trigger_id" => trigger.id}
-                    |> ActiveTriggerWorker.new(scheduled_at: next_scheduled_at)
-                    |> Oban.insert!()
-
-                    insert_content_free_audit!(professional.id, trigger.id, "trigger_activated")
-
-                    decrypt_trigger_fields(updated, dek)
-
-                  {:error, {:invalid_end_date, _msg}} ->
-                    Repo.rollback(
-                      {:end_date_passed,
-                       "La fecha de fin ya expiró. Modifica la fecha de fin o crea un nuevo trigger."}
-                    )
-
-                  {:error, reason} ->
-                    Repo.rollback(reason)
-                end
-            end
+            reactivate_or_resume_trigger(trigger, professional.id, "trigger_activated", dek)
         end
       end)
     else
       :error -> {:error, :unauthorized}
       nil -> {:error, :unauthorized}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Resumes a trigger paused by crisis (Issue #443).
+  Can only be performed by the patient's owning professional.
+  Rechecks schedule validity, re-enqueues ActiveTriggerWorker, and audits the action.
+  """
+  @spec resume_trigger(Accounts.Professional.t(), binary(), binary()) ::
+          {:ok, Trigger.t()} | {:error, term()}
+  def resume_trigger(%Accounts.Professional{} = professional, patient_id, trigger_id)
+      when is_binary(patient_id) and is_binary(trigger_id) do
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
+         %Accounts.Patient{} = patient <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
+         {:ok, dek} <- Clinical.patient_dek(patient, "trigger_resume") do
+      Repo.transaction(fn ->
+        query =
+          from(t in Trigger,
+            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            lock: "FOR UPDATE"
+          )
+
+        case Repo.one(query) do
+          nil ->
+            Repo.rollback(:not_found)
+
+          %Trigger{status: "fired"} ->
+            Repo.rollback(:already_fired)
+
+          %Trigger{approved_text: nil} ->
+            Repo.rollback(:unapproved)
+
+          %Trigger{status: "active"} = trigger ->
+            decrypt_trigger_fields(trigger, dek)
+
+          %Trigger{status: "inactive"} ->
+            Repo.rollback(:not_paused)
+
+          %Trigger{status: "paused_by_crisis"} = trigger ->
+            reactivate_or_resume_trigger(trigger, professional.id, "trigger_resumed", dek)
+        end
+      end)
+    else
+      :error -> {:error, :unauthorized}
+      nil -> {:error, :unauthorized}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Pauses all active triggers of a patient when a crisis is detected (Issue #443).
+  Moves status to `paused_by_crisis`, cancels scheduled Oban jobs, and writes content-free audit logs.
+  """
+  @spec pause_active_triggers_for_crisis(binary()) :: {:ok, integer()} | {:error, term()}
+  def pause_active_triggers_for_crisis(patient_id) when is_binary(patient_id) do
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id) do
+      Repo.transaction(fn ->
+        query =
+          from(t in Trigger,
+            where: t.patient_id == ^valid_patient_id and t.status == "active",
+            lock: "FOR UPDATE"
+          )
+
+        triggers = Repo.all(query)
+
+        for trigger <- triggers do
+          trigger
+          |> Trigger.changeset(%{status: "paused_by_crisis"})
+          |> Repo.update!()
+
+          delete_scheduled_jobs(trigger.id)
+
+          insert_content_free_audit!(
+            trigger.professional_id,
+            trigger.id,
+            "trigger_paused_by_crisis"
+          )
+        end
+
+        length(triggers)
+      end)
+    else
+      :error -> {:error, :invalid_patient_id}
     end
   end
 
@@ -775,7 +810,7 @@ defmodule Alethea.Triggers do
     Application.get_env(:alethea, :trigger_preview_chain, TriggerPreviewChain)
   end
 
-  defp insert_content_free_audit!(professional_id, resource_id, action) do
+  def insert_content_free_audit!(professional_id, resource_id, action) do
     %AuditLog{}
     |> AuditLog.changeset(%{
       professional_id: professional_id,
@@ -787,7 +822,7 @@ defmodule Alethea.Triggers do
     |> Repo.insert!()
   end
 
-  defp delete_scheduled_jobs(trigger_id) do
+  def delete_scheduled_jobs(trigger_id) do
     Repo.delete_all(
       from(j in Oban.Job,
         where:
@@ -796,6 +831,71 @@ defmodule Alethea.Triggers do
             j.state in ["scheduled", "available", "retryable"]
       )
     )
+  end
+
+  defp reactivate_or_resume_trigger(trigger, professional_id, audit_action, dek) do
+    now = DateTime.utc_now()
+
+    case trigger.schedule_type do
+      "once" ->
+        if DateTime.compare(trigger.scheduled_at, now) != :gt do
+          Repo.rollback(
+            {:expired_schedule,
+             "El horario programado ya venció. Para programar un nuevo envío, crea un nuevo trigger con un horario futuro."}
+          )
+        else
+          updated =
+            trigger
+            |> Trigger.changeset(%{status: "active"})
+            |> Repo.update!()
+
+          delete_scheduled_jobs(trigger.id)
+
+          %{"trigger_id" => trigger.id}
+          |> ActiveTriggerWorker.new(scheduled_at: trigger.scheduled_at)
+          |> Oban.insert!()
+
+          insert_content_free_audit!(professional_id, trigger.id, audit_action)
+
+          decrypt_trigger_fields(updated, dek)
+        end
+
+      recurring when recurring in ["daily", "weekly"] ->
+        attrs = %{
+          time: trigger.time,
+          weekdays: trigger.weekdays,
+          end_date: trigger.end_date
+        }
+
+        patient_tz = %{timezone: trigger.timezone}
+
+        case Schedule.initial_occurrence(patient_tz, recurring, attrs, now) do
+          {:ok, %{scheduled_at: next_scheduled_at}} ->
+            updated =
+              trigger
+              |> Trigger.changeset(%{status: "active", scheduled_at: next_scheduled_at})
+              |> Repo.update!()
+
+            delete_scheduled_jobs(trigger.id)
+
+            %{"trigger_id" => trigger.id}
+            |> ActiveTriggerWorker.new(scheduled_at: next_scheduled_at)
+            |> Oban.insert!()
+
+            insert_content_free_audit!(professional_id, trigger.id, audit_action)
+
+            decrypt_trigger_fields(updated, dek)
+
+          {:error, {:invalid_end_date, _msg}} ->
+            Repo.rollback(
+              {:end_date_passed,
+               "La fecha de fin ya expiró. Modifica la fecha de fin o crea un nuevo trigger."}
+            )
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+    end
   end
 
   defp decrypt_trigger_fields(trigger, dek) do
