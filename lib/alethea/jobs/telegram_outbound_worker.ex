@@ -162,7 +162,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
       case begin_delivery(message_id, resolved_lane, %{
              patient_id: patient_id,
              chat_id: chat_id,
-             chat_id_hash: chat_id_hash
+             chat_id_hash: chat_id_hash,
+             args: args
            }) do
         {:skip, state} ->
           Logger.info(
@@ -317,7 +318,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   defp begin_delivery(message_id, lane, arm_ctx) do
     cond do
       not tracked_message_id?(message_id) -> :untracked
-      trigger_lane?(lane) -> begin_trigger_delivery(message_id)
+      trigger_lane?(lane) -> begin_trigger_delivery(message_id, arm_ctx)
       crisis_lane?(lane) -> begin_crisis_delivery(message_id)
       true -> begin_journaling_delivery(message_id, arm_ctx)
     end
@@ -329,7 +330,47 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     trigger_lane?(lane) or Map.has_key?(args, "trigger_id")
   end
 
-  defp begin_trigger_delivery(message_id) do
+  defp begin_trigger_delivery(message_id, arm_ctx) do
+    args = Map.get(arm_ctx, :args, %{})
+    message = Repo.get(Message, message_id)
+    trigger_id = (message && message.trigger_id) || Map.get(args, "trigger_id")
+
+    case trigger_id do
+      tid when is_binary(tid) ->
+        Repo.transaction(fn ->
+          query = from(t in Alethea.Triggers.Trigger, where: t.id == ^tid, lock: "FOR UPDATE")
+
+          case Repo.one(query) do
+            nil ->
+              {:skip, "trigger_missing"}
+
+            %Alethea.Triggers.Trigger{status: "inactive"} ->
+              {:skip, "trigger_inactive"}
+
+            %Alethea.Triggers.Trigger{approved_text: nil} ->
+              {:skip, "trigger_unapproved"}
+
+            %Alethea.Triggers.Trigger{} = trigger ->
+              job_revision = Map.get(args, "approval_revision") || 1
+
+              if (trigger.approval_revision || 1) != job_revision do
+                {:skip, "trigger_stale_revision"}
+              else
+                claim_trigger_message(message_id)
+              end
+          end
+        end)
+        |> case do
+          {:ok, result} -> result
+          {:error, _} -> {:skip, "trigger_lock_failed"}
+        end
+
+      _ ->
+        claim_trigger_message(message_id)
+    end
+  end
+
+  defp claim_trigger_message(message_id) do
     case Clinical.claim_trigger_delivery(message_id) do
       :claimed -> :claimed
       {:not_claimed, nil} -> :untracked
@@ -528,7 +569,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     case begin_delivery(message_id, lane, %{
            patient_id: patient_id,
            chat_id: chat_id,
-           chat_id_hash: chat_id_hash
+           chat_id_hash: chat_id_hash,
+           args: args
          }) do
       {:skip, _state} ->
         # The reply already has its outcome (e.g. an acknowledged crisis
@@ -597,7 +639,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     new_args =
       if trigger_lane?(lane) do
         args
-        |> Map.take(["trigger_id", "message_id", "lane", "priority"])
+        |> Map.take(["trigger_id", "message_id", "lane", "priority", "approval_revision"])
         |> Map.put("_attempt", next_attempt)
       else
         Map.put(args, "_attempt", next_attempt)
