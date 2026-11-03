@@ -337,24 +337,32 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
     case trigger_id do
       tid when is_binary(tid) ->
-        case Repo.get(Alethea.Triggers.Trigger, tid) do
-          %Alethea.Triggers.Trigger{status: "inactive"} ->
-            {:skip, "trigger_inactive"}
+        Repo.transaction(fn ->
+          query = from(t in Alethea.Triggers.Trigger, where: t.id == ^tid, lock: "FOR UPDATE")
 
-          %Alethea.Triggers.Trigger{approved_text: nil} ->
-            {:skip, "trigger_unapproved"}
+          case Repo.one(query) do
+            nil ->
+              {:skip, "trigger_missing"}
 
-          %Alethea.Triggers.Trigger{} = trigger ->
-            job_revision = Map.get(args, "approval_revision") || 1
+            %Alethea.Triggers.Trigger{status: "inactive"} ->
+              {:skip, "trigger_inactive"}
 
-            if trigger.approval_revision != job_revision do
-              {:skip, "trigger_stale_revision"}
-            else
-              claim_trigger_message(message_id)
-            end
+            %Alethea.Triggers.Trigger{approved_text: nil} ->
+              {:skip, "trigger_unapproved"}
 
-          nil ->
-            {:skip, "trigger_missing"}
+            %Alethea.Triggers.Trigger{} = trigger ->
+              job_revision = Map.get(args, "approval_revision") || 1
+
+              if (trigger.approval_revision || 1) != job_revision do
+                {:skip, "trigger_stale_revision"}
+              else
+                claim_trigger_message(message_id)
+              end
+          end
+        end)
+        |> case do
+          {:ok, result} -> result
+          {:error, _} -> {:skip, "trigger_lock_failed"}
         end
 
       _ ->

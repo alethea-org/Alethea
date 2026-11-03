@@ -331,5 +331,158 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
       assert Fake.sends() == []
       assert Repo.get!(Message, message.id).delivery_state == "pending"
     end
+
+    test "concurrent instruction edit holding trigger lock serializes outbound delivery and suppresses send on approval removal" do
+      chat_id_hash = "race_hash_" |> String.pad_trailing(64, "0")
+
+      {p, tr, msg} =
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          patient = bind_patient(chat_id_hash)
+
+          {:ok, _} =
+            Alethea.Foundation.Accounts.store_encrypted_telegram_chat_id(
+              patient.foundation_patient,
+              patient.chat_id
+            )
+
+          {:ok, dek} = Clinical.patient_dek(patient.legacy_patient, "test_race")
+          {:ok, enc} = Alethea.Encryption.PatientVault.encrypt("Mensaje proactivo", dek)
+          now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+          trigger =
+            Repo.insert!(%Trigger{
+              patient_id: patient.legacy_patient.id,
+              professional_id: patient.legacy_patient.professional_id,
+              instruction: enc,
+              draft_message: enc,
+              approved_text: enc,
+              scheduled_at: now,
+              timezone: "America/Santiago",
+              status: "active",
+              approval_revision: 1
+            })
+
+          message =
+            Repo.insert!(%Message{
+              patient_id: patient.legacy_patient.id,
+              direction: "outbound",
+              behavior_type: "spontaneous",
+              encrypted_content: enc,
+              delivery_state: "pending",
+              trigger_id: trigger.id,
+              timestamp: now
+            })
+
+          {patient, trigger, message}
+        end)
+
+      on_exit(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          l_pid = Ecto.UUID.dump!(p.legacy_patient.professional_id)
+          f_pid = Ecto.UUID.dump!(p.foundation_patient.professional_id)
+          Repo.query!("DELETE FROM messages WHERE id = $1", [Ecto.UUID.dump!(msg.id)])
+          Repo.query!("DELETE FROM triggers WHERE id = $1", [Ecto.UUID.dump!(tr.id)])
+          Repo.query!("DELETE FROM audit_logs WHERE professional_id = $1", [l_pid])
+
+          Repo.query!("DELETE FROM foundation_patients WHERE id = $1", [
+            Ecto.UUID.dump!(p.foundation_patient.id)
+          ])
+
+          Repo.query!("DELETE FROM patients WHERE id = $1", [Ecto.UUID.dump!(p.legacy_patient.id)])
+
+          Repo.query!("DELETE FROM encryption_keys WHERE professional_id = $1", [l_pid])
+          Repo.query!("DELETE FROM foundation_professionals WHERE id = $1", [f_pid])
+          Repo.query!("DELETE FROM professionals WHERE id = $1", [l_pid])
+        end)
+      end)
+
+      task_sup = start_supervised!(Task.Supervisor)
+      parent = self()
+
+      holder =
+        Task.Supervisor.async_nolink(task_sup, fn ->
+          Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
+
+          try do
+            h_pid = hd(hd(Repo.query!("SELECT pg_backend_pid()").rows))
+
+            Repo.transaction(fn ->
+              Repo.query!("SELECT * FROM triggers WHERE id = $1 FOR UPDATE", [
+                Ecto.UUID.dump!(tr.id)
+              ])
+
+              send(parent, {:holder_locked, h_pid})
+
+              receive do
+                :commit_edit ->
+                  Repo.query!(
+                    "UPDATE triggers SET approved_text = NULL, draft_message = NULL, approval_revision = 2 WHERE id = $1",
+                    [Ecto.UUID.dump!(tr.id)]
+                  )
+              end
+            end)
+
+            send(parent, :holder_done)
+          after
+            Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+          end
+        end)
+
+      assert_receive {:holder_locked, h_pid}, 5_000
+
+      worker =
+        Task.Supervisor.async_nolink(task_sup, fn ->
+          Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
+
+          try do
+            w_pid = hd(hd(Repo.query!("SELECT pg_backend_pid()").rows))
+            send(parent, {:worker_started, w_pid})
+
+            TelegramOutboundWorker.perform(%Oban.Job{
+              args: %{
+                "trigger_id" => tr.id,
+                "message_id" => msg.id,
+                "lane" => "trigger",
+                "approval_revision" => 1
+              },
+              attempt: 1,
+              priority: 0
+            })
+          after
+            Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+          end
+        end)
+
+      assert_receive {:worker_started, w_pid}, 5_000
+      assert :ok = await_trigger_lock_waiter(w_pid, h_pid)
+
+      send(holder.pid, :commit_edit)
+      assert_receive :holder_done, 5_000
+      assert :ok = Task.await(worker, 5_000)
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, msg.id).delivery_state == "pending"
+      assert Repo.get!(Trigger, tr.id).approved_text == nil
+    end
+  end
+
+  defp await_trigger_lock_waiter(worker_pid, holder_pid, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 5_000
+
+    [[pids]] =
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        Repo.query!("SELECT pg_blocking_pids($1)", [worker_pid]).rows
+      end)
+
+    cond do
+      holder_pid in pids ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("Worker was not serialized behind trigger lock holder")
+
+      true ->
+        receive after: (10 -> await_trigger_lock_waiter(worker_pid, holder_pid, deadline))
+    end
   end
 end
