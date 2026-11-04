@@ -57,7 +57,8 @@ defmodule Alethea.Triggers.Trigger do
       :scheduled_at,
       :timezone,
       :status,
-      :schedule_type
+      :schedule_type,
+      :consecutive_delivery_failures
     ])
     |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
     |> validate_inclusion(:status, [

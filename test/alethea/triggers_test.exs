@@ -709,6 +709,12 @@ defmodule Alethea.TriggersTest do
       refute neg_changeset.valid?
 
       assert "must be greater than or equal to 0" in errors_on(neg_changeset).consecutive_delivery_failures
+
+      nil_changeset =
+        Trigger.changeset(%Trigger{}, Map.put(attrs, :consecutive_delivery_failures, nil))
+
+      refute nil_changeset.valid?
+      assert "can't be blank" in errors_on(nil_changeset).consecutive_delivery_failures
     end
   end
 
@@ -945,6 +951,11 @@ defmodule Alethea.TriggersTest do
       reloaded = Repo.get!(Trigger, trigger.id)
       assert reloaded.consecutive_delivery_failures == 1
       assert reloaded.status == "active"
+
+      # Calling it again on the same message is idempotent: does not increment counter again
+      assert :ok = Triggers.handle_delivery_failure(message.id)
+      reloaded_again = Repo.get!(Trigger, trigger.id)
+      assert reloaded_again.consecutive_delivery_failures == 1
     end
 
     test "handle_delivery_failure pauses trigger after 3 consecutive failures", %{

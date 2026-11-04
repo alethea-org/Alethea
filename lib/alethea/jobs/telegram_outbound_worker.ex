@@ -477,13 +477,33 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   defp record_delivery(_delivery, message_id, {:sent, _} = outcome) do
     Clinical.record_telegram_delivery(message_id, outcome)
-    Alethea.Triggers.handle_delivery_success(message_id)
+
+    case Alethea.Triggers.handle_delivery_success(message_id) do
+      {:error, reason} ->
+        Logger.error(
+          "TelegramOutboundWorker: handle_delivery_success error (message_id=#{message_id}, reason=#{inspect(reason)})"
+        )
+
+      _ ->
+        :ok
+    end
+
     :ok
   end
 
   defp record_delivery(_delivery, message_id, :failed = outcome) do
     Clinical.record_telegram_delivery(message_id, outcome)
-    Alethea.Triggers.handle_delivery_failure(message_id)
+
+    case Alethea.Triggers.handle_delivery_failure(message_id) do
+      {:error, reason} ->
+        Logger.error(
+          "TelegramOutboundWorker: handle_delivery_failure error (message_id=#{message_id}, reason=#{inspect(reason)})"
+        )
+
+      _ ->
+        :ok
+    end
+
     :ok
   end
 

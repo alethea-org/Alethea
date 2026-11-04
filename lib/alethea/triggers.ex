@@ -526,38 +526,47 @@ defmodule Alethea.Triggers do
           %Clinical.Message{trigger_id: trigger_id} = message when not is_nil(trigger_id) ->
             now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-            from(f in TriggerFiring, where: f.message_id == ^message.id)
-            |> Repo.update_all(set: [status: "not_delivered", updated_at: now])
+            firing = Repo.get_by(TriggerFiring, message_id: message.id)
 
-            case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
-              %Trigger{} = trigger ->
-                new_failures = (trigger.consecutive_delivery_failures || 0) + 1
+            if firing && firing.status == "not_delivered" do
+              # Already processed as not_delivered (idempotent no-op)
+              :ok
+            else
+              if firing do
+                from(f in TriggerFiring, where: f.id == ^firing.id)
+                |> Repo.update_all(set: [status: "not_delivered", updated_at: now])
+              end
 
-                if new_failures >= 3 and trigger.status == "active" do
-                  trigger
-                  |> Trigger.changeset(%{
-                    status: "paused_by_delivery_failures",
-                    consecutive_delivery_failures: new_failures
-                  })
-                  |> Repo.update!()
+              case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
+                %Trigger{} = trigger ->
+                  new_failures = (trigger.consecutive_delivery_failures || 0) + 1
 
-                  delete_scheduled_jobs(trigger.id)
+                  if new_failures >= 3 and trigger.status == "active" do
+                    trigger
+                    |> Trigger.changeset(%{
+                      status: "paused_by_delivery_failures",
+                      consecutive_delivery_failures: new_failures
+                    })
+                    |> Repo.update!()
 
-                  insert_content_free_audit!(
-                    trigger.professional_id,
-                    trigger.id,
-                    "trigger_paused_by_delivery_failures"
-                  )
-                else
-                  trigger
-                  |> Trigger.changeset(%{consecutive_delivery_failures: new_failures})
-                  |> Repo.update!()
-                end
+                    delete_scheduled_jobs(trigger.id)
 
-                :ok
+                    insert_content_free_audit!(
+                      trigger.professional_id,
+                      trigger.id,
+                      "trigger_paused_by_delivery_failures"
+                    )
+                  else
+                    trigger
+                    |> Trigger.changeset(%{consecutive_delivery_failures: new_failures})
+                    |> Repo.update!()
+                  end
 
-              nil ->
-                :ok
+                  :ok
+
+                nil ->
+                  :ok
+              end
             end
 
           _ ->
@@ -586,7 +595,8 @@ defmodule Alethea.Triggers do
         case Repo.get(Clinical.Message, valid_message_id) do
           %Clinical.Message{trigger_id: trigger_id} when not is_nil(trigger_id) ->
             case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
-              %Trigger{consecutive_delivery_failures: failures} = trigger when failures > 0 ->
+              %Trigger{consecutive_delivery_failures: failures} = trigger
+              when not is_nil(failures) and failures > 0 ->
                 trigger
                 |> Trigger.changeset(%{consecutive_delivery_failures: 0})
                 |> Repo.update!()
