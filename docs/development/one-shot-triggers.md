@@ -61,12 +61,32 @@ The tracer bullet covers the full path end-to-end:
 - When `end_date` is reached (no further occurrences possible), `trigger.status` transitions to `"fired"` and scheduling ceases.
 - Concurrency defense: `trigger_firings` unique index on `[:trigger_id, :scheduled_at]` ensures each scheduled occurrence fires at most once, and row-level locking `FOR UPDATE` prevents race conditions.
 
-## Scope Exclusions (Deferred to Issues #442–#448, #452)
+### 7. Session Deferral (Issue #444)
+- A due active trigger waits while a session is open, inbound burst messages lack reply coverage, or an ordinary burst reply is pending delivery.
+- Session closure remains owned by `SessionTimeoutWorker`; the trigger worker does not run a separate inactivity timer.
+- The same job snoozes for up to 60 seconds at a time, capped at the original `scheduled_at` plus one hour. Closing the session and resolving pending replies releases it on the next poll.
+- At the one-hour boundary the trigger may fire even if journaling is still open. Crisis and approval guards continue to apply.
+- Deferral creates no message, firing, audit event, or outbound job and never advances the occurrence or resets its deadline.
+
+### 8. Daily Send Cap and Skipped History (Issue #444 — S2, S4)
+- Active sends are capped at a globally configured 5 sends per patient per calendar day in the patient's configured timezone (`patient.timezone`), defaulting to 5 via `:alethea, :active_trigger_daily_cap`.
+- Day boundaries and DST transitions: `Triggers.local_day_utc_range/2` calculates contiguous `[start_utc, end_utc)` bounds in the patient's timezone. During DST midnight spring-forward gaps (e.g. 00:00 jumping to 01:00 in America/Santiago), the boundary resolves to the first valid instant of the new day (e.g. 01:00 local / 04:00 UTC) for both the end of the preceding day and the start of the next day, avoiding dropped last-second firings or gap omissions. During midnight fall-back ambiguities, the earlier midnight instant is consistently selected on both adjacent boundaries to prevent day overlap.
+- Concurrency and lock order: `ActiveTriggerWorker` locks the patient conversation first via `Clinical.lock_patient_conversation!/1` before acquiring the row-level `FOR UPDATE` lock on the trigger, preserving the global lock hierarchy (Patient -> Trigger -> Message) and serializing concurrent trigger evaluations for the same patient without deadlock.
+- The 6th send of the day (and subsequent attempts exceeding the cap) is suppressed: no `Message` record is created, and no `TelegramOutboundWorker` job is enqueued.
+- Truthful skipped history: `TriggerFiring` records `status: "skipped"` with `message_id: nil`. In the clinical history LiveView, it renders an `"Omitido"` badge without a broken message link.
+- Recurrence handling: skipped occurrences advance via `Triggers.next_occurrence/2`. One-shot triggers are consumed (`trigger.status = "fired"`), and recurring triggers advance to their next occurrence.
+- Content-free audit: `Triggers.insert_content_free_audit!(trigger.professional_id, trigger.id, "trigger_skipped")` logs the event without PHI.
+
+### 9. Elicited Reply Tagging (Issue #447)
+- A patient reply whose timestamp falls within 2 hours of the patient's newest delivered Trigger activo message is persisted with `behavior_type: "elicited"`; otherwise it stays `"spontaneous"`. The clinical record can thus distinguish prompted from spontaneous behavior.
+- Only acknowledged deliveries open the window: the anchor query in `Triggers.elicited_window_open?/2` considers outbound trigger messages with `delivery_state: "sent"` exclusively — pending, ambiguous, or failed firings never tag a reply as elicited.
+- When several delivered trigger messages exist, the newest one anchors the window. A reply timestamped before that delivery is never inside it, and the check is per-patient, so other patients' triggers never cross.
+- The gate runs only on first insert inside `Clinical.find_or_save_telegram_inbound/4`; a resumed or replayed inbound keeps its persisted tag, so history is never rewritten.
+
+## Scope Exclusions (Deferred to Issues #445–#448, #452)
 - Editing, status toggles, dashboard trigger counts (#442)
 - Crisis pause and resumption (#443)
-- Session deferral and daily limit caps (#444)
 - Delivery failure counters and retry history handling (#445)
 - Patient-initiated pause/opt-out notices (#446)
-- ELICITED message classification (#447)
 - Reactive matching (#448 — tracer bullet landed; see `docs/features/trigger-management.md`, "Reactive Triggers")
 - RAG context injection into triggers (#452)

@@ -2,7 +2,7 @@ defmodule Alethea.Triggers do
   @moduledoc """
   Context module for managing patient triggers: scheduled ("active" kind,
   Issue #440) and reactive ones that fire when a patient burst matches their
-  condition (Issue #448).
+  condition (Issue #448), plus the elicited-reply window (Issue #447).
   """
 
   import Ecto.Query
@@ -18,6 +18,54 @@ defmodule Alethea.Triggers do
   alias AletheaJobs.ActiveTriggerWorker
 
   @default_cooldown_hours 24
+
+  # Issue #447: a patient reply within this many seconds of a delivered
+  # Trigger activo message is prompted behavior ("elicited"), not
+  # spontaneous. Only acknowledged deliveries ("sent") open the window.
+  @elicited_window_seconds 2 * 60 * 60
+
+  @doc """
+  Whether an inbound message timestamped `inbound_timestamp` falls within
+  2 hours of the patient's newest delivered Trigger activo message
+  (issue #447).
+
+  Only outbound trigger messages whose Telegram delivery was acknowledged
+  (`delivery_state: "sent"`) anchor the window — pending, ambiguous, or
+  failed firings do not prove the patient was prompted. When several
+  delivered trigger messages exist, the newest one (by `timestamp`, then
+  `id`) anchors the window. A reply timestamped before that delivery,
+  or from another patient, is never inside it.
+
+  `inbound_timestamp` may be `nil` for rows that predate the field —
+  legacy rows are read as spontaneous.
+  """
+  @spec elicited_window_open?(binary(), DateTime.t() | nil) :: boolean()
+  def elicited_window_open?(patient_id, inbound_timestamp)
+
+  def elicited_window_open?(patient_id, %DateTime{} = inbound_timestamp)
+      when is_binary(patient_id) do
+    query =
+      from m in Message,
+        where:
+          m.patient_id == ^patient_id and
+            not is_nil(m.trigger_id) and
+            m.direction == "outbound" and
+            m.delivery_state == "sent",
+        order_by: [desc: m.timestamp, desc: m.id],
+        limit: 1,
+        select: m.timestamp
+
+    case Repo.one(query) do
+      nil ->
+        false
+
+      delivered_at ->
+        elapsed = DateTime.diff(inbound_timestamp, delivered_at, :second)
+        elapsed >= 0 and elapsed <= @elicited_window_seconds
+    end
+  end
+
+  def elicited_window_open?(_patient_id, nil), do: false
 
   @doc """
   Computes the next occurrence for an active trigger after `from_utc`.
@@ -1006,6 +1054,90 @@ defmodule Alethea.Triggers do
 
   defp trigger_preview_chain do
     Application.get_env(:alethea, :trigger_preview_chain, TriggerPreviewChain)
+  end
+
+  @default_daily_cap 5
+
+  @doc """
+  Returns the globally configured active trigger daily send cap per patient (Issue #444, S2).
+  Defaults to 5.
+  """
+  @spec daily_cap() :: non_neg_integer()
+  def daily_cap do
+    case Application.get_env(:alethea, :active_trigger_daily_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        cap
+
+      _ ->
+        case Application.get_env(:alethea, __MODULE__) do
+          kw when is_list(kw) -> Keyword.get(kw, :daily_cap, @default_daily_cap)
+          _ -> @default_daily_cap
+        end
+    end
+  end
+
+  @doc """
+  Counts the number of active sends ("fired" firings) for a patient on their local calendar day (Issue #444, S2).
+  """
+  @spec count_daily_active_sends(binary(), DateTime.t(), String.t() | nil) :: non_neg_integer()
+  def count_daily_active_sends(patient_id, %DateTime{} = instant, timezone)
+      when is_binary(patient_id) do
+    {start_utc, end_utc} = local_day_utc_range(instant, timezone)
+
+    query =
+      from f in TriggerFiring,
+        join: t in assoc(f, :trigger),
+        where:
+          t.patient_id == ^patient_id and
+            f.status == "fired" and
+            f.fired_at >= ^start_utc and
+            f.fired_at < ^end_utc,
+        select: count(f.id)
+
+    Repo.one(query) || 0
+  end
+
+  @doc """
+  Calculates the [start_utc, end_utc) interval corresponding to the patient's local calendar day
+  for the given UTC instant and timezone, properly handling DST transitions.
+  """
+  @spec local_day_utc_range(DateTime.t(), String.t() | nil) :: {DateTime.t(), DateTime.t()}
+  def local_day_utc_range(%DateTime{} = instant, timezone) do
+    database = Tz.TimeZoneDatabase
+
+    tz =
+      if is_binary(timezone) and Alethea.Accounts.Timezone.valid?(timezone) do
+        timezone
+      else
+        "America/Santiago"
+      end
+
+    {:ok, local_dt} = DateTime.shift_zone(instant, tz, database)
+    local_date = DateTime.to_date(local_dt)
+    tomorrow = Date.add(local_date, 1)
+
+    start_utc = local_midnight_to_utc(local_date, tz, database)
+    end_utc = local_midnight_to_utc(tomorrow, tz, database)
+
+    {start_utc, end_utc}
+  end
+
+  defp local_midnight_to_utc(%Date{} = date, tz, database) do
+    case DateTime.new(date, ~T[00:00:00], tz, database) do
+      {:ok, dt} ->
+        {:ok, utc_dt} = DateTime.shift_zone(dt, "Etc/UTC", database)
+        DateTime.truncate(utc_dt, :second)
+
+      {:ambiguous, dt1, dt2} ->
+        {:ok, u1} = DateTime.shift_zone(dt1, "Etc/UTC", database)
+        {:ok, u2} = DateTime.shift_zone(dt2, "Etc/UTC", database)
+        earlier = if DateTime.compare(u1, u2) == :lt, do: u1, else: u2
+        DateTime.truncate(earlier, :second)
+
+      {:gap, _dt1, dt2} ->
+        {:ok, u2} = DateTime.shift_zone(dt2, "Etc/UTC", database)
+        DateTime.truncate(u2, :second)
+    end
   end
 
   def insert_content_free_audit!(professional_id, resource_id, action) do

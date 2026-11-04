@@ -4,6 +4,7 @@ defmodule Alethea.TriggersTest do
 
   import Alethea.TriggersFixtures
   import Mox
+  import Ecto.Query
 
   alias Alethea.Accounts.AuditLog
   alias Alethea.Clinical
@@ -562,6 +563,268 @@ defmodule Alethea.TriggersTest do
 
       assert {:error, :unauthorized} =
                Triggers.get_trigger(other.professional, patient.id, trigger.id)
+    end
+  end
+
+  describe "TriggerFiring schema validations (S4)" do
+    alias Alethea.Triggers.TriggerFiring
+
+    test "requires message_id when status is fired", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "fired",
+          fired_at: DateTime.utc_now()
+        })
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).message_id
+    end
+
+    test "allows nil message_id when status is skipped", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "skipped",
+          fired_at: DateTime.utc_now()
+        })
+
+      assert changeset.valid?
+    end
+
+    test "rejects message_id when status is skipped", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: Ecto.UUID.generate(),
+          status: "skipped",
+          fired_at: DateTime.utc_now()
+        })
+
+      refute changeset.valid?
+      assert errors_on(changeset).message_id != []
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Elicited window (#447): a patient reply within 2h of a DELIVERED
+  # Trigger activo message is prompted behavior, not spontaneous.
+  # ----------------------------------------------------------------
+
+  describe "elicited_window_open?/2 (#447)" do
+    setup %{patient: patient} do
+      {:ok, dek} = Clinical.patient_dek(patient, "test_elicited_window")
+      {:ok, enc} = PatientVault.encrypt("Texto de trigger", dek)
+
+      %{enc_text: enc}
+    end
+
+    defp insert_elicited_trigger!(patient, enc_text) do
+      %Trigger{}
+      |> Trigger.changeset(%{
+        patient_id: patient.id,
+        professional_id: patient.professional_id,
+        instruction: enc_text,
+        draft_message: enc_text,
+        approved_text: enc_text,
+        scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        timezone: "America/Santiago",
+        schedule_type: "once",
+        status: "fired"
+      })
+      |> Repo.insert!()
+    end
+
+    defp insert_trigger_message!(patient, trigger, delivery_state, minutes_ago) do
+      {:ok, dek} = Clinical.patient_dek(patient, "test_elicited_window_message")
+      {:ok, enc} = PatientVault.encrypt("Mensaje programado", dek)
+
+      %Clinical.Message{}
+      |> Clinical.Message.changeset(%{
+        patient_id: patient.id,
+        direction: "outbound",
+        behavior_type: "spontaneous",
+        encrypted_content: enc,
+        timestamp:
+          DateTime.utc_now()
+          |> DateTime.add(-minutes_ago, :minute)
+          |> DateTime.truncate(:second)
+      })
+      |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+      |> Ecto.Changeset.put_change(:delivery_state, delivery_state)
+      |> Repo.insert!()
+    end
+
+    defp window_open?(patient, minutes_ago) do
+      timestamp =
+        DateTime.utc_now() |> DateTime.add(-minutes_ago, :minute) |> DateTime.truncate(:second)
+
+      Triggers.elicited_window_open?(patient.id, timestamp)
+    end
+
+    test "returns true when a delivered trigger message is within 2 hours", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 30)
+
+      assert window_open?(patient, 0)
+    end
+
+    test "returns true exactly at the 2 hour boundary (inclusive)", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 120)
+
+      assert window_open?(patient, 0)
+    end
+
+    test "returns false just past the 2 hour boundary", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 121)
+
+      refute window_open?(patient, 0)
+    end
+
+    test "returns false well after the window", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 240)
+
+      refute window_open?(patient, 0)
+    end
+
+    test "returns false when the newest trigger message is not delivered (pending)", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "pending", 30)
+
+      refute window_open?(patient, 0)
+    end
+
+    test "returns false when the newest trigger message failed delivery", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "failed", 30)
+
+      refute window_open?(patient, 0)
+    end
+
+    test "returns false when the newest trigger message delivery is ambiguous", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "ambiguous", 30)
+
+      refute window_open?(patient, 0)
+    end
+
+    test "returns false when the message has no trigger provenance", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      message = insert_trigger_message!(patient, trigger, "sent", 30)
+
+      Repo.update_all(
+        from(m in Clinical.Message, where: m.id == ^message.id),
+        set: [trigger_id: nil]
+      )
+
+      refute window_open?(patient, 0)
+    end
+
+    test "a newer pending trigger message does not mask an older delivered one", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 30)
+      insert_trigger_message!(patient, trigger, "pending", 5)
+
+      assert window_open?(patient, 0)
+    end
+
+    test "returns false when the reply predates the trigger delivery", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 30)
+
+      # Inbound written 60 minutes ago: 30 minutes BEFORE the trigger was delivered.
+      refute window_open?(patient, 60)
+    end
+
+    test "returns false when the patient has no trigger messages", %{patient: patient} do
+      refute window_open?(patient, 0)
+    end
+
+    test "returns false for a nil inbound timestamp", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 30)
+
+      refute Triggers.elicited_window_open?(patient.id, nil)
+    end
+
+    test "does not cross patients", %{patient: patient, enc_text: enc_text} do
+      trigger = insert_elicited_trigger!(patient, enc_text)
+      insert_trigger_message!(patient, trigger, "sent", 30)
+
+      other = fixture_professional_and_patient()
+
+      refute window_open?(other.patient, 0)
     end
   end
 end

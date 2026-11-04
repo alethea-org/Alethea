@@ -102,10 +102,12 @@ The `status` field on `Alethea.Triggers.Trigger` supports:
 ## Execution and Worker Guards
 
 ### `ActiveTriggerWorker`
-- Runs under row-level `FOR UPDATE` lock on the trigger record.
+- Locks the patient conversation first via `Clinical.lock_patient_conversation!/1` before acquiring the row-level `FOR UPDATE` lock on the trigger record. This guarantees the global lock hierarchy (Patient -> Trigger -> Message) and serializes concurrent trigger evaluations for the same patient without deadlock.
 - Pattern matches on `%Trigger{status: "active", approved_text: app} when not is_nil(app)`.
 - If the trigger is `"inactive"`, `"fired"`, or unapproved (`approved_text: nil`), the worker performs a clean no-op (`:ok`) without firing, creating messages, or enqueuing outbound jobs.
-- Passes `"approval_revision" => trigger.approval_revision` in Oban job arguments when enqueuing `TelegramOutboundWorker`.
+- Evaluates the daily active send cap (globally configured to 5 sends per patient calendar day in `patient.timezone` via `Triggers.count_daily_active_sends/3`).
+- If cap is reached (6th or subsequent send): records `TriggerFiring` with `status: "skipped"` and `message_id: nil`, advances recurrence via `Triggers.next_occurrence/2` (finishing one-shot triggers or scheduling the next occurrence for recurring triggers), records a content-free `"trigger_skipped"` audit log, and skips message creation and outbound dispatch.
+- If under cap: creates the `Message`, records `TriggerFiring` with `status: "fired"`, advances recurrence, records `"trigger_fired"` audit log, and passes `"approval_revision" => trigger.approval_revision` in Oban job arguments when enqueuing `TelegramOutboundWorker`.
 
 ### `TelegramOutboundWorker`
 - In `begin_trigger_delivery`, the worker evaluates the current database state of the associated trigger before claiming delivery or invoking the Telegram client:

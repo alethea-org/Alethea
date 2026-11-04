@@ -391,6 +391,39 @@ defmodule AletheaWeb.TriggersLiveTest do
       assert has_element?(msg_view, "#back-to-triggers-link")
     end
 
+    test "displays skipped firing with Omitido pill and without message link (S4)",
+         %{conn: conn, patient: patient, professional: professional} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion de prueba",
+          approved_text: "Mensaje final entregado al paciente",
+          date: future_date,
+          time: ~T[11:00:00]
+        })
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "skipped",
+          fired_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Repo.insert!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      # Switch to history tab
+      view |> element("#tab-history") |> render_click()
+
+      assert has_element?(view, "#trigger-firings")
+      assert has_element?(view, "#firing-#{firing.id}")
+      assert render(view) =~ "Omitido"
+      refute has_element?(view, "#firing-message-link-#{firing.id}")
+    end
+
     test "truthful history shows queued before Telegram ack and sent after TelegramOutboundWorker with Fake (B4)",
          %{conn: conn, patient: patient, professional: professional} do
       {:ok, _} = safe_start_pacer()
