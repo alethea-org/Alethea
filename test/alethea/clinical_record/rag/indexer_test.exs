@@ -66,6 +66,14 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
                {:unknown, "functional_analysis_version_registered"}
     end
 
+    test "trigger_saved indexes as trigger context, never evidence (#452)" do
+      assert Indexer.eligibility("trigger_saved") == {:index, :trigger}
+    end
+
+    test "trigger_firing_created indexes as trigger context, never evidence (#452)" do
+      assert Indexer.eligibility("trigger_firing_created") == {:index, :trigger_firing}
+    end
+
     test "patient_message_received indexes (sdd/telegram-rag-ingestion-262 #262, Slice 1)" do
       assert Indexer.eligibility("patient_message_received") == {:index, :patient_message}
     end
@@ -741,6 +749,96 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
 
       assert {:ok, "Observacion nueva cifrada con la DEK de ClinicalRecord"} =
                PatientVault.decrypt(v2_chunk.encrypted_content, clinical_record_dek)
+    end
+  end
+
+  describe "index_event/1 — triggers as therapist context, never evidence (#452)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "trigger_saved produces a chunk decryptable under the patient DEK", %{
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, trigger} =
+        Alethea.Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+          "condition" => "si el paciente habla de su jefe",
+          "instruction" => "recordarle la analogia del monstruo de la sesion del martes",
+          "approved_text" => "Recuerda la analogia del monstruo que trabajamos."
+        })
+
+      assert :ok =
+               Indexer.index_event(%{
+                 "event" => "trigger_saved",
+                 "resource_type" => "trigger",
+                 "resource_id" => trigger.id,
+                 "patient_id" => patient.id,
+                 "professional_id" => professional.id
+               })
+
+      chunks = Chunk |> Repo.all() |> Enum.filter(&(&1.source_resource_id == trigger.id))
+      assert length(chunks) == 1
+      chunk = hd(chunks)
+      assert chunk.source_resource_type == "trigger"
+      assert chunk.target_behavior_id == nil
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      assert {:ok, text} = PatientVault.decrypt(chunk.encrypted_content, patient_dek)
+      assert text =~ "recordarle la analogia del monstruo"
+    end
+
+    test "trigger_firing_created produces a chunk anchored on the trigger instruction", %{
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, trigger} =
+        Alethea.Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+          "condition" => "si el paciente habla de su madre",
+          "instruction" => "recordarle la tecnica de respiracion",
+          "approved_text" => "Prueba la tecnica de respiracion."
+        })
+
+      {:ok, message} =
+        Alethea.Clinical.save_message(patient, "Pelea con mi madre", nil, "inbound", "spontaneous")
+
+      {:ok, firing} =
+        Alethea.Triggers.record_reactive_firing(trigger.id, message.id, DateTime.utc_now())
+
+      assert :ok =
+               Indexer.index_event(%{
+                 "event" => "trigger_firing_created",
+                 "resource_type" => "trigger_firing",
+                 "resource_id" => firing.id,
+                 "patient_id" => patient.id,
+                 "professional_id" => professional.id
+               })
+
+      chunks = Chunk |> Repo.all() |> Enum.filter(&(&1.source_resource_id == firing.id))
+      assert length(chunks) == 1
+      chunk = hd(chunks)
+      assert chunk.source_resource_type == "trigger_firing"
+    end
+
+    test "an unknown trigger event string is not a recognized RAG event" do
+      assert Indexer.eligibility("trigger_deleted") == {:unknown, "trigger_deleted"}
+    end
+
+    test "a trigger resource_id that no longer resolves surfaces :not_found", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:error, :not_found} =
+               Indexer.index_event(%{
+                 "event" => "trigger_saved",
+                 "resource_type" => "trigger",
+                 "resource_id" => Ecto.UUID.generate(),
+                 "patient_id" => patient.id,
+                 "professional_id" => professional.id
+               })
     end
   end
 

@@ -144,6 +144,41 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
     end
   end
 
+  describe "trigger_event/5 — triggers RAG context events (#452)" do
+    test "builds a job changeset for a trigger resource with identifiers only" do
+      id = Ecto.UUID.generate()
+      patient_id = Ecto.UUID.generate()
+      professional_id = Ecto.UUID.generate()
+
+      changeset = Outbox.trigger_event("trigger_saved", "trigger", id, patient_id, professional_id)
+      args = get_change(changeset, :args)
+
+      assert changeset.valid?
+      assert args["event"] == "trigger_saved"
+      assert args["resource_type"] == "trigger"
+      assert args["resource_id"] == id
+      refute Map.has_key?(args, "instruction")
+    end
+
+    test "builds a job changeset for a trigger_firing resource (triangulation)" do
+      id = Ecto.UUID.generate()
+      patient_id = Ecto.UUID.generate()
+      professional_id = Ecto.UUID.generate()
+
+      changeset =
+        Outbox.trigger_event(
+          "trigger_firing_created",
+          "trigger_firing",
+          id,
+          patient_id,
+          professional_id
+        )
+
+      args = get_change(changeset, :args)
+      assert args["resource_type"] == "trigger_firing"
+    end
+  end
+
   describe "event/2 — functional_analysis_draft_saved (PR1b task 2.7)" do
     test "builds a job changeset with a functional_analysis_draft resource_type and no body" do
       id = Ecto.UUID.generate()
