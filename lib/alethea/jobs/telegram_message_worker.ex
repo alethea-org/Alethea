@@ -18,7 +18,9 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        `:ok` (REQ-C5-persist-inbound-message "empty text payloads
        are dropped").
     4. Persist inbound `Message` via `Clinical.find_or_save_telegram_inbound/4`
-       with `direction: "inbound"`, `source: "spontaneous"`,
+       with `direction: "inbound"`, `source: "spontaneous"` unless a
+       delivered Trigger activo message was acknowledged within the last
+       2h (#447), in which case the inbound is `source: "elicited"`,
        `telegram_message_id` (REQ-C3-worker-persists-message). A
        re-execution finds the row already persisted for that Telegram
        message in the patient's conversation and resumes from it (#390).

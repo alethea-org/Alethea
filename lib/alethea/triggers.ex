@@ -1,6 +1,7 @@
 defmodule Alethea.Triggers do
   @moduledoc """
-  Context module for managing patient one-shot triggers (Issue #440).
+  Context module for managing patient one-shot triggers (Issue #440)
+  and the elicited-reply window (Issue #447).
   """
 
   import Ecto.Query
@@ -14,6 +15,54 @@ defmodule Alethea.Triggers do
   alias Alethea.Repo
   alias Alethea.Triggers.{Schedule, Trigger, TriggerFiring}
   alias AletheaJobs.ActiveTriggerWorker
+
+  # Issue #447: a patient reply within this many seconds of a delivered
+  # Trigger activo message is prompted behavior ("elicited"), not
+  # spontaneous. Only acknowledged deliveries ("sent") open the window.
+  @elicited_window_seconds 2 * 60 * 60
+
+  @doc """
+  Whether an inbound message timestamped `inbound_timestamp` falls within
+  2 hours of the patient's newest delivered Trigger activo message
+  (issue #447).
+
+  Only outbound trigger messages whose Telegram delivery was acknowledged
+  (`delivery_state: "sent"`) anchor the window — pending, ambiguous, or
+  failed firings do not prove the patient was prompted. When several
+  delivered trigger messages exist, the newest one (by `timestamp`, then
+  `id`) anchors the window. A reply timestamped before that delivery,
+  or from another patient, is never inside it.
+
+  `inbound_timestamp` may be `nil` for rows that predate the field —
+  legacy rows are read as spontaneous.
+  """
+  @spec elicited_window_open?(binary(), DateTime.t() | nil) :: boolean()
+  def elicited_window_open?(patient_id, inbound_timestamp)
+
+  def elicited_window_open?(patient_id, %DateTime{} = inbound_timestamp)
+      when is_binary(patient_id) do
+    query =
+      from m in Message,
+        where:
+          m.patient_id == ^patient_id and
+            not is_nil(m.trigger_id) and
+            m.direction == "outbound" and
+            m.delivery_state == "sent",
+        order_by: [desc: m.timestamp, desc: m.id],
+        limit: 1,
+        select: m.timestamp
+
+    case Repo.one(query) do
+      nil ->
+        false
+
+      delivered_at ->
+        elapsed = DateTime.diff(inbound_timestamp, delivered_at, :second)
+        elapsed >= 0 and elapsed <= @elicited_window_seconds
+    end
+  end
+
+  def elicited_window_open?(_patient_id, nil), do: false
 
   @doc """
   Computes the next occurrence for an active trigger after `from_utc`.
