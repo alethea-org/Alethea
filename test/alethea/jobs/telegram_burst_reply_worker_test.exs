@@ -20,6 +20,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
   alias Alethea.Repo
   alias Alethea.Telegram.ChatIdHash
+  alias Alethea.Triggers.TriggerFiring
 
   @pepper "telegram-chat-id-pepper-v1-test-only-min-32-bytes-padding-xyz"
   @chat_id 555_000_111
@@ -360,8 +361,383 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
   end
 
   # ----------------------------------------------------------------
+  # perform/1 — reactive triggers (#448)
+  #
+  # The matcher slot is the deterministic `TriggerMatcher.Fake` (config/
+  # test.exs) unless a test binds `TriggerMatcherMock`.
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — reactive triggers (#448)" do
+    @condition "Pelea con mamá"
+    @approved "¿Pudiste usar lo que practicamos para hablar con calma?"
+
+    # select_match/2
+    test "a matched trigger reaches the prompt and a firing is linked to the anchor" do
+      patient = bind_patient()
+      trigger = create_reactive!(patient)
+      test_pid = self()
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        send(test_pid, {:request, request})
+        phi_reply(request.message_id)
+      end)
+
+      member = save_inbound!(patient, "Ayer tuve una pelea con mi mamá", "300")
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:request, %{trigger: @approved}}
+
+      assert [%TriggerFiring{} = firing] = Repo.all(TriggerFiring)
+      assert firing.trigger_id == trigger.id
+      assert firing.message_id == member.id
+      assert firing.status == "fired"
+
+      assert Repo.get!(Message, member.id).behavior_type == "spontaneous"
+      refute is_nil(Repo.get!(Message, member.id).replied_by_message_id)
+      assert [_delivery] = all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    # select_match/2
+    test "a second match within the cooldown does not fire" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+      test_pid = self()
+
+      stub(Alethea.AI.PhiWorkerMock, :process, fn request ->
+        send(test_pid, {:request, request})
+        phi_reply(request.message_id)
+      end)
+
+      save_inbound!(patient, "Tuve una pelea con mi mamá", "310")
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+      assert_receive {:request, %{trigger: @approved}}
+
+      save_inbound!(patient, "Hoy otra vez pelea con mamá", "311")
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+      assert_receive {:request, second}
+      refute Map.has_key?(second, :trigger)
+
+      assert Repo.aggregate(TriggerFiring, :count) == 1
+    end
+
+    test "a matcher error still produces the normal reply, without trigger or firing" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+      use_mock_matcher()
+      test_pid = self()
+
+      expect(Alethea.AI.TriggerMatcherMock, :match, fn _text, _candidates ->
+        {:error, :unavailable}
+      end)
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        send(test_pid, {:request, request})
+        phi_reply(request.message_id)
+      end)
+
+      save_inbound!(patient, "Tuve una pelea con mi mamá", "320")
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:request, request}
+      refute Map.has_key?(request, :trigger)
+      assert Repo.aggregate(TriggerFiring, :count) == 0
+      assert [_delivery] = all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    test "a matcher timeout still produces the normal reply, without trigger or firing" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+      use_mock_matcher()
+      put_env_for_test(:trigger_match_timeout_ms, 50)
+      test_pid = self()
+
+      expect(Alethea.AI.TriggerMatcherMock, :match, fn _text, _candidates ->
+        receive do
+          :never_sent -> {:ok, %{}}
+        end
+      end)
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        send(test_pid, {:request, request})
+        phi_reply(request.message_id)
+      end)
+
+      save_inbound!(patient, "Tuve una pelea con mi mamá", "330")
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:request, request}
+      refute Map.has_key?(request, :trigger)
+      assert Repo.aggregate(TriggerFiring, :count) == 0
+      assert [_delivery] = all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    # select_match/2
+    test "a withheld model reply records no firing" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+      test_pid = self()
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        send(test_pid, {:request, request})
+        {:ok, reply} = phi_reply(request.message_id)
+        {:ok, Map.put(reply, :truncated, true)}
+      end)
+
+      save_inbound!(patient, "Tuve una pelea con mi mamá", "340")
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:request, %{trigger: @approved}}
+      assert Repo.aggregate(TriggerFiring, :count) == 0
+    end
+
+    # select_match/2
+    test "re-executing a burst with a persisted reply never fires again" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+
+      save_inbound!(patient, "Tuve una pelea con mi mamá", "350")
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+      assert Repo.aggregate(TriggerFiring, :count) == 1
+
+      Alethea.AI.PhiWorkerMock |> expect(:process, 0, fn _ -> flunk("must reuse the reply") end)
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+      assert Repo.aggregate(TriggerFiring, :count) == 1
+    end
+
+    test "sentiment regression: emotion scores reach neither the matcher nor the model" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+      use_mock_matcher()
+      test_pid = self()
+
+      member = save_inbound!(patient, "Estoy muy triste por la pelea con mi mamá", "360")
+
+      Repo.insert!(%Alethea.Clinical.EmotionAnalysis{
+        message_id: member.id,
+        joy_score: 0.025,
+        sadness_score: 0.875,
+        anger_score: 0.05,
+        fear_score: 0.025,
+        neutral_score: 0.025,
+        dominant_label: "sadness",
+        confidence: 0.875,
+        processed_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+      expect(Alethea.AI.TriggerMatcherMock, :match, fn text, candidates ->
+        send(test_pid, {:matcher, text, candidates})
+        {:ok, %{}}
+      end)
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        send(test_pid, {:request, request})
+        phi_reply(request.message_id)
+      end)
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:matcher, text, candidates}
+      assert text == "Estoy muy triste por la pelea con mi mamá"
+      assert_receive {:request, request}
+
+      supplied = inspect({text, candidates, request}, printable_limit: :infinity)
+      refute supplied =~ "0.875"
+      refute supplied =~ "sadness"
+      refute supplied =~ "dominant"
+    end
+
+    # select_match/2
+    test "a firing committed between match and persist suppresses this burst's firing" do
+      patient = bind_patient()
+      trigger = create_reactive!(patient)
+      test_pid = self()
+
+      # A non-Telegram message: outside every burst, so it cannot make the
+      # save transaction stale.
+      {:ok, concurrent_anchor} =
+        Clinical.save_message(
+          patient.legacy_patient,
+          "mensaje de otra ráfaga",
+          nil,
+          "inbound",
+          "spontaneous"
+        )
+
+      member = save_inbound!(patient, "Ayer tuve una pelea con mi mamá", "370")
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        # Another burst for the same trigger commits its firing after this
+        # burst matched (the prompt already carries the trigger) but before
+        # this burst persists its reply.
+        {:ok, _} =
+          Alethea.Triggers.record_reactive_firing(
+            trigger.id,
+            concurrent_anchor.id,
+            DateTime.utc_now()
+          )
+
+        send(test_pid, {:request, request})
+        phi_reply(request.message_id)
+      end)
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:request, %{trigger: @approved}}
+      assert [%TriggerFiring{} = firing] = Repo.all(TriggerFiring)
+      assert firing.message_id == concurrent_anchor.id
+
+      assert %Message{} = Clinical.get_telegram_reply(member.id)
+      assert [_delivery] = all_enqueued(worker: TelegramOutboundWorker)
+    end
+
+    # select_match/2
+    test "a late-cooldown skip saves the reply and records a content-free audit row" do
+      patient = bind_patient()
+      trigger = create_reactive!(patient)
+
+      {:ok, concurrent_anchor} =
+        Clinical.save_message(
+          patient.legacy_patient,
+          "mensaje de otra ráfaga",
+          nil,
+          "inbound",
+          "spontaneous"
+        )
+
+      member = save_inbound!(patient, "Ayer tuve una pelea con mi mamá", "375")
+
+      Alethea.AI.PhiWorkerMock
+      |> expect(:process, fn request ->
+        {:ok, _} =
+          Alethea.Triggers.record_reactive_firing(
+            trigger.id,
+            concurrent_anchor.id,
+            DateTime.utc_now()
+          )
+
+        phi_reply(request.message_id)
+      end)
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert [%TriggerFiring{message_id: anchor_id}] = Repo.all(TriggerFiring)
+      assert anchor_id == concurrent_anchor.id
+      assert %Message{} = Clinical.get_telegram_reply(member.id)
+
+      assert [audit] =
+               Repo.all(
+                 from a in Alethea.Accounts.AuditLog,
+                   where: a.action == "trigger_firing_skipped_cooldown"
+               )
+
+      assert audit.resource_type == "trigger"
+      assert audit.resource_id == trigger.id
+      assert audit.professional_id == trigger.professional_id
+      assert audit.details == %{}
+    end
+
+    # select_match/2
+    test "a multi-message burst links the firing to its newest member, stable across re-runs" do
+      patient = bind_patient()
+      trigger = create_reactive!(patient)
+
+      # Inserted out of Telegram order: the anchor is the newest member by
+      # telegram_message_id (the `list_burst_members/1` order), not by
+      # insertion time.
+      _first = save_inbound!(patient, "Ayer tuve una pelea con mi mamá", "381")
+      newest = save_inbound!(patient, "y no pude dormir", "383")
+      _middle = save_inbound!(patient, "me sentí muy mal", "382")
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert [%TriggerFiring{} = firing] = Repo.all(TriggerFiring)
+      assert firing.trigger_id == trigger.id
+      assert firing.message_id == newest.id
+
+      Alethea.AI.PhiWorkerMock |> expect(:process, 0, fn _ -> flunk("must reuse the reply") end)
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert [again] = Repo.all(TriggerFiring)
+      assert again.id == firing.id
+      assert again.message_id == newest.id
+
+      job_args = Repo.all(from j in Oban.Job, select: j.args)
+      refute inspect(job_args, printable_limit: :infinity) =~ @condition
+    end
+
+    test "the matcher receives the burst text sanitized" do
+      patient = bind_patient()
+      _trigger = create_reactive!(patient)
+      use_mock_matcher()
+      test_pid = self()
+
+      expect(Alethea.AI.TriggerMatcherMock, :match, fn text, candidates ->
+        send(test_pid, {:matcher, text, candidates})
+        {:ok, %{}}
+      end)
+
+      save_inbound!(patient, "Pelea con mamá, escríbele a ana@example.com", "390")
+      save_inbound!(patient, "o llámala al +56 9 1234 5678", "391")
+
+      assert :ok = TelegramBurstReplyWorker.perform(%Oban.Job{args: arm_args(patient)})
+
+      assert_receive {:matcher, text, [candidate]}
+      refute text =~ "ana@example.com"
+      refute text =~ "1234 5678"
+      assert text =~ "[REDACTED_EMAIL]"
+      assert text =~ "[REDACTED_PHONE]"
+      assert candidate.condition == @condition
+    end
+  end
+
+  # ----------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------
+
+  defp create_reactive!(patient) do
+    {:ok, trigger} =
+      Alethea.Triggers.create_and_approve_reactive_trigger(
+        patient.legacy_professional,
+        patient.legacy_patient.id,
+        %{
+          "condition" => @condition,
+          "instruction" => "Retomar la comunicación asertiva",
+          "approved_text" => @approved
+        }
+      )
+
+    trigger
+  end
+
+  defp save_inbound!(patient, text, telegram_message_id) do
+    {:ok, inbound} =
+      Clinical.save_telegram_message(
+        patient.foundation_patient,
+        text,
+        "inbound",
+        "spontaneous",
+        telegram_message_id
+      )
+
+    inbound
+  end
+
+  defp use_mock_matcher, do: put_env_for_test(:trigger_matcher, Alethea.AI.TriggerMatcherMock)
+
+  defp put_env_for_test(key, value) do
+    original = Application.fetch_env!(:alethea, key)
+    Application.put_env(:alethea, key, value)
+    on_exit(fn -> Application.put_env(:alethea, key, original) end)
+  end
 
   defp phi_reply(message_id) do
     {:ok,
@@ -400,6 +776,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
 
     %{
       foundation_patient: foundation_patient,
+      legacy_professional: legacy_professional,
       legacy_patient: legacy_patient,
       chat_id: chat_id,
       chat_id_hash: chat_id_hash

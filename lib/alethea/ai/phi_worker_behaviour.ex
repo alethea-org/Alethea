@@ -13,7 +13,10 @@ defmodule Alethea.AI.PhiWorkerBehaviour do
           required(:sanitized_content) => String.t(),
           required(:history) => [turn()],
           optional(:summary) => String.t(),
-          optional(:exploration_mode) => :open | :closing
+          optional(:exploration_mode) => :open | :closing,
+          # #448: approved text of the reactive trigger matched for this
+          # burst, woven into the single reply.
+          optional(:trigger) => String.t()
         }
 
   @type summarize_request :: %{

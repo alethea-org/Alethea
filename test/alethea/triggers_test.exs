@@ -741,6 +741,7 @@ defmodule Alethea.TriggersTest do
         approved_text: enc_text,
         scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
         timezone: "America/Santiago",
+        schedule_type: "once",
         status: "fired"
       })
       |> Repo.insert!()

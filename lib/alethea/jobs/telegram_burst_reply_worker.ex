@@ -41,6 +41,10 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
     5. Check no inbound is left uncovered (`Clinical.uncovered_inbound?/1`,
        design R3) — a newer inbound arrived during generation.
     6. Save the AI diagnosis anchored to the newest member.
+    6b. Record the reactive-trigger firing (#448) when the reply carried
+        one (`:trigger_match`), linked to the newest member, re-validating
+        the trigger's cooldown under a row lock
+        (`Triggers.fire_reactive_trigger/3`).
     7. Enqueue the delivery job INSIDE this transaction (design AD9):
        a crash before commit leaves nothing to resume; a crash after
        commit but before the job is visible cannot happen, because the
@@ -85,6 +89,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Telegram.{GenerationFailureNotice, JournalingReply}
+  alias Alethea.Triggers
   alias AletheaJobs.SafeReason
 
   @window_seconds 45
@@ -436,6 +441,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
              ),
            false <- Clinical.uncovered_inbound?(legacy_patient.id),
            {:ok, _diagnosis} <- Clinical.save_ai_diagnosis(anchor.id, chain_result),
+           :ok <- record_trigger_firing(chain_result, anchor),
            {:ok, _job} <-
              insert_outbound_job(foundation_patient, reply, chain_result.response, args) do
         reply
@@ -445,6 +451,29 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
       end
     end)
   end
+
+  # #448: a reactive trigger woven into this reply is recorded in the same
+  # transaction as the reply, linked to the anchor patient message (which
+  # stays spontaneous). A rollback therefore never leaves a firing without
+  # the reply that carried it, and a reused persisted reply never fires.
+  #
+  # Cooldown race: eligibility was checked at match time, before
+  # generation. `Triggers.fire_reactive_trigger/3` re-validates it under a
+  # row lock on the trigger (taken after the patient lock above, the same
+  # order the crisis pause uses). If another burst fired the trigger in the
+  # meantime, or it was paused/deactivated, the firing is skipped but the
+  # reply is still saved: its prompt already carried the approved trigger
+  # text, so the patient receives it once more inside the cooldown. That is
+  # accepted over discarding a generated reply; the firing log stays the
+  # single source of truth for the cooldown.
+  defp record_trigger_firing(%{trigger_match: %{trigger_id: trigger_id}}, anchor) do
+    case Triggers.fire_reactive_trigger(trigger_id, anchor.id, DateTime.utc_now()) do
+      {:ok, _firing_or_skipped} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp record_trigger_firing(_chain_result, _anchor), do: :ok
 
   defp legacy_patient!(foundation_patient) do
     case FoundationAccounts.legacy_patient(foundation_patient) do

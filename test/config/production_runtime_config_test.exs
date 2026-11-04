@@ -20,7 +20,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     WeeklySummaryChain
   }
 
-  alias Alethea.AI.{Embeddings, EmotionAnalyzer, LLMConfig, Whisper}
+  alias Alethea.AI.{Embeddings, EmotionAnalyzer, LLMConfig, TriggerMatcher, Whisper}
   alias Alethea.Clinical.RunningSummary
 
   @managed_env ~w(
@@ -33,7 +33,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     EMOTION_ANALYZER_ENABLED EMOTION_SIDECAR_URL EMOTION_SIDECAR_AUTH_TOKEN
     EMBEDDINGS_ENABLED EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL EMBEDDINGS_AUTH_TOKEN
     EMBEDDINGS_RECEIVE_TIMEOUT_MS
-    WHISPER_ENABLED
+    WHISPER_ENABLED TRIGGER_MATCHER_ENABLED
     DEMO_RESTRICTED_ACCESS DEMO_ALLOWED_EMAILS DEMO_SYNTHETIC_DATA
   )
 
@@ -510,6 +510,21 @@ defmodule Alethea.ProductionRuntimeConfigTest do
         prod_config(%{"WHISPER_ENABLED" => "true"})
       end
     end
+
+    test "reactive-trigger matching is disabled and cannot be enabled without an adapter" do
+      assert prod_config() |> alethea(:trigger_matcher) == TriggerMatcher.Disabled
+
+      assert prod_config(%{"TRIGGER_MATCHER_ENABLED" => "false"}) |> alethea(:trigger_matcher) ==
+               TriggerMatcher.Disabled
+
+      assert_raise RuntimeError,
+                   ~r/TRIGGER_MATCHER_ENABLED.*no production trigger matcher adapter/,
+                   fn -> prod_config(%{"TRIGGER_MATCHER_ENABLED" => "true"}) end
+
+      assert_raise RuntimeError, ~r/TRIGGER_MATCHER_ENABLED must be exactly true or false/, fn ->
+        prod_config(%{"TRIGGER_MATCHER_ENABLED" => "yes"})
+      end
+    end
   end
 
   describe "merged production configuration" do
@@ -533,6 +548,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
             :emotion_analyzer,
             :ai_embeddings,
             :ai_whisper,
+            :trigger_matcher,
             :telegram_client,
             EmotionAnalyzer,
             Embeddings.Ollama,
@@ -547,7 +563,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
         refute rendered =~ "127.0.0.1"
         refute rendered =~ "Fake"
 
-        for slot <- [:emotion_analyzer, :ai_embeddings, :ai_whisper] do
+        for slot <- [:emotion_analyzer, :ai_embeddings, :ai_whisper, :trigger_matcher] do
           assert Keyword.has_key?(merged, slot), "#{inspect(slot)} must never be left unset"
         end
 

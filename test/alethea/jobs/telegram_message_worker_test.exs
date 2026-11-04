@@ -936,6 +936,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
         approved_text: enc,
         scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
         timezone: "America/Santiago",
+        schedule_type: "once",
         status: "fired"
       })
       |> Repo.insert!()

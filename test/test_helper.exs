@@ -16,6 +16,11 @@ Mox.defmock(Alethea.AI.FunctionalAnalysisDraftChainMock, for: Alethea.AI.Chains.
 Mox.defmock(Alethea.AI.TriggerPreviewChainMock, for: Alethea.AI.Chains.ChainBehaviour)
 Mox.defmock(Alethea.AI.PhiWorkerMock, for: Alethea.AI.PhiWorkerBehaviour)
 
+# Reactive-trigger matcher (#448): the slot is wired to the deterministic
+# `Alethea.AI.TriggerMatcher.Fake` in config/test.exs. Tests that force an
+# error, a timeout, or prove the matcher is never called bind this mock.
+Mox.defmock(Alethea.AI.TriggerMatcherMock, for: Alethea.AI.TriggerMatcherBehaviour)
+
 # sdd/clinical-rag-projection (GitHub #196, WU2): the Indexer's embed
 # step needs to inject `{:error, _}`/dimension-mismatch shapes that the
 # deterministic `Alethea.AI.Embeddings.Fake` cannot express (spec

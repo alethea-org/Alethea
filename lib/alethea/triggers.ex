@@ -1,7 +1,8 @@
 defmodule Alethea.Triggers do
   @moduledoc """
-  Context module for managing patient one-shot triggers (Issue #440)
-  and the elicited-reply window (Issue #447).
+  Context module for managing patient triggers: scheduled ("active" kind,
+  Issue #440) and reactive ones that fire when a patient burst matches their
+  condition (Issue #448), plus the elicited-reply window (Issue #447).
   """
 
   import Ecto.Query
@@ -15,6 +16,8 @@ defmodule Alethea.Triggers do
   alias Alethea.Repo
   alias Alethea.Triggers.{Schedule, Trigger, TriggerFiring}
   alias AletheaJobs.ActiveTriggerWorker
+
+  @default_cooldown_hours 24
 
   # Issue #447: a patient reply within this many seconds of a delivered
   # Trigger activo message is prompted behavior ("elicited"), not
@@ -163,6 +166,212 @@ defmodule Alethea.Triggers do
   end
 
   @doc """
+  Creates and approves a reactive trigger (#448) in a single transaction.
+
+  A reactive trigger has no schedule: it fires when a patient burst on the
+  safe path matches its `condition`. The condition, instruction, draft and
+  approved text are encrypted with the patient's DEK. `cooldown_hours`
+  defaults to 24. Writes the same content-free audit entries as an active
+  trigger and schedules no job.
+  """
+  @spec create_and_approve_reactive_trigger(Accounts.Professional.t(), binary(), map()) ::
+          {:ok, Trigger.t()} | {:error, term()}
+  def create_and_approve_reactive_trigger(
+        %Accounts.Professional{} = professional,
+        patient_id,
+        attrs
+      )
+      when is_binary(patient_id) and is_map(attrs) do
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         %Accounts.Patient{} = patient <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
+         {:ok, condition} <- extract_condition(attrs),
+         {:ok, instruction, draft_message, approved_text} <- validate_and_extract_texts(attrs),
+         {:ok, dek} <- Clinical.patient_dek(patient, "trigger_creation"),
+         {:ok, enc_condition} <- PatientVault.encrypt(condition, dek),
+         {:ok, enc_instruction} <- PatientVault.encrypt(instruction, dek),
+         {:ok, enc_draft} <- PatientVault.encrypt(draft_message, dek),
+         {:ok, enc_approved} <- PatientVault.encrypt(approved_text, dek) do
+      trigger_params = %{
+        patient_id: patient.id,
+        professional_id: professional.id,
+        condition: enc_condition,
+        instruction: enc_instruction,
+        draft_message: enc_draft,
+        approved_text: enc_approved,
+        cooldown_hours: fetch_attr(attrs, :cooldown_hours) || @default_cooldown_hours,
+        timezone: patient.timezone || "America/Santiago",
+        status: "active"
+      }
+
+      Repo.transaction(fn ->
+        case %Trigger{} |> Trigger.reactive_changeset(trigger_params) |> Repo.insert() do
+          {:ok, trigger} ->
+            insert_content_free_audit!(professional.id, trigger.id, "trigger_created")
+            insert_content_free_audit!(professional.id, trigger.id, "trigger_approved")
+
+            %{
+              trigger
+              | decrypted_condition: condition,
+                decrypted_instruction: instruction,
+                decrypted_draft_message: draft_message,
+                decrypted_approved_text: approved_text
+            }
+
+          {:error, changeset} ->
+            Repo.rollback(changeset)
+        end
+      end)
+    else
+      :error -> {:error, :unauthorized}
+      nil -> {:error, :unauthorized}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Lists the reactive triggers of `patient` that may be offered to the
+  trigger matcher right now (#448): kind `reactive`, status `active`,
+  approved (an `approved_text` is present, which a changed instruction
+  clears), and not fired within their `cooldown_hours` before `now`.
+
+  Called by the journaling pipeline, not by a professional, so it is not
+  owner-scoped. The patient DEK is loaded only when at least one trigger is
+  eligible; each returned trigger carries `decrypted_condition` and
+  `decrypted_approved_text`, and one whose condition or approved text cannot
+  be decrypted is left out.
+  """
+  @spec eligible_reactive_triggers(Accounts.Patient.t(), DateTime.t()) ::
+          {:ok, [Trigger.t()]} | {:error, term()}
+  def eligible_reactive_triggers(%Accounts.Patient{} = patient, now \\ DateTime.utc_now()) do
+    recent_firing =
+      from(f in TriggerFiring,
+        where:
+          f.trigger_id == parent_as(:trigger).id and
+            f.fired_at >
+              fragment(
+                "? - make_interval(hours => ?)",
+                type(^now, :utc_datetime),
+                parent_as(:trigger).cooldown_hours
+              )
+      )
+
+    triggers =
+      from(t in Trigger,
+        as: :trigger,
+        where:
+          t.patient_id == ^patient.id and t.kind == "reactive" and t.status == "active" and
+            not is_nil(t.approved_text) and not exists(recent_firing),
+        order_by: [asc: t.inserted_at, asc: t.id]
+      )
+      |> Repo.all()
+
+    case triggers do
+      [] ->
+        {:ok, []}
+
+      _ ->
+        with {:ok, dek} <- Clinical.patient_dek(patient, "reactive_trigger_matching") do
+          {:ok,
+           triggers
+           |> Enum.map(&decrypt_trigger_fields(&1, dek))
+           |> Enum.reject(&(is_nil(&1.decrypted_condition) or is_nil(&1.decrypted_approved_text)))}
+        end
+    end
+  end
+
+  @doc """
+  Records that a reactive trigger fired for the patient message it matched
+  (#448). `scheduled_at` defaults to `fired_at`. The message itself is not
+  modified: it stays a spontaneous patient message.
+  """
+  @spec record_reactive_firing(binary(), binary(), DateTime.t()) ::
+          {:ok, TriggerFiring.t()} | {:error, Ecto.Changeset.t()}
+  def record_reactive_firing(trigger_id, message_id, %DateTime{} = fired_at)
+      when is_binary(trigger_id) and is_binary(message_id) do
+    %TriggerFiring{}
+    |> TriggerFiring.changeset(%{
+      trigger_id: trigger_id,
+      message_id: message_id,
+      status: "fired",
+      fired_at: DateTime.truncate(fired_at, :second)
+    })
+    |> Repo.insert()
+  end
+
+  @doc """
+  Records a reactive firing only if the trigger is still eligible when the
+  firing is persisted (#448).
+
+  Eligibility is checked at match time (`eligible_reactive_triggers/2`),
+  before reply generation, and two bursts for the same patient can both
+  pass that check before either persists. This re-validates it under
+  `SELECT ... FOR UPDATE` on the trigger row: kind `reactive`, status
+  `active`, approved, and no firing within `cooldown_hours` before
+  `fired_at`. Concurrent callers for the same trigger serialize on the row
+  lock, so at most one firing lands per cooldown window.
+
+  Returns `{:ok, :skipped}` when the trigger is no longer eligible. Meant to
+  run inside the caller's reply-save transaction, so the lock is held until
+  that transaction commits.
+  """
+  @spec fire_reactive_trigger(binary(), binary(), DateTime.t()) ::
+          {:ok, TriggerFiring.t()} | {:ok, :skipped} | {:error, term()}
+  def fire_reactive_trigger(trigger_id, message_id, %DateTime{} = fired_at)
+      when is_binary(trigger_id) and is_binary(message_id) do
+    fired_at = DateTime.truncate(fired_at, :second)
+
+    Repo.transaction(fn ->
+      locked =
+        Repo.one(
+          from(t in Trigger,
+            where: t.id == ^trigger_id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      case reactive_fireability(locked, fired_at) do
+        :fireable ->
+          case record_reactive_firing(trigger_id, message_id, fired_at) do
+            {:ok, firing} -> firing
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        :cooldown ->
+          insert_content_free_audit!(
+            locked.professional_id,
+            locked.id,
+            "trigger_firing_skipped_cooldown"
+          )
+
+          :skipped
+
+        :ineligible ->
+          :skipped
+      end
+    end)
+  end
+
+  defp reactive_fireability(
+         %Trigger{kind: "reactive", status: "active", approved_text: approved} = trigger,
+         fired_at
+       )
+       when not is_nil(approved) do
+    window_start = DateTime.add(fired_at, -trigger.cooldown_hours * 3600, :second)
+
+    in_cooldown? =
+      Repo.exists?(
+        from(f in TriggerFiring,
+          where: f.trigger_id == ^trigger.id and f.fired_at > ^window_start
+        )
+      )
+
+    if in_cooldown?, do: :cooldown, else: :fireable
+  end
+
+  defp reactive_fireability(_trigger, _fired_at), do: :ineligible
+
+  @doc """
   Lists all triggers for a given patient, including active, inactive, and unapproved.
   Decrypts fields using patient DEK.
   """
@@ -238,7 +447,9 @@ defmodule Alethea.Triggers do
       query =
         from(t in Trigger,
           where: t.patient_id == ^valid_patient_id,
+          group_by: t.kind,
           select: %{
+            kind: t.kind,
             total: count(t.id),
             active: count(fragment("CASE WHEN ? = 'active' THEN 1 END", t.status)),
             inactive: count(fragment("CASE WHEN ? = 'inactive' THEN 1 END", t.status)),
@@ -258,29 +469,7 @@ defmodule Alethea.Triggers do
           }
         )
 
-      stats =
-        Repo.one(query) ||
-          %{
-            total: 0,
-            active: 0,
-            inactive: 0,
-            fired: 0,
-            paused_by_crisis: 0,
-            paused_by_delivery_failures: 0,
-            needs_approval: 0
-          }
-
-      active_kind = %{
-        total: stats.total,
-        active: stats.active,
-        inactive: stats.inactive,
-        fired: stats.fired,
-        paused_by_crisis: stats.paused_by_crisis,
-        paused_by_delivery_failures: stats.paused_by_delivery_failures,
-        needs_approval: stats.needs_approval
-      }
-
-      reactive_kind = %{
+      zero = %{
         total: 0,
         active: 0,
         inactive: 0,
@@ -289,6 +478,12 @@ defmodule Alethea.Triggers do
         paused_by_delivery_failures: 0,
         needs_approval: 0
       }
+
+      by_kind = Map.new(Repo.all(query), fn row -> {row.kind, Map.delete(row, :kind)} end)
+
+      active_kind = Map.get(by_kind, "active", zero)
+      reactive_kind = Map.get(by_kind, "reactive", zero)
+      stats = Map.merge(active_kind, reactive_kind, fn _key, a, r -> a + r end)
 
       summary = %{
         total: stats.total,
@@ -763,8 +958,9 @@ defmodule Alethea.Triggers do
                 # If trigger is active, verify schedule validity and re-enqueue
                 now = DateTime.utc_now()
 
+                # Reactive triggers (#448) have no schedule to recheck.
                 scheduled_at_res =
-                  if trigger.status == "active" do
+                  if trigger.status == "active" and trigger.kind == "active" do
                     case trigger.schedule_type do
                       "once" ->
                         if DateTime.compare(trigger.scheduled_at, now) != :gt do
@@ -824,7 +1020,7 @@ defmodule Alethea.Triggers do
                       })
                       |> Repo.update!()
 
-                    if trigger.status == "active" do
+                    if trigger.status == "active" and trigger.kind == "active" do
                       delete_scheduled_jobs(trigger.id)
 
                       %{"trigger_id" => trigger.id}
@@ -1094,6 +1290,24 @@ defmodule Alethea.Triggers do
     )
   end
 
+  # Reactive triggers (#448) have no schedule and no job: reactivating one
+  # only makes it eligible for matching again.
+  defp reactivate_or_resume_trigger(
+         %Trigger{kind: "reactive"} = trigger,
+         professional_id,
+         audit_action,
+         dek
+       ) do
+    updated =
+      trigger
+      |> Trigger.changeset(%{status: "active"})
+      |> Repo.update!()
+
+    insert_content_free_audit!(professional_id, trigger.id, audit_action)
+
+    decrypt_trigger_fields(updated, dek)
+  end
+
   defp reactivate_or_resume_trigger(trigger, professional_id, audit_action, dek) do
     now = DateTime.utc_now()
 
@@ -1182,11 +1396,27 @@ defmodule Alethea.Triggers do
         _ -> nil
       end
 
+    dec_condition =
+      case trigger.condition && PatientVault.decrypt(trigger.condition, dek) do
+        {:ok, val} -> val
+        _ -> nil
+      end
+
     %{
       trigger
       | decrypted_instruction: dec_inst,
         decrypted_draft_message: dec_draft,
-        decrypted_approved_text: dec_app
+        decrypted_approved_text: dec_app,
+        decrypted_condition: dec_condition
     }
   end
+
+  defp extract_condition(attrs) do
+    case fetch_attr(attrs, :condition) |> to_string() |> String.trim() do
+      "" -> {:error, :empty_condition}
+      condition -> {:ok, condition}
+    end
+  end
+
+  defp fetch_attr(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
 end

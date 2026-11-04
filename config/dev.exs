@@ -117,6 +117,10 @@ config :alethea, Alethea.Encryption.Vault,
 # (fail-closed — no scores are persisted).
 config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer
 
+# Reactive-trigger matcher (#448): only the deterministic Fake exists until
+# the real adapter lands (#449).
+config :alethea, :trigger_matcher, Alethea.AI.TriggerMatcher.Fake
+
 # Embeddings — Ollama-backed BGE-M3 local adapter (ADR-002, issue #254).
 # Requires `ollama pull bge-m3` and Ollama running (see LOCAL_LLM_BASE_URL above).
 config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Ollama

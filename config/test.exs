@@ -24,6 +24,9 @@ config :alethea, AletheaWeb.Endpoint,
 config :logger, level: :warning
 
 config :alethea, :emotion_analyzer, Alethea.AI.EmotionAnalyzer.Fake
+# Reactive-trigger matcher (#448): deterministic Fake by default; tests that
+# force an error, a timeout or "never called" bind `TriggerMatcherMock`.
+config :alethea, :trigger_matcher, Alethea.AI.TriggerMatcher.Fake
 config :alethea, :phi_worker, Alethea.AI.PhiWorkerMock
 config :alethea, :session_summary_chain, Alethea.AI.SessionSummaryChainMock
 config :alethea, :weekly_summary_chain, Alethea.AI.WeeklySummaryChainMock

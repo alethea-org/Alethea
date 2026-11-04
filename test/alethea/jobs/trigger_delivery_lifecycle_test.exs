@@ -85,6 +85,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "inactive",
           approval_revision: 1
         })
@@ -137,6 +138,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: nil,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "active",
           approval_revision: 2
         })
@@ -188,6 +190,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "active",
           approval_revision: 2
         })
@@ -240,6 +243,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "active",
           approval_revision: 1
         })
@@ -292,6 +296,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "active",
           approval_revision: 2
         })
@@ -358,6 +363,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
               approved_text: enc,
               scheduled_at: now,
               timezone: "America/Santiago",
+              schedule_type: "once",
               status: "active",
               approval_revision: 1
             })
@@ -479,6 +485,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "paused_by_crisis",
           approval_revision: 1
         })
@@ -530,6 +537,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "active",
           approval_revision: 1
         })
@@ -585,6 +593,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
           approved_text: enc_text,
           scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
           timezone: "America/Santiago",
+          schedule_type: "once",
           status: "paused_by_delivery_failures",
           approval_revision: 1,
           consecutive_delivery_failures: 3

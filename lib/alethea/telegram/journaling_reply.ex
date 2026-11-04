@@ -11,7 +11,12 @@ defmodule Alethea.Telegram.JournalingReply do
 
     * the current turn, sanitized, exactly once;
     * up to 10 prior journaling messages, oldest first, each tagged
-      `:patient` or `:alethea` and sanitized.
+      `:patient` or `:alethea` and sanitized;
+    * the running summary, when a usable one exists (#394);
+    * the approved text of at most one reactive trigger matched on the
+      sanitized burst text (#448, `Alethea.Triggers.ReactiveMatch`),
+      sanitized. When it is used, the result carries `:trigger_match`
+      (`%{trigger_id, probability}`) so the caller can record the firing.
 
   Nothing else: no clinician records, no emotion scores, no other
   inferred clinical data.
@@ -44,6 +49,7 @@ defmodule Alethea.Telegram.JournalingReply do
   alias Alethea.Clinical.{Message, RunningSummary}
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{JournalingFallback, TopicExploration}
+  alias Alethea.Triggers.ReactiveMatch
 
   @history_limit 10
   @fallback_model_version "journaling-fallback"
@@ -112,9 +118,16 @@ defmodule Alethea.Telegram.JournalingReply do
 
     request = maybe_put_summary(request, foundation_patient, anchor)
 
+    # #448: at most one reactive trigger, matched on the sanitized burst
+    # text before generation; any matcher failure means no trigger.
+    match = ReactiveMatch.find(legacy_patient, sanitized_content)
+    request = maybe_put_trigger(request, match)
+
     case ai_worker().process(request) do
       {:ok, %{response: reply} = chain_result} when is_binary(reply) and reply != "" ->
-        finish_reply(chain_result, reply, state, anchor)
+        chain_result
+        |> finish_reply(reply, state, anchor)
+        |> maybe_put_trigger_match(match)
 
       {:ok, %{response: _empty}} ->
         {:error, :empty_response}
@@ -244,6 +257,25 @@ defmodule Alethea.Telegram.JournalingReply do
         request
     end
   end
+
+  # The approved trigger text is professional-written data; it is sanitized
+  # like every other supplied text before it reaches the AI worker.
+  defp maybe_put_trigger(request, {:ok, {trigger, _probability}}),
+    do: Map.put(request, :trigger, Sanitizer.sanitize(trigger.decrypted_approved_text))
+
+  defp maybe_put_trigger(request, :none), do: request
+
+  # The firing is recorded by the caller (in its save transaction) only when
+  # the model's own reply is delivered: a reply replaced by a fallback
+  # (guard block, truncation, exploration copy) never carried the trigger.
+  defp maybe_put_trigger_match({:ok, %{model_version: @fallback_model_version}} = result, _),
+    do: result
+
+  defp maybe_put_trigger_match({:ok, result}, {:ok, {trigger, probability}}),
+    do:
+      {:ok, Map.put(result, :trigger_match, %{trigger_id: trigger.id, probability: probability})}
+
+  defp maybe_put_trigger_match(result, _match), do: result
 
   defp load_summary(foundation_patient) do
     # Checked first: with a hosted reply provider the summary must not even
