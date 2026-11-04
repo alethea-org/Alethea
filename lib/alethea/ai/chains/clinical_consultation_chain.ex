@@ -22,9 +22,14 @@ defmodule Alethea.AI.Chains.ClinicalConsultationChain do
   alias LangChain.Message
 
   @impl true
-  def run(%{question: question, excerpts: excerpts})
+  def run(%{question: question, excerpts: excerpts} = params)
       when is_binary(question) and is_list(excerpts) do
-    content = build_prompt(%{question: question, excerpts: excerpts})
+    content =
+      build_prompt(%{
+        question: question,
+        excerpts: excerpts,
+        context: Map.get(params, :context, [])
+      })
 
     case LLMConfig.get_and_build(:consultation_synthesis) do
       {:ok, _config, llm} -> do_run(llm, content)
@@ -78,18 +83,41 @@ defmodule Alethea.AI.Chains.ClinicalConsultationChain do
   numbered. Carries no chunk/resource identifiers — the model has no
   channel to name a source.
   """
-  @spec build_prompt(%{question: String.t(), excerpts: [String.t()]}) :: String.t()
-  def build_prompt(%{question: question, excerpts: excerpts})
+  @spec build_prompt(%{question: String.t(), excerpts: [String.t()], context: [String.t()]}) ::
+          String.t()
+  def build_prompt(%{question: question, excerpts: excerpts} = params)
       when is_binary(question) and is_list(excerpts) do
     numbered =
       excerpts
       |> Enum.with_index(1)
       |> Enum.map_join("\n", fn {excerpt, index} -> "#{index}. #{excerpt}" end)
 
+    # #452: never-evidence therapist context (trigger configuration and
+    # firings) rides in its own prompt section, explicitly marked as not
+    # evidence, so the synthesis can mention what the therapist asked the
+    # bot to do without ever citing it as clinical evidence.
+    context_section =
+      case Map.get(params, :context, []) do
+        [] ->
+          ""
+
+        context ->
+          context_numbered =
+            context
+            |> Enum.with_index(1)
+            |> Enum.map_join("\n", fn {line, index} -> "#{index}. #{line}" end)
+
+          """
+
+          Contexto del terapeuta (instrucciones propias; NO es evidencia clínica, no lo cites como tal):
+          #{context_numbered}
+          """
+      end
+
     """
     Pregunta del profesional:
     #{question}
-
+    #{context_section}
     Fragmentos de evidencia clínica (usa solo estos):
     #{numbered}
     """

@@ -50,10 +50,10 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
       `Retrieval.context/3` restricted to never-evidence types.
       `lib/alethea/clinical_record/rag/retrieval.ex`,
       `test/alethea/clinical_record/rag/retrieval_test.exs` — commit: PENDING
-- [ ] T4 (S2,S3,S5): `Consultation.Live` fetches context, feeds chain as
+- [x] T4 (S2,S3,S5): `Consultation.Live` fetches context, feeds chain as
       `context`, excludes from Sources/hypothesis/threshold.
       `lib/alethea/clinical_record/rag/consultation/live.ex`,
-      `lib/alethea/ai/chains/clinical_consultation_chain.ex` — commit:
+      `lib/alethea/ai/chains/clinical_consultation_chain.ex` — commit: PENDING
 - [ ] T5 (S1): Reindex task re-enqueues triggers/firings.
       `lib/mix/tasks/alethea.rag.reindex.ex` — commit:
 - [ ] T6: `mix precommit`, docs, close feature — commit:

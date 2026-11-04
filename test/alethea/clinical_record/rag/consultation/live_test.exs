@@ -732,4 +732,68 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
       oban_jobs: Repo.all(Oban.Job)
     }
   end
+
+  describe "answer/4 — trigger context reaches the chain, never evidence (#452)" do
+    test "trigger chunks feed the chain as context and never become sources", %{
+      professional: professional,
+      patient: patient
+    } do
+      _evidence =
+        insert_chunk!(
+          professional,
+          patient,
+          "El paciente practica respiracion guiada",
+          near_vector()
+        )
+
+      trigger_chunk =
+        insert_chunk!(
+          professional,
+          patient,
+          "Instruccion: recordarle la tecnica de respiracion",
+          near_vector(),
+          source_resource_type: "trigger"
+        )
+
+      stub_query_embedding(near_vector())
+
+      test_pid = self()
+
+      expect(ClinicalConsultationChainMock, :run, fn params ->
+        send(test_pid, {:chain_params, params})
+        {:ok, %{synthesis: "sintesis"}}
+      end)
+
+      assert {:ok, %Answer{outcome: :synthesis, sources: sources}} =
+               Live.answer(professional, patient.id, "respiracion", [])
+
+      assert_received {:chain_params, params}
+      context = Enum.join(params.context || [], " ")
+      excerpts = Enum.join(params.excerpts, " ")
+      assert context =~ "tecnica de respiracion"
+      refute excerpts =~ "Instruccion:"
+
+      refute trigger_chunk in Enum.map(sources, & &1.reference.resource_id)
+    end
+
+    test "trigger context alone never yields a synthesis outcome", %{
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(
+        professional,
+        patient,
+        "Instruccion: recordarle la tecnica de respiracion",
+        near_vector(),
+        source_resource_type: "trigger"
+      )
+
+      stub_query_embedding(near_vector())
+
+      expect(ClinicalConsultationChainMock, :run, 0, fn _params -> :never end)
+
+      assert {:ok, %Answer{outcome: :no_evidence, sources: []}} =
+               Live.answer(professional, patient.id, "respiracion", [])
+    end
+  end
 end
