@@ -17,6 +17,7 @@ defmodule Alethea.Clinical do
   alias Alethea.Repo
   alias Alethea.Clinical.{CrisisExchange, Message, Outbox, Summary, Trend}
   alias Alethea.AI.Diagnosis
+  alias Alethea.Triggers
   alias Alethea.Clinical.EmotionAnalysis
   alias Alethea.Accounts.EncryptionKey
   alias Alethea.Encryption.PatientVault
@@ -235,7 +236,14 @@ defmodule Alethea.Clinical do
               text,
               nil,
               "inbound",
-              "spontaneous",
+              # Issue #447: a fresh inbound within 2h of a delivered
+              # Trigger activo message is prompted behavior. Resumed rows
+              # (the case above) keep their persisted tag — the gate runs
+              # only on first insert, so a replay never rewrites history.
+              if(Triggers.elicited_window_open?(legacy_patient.id, DateTime.utc_now()),
+                do: "elicited",
+                else: "spontaneous"
+              ),
               session_id,
               telegram_message_id
             )

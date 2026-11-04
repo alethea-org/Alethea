@@ -913,6 +913,102 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     end
   end
 
+  # ----------------------------------------------------------------
+  # Elicited tagging (#447): an inbound persisted within 2h of a
+  # delivered Trigger activo message is "elicited", not "spontaneous".
+  # Only acknowledged deliveries (delivery_state: "sent") open the
+  # window; legacy rows with a nil timestamp never do.
+  # ----------------------------------------------------------------
+
+  describe "perform/1 — trigger elicited tagging (#447)" do
+    setup :setup_bound_patient
+
+    defp insert_window_trigger!(ctx) do
+      {:ok, dek} = Clinical.patient_dek(ctx.legacy_patient, "trigger_elicited_window")
+      {:ok, enc} = Alethea.Encryption.PatientVault.encrypt("Texto de trigger", dek)
+
+      %Alethea.Triggers.Trigger{}
+      |> Alethea.Triggers.Trigger.changeset(%{
+        patient_id: ctx.legacy_patient.id,
+        professional_id: ctx.legacy_patient.professional_id,
+        instruction: enc,
+        draft_message: enc,
+        approved_text: enc,
+        scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        timezone: "America/Santiago",
+        status: "fired"
+      })
+      |> Repo.insert!()
+    end
+
+    defp insert_trigger_message!(ctx, trigger, delivery_state, minutes_ago) do
+      {:ok, dek} = Clinical.patient_dek(ctx.legacy_patient, "trigger_elicited_window_message")
+      {:ok, enc} = Alethea.Encryption.PatientVault.encrypt("Mensaje programado", dek)
+
+      %Message{}
+      |> Message.changeset(%{
+        patient_id: ctx.legacy_patient.id,
+        direction: "outbound",
+        behavior_type: "spontaneous",
+        encrypted_content: enc,
+        timestamp:
+          DateTime.utc_now()
+          |> DateTime.add(-minutes_ago, :minute)
+          |> DateTime.truncate(:second)
+      })
+      |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+      |> Ecto.Changeset.put_change(:delivery_state, delivery_state)
+      |> Repo.insert!()
+    end
+
+    test "tags an inbound within 2h of a delivered trigger message as elicited", ctx do
+      trigger = insert_window_trigger!(ctx)
+      insert_trigger_message!(ctx, trigger, "sent", 30)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("gracias por el recordatorio",
+                     telegram_message_id: 801,
+                     telegram_update_id: 81
+                   )
+               })
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+      assert inbound.behavior_type == "elicited"
+    end
+
+    test "keeps an inbound past the 2h window spontaneous", ctx do
+      trigger = insert_window_trigger!(ctx)
+      insert_trigger_message!(ctx, trigger, "sent", 181)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args:
+                   build_args("hola de nuevo",
+                     telegram_message_id: 802,
+                     telegram_update_id: 82
+                   )
+               })
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+      assert inbound.behavior_type == "spontaneous"
+    end
+
+    test "an undelivered trigger message does not open the window", ctx do
+      trigger = insert_window_trigger!(ctx)
+      insert_trigger_message!(ctx, trigger, "pending", 30)
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args: build_args("recibido", telegram_message_id: 803, telegram_update_id: 83)
+               })
+
+      inbound = Repo.one!(from m in Message, where: m.direction == "inbound")
+      assert inbound.behavior_type == "spontaneous"
+    end
+  end
+
   describe "perform/1 — session lifecycle" do
     setup :setup_bound_patient
 

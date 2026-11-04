@@ -77,11 +77,16 @@ The tracer bullet covers the full path end-to-end:
 - Recurrence handling: skipped occurrences advance via `Triggers.next_occurrence/2`. One-shot triggers are consumed (`trigger.status = "fired"`), and recurring triggers advance to their next occurrence.
 - Content-free audit: `Triggers.insert_content_free_audit!(trigger.professional_id, trigger.id, "trigger_skipped")` logs the event without PHI.
 
+### 9. Elicited Reply Tagging (Issue #447)
+- A patient reply whose timestamp falls within 2 hours of the patient's newest delivered Trigger activo message is persisted with `behavior_type: "elicited"`; otherwise it stays `"spontaneous"`. The clinical record can thus distinguish prompted from spontaneous behavior.
+- Only acknowledged deliveries open the window: the anchor query in `Triggers.elicited_window_open?/2` considers outbound trigger messages with `delivery_state: "sent"` exclusively — pending, ambiguous, or failed firings never tag a reply as elicited.
+- When several delivered trigger messages exist, the newest one anchors the window. A reply timestamped before that delivery is never inside it, and the check is per-patient, so other patients' triggers never cross.
+- The gate runs only on first insert inside `Clinical.find_or_save_telegram_inbound/4`; a resumed or replayed inbound keeps its persisted tag, so history is never rewritten.
+
 ## Scope Exclusions (Deferred to Issues #445–#448, #452)
 - Editing, status toggles, dashboard trigger counts (#442)
 - Crisis pause and resumption (#443)
 - Delivery failure counters and retry history handling (#445)
 - Patient-initiated pause/opt-out notices (#446)
-- ELICITED message classification (#447)
 - Reactive matching (#448)
 - RAG context injection into triggers (#452)
