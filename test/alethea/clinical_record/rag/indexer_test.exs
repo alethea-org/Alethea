@@ -833,6 +833,34 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       assert Indexer.eligibility("trigger_deleted") == {:unknown, "trigger_deleted"}
     end
 
+    test "an active trigger with no condition indexes (R3-001 regression)", %{
+      professional: professional,
+      patient: patient
+    } do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, trigger} =
+        Alethea.Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "recordarle respirar antes de la reunion",
+          approved_text: "Respira hondo antes de la reunion.",
+          schedule_type: "once",
+          date: DateTime.to_date(now) |> Date.add(1),
+          time: ~T[10:00:00]
+        })
+
+      assert :ok =
+               Indexer.index_event(%{
+                 "event" => "trigger_saved",
+                 "resource_type" => "trigger",
+                 "resource_id" => trigger.id,
+                 "patient_id" => patient.id,
+                 "professional_id" => professional.id
+               })
+
+      chunks = Chunk |> Repo.all() |> Enum.filter(&(&1.source_resource_id == trigger.id))
+      assert length(chunks) == 1
+    end
+
     test "a trigger resource_id that no longer resolves surfaces :not_found", %{
       professional: professional,
       patient: patient

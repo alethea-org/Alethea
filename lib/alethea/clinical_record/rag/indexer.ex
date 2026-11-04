@@ -654,10 +654,12 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
       trigger ->
         with {:ok, dek} <- resolve_dek(trigger.encryption_version, patient, kek, patient_dek),
              {:ok, instruction} <- PatientVault.decrypt(trigger.instruction, dek),
-             {:ok, approved_text} when is_binary(approved_text) <-
-               optional_decrypt(trigger.approved_text, dek),
-             {:ok, condition} when is_binary(condition) <-
-               optional_decrypt(trigger.condition, dek) do
+             # R3-001 (#452 review): active triggers have no `condition` and a
+             # re-edited trigger has no `approved_text` — both decrypt to
+             # `nil` legitimately, and a binary guard here silently aborted
+             # indexing for exactly those rows.
+             {:ok, approved_text} <- optional_decrypt(trigger.approved_text, dek),
+             {:ok, condition} <- optional_decrypt(trigger.condition, dek) do
           text = trigger_summary(trigger, condition, instruction, approved_text)
 
           {:ok, text, to_usec(DateTime.from_naive!(trigger.inserted_at, "Etc/UTC")), nil,
