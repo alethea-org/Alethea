@@ -45,7 +45,7 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
 - [x] T2 (S1): Enqueue outbox events on trigger create/edit/approve/pause/
       resume and on firing creation. `lib/alethea/triggers.ex`,
       `lib/alethea_jobs/active_trigger_worker.ex`,
-      `test/alethea/triggers/rag_outbox_test.exs` — commit: PENDING
+      `test/alethea/triggers/rag_outbox_test.exs` — commit: e1a92db (slice 1 closed at T2)
 - [ ] T3 (S2,S3): `@never_evidence` gains both types; new
       `Retrieval.context/3` restricted to never-evidence types.
       `lib/alethea/clinical_record/rag/retrieval.ex` — commit:
