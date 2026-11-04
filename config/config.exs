@@ -153,6 +153,14 @@ config :alethea, Alethea.Clinical, recent_message_limit: 10
 # swap (AD10). Results all scoring below it yield `:no_evidence`.
 config :alethea, :consultation_evidence_threshold, 0.35
 
+# Reactive triggers (#448). `:trigger_match_threshold` is the global floor a
+# matcher probability must reach for a reactive trigger to fire, owned by
+# `Alethea.Triggers.ReactiveMatch.threshold/0`. `:trigger_match_timeout_ms`
+# bounds the single matcher call per burst; a slower matcher means the
+# reply is generated without a trigger.
+config :alethea, :trigger_match_threshold, 0.7
+config :alethea, :trigger_match_timeout_ms, 5_000
+
 # --- Clinical Record Retention (sdd/clinical-record-retention, GitHub #197) ---
 
 # `false` by default — `AletheaJobs.RetentionSweepWorker` is a no-op

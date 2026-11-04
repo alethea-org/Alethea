@@ -23,6 +23,9 @@ defmodule Alethea.Triggers.TriggerFiring do
     |> unique_constraint([:trigger_id, :scheduled_at],
       name: :trigger_firings_trigger_id_scheduled_at_index
     )
+    |> unique_constraint([:trigger_id, :message_id],
+      name: :trigger_firings_trigger_id_message_id_index
+    )
   end
 
   defp default_scheduled_at(changeset) do

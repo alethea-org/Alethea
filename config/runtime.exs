@@ -535,6 +535,21 @@ if config_env() == :prod do
       raise "environment variable WHISPER_ENABLED must be exactly true or false."
   end
 
+  # Reactive-trigger matching (#448) has no production adapter yet (only the
+  # Fake exists, the real one is #449), so it is always disabled and asking
+  # for it fails the boot. Disabled means replies carry no reactive trigger.
+  case System.get_env("TRIGGER_MATCHER_ENABLED") do
+    value when value in [nil, "false"] ->
+      config :alethea, :trigger_matcher, Alethea.AI.TriggerMatcher.Disabled
+
+    "true" ->
+      raise "environment variable TRIGGER_MATCHER_ENABLED cannot be true: " <>
+              "no production trigger matcher adapter exists yet. Unset it or set it to false."
+
+    _other ->
+      raise "environment variable TRIGGER_MATCHER_ENABLED must be exactly true or false."
+  end
+
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key

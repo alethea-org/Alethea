@@ -68,5 +68,5 @@ The tracer bullet covers the full path end-to-end:
 - Delivery failure counters and retry history handling (#445)
 - Patient-initiated pause/opt-out notices (#446)
 - ELICITED message classification (#447)
-- Reactive matching (#448)
+- Reactive matching (#448 — tracer bullet landed; see `docs/features/trigger-management.md`, "Reactive Triggers")
 - RAG context injection into triggers (#452)

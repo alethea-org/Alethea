@@ -14,14 +14,22 @@ defmodule Alethea.Triggers.Trigger do
     field :encryption_version, :integer, default: 1
     field :approval_revision, :integer, default: 1
 
-    field :schedule_type, :string, default: "once"
+    field :schedule_type, :string
     field :time, :time
     field :weekdays, {:array, :integer}
     field :end_date, :date
 
+    # #448: "active" triggers are scheduled; "reactive" ones fire when a
+    # patient burst matches their patient-encrypted `condition`. `kind` is
+    # set only through `reactive_changeset/2`, never cast from params.
+    field :kind, :string, default: "active"
+    field :condition, :binary
+    field :cooldown_hours, :integer
+
     field :decrypted_instruction, :string, virtual: true
     field :decrypted_draft_message, :string, virtual: true
     field :decrypted_approved_text, :string, virtual: true
+    field :decrypted_condition, :string, virtual: true
 
     belongs_to :patient, Alethea.Accounts.Patient
     belongs_to :professional, Alethea.Accounts.Professional
@@ -46,20 +54,52 @@ defmodule Alethea.Triggers.Trigger do
       :schedule_type,
       :time,
       :weekdays,
-      :end_date
+      :end_date,
+      :condition,
+      :cooldown_hours
     ])
-    |> validate_required([
-      :patient_id,
-      :professional_id,
-      :instruction,
-      :scheduled_at,
-      :timezone,
-      :status,
-      :schedule_type
-    ])
-    |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
+    |> validate_required([:patient_id, :professional_id, :instruction, :status])
     |> validate_inclusion(:status, ["active", "inactive", "fired", "paused_by_crisis"])
-    |> validate_schedule_fields()
+    |> validate_kind_shape()
+    |> check_constraint(:kind, name: :triggers_kind_check)
+    |> check_constraint(:kind, name: :triggers_active_shape_check)
+    |> check_constraint(:kind, name: :triggers_reactive_shape_check)
+  end
+
+  @doc """
+  Changeset for a new reactive trigger (#448). Sets `kind` programmatically
+  and then applies `changeset/2`, whose rules depend on the kind.
+  """
+  def reactive_changeset(trigger, attrs) do
+    trigger
+    |> change(kind: "reactive")
+    |> changeset(attrs)
+  end
+
+  defp validate_kind_shape(changeset) do
+    case get_field(changeset, :kind) do
+      "reactive" ->
+        changeset
+        |> validate_required([:condition, :cooldown_hours])
+        |> validate_number(:cooldown_hours, greater_than: 0)
+        |> validate_absent([:scheduled_at, :schedule_type])
+
+      _active ->
+        changeset
+        |> validate_required([:scheduled_at, :timezone, :schedule_type])
+        |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
+        |> validate_absent([:condition])
+        |> validate_schedule_fields()
+    end
+  end
+
+  defp validate_absent(changeset, fields) do
+    Enum.reduce(fields, changeset, fn field, acc ->
+      case get_field(acc, field) do
+        nil -> acc
+        _present -> add_error(acc, field, "must be blank for this trigger kind")
+      end
+    end)
   end
 
   defp validate_schedule_fields(changeset) do

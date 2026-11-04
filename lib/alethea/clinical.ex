@@ -466,7 +466,11 @@ defmodule Alethea.Clinical do
           ) and
           (is_nil(m.replied_by_message_id) or
              m.replied_by_message_id in subquery(pending_reply_ids)),
-      order_by: fragment("?::bigint", m.telegram_message_id)
+      # `(patient_id, telegram_message_id)` is unique, so this order is
+      # already total; `id` is a tiebreaker for string ids that cast to the
+      # same bigint ("07" / "7"). The anchor (newest member, where a
+      # reactive firing is linked, #448) must be stable across retries.
+      order_by: [asc: fragment("?::bigint", m.telegram_message_id), asc: m.id]
     )
   end
 

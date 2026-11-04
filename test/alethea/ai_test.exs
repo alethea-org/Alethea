@@ -23,6 +23,10 @@ defmodule Alethea.AITest do
     test "whisper/0 returns the module configured at :ai_whisper" do
       assert AI.whisper() == Alethea.AI.Whisper.Fake
     end
+
+    test "trigger_matcher/0 returns the module configured at :trigger_matcher" do
+      assert AI.trigger_matcher() == Alethea.AI.TriggerMatcher.Fake
+    end
   end
 
   describe "enabled?/1" do
@@ -30,13 +34,15 @@ defmodule Alethea.AITest do
       assert AI.enabled?(:ai_embeddings)
       assert AI.enabled?(:ai_whisper)
       assert AI.enabled?(:emotion_analyzer)
+      assert AI.enabled?(:trigger_matcher)
     end
 
     test "is false for a slot wired to its Disabled adapter" do
       for {slot, disabled} <- [
             ai_embeddings: Alethea.AI.Embeddings.Disabled,
             ai_whisper: Alethea.AI.Whisper.Disabled,
-            emotion_analyzer: Alethea.AI.EmotionAnalyzer.Disabled
+            emotion_analyzer: Alethea.AI.EmotionAnalyzer.Disabled,
+            trigger_matcher: Alethea.AI.TriggerMatcher.Disabled
           ] do
         with_slot(slot, disabled, fn ->
           refute AI.enabled?(slot)
@@ -69,6 +75,14 @@ defmodule Alethea.AITest do
     test "emotion analysis fails closed and never fabricates scores" do
       with_slot(:emotion_analyzer, Alethea.AI.EmotionAnalyzer.Disabled, fn ->
         assert AI.emotion_analyzer().analyze_batch(["synthetic text"]) == {:error, :unavailable}
+      end)
+    end
+
+    test "trigger matching fails closed and never fabricates probabilities" do
+      with_slot(:trigger_matcher, Alethea.AI.TriggerMatcher.Disabled, fn ->
+        assert AI.trigger_matcher().match("synthetic text", [
+                 %{id: Ecto.UUID.generate(), condition: "synthetic condition"}
+               ]) == {:error, :unavailable}
       end)
     end
   end

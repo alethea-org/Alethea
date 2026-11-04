@@ -25,7 +25,10 @@ defmodule Alethea.AI.PhiWorker do
       exploration_mode: Map.get(request, :exploration_mode, :open)
     }
 
-    GuidedConversationChain.run(put_summary(params, Map.get(request, :summary)))
+    params
+    |> put_summary(Map.get(request, :summary))
+    |> put_trigger(Map.get(request, :trigger))
+    |> GuidedConversationChain.run()
   end
 
   @impl true
@@ -40,6 +43,13 @@ defmodule Alethea.AI.PhiWorker do
     do: Map.put(params, :summary, Sanitizer.sanitize(summary))
 
   defp put_summary(params, _none), do: params
+
+  # #448: the approved text of the selected reactive trigger, re-sanitized
+  # like every other text that reaches the model.
+  defp put_trigger(params, trigger) when is_binary(trigger),
+    do: Map.put(params, :trigger, Sanitizer.sanitize(trigger))
+
+  defp put_trigger(params, _none), do: params
 
   defp sanitize_previous(previous) when is_binary(previous), do: Sanitizer.sanitize(previous)
   defp sanitize_previous(_none), do: nil
