@@ -12,7 +12,7 @@ defmodule AletheaWeb.TriggersLiveTest do
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
   alias Alethea.Triggers
-  alias Alethea.Triggers.TriggerFiring
+  alias Alethea.Triggers.{Trigger, TriggerFiring}
   alias AletheaJobs.ActiveTriggerWorker
 
   setup :verify_on_exit!
@@ -389,6 +389,132 @@ defmodule AletheaWeb.TriggersLiveTest do
       assert has_element?(msg_view, "#produced-message-body")
       assert render(msg_view) =~ "Mensaje final entregado al paciente"
       assert has_element?(msg_view, "#back-to-triggers-link")
+    end
+
+    test "displays skipped firing with Omitido pill and without message link (S4)",
+         %{conn: conn, patient: patient, professional: professional} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion de prueba",
+          approved_text: "Mensaje final entregado al paciente",
+          date: future_date,
+          time: ~T[11:00:00]
+        })
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "skipped",
+          fired_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Repo.insert!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      # Switch to history tab
+      view |> element("#tab-history") |> render_click()
+
+      assert has_element?(view, "#trigger-firings")
+      assert has_element?(view, "#firing-#{firing.id}")
+      assert render(view) =~ "Omitido"
+      refute has_element?(view, "#firing-message-link-#{firing.id}")
+    end
+
+    test "displays not_delivered firing with No entregado pill and message link (S2, #445)",
+         %{conn: conn, patient: patient, professional: professional} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion de prueba",
+          approved_text: "Mensaje final entregado al paciente",
+          date: future_date,
+          time: ~T[11:00:00]
+        })
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: trigger.approved_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:delivery_state, "failed")
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: message.id,
+          status: "not_delivered",
+          fired_at: now
+        })
+        |> Repo.insert!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      # Switch to history tab
+      view |> element("#tab-history") |> render_click()
+
+      assert has_element?(view, "#trigger-firings")
+      assert has_element?(view, "#firing-#{firing.id}")
+      assert has_element?(view, "#firing-status-#{firing.id}")
+      assert render(view) =~ "No entregado"
+      assert has_element?(view, "#firing-message-link-#{firing.id}")
+    end
+
+    test "displays trigger paused by delivery failures with badge, notice, and allows resume (S5, #445)",
+         %{conn: conn, patient: patient, professional: professional} do
+      future_date = Date.utc_today() |> Date.add(2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion diaria",
+          approved_text: "Mensaje aprobado diario",
+          schedule_type: "daily",
+          time: ~T[10:00:00],
+          date: future_date
+        })
+
+      trigger
+      |> Trigger.changeset(%{
+        status: "paused_by_delivery_failures",
+        consecutive_delivery_failures: 3
+      })
+      |> Repo.update!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#trigger-status-badge-#{trigger.id}")
+      assert render(view) =~ "Pausado por fallas de entrega"
+      assert has_element?(view, "#trigger-pause-reason-#{trigger.id}")
+      assert render(view) =~ "Pausado automáticamente tras 3 fallas consecutivas de entrega"
+      assert has_element?(view, "#resume-trigger-button-#{trigger.id}")
+
+      # Resume the trigger
+      view
+      |> element("#resume-trigger-button-#{trigger.id}")
+      |> render_click()
+
+      # Now it is active again
+      assert render(view) =~ "Trigger reanudado exitosamente."
+      assert has_element?(view, "#trigger-status-badge-#{trigger.id}")
+      refute render(view) =~ "Pausado por fallas de entrega"
+      refute has_element?(view, "#trigger-pause-reason-#{trigger.id}")
+
+      reloaded = Repo.get!(Trigger, trigger.id)
+      assert reloaded.status == "active"
+      assert reloaded.consecutive_delivery_failures == 0
     end
 
     test "truthful history shows queued before Telegram ack and sent after TelegramOutboundWorker with Fake (B4)",

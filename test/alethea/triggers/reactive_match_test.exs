@@ -122,6 +122,13 @@ defmodule Alethea.Triggers.ReactiveMatchTest do
       assert ReactiveMatch.find(ctx.patient, "texto") == :none
     end
 
+    test "a malformed matcher result (not a map) degrades to no trigger", ctx do
+      {:ok, _} = create_reactive(ctx, "condición")
+      expect(TriggerMatcherMock, :match, fn _, _ -> {:ok, :not_a_map} end)
+
+      assert ReactiveMatch.find(ctx.patient, "texto") == :none
+    end
+
     test "probabilities for unknown ids or outside 0..1 are ignored", ctx do
       {:ok, trigger} = create_reactive(ctx, "condición")
 

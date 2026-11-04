@@ -120,8 +120,6 @@ defmodule Alethea.Triggers.ReactiveMatch do
     end)
   end
 
-  defp score(_triggers, _invalid), do: []
-
   # One bounded call per burst. The adapter runs in a task whose body never
   # raises or exits, so a crash cannot take the reply job down with it; a
   # call slower than the bound is killed.

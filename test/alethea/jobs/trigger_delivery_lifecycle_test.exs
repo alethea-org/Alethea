@@ -338,7 +338,7 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
     end
 
     test "concurrent instruction edit holding trigger lock serializes outbound delivery and suppresses send on approval removal" do
-      chat_id_hash = "race_hash_" |> String.pad_trailing(64, "0")
+      chat_id_hash = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
 
       {p, tr, msg} =
         Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
@@ -577,6 +577,315 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
 
       assert Fake.sends() == []
       assert Repo.get!(Message, message.id).delivery_state == "pending"
+    end
+
+    test "skips delivery when trigger is paused_by_delivery_failures (#445)", %{
+      patient: patient,
+      enc_text: enc_text
+    } do
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          schedule_type: "once",
+          status: "paused_by_delivery_failures",
+          approval_revision: 1,
+          consecutive_delivery_failures: 3
+        })
+        |> Repo.insert!()
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      Repo.update_all(from(m in Message, where: m.id == ^message.id),
+        set: [delivery_state: "pending"]
+      )
+
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: %{
+                   "trigger_id" => trigger.id,
+                   "message_id" => message.id,
+                   "lane" => "trigger",
+                   "approval_revision" => 1
+                 },
+                 attempt: 1,
+                 priority: 0
+               })
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, message.id).delivery_state == "pending"
+    end
+  end
+
+  describe "Trigger delivery failures and pause lifecycle (#445)" do
+    alias Alethea.Accounts.AuditLog
+    alias Alethea.Foundation.Accounts.OutboundDeadLetter
+    alias Alethea.Triggers.{Trigger, TriggerFiring}
+
+    test "exhausted delivery failure dead-letters, marks firing as not_delivered, and increments failure count (S1-S3)",
+         %{patient: patient, enc_text: enc_text} do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
+
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          status: "active",
+          schedule_type: "daily",
+          time: ~T[10:00:00],
+          consecutive_delivery_failures: 0
+        })
+        |> Repo.insert!()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:delivery_state, "pending")
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: message.id,
+          status: "fired",
+          fired_at: now,
+          scheduled_at: trigger.scheduled_at
+        })
+        |> Repo.insert!()
+
+      Fake.queue_responses([{:error, {:rate_limited, 2}}])
+
+      args = %{
+        "trigger_id" => trigger.id,
+        "message_id" => message.id,
+        "lane" => "trigger",
+        "approval_revision" => 1,
+        "_attempt" => 5
+      }
+
+      # Run at attempt 5 (exhaustion)
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: args,
+                 attempt: 5,
+                 priority: 0
+               })
+
+      # Dead-letter row written to foundation_outbound_dead_letters
+      assert [dead_letter] = Repo.all(OutboundDeadLetter)
+      assert dead_letter.attempts == 5
+      assert dead_letter.outcome == "failed"
+
+      # PubSub event broadcast on ops:alerts
+      assert_receive {:outbound_dead_letter, %{attempts: 5}}, 1_000
+
+      # Message marked failed
+      assert Repo.get!(Message, message.id).delivery_state == "failed"
+
+      # Trigger firing marked not_delivered
+      assert Repo.get!(TriggerFiring, firing.id).status == "not_delivered"
+
+      # Trigger failure count incremented to 1, still active
+      reloaded_trigger = Repo.get!(Trigger, trigger.id)
+      assert reloaded_trigger.consecutive_delivery_failures == 1
+      assert reloaded_trigger.status == "active"
+    end
+
+    test "3 consecutive delivery failures pause the trigger, cancel jobs, and write audit log (S3)",
+         %{patient: patient, enc_text: enc_text} do
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          status: "active",
+          schedule_type: "daily",
+          time: ~T[10:00:00],
+          consecutive_delivery_failures: 2
+        })
+        |> Repo.insert!()
+
+      # Schedule a future job that should be cancelled when paused
+      future_time = DateTime.utc_now() |> DateTime.add(3600, :second)
+
+      %{"trigger_id" => trigger.id}
+      |> AletheaJobs.ActiveTriggerWorker.new(scheduled_at: future_time)
+      |> Oban.insert!()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:delivery_state, "pending")
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: message.id,
+          status: "fired",
+          fired_at: now,
+          scheduled_at: trigger.scheduled_at
+        })
+        |> Repo.insert!()
+
+      Fake.queue_responses([{:error, {:rate_limited, 2}}])
+
+      # Run 3rd failure attempt 5
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: %{
+                   "trigger_id" => trigger.id,
+                   "message_id" => message.id,
+                   "lane" => "trigger",
+                   "approval_revision" => 1,
+                   "_attempt" => 5
+                 },
+                 attempt: 5,
+                 priority: 0
+               })
+
+      # Trigger is now paused_by_delivery_failures
+      reloaded_trigger = Repo.get!(Trigger, trigger.id)
+      assert reloaded_trigger.consecutive_delivery_failures == 3
+      assert reloaded_trigger.status == "paused_by_delivery_failures"
+
+      # Firing is not_delivered
+      assert Repo.get!(TriggerFiring, firing.id).status == "not_delivered"
+
+      # Scheduled Oban jobs were cancelled
+      scheduled_jobs =
+        Repo.all(
+          from j in Oban.Job,
+            where:
+              j.worker == "AletheaJobs.ActiveTriggerWorker" and
+                fragment("?->>'trigger_id' = ?", j.args, ^trigger.id) and
+                j.state in ["scheduled", "available", "retryable"]
+        )
+
+      assert scheduled_jobs == []
+
+      # Audit log recorded
+      audit_logs =
+        Repo.all(
+          from a in AuditLog,
+            where:
+              a.resource_id == ^trigger.id and
+                a.action == "trigger_paused_by_delivery_failures"
+        )
+
+      assert length(audit_logs) == 1
+    end
+
+    test "successful delivery resets consecutive_delivery_failures counter (S4)",
+         %{patient: patient, enc_text: enc_text} do
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          professional_id: patient.legacy_patient.professional_id,
+          instruction: enc_text,
+          draft_message: enc_text,
+          approved_text: enc_text,
+          scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          timezone: "America/Santiago",
+          status: "active",
+          schedule_type: "daily",
+          time: ~T[10:00:00],
+          consecutive_delivery_failures: 2
+        })
+        |> Repo.insert!()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:delivery_state, "pending")
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      %TriggerFiring{}
+      |> TriggerFiring.changeset(%{
+        trigger_id: trigger.id,
+        message_id: message.id,
+        status: "fired",
+        fired_at: now,
+        scheduled_at: trigger.scheduled_at
+      })
+      |> Repo.insert!()
+
+      # Fake returns success by default
+      assert :ok =
+               TelegramOutboundWorker.perform(%Oban.Job{
+                 args: %{
+                   "trigger_id" => trigger.id,
+                   "message_id" => message.id,
+                   "lane" => "trigger",
+                   "approval_revision" => 1
+                 },
+                 attempt: 1,
+                 priority: 0
+               })
+
+      assert Repo.get!(Message, message.id).delivery_state == "sent"
+
+      # Counter reset to 0
+      reloaded_trigger = Repo.get!(Trigger, trigger.id)
+      assert reloaded_trigger.consecutive_delivery_failures == 0
+      assert reloaded_trigger.status == "active"
     end
   end
 

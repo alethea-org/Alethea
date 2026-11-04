@@ -1135,6 +1135,13 @@ defmodule AletheaWeb.TriggersLive.Index do
                         >
                           Pausado por crisis
                         </span>
+                      <% trigger.status == "paused_by_delivery_failures" -> %>
+                        <span
+                          id={"trigger-status-badge-#{trigger.id}"}
+                          class="pt-pill pt-pill--risk"
+                        >
+                          Pausado por fallas de entrega
+                        </span>
                       <% trigger.status == "fired" -> %>
                         <span id={"trigger-status-badge-#{trigger.id}"} class="pt-pill">
                           Finalizado
@@ -1200,7 +1207,7 @@ defmodule AletheaWeb.TriggersLive.Index do
                             >
                               Desactivar
                             </button>
-                          <% trigger.status == "paused_by_crisis" -> %>
+                          <% trigger.status in ["paused_by_crisis", "paused_by_delivery_failures"] -> %>
                             <button
                               type="button"
                               id={"resume-trigger-button-#{trigger.id}"}
@@ -1237,6 +1244,16 @@ defmodule AletheaWeb.TriggersLive.Index do
                 <p class="pt-muted" style="font-size: 0.85em;">
                   <em>Instrucción original:</em> {trigger.decrypted_instruction || "(Cifrada)"}
                 </p>
+
+                <%= if trigger.status == "paused_by_delivery_failures" do %>
+                  <div
+                    id={"trigger-pause-reason-#{trigger.id}"}
+                    class="pt-alert pt-alert--warning"
+                    style="margin-top: 8px; margin-bottom: 8px; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; background: var(--color-surface-subtle); border-left: 3px solid #f59e0b;"
+                  >
+                    Pausado automáticamente tras 3 fallas consecutivas de entrega. Puedes reanudarlo cuando el canal esté disponible.
+                  </div>
+                <% end %>
 
                 <%!-- Formulario de edición inline cuando @editing_trigger_id == trigger.id --%>
                 <%= if @editing_trigger_id == trigger.id and @edit_form do %>
@@ -1543,11 +1560,23 @@ defmodule AletheaWeb.TriggersLive.Index do
                 <div style="margin-bottom: 4px;">
                   <%= cond do %>
                     <% reactive?(firing.trigger) -> %>
-                      <span class="pt-pill">Reactivo</span>
+                      <span id={"firing-status-#{firing.id}"} class="pt-pill">Reactivo</span>
+                    <% firing.status == "skipped" -> %>
+                      <span id={"firing-status-#{firing.id}"} class="pt-pill pt-pill--neutral">
+                        Omitido
+                      </span>
+                    <% firing.status == "not_delivered" or (firing.message && firing.message.delivery_state == "failed") -> %>
+                      <span id={"firing-status-#{firing.id}"} class="pt-pill pt-pill--risk">
+                        No entregado
+                      </span>
                     <% firing.message && firing.message.delivery_state == "sent" -> %>
-                      <span class="pt-pill pt-pill--sent">Enviado</span>
+                      <span id={"firing-status-#{firing.id}"} class="pt-pill pt-pill--sent">
+                        Enviado
+                      </span>
                     <% true -> %>
-                      <span class="pt-pill pt-pill--queued">En cola</span>
+                      <span id={"firing-status-#{firing.id}"} class="pt-pill pt-pill--queued">
+                        En cola
+                      </span>
                   <% end %>
                   <span class="pt-muted" style="margin-left: 8px; font-size: 0.85em;">
                     Disparado el: {format_datetime(firing.fired_at)}
@@ -1558,15 +1587,16 @@ defmodule AletheaWeb.TriggersLive.Index do
                 </p>
               </div>
 
-              <%!-- A reactive firing points at the patient's own message, not a produced one --%>
-              <div :if={not reactive?(firing.trigger)}>
-                <.link
-                  id={"firing-message-link-#{firing.id}"}
-                  navigate={~p"/patients/#{@patient.id}/triggers/messages/#{firing.message_id}"}
-                  class="button-secondary button-secondary--sm"
-                >
-                  Ver mensaje
-                </.link>
+              <div>
+                <%= if firing.message_id && not reactive?(firing.trigger) do %>
+                  <.link
+                    id={"firing-message-link-#{firing.id}"}
+                    navigate={~p"/patients/#{@patient.id}/triggers/messages/#{firing.message_id}"}
+                    class="button-secondary button-secondary--sm"
+                  >
+                    Ver mensaje
+                  </.link>
+                <% end %>
               </div>
             </div>
           </div>

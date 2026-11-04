@@ -1,8 +1,8 @@
 defmodule Alethea.Triggers do
   @moduledoc """
   Context module for managing patient triggers: scheduled ("active" kind,
-  Issue #440) and reactive ones that fire when a patient burst matches their
-  condition (Issue #448).
+  Issue #440), reactive ones that fire when a patient burst matches their
+  condition (Issue #448), and the elicited-reply window (Issue #447).
   """
 
   import Ecto.Query
@@ -18,6 +18,54 @@ defmodule Alethea.Triggers do
   alias AletheaJobs.ActiveTriggerWorker
 
   @default_cooldown_hours 24
+
+  # Issue #447: a patient reply within this many seconds of a delivered
+  # Trigger activo message is prompted behavior ("elicited"), not
+  # spontaneous. Only acknowledged deliveries ("sent") open the window.
+  @elicited_window_seconds 2 * 60 * 60
+
+  @doc """
+  Whether an inbound message timestamped `inbound_timestamp` falls within
+  2 hours of the patient's newest delivered Trigger activo message
+  (issue #447).
+
+  Only outbound trigger messages whose Telegram delivery was acknowledged
+  (`delivery_state: "sent"`) anchor the window — pending, ambiguous, or
+  failed firings do not prove the patient was prompted. When several
+  delivered trigger messages exist, the newest one (by `timestamp`, then
+  `id`) anchors the window. A reply timestamped before that delivery,
+  or from another patient, is never inside it.
+
+  `inbound_timestamp` may be `nil` for rows that predate the field —
+  legacy rows are read as spontaneous.
+  """
+  @spec elicited_window_open?(binary(), DateTime.t() | nil) :: boolean()
+  def elicited_window_open?(patient_id, inbound_timestamp)
+
+  def elicited_window_open?(patient_id, %DateTime{} = inbound_timestamp)
+      when is_binary(patient_id) do
+    query =
+      from m in Message,
+        where:
+          m.patient_id == ^patient_id and
+            not is_nil(m.trigger_id) and
+            m.direction == "outbound" and
+            m.delivery_state == "sent",
+        order_by: [desc: m.timestamp, desc: m.id],
+        limit: 1,
+        select: m.timestamp
+
+    case Repo.one(query) do
+      nil ->
+        false
+
+      delivered_at ->
+        elapsed = DateTime.diff(inbound_timestamp, delivered_at, :second)
+        elapsed >= 0 and elapsed <= @elicited_window_seconds
+    end
+  end
+
+  def elicited_window_open?(_patient_id, nil), do: false
 
   @doc """
   Computes the next occurrence for an active trigger after `from_utc`.
@@ -408,6 +456,8 @@ defmodule Alethea.Triggers do
             fired: count(fragment("CASE WHEN ? = 'fired' THEN 1 END", t.status)),
             paused_by_crisis:
               count(fragment("CASE WHEN ? = 'paused_by_crisis' THEN 1 END", t.status)),
+            paused_by_delivery_failures:
+              count(fragment("CASE WHEN ? = 'paused_by_delivery_failures' THEN 1 END", t.status)),
             needs_approval:
               count(
                 fragment(
@@ -419,7 +469,16 @@ defmodule Alethea.Triggers do
           }
         )
 
-      zero = %{total: 0, active: 0, inactive: 0, fired: 0, paused_by_crisis: 0, needs_approval: 0}
+      zero = %{
+        total: 0,
+        active: 0,
+        inactive: 0,
+        fired: 0,
+        paused_by_crisis: 0,
+        paused_by_delivery_failures: 0,
+        needs_approval: 0
+      }
+
       by_kind = Map.new(Repo.all(query), fn row -> {row.kind, Map.delete(row, :kind)} end)
 
       active_kind = Map.get(by_kind, "active", zero)
@@ -436,7 +495,8 @@ defmodule Alethea.Triggers do
           active: stats.active,
           inactive: stats.inactive,
           fired: stats.fired,
-          paused_by_crisis: stats.paused_by_crisis
+          paused_by_crisis: stats.paused_by_crisis,
+          paused_by_delivery_failures: stats.paused_by_delivery_failures
         },
         active_kind: active_kind,
         reactive_kind: reactive_kind,
@@ -488,7 +548,8 @@ defmodule Alethea.Triggers do
           %Trigger{status: "inactive"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
 
-          %Trigger{status: status} = trigger when status in ["active", "paused_by_crisis"] ->
+          %Trigger{status: status} = trigger
+          when status in ["active", "paused_by_crisis", "paused_by_delivery_failures"] ->
             updated =
               trigger
               |> Trigger.changeset(%{status: "inactive"})
@@ -543,6 +604,9 @@ defmodule Alethea.Triggers do
           %Trigger{status: "paused_by_crisis"} ->
             Repo.rollback(:paused_by_crisis)
 
+          %Trigger{status: "paused_by_delivery_failures"} ->
+            Repo.rollback(:paused_by_delivery_failures)
+
           %Trigger{status: "active"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
 
@@ -594,7 +658,8 @@ defmodule Alethea.Triggers do
           %Trigger{status: "inactive"} ->
             Repo.rollback(:not_paused)
 
-          %Trigger{status: "paused_by_crisis"} = trigger ->
+          %Trigger{status: status} = trigger
+          when status in ["paused_by_crisis", "paused_by_delivery_failures"] ->
             reactivate_or_resume_trigger(trigger, professional.id, "trigger_resumed", dek)
         end
       end)
@@ -641,6 +706,116 @@ defmodule Alethea.Triggers do
       :error -> {:error, :invalid_patient_id}
     end
   end
+
+  @doc """
+  Handles delivery failure for an outbound trigger message (Issue #445, S1-S3).
+  Marks the associated TriggerFiring as "not_delivered", increments
+  consecutive_delivery_failures, and after 3 consecutive failures pauses the trigger,
+  cancels scheduled jobs, and writes a content-free audit log.
+  """
+  @spec handle_delivery_failure(binary()) :: :ok | :not_trigger | {:error, term()}
+  def handle_delivery_failure(message_id) when is_binary(message_id) do
+    with {:ok, valid_message_id} <- Ecto.UUID.cast(message_id) do
+      Repo.transaction(fn ->
+        case Repo.get(Clinical.Message, valid_message_id) do
+          %Clinical.Message{trigger_id: trigger_id} = message when not is_nil(trigger_id) ->
+            now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+            firing = Repo.get_by(TriggerFiring, message_id: message.id)
+
+            if firing && firing.status == "not_delivered" do
+              # Already processed as not_delivered (idempotent no-op)
+              :ok
+            else
+              if firing do
+                from(f in TriggerFiring, where: f.id == ^firing.id)
+                |> Repo.update_all(set: [status: "not_delivered", updated_at: now])
+              end
+
+              case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
+                %Trigger{} = trigger ->
+                  new_failures = (trigger.consecutive_delivery_failures || 0) + 1
+
+                  if new_failures >= 3 and trigger.status == "active" do
+                    trigger
+                    |> Trigger.changeset(%{
+                      status: "paused_by_delivery_failures",
+                      consecutive_delivery_failures: new_failures
+                    })
+                    |> Repo.update!()
+
+                    delete_scheduled_jobs(trigger.id)
+
+                    insert_content_free_audit!(
+                      trigger.professional_id,
+                      trigger.id,
+                      "trigger_paused_by_delivery_failures"
+                    )
+                  else
+                    trigger
+                    |> Trigger.changeset(%{consecutive_delivery_failures: new_failures})
+                    |> Repo.update!()
+                  end
+
+                  :ok
+
+                nil ->
+                  :ok
+              end
+            end
+
+          _ ->
+            :not_trigger
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :error -> {:error, :invalid_message_id}
+    end
+  end
+
+  def handle_delivery_failure(_), do: {:error, :invalid_message_id}
+
+  @doc """
+  Handles delivery success for an outbound trigger message (Issue #445, S4).
+  Resets consecutive_delivery_failures to 0 when the message belongs to a trigger.
+  """
+  @spec handle_delivery_success(binary()) :: :ok | :not_trigger | {:error, term()}
+  def handle_delivery_success(message_id) when is_binary(message_id) do
+    with {:ok, valid_message_id} <- Ecto.UUID.cast(message_id) do
+      Repo.transaction(fn ->
+        case Repo.get(Clinical.Message, valid_message_id) do
+          %Clinical.Message{trigger_id: trigger_id} when not is_nil(trigger_id) ->
+            case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
+              %Trigger{consecutive_delivery_failures: failures} = trigger
+              when not is_nil(failures) and failures > 0 ->
+                trigger
+                |> Trigger.changeset(%{consecutive_delivery_failures: 0})
+                |> Repo.update!()
+
+                :ok
+
+              _ ->
+                :ok
+            end
+
+          _ ->
+            :not_trigger
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :error -> {:error, :invalid_message_id}
+    end
+  end
+
+  def handle_delivery_success(_), do: {:error, :invalid_message_id}
 
   @doc """
   Updates the instruction of an active trigger (S2, S3, S5).
@@ -1008,6 +1183,90 @@ defmodule Alethea.Triggers do
     Application.get_env(:alethea, :trigger_preview_chain, TriggerPreviewChain)
   end
 
+  @default_daily_cap 5
+
+  @doc """
+  Returns the globally configured active trigger daily send cap per patient (Issue #444, S2).
+  Defaults to 5.
+  """
+  @spec daily_cap() :: non_neg_integer()
+  def daily_cap do
+    case Application.get_env(:alethea, :active_trigger_daily_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        cap
+
+      _ ->
+        case Application.get_env(:alethea, __MODULE__) do
+          kw when is_list(kw) -> Keyword.get(kw, :daily_cap, @default_daily_cap)
+          _ -> @default_daily_cap
+        end
+    end
+  end
+
+  @doc """
+  Counts the number of active sends ("fired" firings) for a patient on their local calendar day (Issue #444, S2).
+  """
+  @spec count_daily_active_sends(binary(), DateTime.t(), String.t() | nil) :: non_neg_integer()
+  def count_daily_active_sends(patient_id, %DateTime{} = instant, timezone)
+      when is_binary(patient_id) do
+    {start_utc, end_utc} = local_day_utc_range(instant, timezone)
+
+    query =
+      from f in TriggerFiring,
+        join: t in assoc(f, :trigger),
+        where:
+          t.patient_id == ^patient_id and
+            f.status == "fired" and
+            f.fired_at >= ^start_utc and
+            f.fired_at < ^end_utc,
+        select: count(f.id)
+
+    Repo.one(query) || 0
+  end
+
+  @doc """
+  Calculates the [start_utc, end_utc) interval corresponding to the patient's local calendar day
+  for the given UTC instant and timezone, properly handling DST transitions.
+  """
+  @spec local_day_utc_range(DateTime.t(), String.t() | nil) :: {DateTime.t(), DateTime.t()}
+  def local_day_utc_range(%DateTime{} = instant, timezone) do
+    database = Tz.TimeZoneDatabase
+
+    tz =
+      if is_binary(timezone) and Alethea.Accounts.Timezone.valid?(timezone) do
+        timezone
+      else
+        "America/Santiago"
+      end
+
+    {:ok, local_dt} = DateTime.shift_zone(instant, tz, database)
+    local_date = DateTime.to_date(local_dt)
+    tomorrow = Date.add(local_date, 1)
+
+    start_utc = local_midnight_to_utc(local_date, tz, database)
+    end_utc = local_midnight_to_utc(tomorrow, tz, database)
+
+    {start_utc, end_utc}
+  end
+
+  defp local_midnight_to_utc(%Date{} = date, tz, database) do
+    case DateTime.new(date, ~T[00:00:00], tz, database) do
+      {:ok, dt} ->
+        {:ok, utc_dt} = DateTime.shift_zone(dt, "Etc/UTC", database)
+        DateTime.truncate(utc_dt, :second)
+
+      {:ambiguous, dt1, dt2} ->
+        {:ok, u1} = DateTime.shift_zone(dt1, "Etc/UTC", database)
+        {:ok, u2} = DateTime.shift_zone(dt2, "Etc/UTC", database)
+        earlier = if DateTime.compare(u1, u2) == :lt, do: u1, else: u2
+        DateTime.truncate(earlier, :second)
+
+      {:gap, _dt1, dt2} ->
+        {:ok, u2} = DateTime.shift_zone(dt2, "Etc/UTC", database)
+        DateTime.truncate(u2, :second)
+    end
+  end
+
   def insert_content_free_audit!(professional_id, resource_id, action) do
     %AuditLog{}
     |> AuditLog.changeset(%{
@@ -1062,7 +1321,7 @@ defmodule Alethea.Triggers do
         else
           updated =
             trigger
-            |> Trigger.changeset(%{status: "active"})
+            |> Trigger.changeset(%{status: "active", consecutive_delivery_failures: 0})
             |> Repo.update!()
 
           delete_scheduled_jobs(trigger.id)
@@ -1089,7 +1348,11 @@ defmodule Alethea.Triggers do
           {:ok, %{scheduled_at: next_scheduled_at}} ->
             updated =
               trigger
-              |> Trigger.changeset(%{status: "active", scheduled_at: next_scheduled_at})
+              |> Trigger.changeset(%{
+                status: "active",
+                scheduled_at: next_scheduled_at,
+                consecutive_delivery_failures: 0
+              })
               |> Repo.update!()
 
             delete_scheduled_jobs(trigger.id)

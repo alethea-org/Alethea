@@ -18,6 +18,7 @@ defmodule Alethea.Triggers.Trigger do
     field :time, :time
     field :weekdays, {:array, :integer}
     field :end_date, :date
+    field :consecutive_delivery_failures, :integer, default: 0
 
     # #448: "active" triggers are scheduled; "reactive" ones fire when a
     # patient burst matches their patient-encrypted `condition`. `kind` is
@@ -56,10 +57,24 @@ defmodule Alethea.Triggers.Trigger do
       :weekdays,
       :end_date,
       :condition,
-      :cooldown_hours
+      :cooldown_hours,
+      :consecutive_delivery_failures
     ])
-    |> validate_required([:patient_id, :professional_id, :instruction, :status])
-    |> validate_inclusion(:status, ["active", "inactive", "fired", "paused_by_crisis"])
+    |> validate_required([
+      :patient_id,
+      :professional_id,
+      :instruction,
+      :status,
+      :consecutive_delivery_failures
+    ])
+    |> validate_inclusion(:status, [
+      "active",
+      "inactive",
+      "fired",
+      "paused_by_crisis",
+      "paused_by_delivery_failures"
+    ])
+    |> validate_number(:consecutive_delivery_failures, greater_than_or_equal_to: 0)
     |> validate_kind_shape()
     |> check_constraint(:kind, name: :triggers_kind_check)
     |> check_constraint(:kind, name: :triggers_active_shape_check)
