@@ -12,6 +12,7 @@ defmodule Alethea.Triggers do
   alias Alethea.AI.Chains.TriggerPreviewChain
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
+  alias Alethea.ClinicalRecord.Outbox, as: ClinicalRecordOutbox
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
   alias Alethea.Triggers.{Schedule, Trigger, TriggerFiring}
@@ -145,6 +146,7 @@ defmodule Alethea.Triggers do
         # Audit logs for create and approve (content-free)
         insert_content_free_audit!(professional.id, trigger.id, "trigger_created")
         insert_content_free_audit!(professional.id, trigger.id, "trigger_approved")
+        enqueue_trigger_rag_event(trigger)
 
         # Schedule Oban job with only ID in args
         %{"trigger_id" => trigger.id}
@@ -209,6 +211,7 @@ defmodule Alethea.Triggers do
           {:ok, trigger} ->
             insert_content_free_audit!(professional.id, trigger.id, "trigger_created")
             insert_content_free_audit!(professional.id, trigger.id, "trigger_approved")
+            enqueue_trigger_rag_event(trigger)
 
             %{
               trigger
@@ -297,6 +300,14 @@ defmodule Alethea.Triggers do
       fired_at: DateTime.truncate(fired_at, :second)
     })
     |> Repo.insert()
+    |> case do
+      {:ok, firing} ->
+        enqueue_firing_rag_event(firing)
+        {:ok, firing}
+
+      other ->
+        other
+    end
   end
 
   @doc """
@@ -557,6 +568,7 @@ defmodule Alethea.Triggers do
 
             delete_scheduled_jobs(trigger.id)
             insert_content_free_audit!(professional.id, trigger.id, "trigger_deactivated")
+            enqueue_trigger_rag_event(updated)
 
             decrypt_trigger_fields(updated, dek)
         end
@@ -698,6 +710,8 @@ defmodule Alethea.Triggers do
             trigger.id,
             "trigger_paused_by_crisis"
           )
+
+          enqueue_trigger_rag_event(%{trigger | status: "paused_by_crisis"})
         end
 
         length(triggers)
@@ -878,6 +892,7 @@ defmodule Alethea.Triggers do
 
                   delete_scheduled_jobs(trigger.id)
                   insert_content_free_audit!(professional.id, trigger.id, "trigger_updated")
+                  enqueue_trigger_rag_event(updated)
 
                   %{
                     updated
@@ -1029,6 +1044,7 @@ defmodule Alethea.Triggers do
                     end
 
                     insert_content_free_audit!(professional.id, trigger.id, "trigger_approved")
+                    enqueue_trigger_rag_event(updated)
 
                     %{
                       updated
@@ -1267,6 +1283,46 @@ defmodule Alethea.Triggers do
     end
   end
 
+  @doc """
+  Enqueues the RAG context outbox job for a `TriggerFiring` (GitHub #452):
+  trigger firings index into the clinical-record RAG as never-evidence
+  therapist context. Public because `AletheaJobs.ActiveTriggerWorker`
+  inserts firings directly; failures to enqueue never block the firing
+  itself.
+  """
+  @spec enqueue_firing_rag_event(TriggerFiring.t()) :: :ok
+  def enqueue_firing_rag_event(%TriggerFiring{} = firing) do
+    case Repo.get(Trigger, firing.trigger_id) do
+      %Trigger{} = trigger ->
+        ClinicalRecordOutbox.trigger_event(
+          "trigger_firing_created",
+          "trigger_firing",
+          firing.id,
+          trigger.patient_id,
+          trigger.professional_id
+        )
+        |> Oban.insert!()
+
+        :ok
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp enqueue_trigger_rag_event(%Trigger{} = trigger) do
+    ClinicalRecordOutbox.trigger_event(
+      "trigger_saved",
+      "trigger",
+      trigger.id,
+      trigger.patient_id,
+      trigger.professional_id
+    )
+    |> Oban.insert!()
+
+    :ok
+  end
+
   def insert_content_free_audit!(professional_id, resource_id, action) do
     %AuditLog{}
     |> AuditLog.changeset(%{
@@ -1304,6 +1360,7 @@ defmodule Alethea.Triggers do
       |> Repo.update!()
 
     insert_content_free_audit!(professional_id, trigger.id, audit_action)
+    enqueue_trigger_rag_event(updated)
 
     decrypt_trigger_fields(updated, dek)
   end
@@ -1331,6 +1388,7 @@ defmodule Alethea.Triggers do
           |> Oban.insert!()
 
           insert_content_free_audit!(professional_id, trigger.id, audit_action)
+          enqueue_trigger_rag_event(updated)
 
           decrypt_trigger_fields(updated, dek)
         end
@@ -1362,6 +1420,7 @@ defmodule Alethea.Triggers do
             |> Oban.insert!()
 
             insert_content_free_audit!(professional_id, trigger.id, audit_action)
+            enqueue_trigger_rag_event(updated)
 
             decrypt_trigger_fields(updated, dek)
 

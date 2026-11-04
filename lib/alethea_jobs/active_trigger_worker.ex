@@ -80,8 +80,10 @@ defmodule AletheaJobs.ActiveTriggerWorker do
                                scheduled_at: trigger.scheduled_at
                              })
                              |> Repo.insert() do
-                          {:ok, _firing} ->
+                          {:ok, firing} ->
                             advance_trigger!(trigger)
+
+                            Triggers.enqueue_firing_rag_event(firing)
 
                             Triggers.insert_content_free_audit!(
                               trigger.professional_id,
@@ -124,8 +126,10 @@ defmodule AletheaJobs.ActiveTriggerWorker do
                                scheduled_at: trigger.scheduled_at
                              })
                              |> Repo.insert() do
-                          {:ok, _firing} ->
+                          {:ok, firing} ->
                             advance_trigger!(trigger)
+
+                            Triggers.enqueue_firing_rag_event(firing)
 
                             Triggers.insert_content_free_audit!(
                               trigger.professional_id,

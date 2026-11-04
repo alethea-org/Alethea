@@ -594,6 +594,52 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
     end
   end
 
+  # `Alethea.Clinical.Message` is the "voz del paciente" source
+  # (sdd/telegram-rag-ingestion-262, GitHub #262, AD4). Unlike the
+  # `ClinicalRecord` resources above, `message.timestamp` is already a
+  # `DateTime` (`:utc_datetime`), NOT a `NaiveDateTime` — so it is
+  # widened directly via `to_usec/1` with no `DateTime.from_naive!`
+  # wrap. Patient messages carry no target-behavior facet, so
+  # `target_behavior_id` is always `nil`.
+  defp fetch_and_decrypt(:patient_message, resource_id, patient, kek, patient_dek) do
+    case Repo.get(Message, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      message ->
+        with {:ok, dek} <- resolve_dek(message.encryption_version, patient, kek, patient_dek),
+             {:ok, text} <- PatientVault.decrypt(message.encrypted_content, dek) do
+          {:ok, text, to_usec(message.timestamp), nil, message.encryption_version, dek}
+        end
+    end
+  end
+
+  # `SessionTranscript` returns SPANS in the "plaintext" slot, not text
+  # (design AD3) — `pieces_for/2` dispatches on `resource_kind` to route
+  # them through `chunk_spans/1`. `recorded_at` is already
+  # `utc_datetime_usec` (L3), so no `to_usec` widening. `target_behavior_id`
+  # is always `nil` — the schema has no such field (L4). A parse failure
+  # (tampered/corrupt `encrypted_spans`) is permanent — `{:cancel,
+  # :malformed_transcript}` (AD6) — never retried by the worker.
+  defp fetch_and_decrypt(:session_transcript, resource_id, patient, kek, patient_dek) do
+    case Repo.get(SessionTranscript, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      transcript ->
+        with {:ok, dek} <-
+               resolve_dek(transcript.encryption_version, patient, kek, patient_dek),
+             {:ok, plaintext} <- PatientVault.decrypt(transcript.encrypted_spans, dek),
+             {:ok, %SessionTranscriptContent{spans: spans}} <-
+               SessionTranscriptContent.parse(plaintext) do
+          {:ok, spans, transcript.recorded_at, nil, transcript.encryption_version, dek}
+        else
+          {:error, :malformed} -> {:cancel, :malformed_transcript}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
   # `Alethea.Triggers.Trigger` configuration is therapist context, never
   # evidence (GitHub #452). Its `instruction`, `condition` and
   # `approved_text` are patient-DEK-encrypted binaries; the indexer renders
@@ -616,6 +662,35 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
 
           {:ok, text, to_usec(DateTime.from_naive!(trigger.inserted_at, "Etc/UTC")), nil,
            trigger.encryption_version, dek}
+        end
+    end
+  end
+
+  # A firing carries no encrypted content of its own — its chunk anchors on
+  # the parent trigger's instruction so a consultation query about "what the
+  # therapist asked the bot" can surface the intervention moment. `fired_at`
+  # is `:utc_datetime`, widened explicitly.
+  defp fetch_and_decrypt(:trigger_firing, resource_id, patient, kek, patient_dek) do
+    case Repo.get(Alethea.Triggers.TriggerFiring, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      firing ->
+        case Repo.get(Alethea.Triggers.Trigger, firing.trigger_id) do
+          nil ->
+            {:error, :not_found}
+
+          trigger ->
+            with {:ok, dek} <-
+                   resolve_dek(trigger.encryption_version, patient, kek, patient_dek),
+                 {:ok, instruction} <- PatientVault.decrypt(trigger.instruction, dek) do
+              text =
+                "Disparo de trigger #{firing.status} (contexto del terapeuta, nunca evidencia) " <>
+                  "programado para #{DateTime.to_iso8601(firing.scheduled_at)}. " <>
+                  "Instrucción: #{instruction}."
+
+              {:ok, text, to_usec(firing.fired_at), nil, trigger.encryption_version, dek}
+            end
         end
     end
   end
@@ -665,81 +740,6 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
 
       _ ->
         nil
-    end
-  end
-
-  # A firing carries no encrypted content of its own — its chunk anchors on
-  # the parent trigger's instruction so a consultation query about "what the
-  # therapist asked the bot" can surface the intervention moment. `fired_at`
-  # is `:utc_datetime`, widened explicitly.
-  defp fetch_and_decrypt(:trigger_firing, resource_id, patient, kek, patient_dek) do
-    case Repo.get(Alethea.Triggers.TriggerFiring, resource_id) do
-      nil ->
-        {:error, :not_found}
-
-      firing ->
-        case Repo.get(Alethea.Triggers.Trigger, firing.trigger_id) do
-          nil ->
-            {:error, :not_found}
-
-          trigger ->
-            with {:ok, dek} <-
-                   resolve_dek(trigger.encryption_version, patient, kek, patient_dek),
-                 {:ok, instruction} <- PatientVault.decrypt(trigger.instruction, dek) do
-              text =
-                "Disparo de trigger #{firing.status} (contexto del terapeuta, nunca evidencia) " <>
-                  "programado para #{DateTime.to_iso8601(firing.scheduled_at)}. " <>
-                  "Instrucción: #{instruction}."
-
-              {:ok, text, to_usec(firing.fired_at), nil, trigger.encryption_version, dek}
-            end
-        end
-    end
-  end
-
-  # `Alethea.Clinical.Message` is the "voz del paciente" source
-  # (sdd/telegram-rag-ingestion-262, GitHub #262, AD4). Unlike the
-  # `ClinicalRecord` resources above, `message.timestamp` is already a
-  # `DateTime` (`:utc_datetime`), NOT a `NaiveDateTime` — so it is
-  # widened directly via `to_usec/1` with no `DateTime.from_naive!`
-  # wrap. Patient messages carry no target-behavior facet, so
-  # `target_behavior_id` is always `nil`.
-  defp fetch_and_decrypt(:patient_message, resource_id, patient, kek, patient_dek) do
-    case Repo.get(Message, resource_id) do
-      nil ->
-        {:error, :not_found}
-
-      message ->
-        with {:ok, dek} <- resolve_dek(message.encryption_version, patient, kek, patient_dek),
-             {:ok, text} <- PatientVault.decrypt(message.encrypted_content, dek) do
-          {:ok, text, to_usec(message.timestamp), nil, message.encryption_version, dek}
-        end
-    end
-  end
-
-  # `SessionTranscript` returns SPANS in the "plaintext" slot, not text
-  # (design AD3) — `pieces_for/2` dispatches on `resource_kind` to route
-  # them through `chunk_spans/1`. `recorded_at` is already
-  # `utc_datetime_usec` (L3), so no `to_usec` widening. `target_behavior_id`
-  # is always `nil` — the schema has no such field (L4). A parse failure
-  # (tampered/corrupt `encrypted_spans`) is permanent — `{:cancel,
-  # :malformed_transcript}` (AD6) — never retried by the worker.
-  defp fetch_and_decrypt(:session_transcript, resource_id, patient, kek, patient_dek) do
-    case Repo.get(SessionTranscript, resource_id) do
-      nil ->
-        {:error, :not_found}
-
-      transcript ->
-        with {:ok, dek} <-
-               resolve_dek(transcript.encryption_version, patient, kek, patient_dek),
-             {:ok, plaintext} <- PatientVault.decrypt(transcript.encrypted_spans, dek),
-             {:ok, %SessionTranscriptContent{spans: spans}} <-
-               SessionTranscriptContent.parse(plaintext) do
-          {:ok, spans, transcript.recorded_at, nil, transcript.encryption_version, dek}
-        else
-          {:error, :malformed} -> {:cancel, :malformed_transcript}
-          {:error, reason} -> {:error, reason}
-        end
     end
   end
 end

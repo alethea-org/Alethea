@@ -41,9 +41,11 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
       for `:trigger` / `:trigger_firing`. RED tests first.
       `lib/alethea/clinical_record/outbox.ex`,
       `lib/alethea/clinical_record/rag/indexer.ex`,
-      `test/alethea/clinical_record/rag/indexer_test.exs` — commit:
-- [ ] T2 (S1): Enqueue outbox events on trigger create/edit/approve/pause/
-      resume and on firing creation. `lib/alethea/triggers.ex` — commit:
+      `test/alethea/clinical_record/rag/indexer_test.exs` — commit: 1845968
+- [x] T2 (S1): Enqueue outbox events on trigger create/edit/approve/pause/
+      resume and on firing creation. `lib/alethea/triggers.ex`,
+      `lib/alethea_jobs/active_trigger_worker.ex`,
+      `test/alethea/triggers/rag_outbox_test.exs` — commit: PENDING
 - [ ] T3 (S2,S3): `@never_evidence` gains both types; new
       `Retrieval.context/3` restricted to never-evidence types.
       `lib/alethea/clinical_record/rag/retrieval.ex` — commit:
@@ -61,3 +63,6 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
   clinical record RAG as never-evidence #452"
 - L2: Blockers #440/#448 verified closed. Branch
   `feat/452-trigger-rag-context`.
+- L3: Delivery status transitions (fired -> delivered/not_delivered via
+  `update_all`) do NOT re-enqueue; the indexed firing keeps the creation-time
+  status. Accepted scope cut, noted for review.
