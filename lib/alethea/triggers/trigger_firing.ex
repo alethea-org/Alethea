@@ -15,7 +15,7 @@ defmodule Alethea.Triggers.TriggerFiring do
     timestamps(type: :utc_datetime)
   end
 
-  @valid_statuses ["fired", "skipped"]
+  @valid_statuses ["fired", "skipped", "not_delivered"]
 
   def changeset(firing, attrs) do
     firing
@@ -26,7 +26,8 @@ defmodule Alethea.Triggers.TriggerFiring do
     |> validate_message_by_status()
     |> check_constraint(:message_id,
       name: :trigger_firings_status_message_check,
-      message: "must be present for fired triggers and absent for skipped triggers"
+      message:
+        "must be present for fired or not_delivered triggers and absent for skipped triggers"
     )
     |> unique_constraint([:trigger_id, :scheduled_at],
       name: :trigger_firings_trigger_id_scheduled_at_index
@@ -38,7 +39,7 @@ defmodule Alethea.Triggers.TriggerFiring do
     message_id = get_field(changeset, :message_id)
 
     case status do
-      "fired" ->
+      s when s in ["fired", "not_delivered"] ->
         if is_nil(message_id) do
           add_error(changeset, :message_id, "can't be blank")
         else
