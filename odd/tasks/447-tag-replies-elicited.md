@@ -7,7 +7,7 @@ S1. "A reply within 2h is ELICITED; after 2h it is SPONTANEOUS." Check patient r
 S2. "Only delivered trigger messages open the window." Check that undelivered trigger messages (pending, failed, ambiguous) and non-trigger messages do not open the elicited window.
 
 ## Tasks
-- T1 | S1, S2 | inline | done | Implemented `Triggers.elicited_window_open?/2` (sent-only anchor, newest-by-timestamp, inclusive 2h boundary) and inbound tagging in `Clinical.find_or_save_telegram_inbound/4` on first insert only. RED: 14 failures (13 unit UndefinedFunctionError + 1 worker tag mismatch; 2 worker guard tests pinned current behavior). GREEN: focused 110 passed; full suite and precommit 2637 passed, 5 skipped. Commit recorded below in Log L4.
+- T1 | S1, S2 | inline | done | Implemented `Triggers.elicited_window_open?/2` (sent-only anchor, newest-by-timestamp, inclusive 2h boundary) and inbound tagging in `Clinical.find_or_save_telegram_inbound/4` on first insert only. RED: 14 failures (13 unit UndefinedFunctionError + 1 worker tag mismatch; 2 worker guard tests pinned current behavior). GREEN: focused 110 passed; full suite and precommit 2637 passed, 5 skipped. Commit c7919a6 on `feat/447-tag-replies-elicited` (387 authored changed lines).
 
 ## Log
 L1. User request verbatim: "hagamos la issue [Feature]: Tag replies to a Trigger activo as ELICITED #447"
