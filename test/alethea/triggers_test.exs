@@ -564,4 +564,79 @@ defmodule Alethea.TriggersTest do
                Triggers.get_trigger(other.professional, patient.id, trigger.id)
     end
   end
+
+  describe "TriggerFiring schema validations (S4)" do
+    alias Alethea.Triggers.TriggerFiring
+
+    test "requires message_id when status is fired", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "fired",
+          fired_at: DateTime.utc_now()
+        })
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).message_id
+    end
+
+    test "allows nil message_id when status is skipped", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "skipped",
+          fired_at: DateTime.utc_now()
+        })
+
+      assert changeset.valid?
+    end
+
+    test "rejects message_id when status is skipped", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: Ecto.UUID.generate(),
+          status: "skipped",
+          fired_at: DateTime.utc_now()
+        })
+
+      refute changeset.valid?
+      assert errors_on(changeset).message_id != []
+    end
+  end
 end
