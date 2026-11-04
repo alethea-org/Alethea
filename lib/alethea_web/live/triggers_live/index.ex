@@ -1559,12 +1559,12 @@ defmodule AletheaWeb.TriggersLive.Index do
               <div id={"firing-#{firing.id}"}>
                 <div style="margin-bottom: 4px;">
                   <%= cond do %>
-                    <% reactive?(firing.trigger) -> %>
-                      <span id={"firing-status-#{firing.id}"} class="pt-pill">Reactivo</span>
                     <% firing.status == "skipped" -> %>
                       <span id={"firing-status-#{firing.id}"} class="pt-pill pt-pill--neutral">
                         Omitido
                       </span>
+                    <% reactive?(firing.trigger) -> %>
+                      <span id={"firing-status-#{firing.id}"} class="pt-pill">Reactivo</span>
                     <% firing.status == "not_delivered" or (firing.message && firing.message.delivery_state == "failed") -> %>
                       <span id={"firing-status-#{firing.id}"} class="pt-pill pt-pill--risk">
                         No entregado
@@ -1587,6 +1587,8 @@ defmodule AletheaWeb.TriggersLive.Index do
                 </p>
               </div>
 
+              <%!-- A reactive firing points at the patient's own message, not a produced one;
+                   a skipped firing (#444) has no message at all --%>
               <div>
                 <%= if firing.message_id && not reactive?(firing.trigger) do %>
                   <.link

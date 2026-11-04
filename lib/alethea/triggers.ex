@@ -1,8 +1,8 @@
 defmodule Alethea.Triggers do
   @moduledoc """
   Context module for managing patient triggers: scheduled ("active" kind,
-  Issue #440), reactive ones that fire when a patient burst matches their
-  condition (Issue #448), and the elicited-reply window (Issue #447).
+  Issue #440) and reactive ones that fire when a patient burst matches their
+  condition (Issue #448), plus the elicited-reply window (Issue #447).
   """
 
   import Ecto.Query
