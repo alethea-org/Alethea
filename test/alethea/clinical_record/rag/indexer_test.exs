@@ -803,7 +803,13 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
         })
 
       {:ok, message} =
-        Alethea.Clinical.save_message(patient, "Pelea con mi madre", nil, "inbound", "spontaneous")
+        Alethea.Clinical.save_message(
+          patient,
+          "Pelea con mi madre",
+          nil,
+          "inbound",
+          "spontaneous"
+        )
 
       {:ok, firing} =
         Alethea.Triggers.record_reactive_firing(trigger.id, message.id, DateTime.utc_now())

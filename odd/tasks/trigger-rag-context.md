@@ -49,15 +49,15 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
 - [x] T3 (S2,S3): `@never_evidence` gains both types; new
       `Retrieval.context/3` restricted to never-evidence types.
       `lib/alethea/clinical_record/rag/retrieval.ex`,
-      `test/alethea/clinical_record/rag/retrieval_test.exs` — commit: PENDING
+      `test/alethea/clinical_record/rag/retrieval_test.exs` — commit: 44cc312
 - [x] T4 (S2,S3,S5): `Consultation.Live` fetches context, feeds chain as
       `context`, excludes from Sources/hypothesis/threshold.
       `lib/alethea/clinical_record/rag/consultation/live.ex`,
-      `lib/alethea/ai/chains/clinical_consultation_chain.ex` — commit: PENDING
+      `lib/alethea/ai/chains/clinical_consultation_chain.ex` — commit: 61d9358
 - [x] T5 (S1): Reindex task re-enqueues triggers/firings.
       `lib/mix/tasks/alethea.rag.reindex.ex`,
-      `test/mix/tasks/alethea_rag_reindex_test.exs` — commit: PENDING
-- [ ] T6: `mix precommit`, docs, close feature — commit:
+      `test/mix/tasks/alethea_rag_reindex_test.exs` — commit: THIS
+- [x] T6: `mix precommit`, docs, close feature — commit: THIS
 
 ## Log
 
@@ -68,3 +68,10 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
 - L3: Delivery status transitions (fired -> delivered/not_delivered via
   `update_all`) do NOT re-enqueue; the indexed firing keeps the creation-time
   status. Accepted scope cut, noted for review.
+- L4: `mix precommit` full suite: 2753/2763, 5 skipped. The 10 remaining
+  failures are the pre-existing origin/main baseline (verified by diffing
+  failing-test lists against a worktree of origin/main); no new failure.
+- L5: `TriggersLiveTest` B2 ("duplicate click on approve does not schedule
+  twice") updated: it asserted exactly 1 Oban.Job overall; creation now also
+  enqueues the trigger_saved RAG job, so the pin became 1 ActiveTriggerWorker
+  + 1 ClinicalRecordOutboxWorker job.

@@ -107,8 +107,12 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
     resolved_query = resolve_query(query, followup_state, Keyword.get(opts, :turn_index, 0))
 
     case Retrieval.search(professional, patient_id, resolved_query, opts) do
-      {:error, :unauthorized} -> {:error, :unauthorized}
-      {:error, _reason} -> {:ok, %Answer{outcome: :provider_failure}}
+      {:error, :unauthorized} ->
+        {:error, :unauthorized}
+
+      {:error, _reason} ->
+        {:ok, %Answer{outcome: :provider_failure}}
+
       {:ok, envelope} ->
         # #452: never-evidence trigger chunks ride along as therapist
         # context. They never participate in the evidence threshold, the

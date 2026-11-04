@@ -150,7 +150,9 @@ defmodule Alethea.ClinicalRecord.OutboxTest do
       patient_id = Ecto.UUID.generate()
       professional_id = Ecto.UUID.generate()
 
-      changeset = Outbox.trigger_event("trigger_saved", "trigger", id, patient_id, professional_id)
+      changeset =
+        Outbox.trigger_event("trigger_saved", "trigger", id, patient_id, professional_id)
+
       args = get_change(changeset, :args)
 
       assert changeset.valid?
