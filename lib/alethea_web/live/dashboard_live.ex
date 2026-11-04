@@ -742,6 +742,7 @@ defmodule AletheaWeb.DashboardLive do
       inactive: 0,
       fired: 0,
       paused_by_crisis: 0,
+      paused_by_delivery_failures: 0,
       needs_approval: 0
     }
 
@@ -751,6 +752,7 @@ defmodule AletheaWeb.DashboardLive do
       inactive: 0,
       fired: 0,
       paused_by_crisis: 0,
+      paused_by_delivery_failures: 0,
       needs_approval: 0
     }
 
@@ -764,7 +766,8 @@ defmodule AletheaWeb.DashboardLive do
         active: 0,
         inactive: 0,
         fired: 0,
-        paused_by_crisis: 0
+        paused_by_crisis: 0,
+        paused_by_delivery_failures: 0
       },
       active_kind: active_kind,
       reactive_kind: reactive_kind,

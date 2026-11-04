@@ -350,6 +350,9 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
             %Alethea.Triggers.Trigger{status: "paused_by_crisis"} ->
               {:skip, "trigger_paused_by_crisis"}
 
+            %Alethea.Triggers.Trigger{status: "paused_by_delivery_failures"} ->
+              {:skip, "trigger_paused_by_delivery_failures"}
+
             %Alethea.Triggers.Trigger{approved_text: nil} ->
               {:skip, "trigger_unapproved"}
 
@@ -472,8 +475,15 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   defp record_delivery(:untracked, _message_id, _outcome), do: :ok
 
-  defp record_delivery(_delivery, message_id, outcome) do
+  defp record_delivery(_delivery, message_id, {:sent, _} = outcome) do
     Clinical.record_telegram_delivery(message_id, outcome)
+    Alethea.Triggers.handle_delivery_success(message_id)
+    :ok
+  end
+
+  defp record_delivery(_delivery, message_id, :failed = outcome) do
+    Clinical.record_telegram_delivery(message_id, outcome)
+    Alethea.Triggers.handle_delivery_failure(message_id)
     :ok
   end
 

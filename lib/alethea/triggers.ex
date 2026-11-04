@@ -245,6 +245,8 @@ defmodule Alethea.Triggers do
             fired: count(fragment("CASE WHEN ? = 'fired' THEN 1 END", t.status)),
             paused_by_crisis:
               count(fragment("CASE WHEN ? = 'paused_by_crisis' THEN 1 END", t.status)),
+            paused_by_delivery_failures:
+              count(fragment("CASE WHEN ? = 'paused_by_delivery_failures' THEN 1 END", t.status)),
             needs_approval:
               count(
                 fragment(
@@ -258,7 +260,15 @@ defmodule Alethea.Triggers do
 
       stats =
         Repo.one(query) ||
-          %{total: 0, active: 0, inactive: 0, fired: 0, paused_by_crisis: 0, needs_approval: 0}
+          %{
+            total: 0,
+            active: 0,
+            inactive: 0,
+            fired: 0,
+            paused_by_crisis: 0,
+            paused_by_delivery_failures: 0,
+            needs_approval: 0
+          }
 
       active_kind = %{
         total: stats.total,
@@ -266,6 +276,7 @@ defmodule Alethea.Triggers do
         inactive: stats.inactive,
         fired: stats.fired,
         paused_by_crisis: stats.paused_by_crisis,
+        paused_by_delivery_failures: stats.paused_by_delivery_failures,
         needs_approval: stats.needs_approval
       }
 
@@ -275,6 +286,7 @@ defmodule Alethea.Triggers do
         inactive: 0,
         fired: 0,
         paused_by_crisis: 0,
+        paused_by_delivery_failures: 0,
         needs_approval: 0
       }
 
@@ -288,7 +300,8 @@ defmodule Alethea.Triggers do
           active: stats.active,
           inactive: stats.inactive,
           fired: stats.fired,
-          paused_by_crisis: stats.paused_by_crisis
+          paused_by_crisis: stats.paused_by_crisis,
+          paused_by_delivery_failures: stats.paused_by_delivery_failures
         },
         active_kind: active_kind,
         reactive_kind: reactive_kind,
@@ -340,7 +353,8 @@ defmodule Alethea.Triggers do
           %Trigger{status: "inactive"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
 
-          %Trigger{status: status} = trigger when status in ["active", "paused_by_crisis"] ->
+          %Trigger{status: status} = trigger
+          when status in ["active", "paused_by_crisis", "paused_by_delivery_failures"] ->
             updated =
               trigger
               |> Trigger.changeset(%{status: "inactive"})
@@ -395,6 +409,9 @@ defmodule Alethea.Triggers do
           %Trigger{status: "paused_by_crisis"} ->
             Repo.rollback(:paused_by_crisis)
 
+          %Trigger{status: "paused_by_delivery_failures"} ->
+            Repo.rollback(:paused_by_delivery_failures)
+
           %Trigger{status: "active"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
 
@@ -446,7 +463,8 @@ defmodule Alethea.Triggers do
           %Trigger{status: "inactive"} ->
             Repo.rollback(:not_paused)
 
-          %Trigger{status: "paused_by_crisis"} = trigger ->
+          %Trigger{status: status} = trigger
+          when status in ["paused_by_crisis", "paused_by_delivery_failures"] ->
             reactivate_or_resume_trigger(trigger, professional.id, "trigger_resumed", dek)
         end
       end)
@@ -493,6 +511,106 @@ defmodule Alethea.Triggers do
       :error -> {:error, :invalid_patient_id}
     end
   end
+
+  @doc """
+  Handles delivery failure for an outbound trigger message (Issue #445, S1-S3).
+  Marks the associated TriggerFiring as "not_delivered", increments
+  consecutive_delivery_failures, and after 3 consecutive failures pauses the trigger,
+  cancels scheduled jobs, and writes a content-free audit log.
+  """
+  @spec handle_delivery_failure(binary()) :: :ok | :not_trigger | {:error, term()}
+  def handle_delivery_failure(message_id) when is_binary(message_id) do
+    with {:ok, valid_message_id} <- Ecto.UUID.cast(message_id) do
+      Repo.transaction(fn ->
+        case Repo.get(Clinical.Message, valid_message_id) do
+          %Clinical.Message{trigger_id: trigger_id} = message when not is_nil(trigger_id) ->
+            now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+            from(f in TriggerFiring, where: f.message_id == ^message.id)
+            |> Repo.update_all(set: [status: "not_delivered", updated_at: now])
+
+            case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
+              %Trigger{} = trigger ->
+                new_failures = (trigger.consecutive_delivery_failures || 0) + 1
+
+                if new_failures >= 3 and trigger.status == "active" do
+                  trigger
+                  |> Trigger.changeset(%{
+                    status: "paused_by_delivery_failures",
+                    consecutive_delivery_failures: new_failures
+                  })
+                  |> Repo.update!()
+
+                  delete_scheduled_jobs(trigger.id)
+
+                  insert_content_free_audit!(
+                    trigger.professional_id,
+                    trigger.id,
+                    "trigger_paused_by_delivery_failures"
+                  )
+                else
+                  trigger
+                  |> Trigger.changeset(%{consecutive_delivery_failures: new_failures})
+                  |> Repo.update!()
+                end
+
+                :ok
+
+              nil ->
+                :ok
+            end
+
+          _ ->
+            :not_trigger
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :error -> {:error, :invalid_message_id}
+    end
+  end
+
+  def handle_delivery_failure(_), do: {:error, :invalid_message_id}
+
+  @doc """
+  Handles delivery success for an outbound trigger message (Issue #445, S4).
+  Resets consecutive_delivery_failures to 0 when the message belongs to a trigger.
+  """
+  @spec handle_delivery_success(binary()) :: :ok | :not_trigger | {:error, term()}
+  def handle_delivery_success(message_id) when is_binary(message_id) do
+    with {:ok, valid_message_id} <- Ecto.UUID.cast(message_id) do
+      Repo.transaction(fn ->
+        case Repo.get(Clinical.Message, valid_message_id) do
+          %Clinical.Message{trigger_id: trigger_id} when not is_nil(trigger_id) ->
+            case Repo.one(from(t in Trigger, where: t.id == ^trigger_id, lock: "FOR UPDATE")) do
+              %Trigger{consecutive_delivery_failures: failures} = trigger when failures > 0 ->
+                trigger
+                |> Trigger.changeset(%{consecutive_delivery_failures: 0})
+                |> Repo.update!()
+
+                :ok
+
+              _ ->
+                :ok
+            end
+
+          _ ->
+            :not_trigger
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :error -> {:error, :invalid_message_id}
+    end
+  end
+
+  def handle_delivery_success(_), do: {:error, :invalid_message_id}
 
   @doc """
   Updates the instruction of an active trigger (S2, S3, S5).
@@ -979,7 +1097,7 @@ defmodule Alethea.Triggers do
         else
           updated =
             trigger
-            |> Trigger.changeset(%{status: "active"})
+            |> Trigger.changeset(%{status: "active", consecutive_delivery_failures: 0})
             |> Repo.update!()
 
           delete_scheduled_jobs(trigger.id)
@@ -1006,7 +1124,11 @@ defmodule Alethea.Triggers do
           {:ok, %{scheduled_at: next_scheduled_at}} ->
             updated =
               trigger
-              |> Trigger.changeset(%{status: "active", scheduled_at: next_scheduled_at})
+              |> Trigger.changeset(%{
+                status: "active",
+                scheduled_at: next_scheduled_at,
+                consecutive_delivery_failures: 0
+              })
               |> Repo.update!()
 
             delete_scheduled_jobs(trigger.id)

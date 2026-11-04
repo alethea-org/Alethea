@@ -639,6 +639,77 @@ defmodule Alethea.TriggersTest do
       refute changeset.valid?
       assert errors_on(changeset).message_id != []
     end
+
+    test "allows message_id when status is not_delivered (#445)", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: Ecto.UUID.generate(),
+          status: "not_delivered",
+          fired_at: DateTime.utc_now()
+        })
+
+      assert changeset.valid?
+    end
+
+    test "requires message_id when status is not_delivered (#445)", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      changeset =
+        TriggerFiring.changeset(%TriggerFiring{}, %{
+          trigger_id: trigger.id,
+          message_id: nil,
+          status: "not_delivered",
+          fired_at: DateTime.utc_now()
+        })
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).message_id
+    end
+
+    test "allows paused_by_delivery_failures status and consecutive_delivery_failures on Trigger (#445)",
+         %{patient: patient, professional: professional} do
+      attrs = %{
+        patient_id: patient.id,
+        professional_id: professional.id,
+        instruction: "Instruccion",
+        scheduled_at: DateTime.utc_now(),
+        timezone: "America/Santiago",
+        status: "paused_by_delivery_failures",
+        schedule_type: "once",
+        consecutive_delivery_failures: 3
+      }
+
+      changeset = Trigger.changeset(%Trigger{}, attrs)
+      assert changeset.valid?
+
+      neg_changeset =
+        Trigger.changeset(%Trigger{}, Map.put(attrs, :consecutive_delivery_failures, -1))
+
+      refute neg_changeset.valid?
+
+      assert "must be greater than or equal to 0" in errors_on(neg_changeset).consecutive_delivery_failures
+    end
   end
 
   # ----------------------------------------------------------------
@@ -824,6 +895,298 @@ defmodule Alethea.TriggersTest do
       other = fixture_professional_and_patient()
 
       refute window_open?(other.patient, 0)
+    end
+  end
+
+  describe "delivery failure handling and lifecycle (#445)" do
+    alias Alethea.Triggers.TriggerFiring
+
+    test "handle_delivery_failure updates firing to not_delivered and increments counter", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      message =
+        %Clinical.Message{}
+        |> Clinical.Message.changeset(%{
+          patient_id: patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: trigger.approved_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Ecto.Changeset.put_change(:delivery_state, "failed")
+        |> Repo.insert!()
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: message.id,
+          status: "fired",
+          fired_at: now,
+          scheduled_at: trigger.scheduled_at
+        })
+        |> Repo.insert!()
+
+      assert :ok = Triggers.handle_delivery_failure(message.id)
+
+      assert Repo.get!(TriggerFiring, firing.id).status == "not_delivered"
+      reloaded = Repo.get!(Trigger, trigger.id)
+      assert reloaded.consecutive_delivery_failures == 1
+      assert reloaded.status == "active"
+    end
+
+    test "handle_delivery_failure pauses trigger after 3 consecutive failures", %{
+      patient: patient,
+      professional: professional
+    } do
+      future_date = Date.add(Date.utc_today(), 1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          schedule_type: "daily",
+          time: ~T[11:00:00],
+          date: future_date
+        })
+
+      # Set failure count to 2
+      trigger
+      |> Trigger.changeset(%{consecutive_delivery_failures: 2})
+      |> Repo.update!()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      message =
+        %Clinical.Message{}
+        |> Clinical.Message.changeset(%{
+          patient_id: patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: trigger.approved_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Ecto.Changeset.put_change(:delivery_state, "failed")
+        |> Repo.insert!()
+
+      firing =
+        %TriggerFiring{}
+        |> TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: message.id,
+          status: "fired",
+          fired_at: now,
+          scheduled_at: trigger.scheduled_at
+        })
+        |> Repo.insert!()
+
+      assert :ok = Triggers.handle_delivery_failure(message.id)
+
+      assert Repo.get!(TriggerFiring, firing.id).status == "not_delivered"
+      reloaded = Repo.get!(Trigger, trigger.id)
+      assert reloaded.consecutive_delivery_failures == 3
+      assert reloaded.status == "paused_by_delivery_failures"
+
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_paused_by_delivery_failures"
+             )
+    end
+
+    test "success in between resets consecutive_delivery_failures", %{
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: Date.add(Date.utc_today(), 1),
+          time: ~T[11:00:00]
+        })
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # 2 failures
+      for _ <- 1..2 do
+        msg =
+          %Clinical.Message{}
+          |> Clinical.Message.changeset(%{
+            patient_id: patient.id,
+            direction: "outbound",
+            behavior_type: "spontaneous",
+            encrypted_content: trigger.approved_text,
+            timestamp: now
+          })
+          |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+          |> Repo.insert!()
+
+        Triggers.handle_delivery_failure(msg.id)
+      end
+
+      assert Repo.get!(Trigger, trigger.id).consecutive_delivery_failures == 2
+
+      # 1 success in between
+      success_msg =
+        %Clinical.Message{}
+        |> Clinical.Message.changeset(%{
+          patient_id: patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: trigger.approved_text,
+          timestamp: now
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      assert :ok = Triggers.handle_delivery_success(success_msg.id)
+      assert Repo.get!(Trigger, trigger.id).consecutive_delivery_failures == 0
+
+      # 2 more failures do not pause the trigger (count is now 2, not 4)
+      for _ <- 1..2 do
+        msg =
+          %Clinical.Message{}
+          |> Clinical.Message.changeset(%{
+            patient_id: patient.id,
+            direction: "outbound",
+            behavior_type: "spontaneous",
+            encrypted_content: trigger.approved_text,
+            timestamp: now
+          })
+          |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+          |> Repo.insert!()
+
+        Triggers.handle_delivery_failure(msg.id)
+      end
+
+      reloaded = Repo.get!(Trigger, trigger.id)
+      assert reloaded.consecutive_delivery_failures == 2
+      assert reloaded.status == "active"
+    end
+
+    test "resuming a trigger paused by delivery failures resets counter and activates trigger", %{
+      patient: patient,
+      professional: professional
+    } do
+      future_date = Date.add(Date.utc_today(), 2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion diaria",
+          approved_text: "Texto diario",
+          schedule_type: "daily",
+          time: ~T[11:00:00],
+          date: future_date
+        })
+
+      trigger
+      |> Trigger.changeset(%{
+        status: "paused_by_delivery_failures",
+        consecutive_delivery_failures: 3
+      })
+      |> Repo.update!()
+
+      assert {:ok, resumed} = Triggers.resume_trigger(professional, patient.id, trigger.id)
+      assert resumed.status == "active"
+      assert resumed.consecutive_delivery_failures == 0
+
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_resumed"
+             )
+    end
+
+    test "activate_trigger rejects a trigger paused by delivery failures", %{
+      patient: patient,
+      professional: professional
+    } do
+      future_date = Date.add(Date.utc_today(), 2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion diaria",
+          approved_text: "Texto diario",
+          schedule_type: "daily",
+          time: ~T[11:00:00],
+          date: future_date
+        })
+
+      trigger
+      |> Trigger.changeset(%{
+        status: "paused_by_delivery_failures",
+        consecutive_delivery_failures: 3
+      })
+      |> Repo.update!()
+
+      assert {:error, :paused_by_delivery_failures} =
+               Triggers.activate_trigger(professional, patient.id, trigger.id)
+    end
+
+    test "deactivate_trigger can deactivate a trigger paused by delivery failures", %{
+      patient: patient,
+      professional: professional
+    } do
+      future_date = Date.add(Date.utc_today(), 2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion diaria",
+          approved_text: "Texto diario",
+          schedule_type: "daily",
+          time: ~T[11:00:00],
+          date: future_date
+        })
+
+      trigger
+      |> Trigger.changeset(%{
+        status: "paused_by_delivery_failures",
+        consecutive_delivery_failures: 3
+      })
+      |> Repo.update!()
+
+      assert {:ok, deactivated} =
+               Triggers.deactivate_trigger(professional, patient.id, trigger.id)
+
+      assert deactivated.status == "inactive"
+    end
+
+    test "get_trigger_summary includes paused_by_delivery_failures count", %{
+      patient: patient,
+      professional: professional
+    } do
+      future_date = Date.add(Date.utc_today(), 2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[11:00:00]
+        })
+
+      trigger
+      |> Trigger.changeset(%{
+        status: "paused_by_delivery_failures",
+        consecutive_delivery_failures: 3
+      })
+      |> Repo.update!()
+
+      assert {:ok, summary} = Triggers.get_trigger_summary(professional, patient.id)
+      assert summary.by_status.paused_by_delivery_failures == 1
+      assert summary.active_kind.paused_by_delivery_failures == 1
     end
   end
 end
