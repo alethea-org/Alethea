@@ -8,11 +8,10 @@ defmodule Alethea.AI.JournalingOutputGuard do
   catalog's existing diagnostic and prescriptive patterns. No model or
   classifier is called.
 
-  The catalog is deliberately broad — a reply that merely mentions
+  The catalog is deliberately broad: a reply that merely mentions
   medication or a diagnosis while redirecting the patient to their
-  therapist is blocked too. That is the intended, conservative outcome:
-  a blocked reply costs the patient one generic question, an unblocked
-  one could put clinical language in front of them.
+  therapist is blocked too. Trigger context permits prescriptive wording
+  but never bypasses the diagnostic check.
   """
 
   alias Alethea.AI.ClinicalSafetyPatterns
@@ -20,19 +19,22 @@ defmodule Alethea.AI.JournalingOutputGuard do
   @type block_reason :: :diagnostic | :prescriptive
 
   @doc """
-  Returns `:ok` when `reply` is free of diagnostic and prescriptive
-  language, otherwise `{:blocked, reason}`. Diagnostic language takes
-  precedence when both are present.
+  Returns `:ok` when `reply` passes the lexical checks, otherwise
+  `{:blocked, reason}`. Diagnostic language is always blocked and takes
+  precedence. Prescriptive language is allowed only in trigger context.
   """
-  @spec check(String.t()) :: :ok | {:blocked, block_reason()}
-  def check(reply) when is_binary(reply) do
+  @spec check(String.t(), :journaling | :trigger) :: :ok | {:blocked, block_reason()}
+  def check(reply, context \\ :journaling)
+
+  def check(reply, context) when is_binary(reply) and context in [:journaling, :trigger] do
     normalized = ClinicalSafetyPatterns.normalize(reply)
 
     cond do
       matches_any?(normalized, ClinicalSafetyPatterns.diagnostic_patterns()) ->
         {:blocked, :diagnostic}
 
-      matches_any?(normalized, ClinicalSafetyPatterns.prescriptive_patterns()) ->
+      context == :journaling and
+          matches_any?(normalized, ClinicalSafetyPatterns.prescriptive_patterns()) ->
         {:blocked, :prescriptive}
 
       true ->
