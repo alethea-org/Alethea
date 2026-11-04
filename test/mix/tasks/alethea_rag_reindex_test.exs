@@ -227,6 +227,47 @@ defmodule Mix.Tasks.Alethea.Rag.ReindexTest do
     Chunk |> where([c], c.patient_id == ^patient_id) |> Repo.aggregate(:count)
   end
 
+  test "--confirm re-enqueues trigger configuration and firings as RAG context (#452)" do
+    professional = create_professional!()
+    patient = create_patient!(professional)
+
+    {:ok, trigger} =
+      Alethea.Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+        "condition" => "si habla de su jefe",
+        "instruction" => "recordarle la analogia del monstruo",
+        "approved_text" => "Recuerda la analogia del monstruo."
+      })
+
+    {:ok, message} =
+      Clinical.save_message(patient, "Hable de su jefe", nil, "inbound", "spontaneous")
+
+    {:ok, _firing} =
+      Alethea.Triggers.record_reactive_firing(trigger.id, message.id, DateTime.utc_now())
+
+    drain_outbox!()
+
+    output = capture_io(fn -> run_task(["--patient-id", patient.id]) end)
+
+    assert output =~ "ALETHEA_RAG_REINDEX_DRY_RUN"
+    assert output =~ "trigger=1"
+    assert output =~ "trigger_firing=1"
+
+    output = capture_io(fn -> run_task(["--patient-id", patient.id, "--confirm"]) end)
+
+    assert output =~ "ALETHEA_RAG_REINDEX_COMPLETE"
+    assert output =~ "enqueued=3"
+
+    events =
+      all_enqueued(worker: ClinicalRecordOutboxWorker)
+      |> Enum.filter(&(&1.args["patient_id"] == patient.id))
+      |> Enum.map(& &1.args["event"])
+      |> Enum.sort()
+
+    # The inbound patient message is independently INDEX-eligible; the
+    # trigger configuration and firing ride along as RAG context.
+    assert events == ["patient_message_received", "trigger_firing_created", "trigger_saved"]
+  end
+
   defp seed_eligible_and_ineligible_resources! do
     professional = create_professional!()
     patient = create_patient!(professional)

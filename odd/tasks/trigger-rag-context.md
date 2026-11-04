@@ -54,8 +54,9 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
       `context`, excludes from Sources/hypothesis/threshold.
       `lib/alethea/clinical_record/rag/consultation/live.ex`,
       `lib/alethea/ai/chains/clinical_consultation_chain.ex` — commit: PENDING
-- [ ] T5 (S1): Reindex task re-enqueues triggers/firings.
-      `lib/mix/tasks/alethea.rag.reindex.ex` — commit:
+- [x] T5 (S1): Reindex task re-enqueues triggers/firings.
+      `lib/mix/tasks/alethea.rag.reindex.ex`,
+      `test/mix/tasks/alethea_rag_reindex_test.exs` — commit: PENDING
 - [ ] T6: `mix precommit`, docs, close feature — commit:
 
 ## Log
