@@ -24,3 +24,4 @@ Delivery failures of a Trigger activo use the existing dead-letter path, the fir
 - L3: Implemented `Triggers.handle_delivery_failure/1` and `Triggers.handle_delivery_success/1`, wired through `TelegramOutboundWorker.record_delivery/3`. Pauses trigger and cancels Oban jobs on 3 consecutive failures, resets counter on success or resume (commit 2faf50a).
 - L4: Updated `TriggersLive.Index` to render "No entregado" pill for not_delivered firings, "Pausado por fallas de entrega" badge with reason notice, and resume button (commit 6e8acdc).
 - L5: Verified all tests, ran `mix precommit`: 2653 passed (6 doctests, 2647 tests), 0 failures.
+- L6: Applied advisory review improvements (commit cea7c63): added `consecutive_delivery_failures` to `validate_required`, made `handle_delivery_failure/1` strictly idempotent on `TriggerFiring` status, and added error logging in `TelegramOutboundWorker.record_delivery/3`. Mix precommit: 2653 passed, 0 failures.
