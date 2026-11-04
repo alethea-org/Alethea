@@ -2,6 +2,8 @@ defmodule AletheaJobs.ActiveTriggerWorker do
   @moduledoc """
   Oban worker that fires at the scheduled time of an active trigger (Issues #440, #441).
   Supports one-shot, daily, and weekly schedules until optional end_date.
+  Defers during journaling, polling at most once per minute until the original
+  due time plus one hour. Crisis protection still takes precedence.
   """
   use Oban.Worker,
     queue: :schedulers,
@@ -11,7 +13,8 @@ defmodule AletheaJobs.ActiveTriggerWorker do
   import Ecto.Query
 
   alias Alethea.Accounts.AuditLog
-  alias Alethea.Clinical.Message
+  alias Alethea.Clinical
+  alias Alethea.Clinical.{Message, Session}
   alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Repo
   alias Alethea.Triggers
@@ -55,6 +58,7 @@ defmodule AletheaJobs.ActiveTriggerWorker do
                      scheduled_at: trigger.scheduled_at
                    ) do
                 nil ->
+                  defer_during_journaling!(trigger, now)
                   now_sec = DateTime.truncate(now, :second)
 
                   # B5: Set trigger_id programmatically, not from untrusted changeset attrs
@@ -149,4 +153,18 @@ defmodule AletheaJobs.ActiveTriggerWorker do
   end
 
   def perform(_job), do: :ok
+
+  defp defer_during_journaling!(trigger, now) do
+    remaining = 3600 - DateTime.diff(now, trigger.scheduled_at, :second)
+
+    if remaining > 0 and journaling_open?(trigger.patient_id) do
+      Repo.rollback({:snooze, min(60, remaining)})
+    end
+  end
+
+  defp journaling_open?(patient_id) do
+    # SessionTimeoutWorker owns closure; do not invent a second inactivity clock.
+    Repo.exists?(from(s in Session, where: s.patient_id == ^patient_id and s.status == "open")) or
+      Clinical.uncovered_inbound?(patient_id) or Clinical.pending_reply_ids(patient_id) != []
+  end
 end
