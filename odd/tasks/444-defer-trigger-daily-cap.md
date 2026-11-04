@@ -1,0 +1,42 @@
+# Issue #444 — Defer active triggers and cap daily sends
+Objective: implement #444 on `feat/444-defer-trigger-daily-cap`, based on `663cb9013461a5efaa693d3dcb3df513509645e8`.
+Delivery: auto-chain, feature-branch-chain (human selected); forecast ~480 authored changed lines in two coherent units. Runner: focused `mix test` files and `mix precommit`. No push, PR creation, or merge authorized.
+
+## Specs
+S1. "If a journaling session is open when a Trigger activo is due (pending burst reply or session not timed out), defer the send until the session closes, at most 1h, then send anyway." Check worker public interface for pending replies, non-timed-out sessions, closure, and one-hour boundary; verify no premature side effects and preserved recurrence/idempotency.
+S2. "Cap active sends to 5 per patient per day (global configuration)." Check configurable limit, active-only per-patient daily counting, day boundary, and concurrent attempts.
+S3. "A due firing during an open session is sent after the session closes, or after 1h at the latest." Check before/exactly at one hour and closure using worker perform and outbound jobs; preserve crisis protection.
+S4. "The sixth send of the day for a patient is not sent and is recorded as skipped in the history." Check no outbound message/job for sixth send, truthful skipped history without message link, idempotent retry, and recurrence advancement.
+
+## Tasks
+- T1 | S1,S3 | inline: runtime rejected writer launch and explicitly instructed inline execution without retry | done | Implemented bounded session deferral with tests/docs. RED: 4/6 fail as expected; focused GREEN and full suite exit 0 (2609 passed, 5 skipped). Commit pending below.
+- T2 | S2,S4 | delegated: gentle-ai-worker (runtime context backstop), after T1 | in_progress | Implement concurrency-safe configurable cap and skipped history with tests/docs; commit pending. Risk: item 4 (concurrent daily send accounting).
+- T3 | S1-S4 | parent plus gentle-ai-verify for named high-risk unit | pending | Verify outcomes, run mix precommit, native assessment/review when due, and close tracking; commit evidence pending.
+
+## Log
+L1. User request verbatim: "hagamos la issue [Feature]: Defer Trigger activo during open sessions and cap daily sends #444"
+L2. Issue #444 body verbatim:
+> ## Parent
+>
+> #435
+>
+> ## What to build
+>
+> - If a journaling session is open when a Trigger activo is due (pending burst reply or session not timed out), defer the send until the session closes, at most 1h, then send anyway.
+> - Cap active sends to 5 per patient per day (global configuration).
+>
+> ## Acceptance criteria
+>
+> - A due firing during an open session is sent after the session closes, or after 1h at the latest.
+> - The sixth send of the day for a patient is not sent and is recorded as skipped in the history.
+>
+> ## Blocked by
+>
+> - #440
+L3. #440 is closed. Previous #443 is merged as PR #473. Fetched origin/main, confirmed prior HEAD is its ancestor, and created the clean feature branch at 663cb9013461a5efaa693d3dcb3df513509645e8. RDD is on globally.
+L4. Explorer mapped worker, firing schema, history LiveView, session manager, and patient conversation lock. Parent spot-checked worker/schema/session manager. Explorer's exact inactivity threshold and suggested helpers remain hypotheses for writer verification, not established facts. Preserve crisis precedence, approval revision, recurrence, duplicate-firing uniqueness, content-free auditing, and existing lock ordering.
+L5. User instruction verbatim: "Review the delivered subagent output and continue."
+L6. Delivery choice verbatim: "Cadena sobre rama de feature (recomendado)". Chaining choice is feature-branch-chain; publish only with separate human authorization. Forecast ~480 lines, boundaries T1 deferral then T2 daily cap/history (tests/docs stay with each behavior). Parent handles branch/commits; workers do not commit.
+L8. Writer T1 launch was refused by runtime admission despite the declared feature document; runtime instructed inline execution without retry. No writer edits occurred. T1 remains in progress, with no completed checks. Engram mirror save succeeded (5699); readback tool rejected its advertised observation_id schema, so memory readback is unavailable, not proven synchronized.
+L7. Implementation interpretations: poll with bounded snooze (not later than original due time + 1h); retain original scheduled_at while deferred; skipped occurrences are consumed rather than retried next day; daily limit uses patient's local calendar day, never individual trigger timezone; cap is serialization order, no priority system. These follow issue scope and existing schedule model; no extra product feature is introduced.
+L9. T1 complete: `mix test test/alethea_jobs/active_trigger_deferral_test.exs` RED exit 2, four expected missing-deferral failures; two guards passed. GREEN: `mix format lib/alethea_jobs/active_trigger_worker.ex test/alethea_jobs/active_trigger_deferral_test.exs && mix test test/alethea_jobs/active_trigger_worker_test.exs test/alethea_jobs/active_trigger_deferral_test.exs test/alethea/triggers_test.exs && mix test` exit 0; full result 2609 passed, 5 skipped. Existing suite emits expected simulated service errors and sandbox disconnect logs. `git diff --check` passed. Risk: none for T1 (worker-local deferral; no shared helper or lock change). No separate verifier required. Preliminary ASSESS unassessable because new files were untracked; assess committed unit next.
