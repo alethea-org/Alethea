@@ -18,6 +18,7 @@ defmodule Alethea.Triggers.Trigger do
     field :time, :time
     field :weekdays, {:array, :integer}
     field :end_date, :date
+    field :consecutive_delivery_failures, :integer, default: 0
 
     field :decrypted_instruction, :string, virtual: true
     field :decrypted_draft_message, :string, virtual: true
@@ -46,7 +47,8 @@ defmodule Alethea.Triggers.Trigger do
       :schedule_type,
       :time,
       :weekdays,
-      :end_date
+      :end_date,
+      :consecutive_delivery_failures
     ])
     |> validate_required([
       :patient_id,
@@ -58,7 +60,14 @@ defmodule Alethea.Triggers.Trigger do
       :schedule_type
     ])
     |> validate_inclusion(:schedule_type, ["once", "daily", "weekly"])
-    |> validate_inclusion(:status, ["active", "inactive", "fired", "paused_by_crisis"])
+    |> validate_inclusion(:status, [
+      "active",
+      "inactive",
+      "fired",
+      "paused_by_crisis",
+      "paused_by_delivery_failures"
+    ])
+    |> validate_number(:consecutive_delivery_failures, greater_than_or_equal_to: 0)
     |> validate_schedule_fields()
   end
 
