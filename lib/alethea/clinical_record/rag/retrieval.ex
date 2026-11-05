@@ -330,6 +330,12 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   # (GitHub #452) — they reach consultations only through `context/4`.
   @never_evidence ["functional_analysis_draft", "trigger", "trigger_firing"]
 
+  # Explicit context allowlist, deliberately NOT `@never_evidence`: legacy
+  # `functional_analysis_draft` chunks (serialized, unreadable working
+  # formulations) must never ride into the therapist-context prompt
+  # (Jorge CORR-452-01, PR #481 review).
+  @context_resource_types ["trigger", "trigger_firing"]
+
   defp fetch_candidates(patient_id, query_vector, candidate_limit, opts, mode \\ :evidence) do
     source_filter =
       Keyword.get(opts, :source_kind) ||
@@ -338,7 +344,7 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
 
     membership =
       if mode == :context do
-        &where(&1, [c], c.source_resource_type in ^@never_evidence)
+        &where(&1, [c], c.source_resource_type in ^@context_resource_types)
       else
         &where(&1, [c], c.source_resource_type not in ^@never_evidence)
       end

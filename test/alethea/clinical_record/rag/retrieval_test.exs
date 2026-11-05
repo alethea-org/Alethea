@@ -731,6 +731,36 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
   end
 
   describe "context/4 — trigger chunks as therapist context (#452)" do
+    test "legacy functional_analysis_draft chunks are never retrieved as context (Jorge CORR-452-01)",
+         %{professional: professional, patient: patient} do
+      draft_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "%{\"antecedents\" => \"draft serialized body\"}",
+          near_vector(),
+          "functional_analysis_draft"
+        )
+
+      trigger_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Instrucción: recordarle la técnica de respiración",
+          near_vector(),
+          "trigger"
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.context(professional, patient.id, "respiración")
+
+      ranked_ids = Enum.map(results, & &1.source_resource_id)
+      assert trigger_id in ranked_ids
+      refute draft_id in ranked_ids
+    end
+
     setup do
       professional = create_professional!()
       patient = create_patient!(professional)

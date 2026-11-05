@@ -11,6 +11,7 @@ defmodule Alethea.Triggers.RagOutboxTest do
   alias Alethea.Clinical
   alias Alethea.Repo
   alias Alethea.Triggers
+  alias Alethea.Triggers.{Trigger, TriggerFiring}
 
   @worker "AletheaJobs.ClinicalRecordOutboxWorker"
 
@@ -111,6 +112,55 @@ defmodule Alethea.Triggers.RagOutboxTest do
              rag_jobs("trigger_firing_created", patient.id)
 
     assert firing_id == firing.id
+  end
+
+  test "delivery-failure pause re-enqueues trigger_saved (Jorge TR-001)", %{
+    professional: professional,
+    patient: patient
+  } do
+    {:ok, trigger} =
+      Triggers.create_and_approve_trigger(professional, patient.id, %{
+        instruction: "Instruccion",
+        approved_text: "Texto",
+        schedule_type: "daily",
+        time: ~T[11:00:00],
+        date: Date.add(Date.utc_today(), 1)
+      })
+
+    trigger
+    |> Ecto.Changeset.change(consecutive_delivery_failures: 2)
+    |> Repo.update!()
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    message =
+      %Clinical.Message{}
+      |> Clinical.Message.changeset(%{
+        patient_id: patient.id,
+        direction: "outbound",
+        behavior_type: "spontaneous",
+        encrypted_content: trigger.approved_text,
+        timestamp: now
+      })
+      |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+      |> Ecto.Changeset.put_change(:delivery_state, "failed")
+      |> Repo.insert!()
+
+    %TriggerFiring{}
+    |> TriggerFiring.changeset(%{
+      trigger_id: trigger.id,
+      message_id: message.id,
+      status: "fired",
+      fired_at: now,
+      scheduled_at: trigger.scheduled_at
+    })
+    |> Repo.insert!()
+
+    assert :ok = Triggers.handle_delivery_failure(message.id)
+    assert Repo.get!(Trigger, trigger.id).status == "paused_by_delivery_failures"
+
+    # create + pause
+    assert length(rag_jobs("trigger_saved", patient.id)) == 2
   end
 
   test "deactivating a trigger re-enqueues trigger_saved", %{

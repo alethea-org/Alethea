@@ -734,6 +734,40 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.LiveTest do
   end
 
   describe "answer/4 — trigger context reaches the chain, never evidence (#452)" do
+    test "a no_evidence turn embeds the query exactly once (Jorge CAND-SEC-PERF-001)", %{
+      professional: professional,
+      patient: patient
+    } do
+      insert_chunk!(
+        professional,
+        patient,
+        "Instruccion: recordarle la tecnica de respiracion",
+        near_vector(),
+        source_resource_type: "trigger"
+      )
+
+      Application.put_env(:alethea, :ai_embeddings, Alethea.AI.EmbeddingsMock, persistent: true)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :ai_embeddings, Alethea.AI.Embeddings.Fake,
+          persistent: true
+        )
+      end)
+
+      Alethea.AI.EmbeddingsMock
+      |> stub(:dimensions, fn -> 1024 end)
+      |> stub(:model, fn -> "fake-embeddings-bge-m3" end)
+
+      # Exactly ONE embedding call: search only. Context retrieval must not
+      # run on a turn that resolves to :no_evidence.
+      expect(Alethea.AI.EmbeddingsMock, :embed, 1, fn _query, [] ->
+        {:ok, near_vector()}
+      end)
+
+      assert {:ok, %Answer{outcome: :no_evidence}} =
+               Live.answer(professional, patient.id, "respiracion", [])
+    end
+
     test "trigger chunks feed the chain as context and never become sources", %{
       professional: professional,
       patient: patient

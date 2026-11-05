@@ -77,6 +77,12 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
   with regression test. Advisory (non-blocking, later work): nil-context
   handling in chain prompt, firing scheduled_at nil in indexer summary,
   never-evidence membership duplication in retrieval.
+- L7: Jorge el Curioso advisory review (PR #481, base 20cb912..head 3f78547):
+  CHANGES REQUESTED. 3 confirmed fixed with proving tests: CORR-452-01
+  (context allowlist @context_resource_types), TR-001 (enqueue on
+  delivery-failure pause, crisis pause, fired), CAND-SEC-PERF-001 (context
+  fetch deferred to synthesis; one embed on no_evidence turns). 2 theoretical
+  (context:nil hardening, docstring drift), 1 rejected.
 - L5: `TriggersLiveTest` B2 ("duplicate click on approve does not schedule
   twice") updated: it asserted exactly 1 Oban.Job overall; creation now also
   enqueues the trigger_saved RAG job, so the pin became 1 ActiveTriggerWorker

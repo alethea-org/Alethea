@@ -36,9 +36,12 @@ defmodule AletheaJobs.ActiveTriggerWorker do
             when not is_nil(approved_text) ->
               if patient.urgent_intervention do
                 # S2: A due firing for a patient under urgent intervention is not sent
-                trigger
-                |> Trigger.changeset(%{status: "paused_by_crisis"})
-                |> Repo.update!()
+                paused =
+                  trigger
+                  |> Trigger.changeset(%{status: "paused_by_crisis"})
+                  |> Repo.update!()
+
+                Triggers.enqueue_trigger_rag_event(paused)
 
                 Triggers.delete_scheduled_jobs(trigger.id)
 
@@ -195,9 +198,12 @@ defmodule AletheaJobs.ActiveTriggerWorker do
         |> Oban.insert!()
 
       :none ->
-        trigger
-        |> Trigger.changeset(%{status: "fired"})
-        |> Repo.update!()
+        fired =
+          trigger
+          |> Trigger.changeset(%{status: "fired"})
+          |> Repo.update!()
+
+        Triggers.enqueue_trigger_rag_event(fired)
     end
   end
 

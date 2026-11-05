@@ -765,6 +765,8 @@ defmodule Alethea.Triggers do
                       trigger.id,
                       "trigger_paused_by_delivery_failures"
                     )
+
+                    enqueue_trigger_rag_event(%{trigger | status: "paused_by_delivery_failures"})
                   else
                     trigger
                     |> Trigger.changeset(%{consecutive_delivery_failures: new_failures})
@@ -1310,7 +1312,13 @@ defmodule Alethea.Triggers do
     end
   end
 
-  defp enqueue_trigger_rag_event(%Trigger{} = trigger) do
+  @doc """
+  Enqueues the `trigger_saved` RAG context outbox job for `trigger` (#452).
+  Public so `AletheaJobs.ActiveTriggerWorker` can also sync trigger status
+  transitions (crisis pause, fired) into the RAG index (Jorge TR-001).
+  """
+  @spec enqueue_trigger_rag_event(Trigger.t()) :: :ok
+  def enqueue_trigger_rag_event(%Trigger{} = trigger) do
     ClinicalRecordOutbox.trigger_event(
       "trigger_saved",
       "trigger",
