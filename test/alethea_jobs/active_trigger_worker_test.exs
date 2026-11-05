@@ -400,6 +400,14 @@ defmodule AletheaJobs.ActiveTriggerWorkerTest do
         Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
           Repo.query!("DELETE FROM oban_jobs WHERE args->>'trigger_id' = $1", [trigger.id])
 
+          # #452: trigger_saved / trigger_firing_created RAG outbox jobs carry
+          # resource_id/patient_id (no trigger_id) — scope by patient so the
+          # committed rows never leak into later refute_enqueued assertions.
+          Repo.query!(
+            "DELETE FROM oban_jobs WHERE worker = 'AletheaJobs.ClinicalRecordOutboxWorker' AND args->>'patient_id' = $1",
+            [patient.id]
+          )
+
           Repo.query!("DELETE FROM trigger_firings WHERE trigger_id = $1", [
             Ecto.UUID.dump!(trigger.id)
           ])
