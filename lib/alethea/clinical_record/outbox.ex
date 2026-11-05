@@ -61,6 +61,30 @@ defmodule Alethea.ClinicalRecord.Outbox do
   defp resource_type(%SessionTranscript{}), do: "session_transcript"
 
   @doc """
+  Builds the outbox job insert changeset for a trigger-domain RAG context
+  event (GitHub #452: trigger configuration and firings index into the
+  clinical-record RAG as never-evidence therapist context). Like
+  `tombstone_event/4`, this takes the five identifiers directly instead of a
+  `ClinicalRecord` struct — the `Alethea.Triggers` context owns the records
+  and this module must not depend on it. Same `@allowed_args` allowlist,
+  same worker, same queue.
+  """
+  @spec trigger_event(String.t(), String.t(), Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          Ecto.Changeset.t()
+  def trigger_event(event_type, resource_type, resource_id, patient_id, professional_id)
+      when is_binary(event_type) and is_binary(resource_type) do
+    %{
+      "event" => event_type,
+      "resource_type" => resource_type,
+      "resource_id" => resource_id,
+      "patient_id" => patient_id,
+      "professional_id" => professional_id
+    }
+    |> Map.take(@allowed_args)
+    |> ClinicalRecordOutboxWorker.new()
+  end
+
+  @doc """
   Builds the outbox job insert changeset for a legal deletion
   (sdd/clinical-record-retention, GitHub #197, Phase 3/Slice C). Unlike
   `event/2`, there is no persisted struct to build `args` from — the row

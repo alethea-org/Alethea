@@ -35,6 +35,25 @@ defmodule Alethea.AI.Chains.ClinicalConsultationChainTest do
       assert prompt =~ "2. Refiere mayor irritabilidad con su pareja durante la semana."
     end
 
+    test "therapist context gets its own never-evidence section (#452)" do
+      prompt =
+        ClinicalConsultationChain.build_prompt(%{
+          question: @question,
+          excerpts: @excerpts,
+          context: ["Instrucción: recordarle la técnica de respiración"]
+        })
+
+      assert prompt =~ "Contexto del terapeuta"
+      assert prompt =~ "NO es evidencia"
+      assert prompt =~ "1. Instrucción: recordarle la técnica de respiración"
+    end
+
+    test "no context leaves the prompt without a context section (#452)" do
+      prompt = ClinicalConsultationChain.build_prompt(%{question: @question, excerpts: @excerpts})
+
+      refute prompt =~ "Contexto del terapeuta"
+    end
+
     test "embeds the question and the excerpt text only — no structural identifiers" do
       prompt = ClinicalConsultationChain.build_prompt(%{question: @question, excerpts: @excerpts})
 

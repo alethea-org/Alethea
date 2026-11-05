@@ -323,9 +323,14 @@ defmodule AletheaWeb.TriggersLiveTest do
       # Second approve click immediately
       render_click(view, "approve_trigger", %{})
 
-      # Only 1 trigger in DB and 1 job enqueued
+      # Only 1 trigger in DB, 1 scheduled send job and 1 RAG context
+      # outbox job (trigger_saved, #452) — no duplicate scheduling.
       assert Repo.aggregate(Alethea.Triggers.Trigger, :count, :id) == 1
-      assert Enum.count(Repo.all(Oban.Job)) == 1
+
+      jobs = Repo.all(Oban.Job)
+      assert Enum.count(jobs, &(&1.worker == "AletheaJobs.ActiveTriggerWorker")) == 1
+
+      assert Enum.count(jobs, &(&1.worker == "AletheaJobs.ClinicalRecordOutboxWorker")) == 1
     end
   end
 

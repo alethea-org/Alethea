@@ -95,6 +95,12 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   def eligibility("functional_analysis_draft_saved"), do: {:ignore, :working_draft}
   def eligibility("patient_message_received"), do: {:index, :patient_message}
 
+  # Trigger configuration and firings are therapist context — indexed for
+  # consultations but never evidence (GitHub #452, same rule as functional
+  # analysis drafts, enforced read-side by `Retrieval.@never_evidence`).
+  def eligibility("trigger_saved"), do: {:index, :trigger}
+  def eligibility("trigger_firing_created"), do: {:index, :trigger_firing}
+
   def eligibility("session_transcript_created"), do: {:index, :session_transcript}
 
   def eligibility("ai_proposal_edited"), do: {:ignore, :not_accepted}
@@ -631,6 +637,111 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
           {:error, :malformed} -> {:cancel, :malformed_transcript}
           {:error, reason} -> {:error, reason}
         end
+    end
+  end
+
+  # `Alethea.Triggers.Trigger` configuration is therapist context, never
+  # evidence (GitHub #452). Its `instruction`, `condition` and
+  # `approved_text` are patient-DEK-encrypted binaries; the indexer renders
+  # a Spanish configuration summary as the chunk plaintext. `inserted_at`
+  # is `:utc_datetime` (NaiveDateTime), widened like `clinical_note`'s.
+  # Trigger content carries no target-behavior facet.
+  defp fetch_and_decrypt(:trigger, resource_id, patient, kek, patient_dek) do
+    case Repo.get(Alethea.Triggers.Trigger, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      trigger ->
+        with {:ok, dek} <- resolve_dek(trigger.encryption_version, patient, kek, patient_dek),
+             {:ok, instruction} <- PatientVault.decrypt(trigger.instruction, dek),
+             # R3-001 (#452 review): active triggers have no `condition` and a
+             # re-edited trigger has no `approved_text` — both decrypt to
+             # `nil` legitimately, and a binary guard here silently aborted
+             # indexing for exactly those rows.
+             {:ok, approved_text} <- optional_decrypt(trigger.approved_text, dek),
+             {:ok, condition} <- optional_decrypt(trigger.condition, dek) do
+          text = trigger_summary(trigger, condition, instruction, approved_text)
+
+          {:ok, text, to_usec(DateTime.from_naive!(trigger.inserted_at, "Etc/UTC")), nil,
+           trigger.encryption_version, dek}
+        end
+    end
+  end
+
+  # A firing carries no encrypted content of its own — its chunk anchors on
+  # the parent trigger's instruction so a consultation query about "what the
+  # therapist asked the bot" can surface the intervention moment. `fired_at`
+  # is `:utc_datetime`, widened explicitly.
+  defp fetch_and_decrypt(:trigger_firing, resource_id, patient, kek, patient_dek) do
+    case Repo.get(Alethea.Triggers.TriggerFiring, resource_id) do
+      nil ->
+        {:error, :not_found}
+
+      firing ->
+        case Repo.get(Alethea.Triggers.Trigger, firing.trigger_id) do
+          nil ->
+            {:error, :not_found}
+
+          trigger ->
+            with {:ok, dek} <-
+                   resolve_dek(trigger.encryption_version, patient, kek, patient_dek),
+                 {:ok, instruction} <- PatientVault.decrypt(trigger.instruction, dek) do
+              text =
+                "Disparo de trigger #{firing.status} (contexto del terapeuta, nunca evidencia) " <>
+                  "programado para #{DateTime.to_iso8601(firing.scheduled_at)}. " <>
+                  "Instrucción: #{instruction}."
+
+              {:ok, text, to_usec(firing.fired_at), nil, trigger.encryption_version, dek}
+            end
+        end
+    end
+  end
+
+  defp optional_decrypt(nil, _dek), do: {:ok, nil}
+  defp optional_decrypt(ciphertext, dek), do: PatientVault.decrypt(ciphertext, dek)
+
+  defp trigger_summary(trigger, condition, instruction, approved_text) do
+    kind = if trigger.kind == "reactive", do: "reactivo", else: "activo"
+
+    parts = [
+      "Configuración de trigger #{kind} del terapeuta (contexto, nunca evidencia).",
+      "Estado: #{trigger_status(trigger.status)}.",
+      condition && "Condición: #{condition}.",
+      "Instrucción: #{instruction}.",
+      approved_text && "Mensaje aprobado: #{approved_text}.",
+      schedule_line(trigger)
+    ]
+
+    parts
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  defp trigger_status("active"), do: "activo"
+  defp trigger_status("inactive"), do: "inactivo"
+  defp trigger_status("paused_by_crisis"), do: "pausado por crisis"
+  defp trigger_status("paused_by_delivery_failures"), do: "pausado por fallos de entrega"
+  defp trigger_status(other), do: other
+
+  defp schedule_line(%{kind: "reactive"} = trigger) do
+    if trigger.cooldown_hours,
+      do: "Cooldown: #{trigger.cooldown_hours} h.",
+      else: nil
+  end
+
+  defp schedule_line(trigger) do
+    case trigger.schedule_type do
+      "once" ->
+        "Programado para #{DateTime.to_iso8601(trigger.scheduled_at)}."
+
+      "daily" ->
+        "Diario a las #{Time.to_string(trigger.time)}."
+
+      "weekly" ->
+        "Semanal a las #{Time.to_string(trigger.time)}."
+
+      _ ->
+        nil
     end
   end
 end

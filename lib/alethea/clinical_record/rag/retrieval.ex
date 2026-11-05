@@ -233,6 +233,47 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
     end
   end
 
+  @doc """
+  Retrieves ONLY never-evidence chunks (trigger configuration and
+  firings, GitHub #452) as therapist context: same authorization, keyring
+  and dense+lexical scoring as `search/4`, but the candidate window is
+  inverted — restricted to `@never_evidence` types — so context and
+  evidence are disjoint by construction. Never used for evidence or
+  evidence suggestions.
+  """
+  @spec context(Professional.t(), Ecto.UUID.t(), String.t(), keyword()) ::
+          {:ok, envelope()} | {:error, :unauthorized | term()}
+  def context(%Professional{} = professional, patient_id, query, opts \\ [])
+      when is_binary(patient_id) and is_binary(query) do
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        {:error, :unauthorized}
+
+      patient ->
+        with {:ok, keyring} <- load_keyring(professional, patient),
+             {:ok, query_vector} <- embed_query(query) do
+          candidate_limit = Keyword.get(opts, :candidate_limit, @candidate_limit)
+          result_limit = Keyword.get(opts, :limit, @default_limit)
+          dense_weight = Keyword.get(opts, :dense_weight, @dense_weight)
+          lexical_weight = Keyword.get(opts, :lexical_weight, @lexical_weight)
+
+          results =
+            patient.id
+            |> fetch_candidates(query_vector, candidate_limit, opts, :context)
+            |> Enum.map(&score_candidate(&1, query, keyring, dense_weight, lexical_weight))
+            |> Enum.sort_by(& &1.score, :desc)
+            |> Enum.take(result_limit)
+
+          {:ok,
+           %{
+             results: results,
+             chunk_count: count_chunks(patient.id),
+             freshness: freshness(patient.id)
+           }}
+        end
+    end
+  end
+
   defp load_keyring(professional, patient) do
     with {:ok, kek} <- Accounts.load_professional_kek(professional),
          {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek) do
@@ -284,22 +325,37 @@ defmodule Alethea.ClinicalRecord.Rag.Retrieval do
   # `score_candidate/5` (the only caller that decrypts) only ever sees
   # rows already inside this window. See the moduledoc's "Security
   # boundary" section.
-  # Chunks indexed before drafts stopped being evidence are still skipped.
-  @never_evidence ["functional_analysis_draft"]
+  # Chunks indexed before drafts stopped being evidence are still skipped;
+  # trigger configuration and firings join the same never-evidence rule
+  # (GitHub #452) — they reach consultations only through `context/4`.
+  @never_evidence ["functional_analysis_draft", "trigger", "trigger_firing"]
 
-  defp fetch_candidates(patient_id, query_vector, candidate_limit, opts) do
+  # Explicit context allowlist, deliberately NOT `@never_evidence`: legacy
+  # `functional_analysis_draft` chunks (serialized, unreadable working
+  # formulations) must never ride into the therapist-context prompt
+  # (Jorge CORR-452-01, PR #481 review).
+  @context_resource_types ["trigger", "trigger_firing"]
+
+  defp fetch_candidates(patient_id, query_vector, candidate_limit, opts, mode \\ :evidence) do
     source_filter =
       Keyword.get(opts, :source_kind) ||
         Keyword.get(opts, :source_types) ||
         Keyword.get(opts, :source_type)
 
+    membership =
+      if mode == :context do
+        &where(&1, [c], c.source_resource_type in ^@context_resource_types)
+      else
+        &where(&1, [c], c.source_resource_type not in ^@never_evidence)
+      end
+
     Chunk
     |> where([c], c.patient_id == ^patient_id)
+    |> membership.()
     |> exclude_dismissed(Keyword.get(opts, :target_behavior_id))
     |> exclude_ids(:id, Keyword.get(opts, :exclude_chunk_ids, []))
     |> exclude_ids(:source_resource_id, Keyword.get(opts, :exclude_resource_ids, []))
     |> filter_by_source(source_filter)
-    |> where([c], c.source_resource_type not in ^@never_evidence)
     |> select([c], %{
       chunk: c,
       dense_distance: selected_as(cosine_distance(c.embedding, ^query_vector), :dense_distance)

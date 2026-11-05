@@ -678,6 +678,137 @@ defmodule Alethea.ClinicalRecord.Rag.RetrievalTest do
     end
   end
 
+  describe "trigger chunks are never evidence (#452)" do
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "a top-matching trigger chunk is excluded from search/4", %{
+      professional: professional,
+      patient: patient
+    } do
+      trigger_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Instrucción: recordarle la técnica de respiración",
+          near_vector(),
+          "trigger"
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.search(professional, patient.id, "respiración")
+
+      ranked_ids = Enum.map(results, & &1.source_resource_id)
+      refute trigger_id in ranked_ids
+    end
+
+    test "a top-matching trigger_firing chunk is excluded from suggest/4", %{
+      professional: professional,
+      patient: patient
+    } do
+      firing_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Disparo de trigger fired. Instrucción: respiración",
+          near_vector(),
+          "trigger_firing"
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.suggest(professional, patient.id, "respiración")
+
+      ranked_ids = Enum.map(results, & &1.source_resource_id)
+      refute firing_id in ranked_ids
+    end
+  end
+
+  describe "context/4 — trigger chunks as therapist context (#452)" do
+    test "legacy functional_analysis_draft chunks are never retrieved as context (Jorge CORR-452-01)",
+         %{professional: professional, patient: patient} do
+      draft_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "%{\"antecedents\" => \"draft serialized body\"}",
+          near_vector(),
+          "functional_analysis_draft"
+        )
+
+      trigger_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Instrucción: recordarle la técnica de respiración",
+          near_vector(),
+          "trigger"
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.context(professional, patient.id, "respiración")
+
+      ranked_ids = Enum.map(results, & &1.source_resource_id)
+      assert trigger_id in ranked_ids
+      refute draft_id in ranked_ids
+    end
+
+    setup do
+      professional = create_professional!()
+      patient = create_patient!(professional)
+      %{professional: professional, patient: patient}
+    end
+
+    test "returns trigger chunks and never evidence chunks", %{
+      professional: professional,
+      patient: patient
+    } do
+      trigger_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "Instrucción: recordarle la técnica de respiración",
+          near_vector(),
+          "trigger"
+        )
+
+      _note_id =
+        insert_chunk!(
+          professional,
+          patient,
+          "El paciente practica respiración guiada",
+          far_vector(),
+          "clinical_note"
+        )
+
+      stub_query_embedding(near_vector())
+
+      assert {:ok, %{results: results}} =
+               Retrieval.context(professional, patient.id, "respiración")
+
+      ranked_types = Enum.map(results, & &1.source_resource_type)
+      assert "trigger" in ranked_types
+      assert "clinical_note" not in ranked_types
+      assert trigger_id in Enum.map(results, & &1.source_resource_id)
+    end
+
+    test "denies a non-treating professional", %{patient: patient} do
+      stranger = create_professional!()
+      deny_query_embedding()
+
+      assert {:error, :unauthorized} =
+               Retrieval.context(stranger, patient.id, "cualquier consulta")
+    end
+  end
+
   # --- fixtures -----------------------------------------------------------
 
   defp near_vector, do: [1.0 | List.duplicate(0.0, 1023)]

@@ -22,6 +22,7 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
 
   alias Alethea.Operator.TaskRuntime
   alias Alethea.Repo
+  alias Alethea.Triggers.{Trigger, TriggerFiring}
 
   @shortdoc "Re-enqueues outbox jobs to rebuild one patient's RAG projection on demand"
 
@@ -130,15 +131,20 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     end
   end
 
-  # Functional analysis drafts are working formulations, never evidence.
-  @resource_kinds ~w(clinical_note consultation_evidence clinician_observation ai_proposal patient_message)
+  # Functional analysis drafts are working formulations, never evidence;
+  # trigger configuration and firings are INDEX-eligible RAG context
+  # (GitHub #452) — they reach consultations through the never-evidence
+  # context path, never as evidence.
+  @resource_kinds ~w(clinical_note consultation_evidence clinician_observation ai_proposal patient_message trigger trigger_firing)
 
   defp eligible_entries(patient_id) do
     clinical_notes(patient_id) ++
       consultation_evidences(patient_id) ++
       clinician_observations(patient_id) ++
       accepted_ai_proposals(patient_id) ++
-      patient_messages(patient_id)
+      patient_messages(patient_id) ++
+      trigger_entries(patient_id) ++
+      trigger_firing_entries(patient_id)
   end
 
   defp clinical_notes(patient_id) do
@@ -183,6 +189,27 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     |> Enum.map(&{"patient_message_received", "patient_message", &1})
   end
 
+  # Trigger configuration and firings are INDEX-eligible RAG context
+  # (#452). Firings carry no patient fields of their own, so they join
+  # through their parent trigger to scope by patient in SQL.
+  defp trigger_entries(patient_id) do
+    Trigger
+    |> where([t], t.patient_id == ^patient_id)
+    |> Repo.all()
+    |> Enum.map(&{"trigger_saved", "trigger", &1})
+  end
+
+  defp trigger_firing_entries(patient_id) do
+    from(f in TriggerFiring,
+      join: t in Trigger,
+      on: t.id == f.trigger_id,
+      where: t.patient_id == ^patient_id,
+      select: {f.id, t}
+    )
+    |> Repo.all()
+    |> Enum.map(&{"trigger_firing_created", "trigger_firing", &1})
+  end
+
   defp count_by_resource_type(entries) do
     grouped =
       entries
@@ -215,6 +242,31 @@ defmodule Mix.Tasks.Alethea.Rag.Reindex do
     # already-loaded `%Patient{}` supplies it at zero extra query.
     event
     |> JournalingOutbox.event(record, patient.professional_id)
+    |> enqueue_job()
+  end
+
+  # Trigger-domain resources have no `ClinicalRecord.Outbox.event/2`
+  # struct clause (the Triggers context owns them) — they enqueue through
+  # the identifiers-only `trigger_event/5` builder instead (#452).
+  defp enqueue({_event, resource_type, %Trigger{} = trigger}, _patient) do
+    "trigger_saved"
+    |> Outbox.trigger_event(
+      resource_type,
+      trigger.id,
+      trigger.patient_id,
+      trigger.professional_id
+    )
+    |> enqueue_job()
+  end
+
+  defp enqueue({_event, resource_type, {firing_id, trigger}}, _patient) do
+    "trigger_firing_created"
+    |> Outbox.trigger_event(
+      resource_type,
+      firing_id,
+      trigger.patient_id,
+      trigger.professional_id
+    )
     |> enqueue_job()
   end
 

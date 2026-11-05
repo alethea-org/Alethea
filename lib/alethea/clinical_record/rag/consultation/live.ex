@@ -107,17 +107,40 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
     resolved_query = resolve_query(query, followup_state, Keyword.get(opts, :turn_index, 0))
 
     case Retrieval.search(professional, patient_id, resolved_query, opts) do
-      {:error, :unauthorized} -> {:error, :unauthorized}
-      {:error, _reason} -> {:ok, %Answer{outcome: :provider_failure}}
-      {:ok, envelope} -> handle_envelope(envelope, query)
+      {:error, :unauthorized} ->
+        {:error, :unauthorized}
+
+      {:error, _reason} ->
+        {:ok, %Answer{outcome: :provider_failure}}
+
+      {:ok, envelope} ->
+        # #452: never-evidence trigger chunks ride along as therapist
+        # context. They never participate in the evidence threshold, the
+        # sources or the hypothesis, and a context-retrieval failure must
+        # never downgrade the evidence answer itself. The fetch is deferred
+        # as a thunk so a :stale or :no_evidence turn never pays the second
+        # embedding call and retrieval pass (Jorge CAND-SEC-PERF-001).
+        context_fn = fn ->
+          case Retrieval.context(professional, patient_id, resolved_query, opts) do
+            {:ok, %{results: context_results}} ->
+              context_results
+              |> Enum.map(&Sanitizer.sanitize(&1.content))
+              |> Enum.reject(&(&1 == ""))
+
+            _other ->
+              []
+          end
+        end
+
+        handle_envelope(envelope, query, context_fn)
     end
   end
 
-  defp handle_envelope(%{freshness: %{stale?: true, pending: pending}}, _query) do
+  defp handle_envelope(%{freshness: %{stale?: true, pending: pending}}, _query, _context_fn) do
     {:ok, %Answer{outcome: :stale, pending: pending}}
   end
 
-  defp handle_envelope(%{results: results}, query) do
+  defp handle_envelope(%{results: results}, query, context_fn) do
     kept =
       results
       |> Enum.filter(&(&1.score >= Consultation.evidence_threshold()))
@@ -125,7 +148,7 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
 
     case kept do
       [] -> {:ok, %Answer{outcome: :no_evidence}}
-      kept -> synthesize(kept, query)
+      kept -> synthesize(kept, query, context_fn.())
     end
   end
 
@@ -141,11 +164,11 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Live do
     end)
   end
 
-  defp synthesize(kept, query) do
+  defp synthesize(kept, query, context_excerpts) do
     sources = Source.from_results(kept)
     excerpts = Enum.map(kept, &Sanitizer.sanitize(&1.content))
 
-    case chain().run(%{question: query, excerpts: excerpts}) do
+    case chain().run(%{question: query, excerpts: excerpts, context: context_excerpts}) do
       {:ok, %{synthesis: synthesis}} when is_binary(synthesis) ->
         # AD8 (no-blank-synthesis): a blank prose beside real sources
         # reads as "the record says nothing" — treated as a safe
