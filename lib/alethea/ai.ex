@@ -10,8 +10,8 @@ defmodule Alethea.AI do
   - `:ai_embeddings` — the embeddings adapter (RAG ingest).
   - `:ai_whisper`    — the Whisper transcription adapter (grabación → transcripción).
   - `:emotion_analyzer` — the development-only emotion analyzer adapter.
-  - `:trigger_matcher` — the reactive-trigger matcher (#448); only a Fake
-                         exists until the real adapter lands (#449).
+  - `:trigger_matcher` — the reactive-trigger matcher (#448, #449); backed by
+                         `Alethea.AI.TriggerMatcher.Jev` in production when enabled.
 
   Each slot is configured at boot via `config :alethea, :ai_*` (and
   `:emotion_analyzer`) and swapped per environment:
@@ -114,7 +114,7 @@ defmodule Alethea.AI do
   def emotion_analyzer, do: configured!(:emotion_analyzer)
 
   @doc """
-  Returns the module configured at `:trigger_matcher` (#448), an
+  Returns the module configured at `:trigger_matcher` (#448, #449), an
   implementation of `Alethea.AI.TriggerMatcherBehaviour`.
 
   Raises `RuntimeError` with a clear message if not configured.
