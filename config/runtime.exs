@@ -535,19 +535,59 @@ if config_env() == :prod do
       raise "environment variable WHISPER_ENABLED must be exactly true or false."
   end
 
-  # Reactive-trigger matching (#448) has no production adapter yet (only the
-  # Fake exists, the real one is #449), so it is always disabled and asking
-  # for it fails the boot. Disabled means replies carry no reactive trigger.
+  # Reactive-trigger matching (#448, #449). When enabled, backed by
+  # `Alethea.AI.TriggerMatcher.Jev` using TypeSafe System One. When disabled,
+  # replies carry no reactive trigger.
   case System.get_env("TRIGGER_MATCHER_ENABLED") do
     value when value in [nil, "false"] ->
       config :alethea, :trigger_matcher, Alethea.AI.TriggerMatcher.Disabled
 
     "true" ->
-      raise "environment variable TRIGGER_MATCHER_ENABLED cannot be true: " <>
-              "no production trigger matcher adapter exists yet. Unset it or set it to false."
+      api_key =
+        optional_secret.("TYPESAFE_API_KEY") ||
+          optional_secret.("JEV_API_KEY") ||
+          raise "environment variable TYPESAFE_API_KEY (or JEV_API_KEY) is missing or empty. " <>
+                  "It is required while TRIGGER_MATCHER_ENABLED=true."
+
+      base_url =
+        optional_env.("TYPESAFE_BASE_URL") ||
+          optional_env.("JEV_BASE_URL") ||
+          "https://api.typesafe.ai"
+
+      model =
+        optional_env.("TYPESAFE_MODEL") ||
+          optional_env.("JEV_MODEL") ||
+          "jev-latest"
+
+      config :alethea, :trigger_matcher, Alethea.AI.TriggerMatcher.Jev
+
+      config :alethea, :jev_trigger_matcher,
+        api_key: api_key,
+        base_url: base_url,
+        model: model
 
     _other ->
       raise "environment variable TRIGGER_MATCHER_ENABLED must be exactly true or false."
+  end
+
+  if threshold_str = optional_env.("TRIGGER_MATCH_THRESHOLD") do
+    case Float.parse(threshold_str) do
+      {threshold, ""} when threshold >= 0.0 and threshold <= 1.0 ->
+        config :alethea, :trigger_match_threshold, threshold
+
+      _other ->
+        raise "environment variable TRIGGER_MATCH_THRESHOLD must be a float between 0.0 and 1.0."
+    end
+  end
+
+  if timeout_str = optional_env.("TRIGGER_MATCH_TIMEOUT_MS") do
+    case Integer.parse(timeout_str) do
+      {timeout_ms, ""} when timeout_ms > 0 ->
+        config :alethea, :trigger_match_timeout_ms, timeout_ms
+
+      _other ->
+        raise "environment variable TRIGGER_MATCH_TIMEOUT_MS must be a positive integer."
+    end
   end
 
   # ## SSL Support

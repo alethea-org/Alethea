@@ -15,8 +15,9 @@ defmodule Alethea.Triggers.ReactiveTest do
   alias Alethea.Clinical
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
+  alias Alethea.TriggerMatcherEvalSet
   alias Alethea.Triggers
-  alias Alethea.Triggers.{Trigger, TriggerFiring}
+  alias Alethea.Triggers.{ReactiveMatch, Trigger, TriggerFiring}
   alias AletheaJobs.ActiveTriggerWorker
 
   @condition "Habla de una discusión con su madre"
@@ -358,6 +359,114 @@ defmodule Alethea.Triggers.ReactiveTest do
                Triggers.activate_trigger(professional, patient.id, trigger.id)
 
       refute_enqueued(worker: ActiveTriggerWorker)
+    end
+  end
+
+  describe "reactive matching end-to-end with TriggerMatcher.Jev and evaluation set" do
+    setup %{professional: professional, patient: patient} do
+      original_matcher = Application.fetch_env!(:alethea, :trigger_matcher)
+      original_jev_config = Application.get_env(:alethea, :jev_trigger_matcher)
+
+      Application.put_env(:alethea, :trigger_matcher, Alethea.AI.TriggerMatcher.Jev)
+
+      on_exit(fn ->
+        Application.put_env(:alethea, :trigger_matcher, original_matcher)
+
+        if original_jev_config do
+          Application.put_env(:alethea, :jev_trigger_matcher, original_jev_config)
+        else
+          Application.delete_env(:alethea, :jev_trigger_matcher)
+        end
+      end)
+
+      %{professional: professional, patient: patient}
+    end
+
+    test "runs evaluation set categories end-to-end against database triggers",
+         %{professional: professional, patient: patient} do
+      # Test representative cases from each category
+      cases = [
+        hd(TriggerMatcherEvalSet.clear_match_cases()),
+        hd(TriggerMatcherEvalSet.near_miss_cases()),
+        hd(TriggerMatcherEvalSet.multi_trigger_cases()),
+        hd(TriggerMatcherEvalSet.no_match_cases())
+      ]
+
+      for eval_case <- cases do
+        # 1. Create candidate triggers in the database for this patient
+        id_mapping =
+          Map.new(eval_case.candidates, fn candidate ->
+            {:ok, trigger} =
+              Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+                "condition" => candidate.condition,
+                "instruction" => "Instrucción clínica",
+                "approved_text" => candidate.approved_text
+              })
+
+            {candidate.id, trigger}
+          end)
+
+        # 2. Wire Jev with a plug that returns answers keyed by real DB trigger id
+        plug = fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          _decoded = Jason.decode!(body)
+
+          answers =
+            Map.new(eval_case.candidates, fn candidate ->
+              real_id = id_mapping[candidate.id].id
+              {real_id, %{"type" => "noul", "noul" => candidate.mock_noul}}
+            end)
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, Jason.encode!(%{"answers" => answers}))
+        end
+
+        Application.put_env(:alethea, :jev_trigger_matcher,
+          api_key: "test-eval-key",
+          plug: plug
+        )
+
+        # 3. Call ReactiveMatch.find/2 with patient burst text
+        result = ReactiveMatch.find(patient, eval_case.patient_message)
+
+        case eval_case.expected_match_id do
+          nil ->
+            assert result == :none,
+                   "Expected no match for #{eval_case.id}, got #{inspect(result)}"
+
+          expected_id ->
+            expected_db_id = id_mapping[expected_id].id
+
+            assert {:ok, {%Trigger{id: ^expected_db_id}, prob}} = result,
+                   "Expected match for #{expected_id} in #{eval_case.id}, got #{inspect(result)}"
+
+            assert prob >= 0.7
+        end
+
+        # Clean up created triggers for next case
+        for {_k, trigger} <- id_mapping do
+          Repo.delete!(trigger)
+        end
+      end
+    end
+
+    test "Jev HTTP error degrades to :none in ReactiveMatch",
+         %{professional: professional, patient: patient} do
+      {:ok, _trigger} = create_reactive(professional, patient)
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal error"}))
+      end
+
+      Application.put_env(:alethea, :jev_trigger_matcher,
+        api_key: "test-eval-key",
+        plug: plug
+      )
+
+      assert ReactiveMatch.find(patient, "Texto cualquiera") == :none
     end
   end
 

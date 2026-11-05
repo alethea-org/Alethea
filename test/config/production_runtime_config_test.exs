@@ -34,6 +34,9 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     EMBEDDINGS_ENABLED EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL EMBEDDINGS_AUTH_TOKEN
     EMBEDDINGS_RECEIVE_TIMEOUT_MS
     WHISPER_ENABLED TRIGGER_MATCHER_ENABLED
+    TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_MODEL
+    JEV_API_KEY JEV_BASE_URL JEV_MODEL
+    TRIGGER_MATCH_THRESHOLD TRIGGER_MATCH_TIMEOUT_MS
     DEMO_RESTRICTED_ACCESS DEMO_ALLOWED_EMAILS DEMO_SYNTHETIC_DATA
   )
 
@@ -511,15 +514,58 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       end
     end
 
-    test "reactive-trigger matching is disabled and cannot be enabled without an adapter" do
+    test "reactive-trigger matching uses TriggerMatcher.Jev when enabled and requires an API key" do
       assert prod_config() |> alethea(:trigger_matcher) == TriggerMatcher.Disabled
 
       assert prod_config(%{"TRIGGER_MATCHER_ENABLED" => "false"}) |> alethea(:trigger_matcher) ==
                TriggerMatcher.Disabled
 
       assert_raise RuntimeError,
-                   ~r/TRIGGER_MATCHER_ENABLED.*no production trigger matcher adapter/,
+                   ~r/TYPESAFE_API_KEY \(or JEV_API_KEY\) is missing or empty/,
                    fn -> prod_config(%{"TRIGGER_MATCHER_ENABLED" => "true"}) end
+
+      config =
+        prod_config(%{
+          "TRIGGER_MATCHER_ENABLED" => "true",
+          "TYPESAFE_API_KEY" => " synthetic-typesafe-key \n"
+        })
+
+      assert alethea(config, :trigger_matcher) == TriggerMatcher.Jev
+
+      assert alethea(config, :jev_trigger_matcher) == [
+               api_key: "synthetic-typesafe-key",
+               base_url: "https://api.typesafe.ai",
+               model: "jev-latest"
+             ]
+
+      custom_config =
+        prod_config(%{
+          "TRIGGER_MATCHER_ENABLED" => "true",
+          "JEV_API_KEY" => "jev-alias-key",
+          "JEV_BASE_URL" => "https://alias.jev.ai",
+          "JEV_MODEL" => "jev-alias-model",
+          "TRIGGER_MATCH_THRESHOLD" => "0.85",
+          "TRIGGER_MATCH_TIMEOUT_MS" => "7500"
+        })
+
+      assert alethea(custom_config, :trigger_matcher) == TriggerMatcher.Jev
+
+      assert alethea(custom_config, :jev_trigger_matcher) == [
+               api_key: "jev-alias-key",
+               base_url: "https://alias.jev.ai",
+               model: "jev-alias-model"
+             ]
+
+      assert alethea(custom_config, :trigger_match_threshold) == 0.85
+      assert alethea(custom_config, :trigger_match_timeout_ms) == 7500
+
+      assert_raise RuntimeError, ~r/TRIGGER_MATCH_THRESHOLD must be a float/, fn ->
+        prod_config(%{"TRIGGER_MATCH_THRESHOLD" => "1.5"})
+      end
+
+      assert_raise RuntimeError, ~r/TRIGGER_MATCH_TIMEOUT_MS must be a positive integer/, fn ->
+        prod_config(%{"TRIGGER_MATCH_TIMEOUT_MS" => "-100"})
+      end
 
       assert_raise RuntimeError, ~r/TRIGGER_MATCHER_ENABLED must be exactly true or false/, fn ->
         prod_config(%{"TRIGGER_MATCHER_ENABLED" => "yes"})
@@ -536,7 +582,9 @@ defmodule Alethea.ProductionRuntimeConfigTest do
           "EMOTION_ANALYZER_ENABLED" => "true",
           "EMOTION_SIDECAR_URL" => "http://emotion.internal.test:8080",
           "EMBEDDINGS_ENABLED" => "true",
-          "EMBEDDINGS_BASE_URL" => "http://embeddings.internal.test:11434"
+          "EMBEDDINGS_BASE_URL" => "http://embeddings.internal.test:11434",
+          "TRIGGER_MATCHER_ENABLED" => "true",
+          "TYPESAFE_API_KEY" => "synthetic-typesafe-key"
         }
       ]
 
