@@ -71,6 +71,12 @@ S5. (US27) "I want trigger configuration and firings never to be treated as
 - L4: `mix precommit` full suite: 2753/2763, 5 skipped. The 10 remaining
   failures are the pre-existing origin/main baseline (verified by diffing
   failing-test lists against a worktree of origin/main); no new failure.
+- L6: Native review (lineage review-d7994d363003bd64, lenses risk+reliability):
+  APPROVED and acknowledged. First run found R3-001 CRITICAL (nil condition/
+  approved_text guards silently aborted indexing) — fixed in commit 77b1e17
+  with regression test. Advisory (non-blocking, later work): nil-context
+  handling in chain prompt, firing scheduled_at nil in indexer summary,
+  never-evidence membership duplication in retrieval.
 - L5: `TriggersLiveTest` B2 ("duplicate click on approve does not schedule
   twice") updated: it asserted exactly 1 Oban.Job overall; creation now also
   enqueues the trigger_saved RAG job, so the pin became 1 ActiveTriggerWorker
