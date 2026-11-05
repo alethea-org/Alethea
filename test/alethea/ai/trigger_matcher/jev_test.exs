@@ -356,4 +356,36 @@ defmodule Alethea.AI.TriggerMatcher.JevTest do
       end
     end
   end
+
+  describe "Application environment timeout configuration" do
+    test "falls back to Application.get_env(:alethea, :trigger_match_timeout_ms) when timeout is not passed in opts" do
+      original_timeout = Application.get_env(:alethea, :trigger_match_timeout_ms)
+
+      try do
+        Application.put_env(:alethea, :trigger_match_timeout_ms, 12_345)
+        test_pid = self()
+
+        finch_spy = fn req, _finch_req, _finch_name, finch_opts ->
+          send(test_pid, {:finch_receive_timeout, finch_opts[:receive_timeout]})
+
+          answers = %{
+            "c-1" => %{"type" => "noul", "noul" => 0.5}
+          }
+
+          {req, Req.Response.new(status: 200, body: %{"answers" => answers})}
+        end
+
+        opts = [req_options: [finch_request: finch_spy]] ++ @default_opts
+
+        assert {:ok, _} = Jev.match("Texto", [%{id: "c-1", condition: "Condición"}], opts)
+        assert_received {:finch_receive_timeout, 12_345}
+      after
+        if original_timeout do
+          Application.put_env(:alethea, :trigger_match_timeout_ms, original_timeout)
+        else
+          Application.delete_env(:alethea, :trigger_match_timeout_ms)
+        end
+      end
+    end
+  end
 end

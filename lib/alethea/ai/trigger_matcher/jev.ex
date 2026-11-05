@@ -94,7 +94,12 @@ defmodule Alethea.AI.TriggerMatcher.Jev do
   defp execute_request(body, api_key, config) do
     base_url = config[:base_url] || @default_base_url
     url = String.trim_trailing(base_url, "/") <> "/v1/systemone"
-    timeout_ms = config[:timeout_ms] || config[:receive_timeout] || @default_timeout_ms
+
+    timeout_ms =
+      config[:timeout_ms] ||
+        config[:receive_timeout] ||
+        Application.get_env(:alethea, :trigger_match_timeout_ms, @default_timeout_ms)
+
     req_options = config[:req_options] || []
 
     req_opts =
