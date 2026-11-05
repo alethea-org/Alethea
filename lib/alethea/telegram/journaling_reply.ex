@@ -123,10 +123,15 @@ defmodule Alethea.Telegram.JournalingReply do
     match = ReactiveMatch.find(legacy_patient, sanitized_content)
     request = maybe_put_trigger(request, match)
 
+    guard_context =
+      if is_binary(request[:trigger]) and request[:trigger] != "",
+        do: :trigger,
+        else: :journaling
+
     case ai_worker().process(request) do
       {:ok, %{response: reply} = chain_result} when is_binary(reply) and reply != "" ->
         chain_result
-        |> finish_reply(reply, state, anchor)
+        |> finish_reply(reply, state, anchor, guard_context)
         |> maybe_put_trigger_match(match)
 
       {:ok, %{response: _empty}} ->
@@ -145,7 +150,7 @@ defmodule Alethea.Telegram.JournalingReply do
   # the guard (AD3): the guard's clinical-wording concern stays
   # separate from the exploration-count concern, so a guard fallback
   # can itself be substituted again by closing/acknowledgement copy.
-  defp finish_reply(chain_result, raw_reply, state, anchor) do
+  defp finish_reply(chain_result, raw_reply, state, anchor, guard_context) do
     {new_situation, text} = TopicExploration.parse_marker(raw_reply)
 
     case text do
@@ -156,7 +161,7 @@ defmodule Alethea.Telegram.JournalingReply do
         guarded =
           chain_result
           |> Map.put(:response, text)
-          |> guard(anchor)
+          |> guard(anchor, guard_context)
 
         {:ok, TopicExploration.enforce(guarded, state, new_situation, anchor.id)}
     end
@@ -168,8 +173,8 @@ defmodule Alethea.Telegram.JournalingReply do
   # the delivery job, nor the AI record anchored to the inbound ever sees
   # the blocked text. `:model_version` is replaced because the fallback
   # was not written by the model.
-  defp guard(chain_result, inbound) do
-    case check(chain_result) do
+  defp guard(chain_result, inbound, guard_context) do
+    case check(chain_result, guard_context) do
       :ok ->
         chain_result
 
@@ -189,8 +194,8 @@ defmodule Alethea.Telegram.JournalingReply do
   # A reply the AI worker reports as cut off by the length limit is an
   # unfinished sentence. It is never trimmed into something that looks
   # complete; it is withheld like any other blocked reply.
-  defp check(%{truncated: true}), do: {:blocked, :incomplete}
-  defp check(%{response: reply}), do: JournalingOutputGuard.check(reply)
+  defp check(%{truncated: true}, _context), do: {:blocked, :incomplete}
+  defp check(%{response: reply}, context), do: JournalingOutputGuard.check(reply, context)
 
   # A history that cannot be loaded or decrypted degrades to an empty
   # one: the patient still gets a reply to the current turn, and nothing

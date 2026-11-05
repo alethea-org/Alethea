@@ -10,6 +10,7 @@ defmodule Alethea.Triggers do
   alias Alethea.Accounts
   alias Alethea.Accounts.AuditLog
   alias Alethea.AI.Chains.TriggerPreviewChain
+  alias Alethea.AI.JournalingOutputGuard
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
   alias Alethea.Encryption.PatientVault
@@ -90,12 +91,15 @@ defmodule Alethea.Triggers do
          %Accounts.Patient{} <-
            Accounts.get_patient_for_professional(professional.id, valid_patient_id),
          trimmed <- String.trim(instruction),
-         true <- trimmed != "" do
-      trigger_preview_chain().run(%{instruction: trimmed})
+         true <- trimmed != "",
+         {:ok, %{draft: draft} = preview} <- trigger_preview_chain().run(%{instruction: trimmed}),
+         :ok <- JournalingOutputGuard.check(draft, :trigger) do
+      {:ok, preview}
     else
       :error -> {:error, :unauthorized}
       nil -> {:error, :unauthorized}
       false -> {:error, :empty_instruction}
+      {:blocked, reason} -> {:error, {:blocked, reason}}
       {:error, reason} -> {:error, reason}
     end
   end
