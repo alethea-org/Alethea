@@ -54,7 +54,9 @@ defmodule AletheaWeb.TriggersLive.Index do
               as: "trigger"
             )
           )
-          |> assign_reactive_form(%{"condition" => "", "instruction" => ""})
+          |> assign_reactive_form(default_reactive_params())
+          |> assign(:editing_reactive_id, nil)
+          |> assign(:reactive_edit_form, nil)
           |> clear_reactive_preview()
           |> assign(:reactive_approving, false)
           |> assign(:active_triggers_empty?, triggers == [])
@@ -171,6 +173,8 @@ defmodule AletheaWeb.TriggersLive.Index do
           "approved_text" => draft
         }
 
+        attrs = Map.merge(attrs, reactive_options(socket.assigns.reactive_form.params))
+
         socket = assign(socket, :reactive_approving, true)
 
         case Triggers.create_and_approve_reactive_trigger(professional, patient.id, attrs) do
@@ -179,7 +183,7 @@ defmodule AletheaWeb.TriggersLive.Index do
              socket
              |> assign(:reactive_approving, false)
              |> clear_reactive_preview()
-             |> assign_reactive_form(%{"condition" => "", "instruction" => ""})
+             |> assign_reactive_form(default_reactive_params())
              |> stream_insert(:reactive_triggers, trigger, at: 0)
              |> assign(:reactive_triggers_empty?, false)
              |> put_flash(:info, "Trigger reactivo aprobado exitosamente.")}
@@ -190,6 +194,12 @@ defmodule AletheaWeb.TriggersLive.Index do
              |> assign(:reactive_approving, false)
              |> put_flash(:error, "No estás autorizado para modificar este paciente.")}
 
+          {:error, :reactive_limit_reached} ->
+            {:noreply,
+             socket
+             |> assign(:reactive_approving, false)
+             |> put_flash(:error, reactive_limit_message())}
+
           {:error, _reason} ->
             {:noreply,
              socket
@@ -199,6 +209,103 @@ defmodule AletheaWeb.TriggersLive.Index do
                "No se pudo aprobar el trigger reactivo. Revisa los datos e inténtalo nuevamente."
              )}
         end
+    end
+  end
+
+  def handle_event("edit_reactive_trigger", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+    previous_id = socket.assigns.editing_reactive_id
+
+    case Triggers.get_trigger(professional, patient.id, trigger_id) do
+      {:ok, %{kind: "reactive"} = trigger} ->
+        socket =
+          with true <- previous_id != nil and previous_id != trigger.id,
+               {:ok, previous} <- Triggers.get_trigger(professional, patient.id, previous_id) do
+            stream_insert(socket, :reactive_triggers, previous)
+          else
+            _ -> socket
+          end
+
+        form =
+          to_form(
+            %{
+              "condition" => trigger.decrypted_condition || "",
+              "cooldown_hours" => to_string(trigger.cooldown_hours),
+              "fire_once" => to_string(trigger.fire_once)
+            },
+            as: "edit_reactive"
+          )
+
+        {:noreply,
+         socket
+         |> assign(:editing_reactive_id, trigger.id)
+         |> assign(:reactive_edit_form, form)
+         |> stream_insert(:reactive_triggers, trigger)}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+    end
+  end
+
+  def handle_event("cancel_edit_reactive", %{"id" => trigger_id}, socket) do
+    socket =
+      socket
+      |> assign(:editing_reactive_id, nil)
+      |> assign(:reactive_edit_form, nil)
+
+    case Triggers.get_trigger(
+           socket.assigns.current_professional,
+           socket.assigns.patient.id,
+           trigger_id
+         ) do
+      {:ok, trigger} -> {:noreply, stream_insert(socket, :reactive_triggers, trigger)}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("validate_reactive_edit", %{"edit_reactive" => params}, socket) do
+    {:noreply, assign(socket, :reactive_edit_form, to_form(params, as: "edit_reactive"))}
+  end
+
+  def handle_event("save_reactive_edit", %{"edit_reactive" => params}, socket) do
+    trigger_id = socket.assigns.editing_reactive_id
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+    socket = assign(socket, :reactive_edit_form, to_form(params, as: "edit_reactive"))
+
+    attrs =
+      Map.merge(
+        %{"condition" => Map.get(params, "condition", "")},
+        reactive_options(params)
+      )
+
+    case Triggers.update_reactive_trigger(professional, patient.id, trigger_id, attrs) do
+      {:ok, trigger} ->
+        {:noreply,
+         socket
+         |> assign(:editing_reactive_id, nil)
+         |> assign(:reactive_edit_form, nil)
+         |> stream_insert(:reactive_triggers, trigger)
+         |> put_flash(:info, "Trigger reactivo actualizado.")}
+
+      {:error, :empty_condition} ->
+        {:noreply, put_flash(socket, :error, "La condición no puede estar vacía.")}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, "El enfriamiento debe ser de al menos 1 hora.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo actualizar el trigger reactivo.")}
     end
   end
 
@@ -466,6 +573,9 @@ defmodule AletheaWeb.TriggersLive.Index do
       {:error, :not_found} ->
         {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
 
+      {:error, :reactive_limit_reached} ->
+        {:noreply, put_flash(socket, :error, reactive_limit_message())}
+
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo activar el trigger.")}
     end
@@ -505,6 +615,9 @@ defmodule AletheaWeb.TriggersLive.Index do
 
       {:error, :not_found} ->
         {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+      {:error, :reactive_limit_reached} ->
+        {:noreply, put_flash(socket, :error, reactive_limit_message())}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "No se pudo reanudar el trigger.")}
@@ -857,6 +970,28 @@ defmodule AletheaWeb.TriggersLive.Index do
   defp reactive_inputs(params) do
     {params |> Map.get("condition", "") |> to_string() |> String.trim(),
      params |> Map.get("instruction", "") |> to_string() |> String.trim()}
+  end
+
+  defp default_reactive_params do
+    %{
+      "condition" => "",
+      "instruction" => "",
+      "cooldown_hours" => "24",
+      "fire_once" => "false"
+    }
+  end
+
+  # Cooldown and fire-once as sent by the forms; absent keys keep the
+  # context defaults.
+  defp reactive_options(params) do
+    params
+    |> Map.take(["cooldown_hours", "fire_once"])
+    |> Map.reject(fn {_key, value} -> value in [nil, ""] end)
+  end
+
+  defp reactive_limit_message do
+    "Este paciente ya tiene #{Triggers.max_active_reactive_triggers()} triggers reactivos activos. " <>
+      "Desactiva uno antes de crear o activar otro."
   end
 
   defp assign_reactive_form(socket, params),
@@ -1336,17 +1471,16 @@ defmodule AletheaWeb.TriggersLive.Index do
           </div>
         </div>
       </div>
-
       <%!-- Panel de Pestaña Reactivos (#448) --%>
       <div id="reactive-tab-panel" class={@active_tab != "reactive" && "hidden"}>
         <div class="pt-card" style="margin-bottom: 28px;">
-          <div class="pt-card__head">
-            <span class="pt-h2">Nuevo trigger reactivo</span>
-          </div>
+          <div class="pt-card__head"><span class="pt-h2">Nuevo trigger reactivo</span></div>
+
           <div class="pt-card__body">
             <p class="pt-muted" style="margin-bottom: 12px;">
-              Cuando el paciente escriba algo que coincida con la condición, Alethea integrará el mensaje aprobado en su respuesta. Se dispara como máximo una vez cada 24 horas.
+              Cuando el paciente escriba algo que coincida con la condición, Alethea integrará el mensaje aprobado en su respuesta. Se dispara como máximo una vez por período de enfriamiento.
             </p>
+
             <.form
               for={@reactive_form}
               id="reactive-trigger-form"
@@ -1371,6 +1505,26 @@ defmodule AletheaWeb.TriggersLive.Index do
                   placeholder="Escribe la instrucción en lenguaje clínico (ej. Retomar el ejercicio de comunicación asertiva)..."
                   rows="3"
                   required
+                />
+              </div>
+
+              <div style="margin-top: 12px;">
+                <.input
+                  id="reactive-trigger-cooldown-input"
+                  field={@reactive_form[:cooldown_hours]}
+                  type="number"
+                  label="Enfriamiento (horas)"
+                  min="1"
+                  step="1"
+                />
+              </div>
+
+              <div style="margin-top: 12px;">
+                <.input
+                  id="reactive-trigger-fire-once-input"
+                  field={@reactive_form[:fire_once]}
+                  type="checkbox"
+                  label="Disparar solo una vez"
                 />
               </div>
 
@@ -1474,12 +1628,29 @@ defmodule AletheaWeb.TriggersLive.Index do
                       <span class="pt-pill pt-pill--warning">Requiere aprobación</span>
                     <% end %>
 
+                    <span
+                      :if={trigger.fire_once}
+                      id={"reactive-trigger-fire-once-badge-#{trigger.id}"}
+                      class="pt-pill"
+                    >
+                      Solo una vez
+                    </span>
                     <span class="pt-muted" style="margin-left: 4px; font-size: 0.85em;">
                       Enfriamiento: {trigger.cooldown_hours} h
                     </span>
                   </div>
 
                   <div class="trigger-actions" style="display: flex; gap: 6px; align-items: center;">
+                    <button
+                      :if={@editing_reactive_id != trigger.id}
+                      type="button"
+                      id={"edit-reactive-trigger-button-#{trigger.id}"}
+                      phx-click="edit_reactive_trigger"
+                      phx-value-id={trigger.id}
+                      class="button-secondary button-secondary--sm"
+                    >
+                      Editar
+                    </button>
                     <%= cond do %>
                       <% trigger.status == "active" -> %>
                         <button
@@ -1527,15 +1698,71 @@ defmodule AletheaWeb.TriggersLive.Index do
                     <span class="pt-muted italic">Pendiente de aprobación</span>
                   <% end %>
                 </p>
+
                 <p class="pt-muted" style="font-size: 0.85em;">
                   <em>Instrucción original:</em> {trigger.decrypted_instruction || "(Cifrada)"}
                 </p>
+
+                <%= if @editing_reactive_id == trigger.id and @reactive_edit_form do %>
+                  <.form
+                    for={@reactive_edit_form}
+                    id={"reactive-trigger-edit-form-#{trigger.id}"}
+                    phx-change="validate_reactive_edit"
+                    phx-submit="save_reactive_edit"
+                    style="margin-top: 12px;"
+                  >
+                    <.input
+                      id={"reactive-trigger-edit-condition-input-#{trigger.id}"}
+                      field={@reactive_edit_form[:condition]}
+                      type="textarea"
+                      label="Condición"
+                      rows="2"
+                    />
+                    <div style="margin-top: 12px;">
+                      <.input
+                        id={"reactive-trigger-edit-cooldown-input-#{trigger.id}"}
+                        field={@reactive_edit_form[:cooldown_hours]}
+                        type="number"
+                        label="Enfriamiento (horas)"
+                        min="1"
+                        step="1"
+                      />
+                    </div>
+
+                    <div style="margin-top: 12px;">
+                      <.input
+                        id={"reactive-trigger-edit-fire-once-input-#{trigger.id}"}
+                        field={@reactive_edit_form[:fire_once]}
+                        type="checkbox"
+                        label="Disparar solo una vez"
+                      />
+                    </div>
+
+                    <div class="form-actions" style="margin-top: 16px; display: flex; gap: 8px;">
+                      <button
+                        type="submit"
+                        id={"save-reactive-trigger-button-#{trigger.id}"}
+                        class="button-primary button-primary--sm"
+                      >
+                        Guardar
+                      </button>
+                      <button
+                        type="button"
+                        id={"cancel-reactive-trigger-edit-button-#{trigger.id}"}
+                        phx-click="cancel_edit_reactive"
+                        phx-value-id={trigger.id}
+                        class="button-secondary button-secondary--sm"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </.form>
+                <% end %>
               </div>
             </div>
           </div>
         </div>
       </div>
-
       <%!-- Panel de Pestaña Historial --%>
       <div id="history-tab-panel" class={@active_tab != "history" && "hidden"}>
         <div>

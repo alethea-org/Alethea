@@ -24,10 +24,11 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - [x] T1 S1,S2,S6 — migration `fire_once` + `cooldown_reset_at`; schema; create accepts `cooldown_hours`/`fire_once`; firing deactivates fire-once trigger. Route: worker mw54d6qz-2-repp. Commit: domain
 - [x] T2 S1,S3,S5 — `update_reactive_trigger/4` (condition, cooldown_hours, fire_once), cooldown reset honored by `eligible_reactive_triggers/2` and `fire_reactive_trigger/3`. Route: worker mw54d6qz-2-repp. Commit: domain
 - [x] T3 S4,S5 — active reactive limit on create/activate/resume. Route: worker mw54d6qz-2-repp. Commit: domain
-- [ ] T4 S1-S4 — LiveView: cooldown/fire-once inputs, reactive edit form, limit message. Route: pending. Commit: —
+- [x] T4 S1-S4 — LiveView: cooldown/fire-once inputs, reactive edit form, limit message. Route: worker mw54mwd8-3-p9lw. Commit: ui
 - [ ] T5 — verification (Risk items 1 migration, 4 concurrency → independent verify), `mix precommit`. Route: gentle-ai-verify. Commit: —
 
 ## Log
 
 - L1 (user, 2026-11-06): "que tal empezar por la ##435" → chose sub-issue "#450 cooldown, fire-once y límites"; working tree: "Worktree aparte".
 - L2 (evidence, 2026-11-06): T1 RED compile error `unknown key :fire_once`; T2 RED 8/12 `UndefinedFunctionError update_reactive_trigger/4`; T3 RED 5/19. GREEN: reactive_limits_test 19/0; test/alethea/triggers/ + telegram_burst_reply_worker_test 133/0 (re-run by parent); compile --warnings-as-errors clean. Postgres container alethea-db-1 recreated with user approval on existing volume alethea_postgres_data.
+- L3 (evidence, 2026-11-06): T4 RED 6/13 new LiveView tests; GREEN triggers LiveView tests (reactive, live, management, dashboard summary) 54/0 re-run by parent. Worker's `mix format` on a CRLF working copy reflowed unrelated HEEx; parent reverted the 19 whitespace-only hunks (origin/main file passes --check-formatted via stdin) and normalized to LF.
