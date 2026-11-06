@@ -747,6 +747,11 @@ defmodule Alethea.Triggers do
            Accounts.get_patient_for_professional(professional.id, valid_patient_id),
          {:ok, dek} <- Clinical.patient_dek(patient, "trigger_activate") do
       Repo.transaction(fn ->
+        # Patient row before trigger row: the same lock order as the burst
+        # reply worker, so activating a reactive trigger cannot deadlock with
+        # its firing (#450).
+        lock_patient!(valid_patient_id)
+
         query =
           from(t in Trigger,
             where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
@@ -798,6 +803,11 @@ defmodule Alethea.Triggers do
            Accounts.get_patient_for_professional(professional.id, valid_patient_id),
          {:ok, dek} <- Clinical.patient_dek(patient, "trigger_resume") do
       Repo.transaction(fn ->
+        # Patient row before trigger row: the same lock order as the burst
+        # reply worker, so activating a reactive trigger cannot deadlock with
+        # its firing (#450).
+        lock_patient!(valid_patient_id)
+
         query =
           from(t in Trigger,
             where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
@@ -1365,14 +1375,18 @@ defmodule Alethea.Triggers do
     end
   end
 
+  defp lock_patient!(patient_id) do
+    Repo.one!(
+      from(p in Accounts.Patient, where: p.id == ^patient_id, lock: "FOR UPDATE", select: p.id)
+    )
+  end
+
   # Must run inside the transaction that writes the new active reactive
   # trigger. The `FOR UPDATE` lock on the patient row serializes concurrent
   # create/activate/resume calls for the same patient, so the count cannot go
   # stale before the write. Rolls back with `:reactive_limit_reached`.
   defp ensure_reactive_slot!(patient_id) do
-    Repo.one!(
-      from(p in Accounts.Patient, where: p.id == ^patient_id, lock: "FOR UPDATE", select: p.id)
-    )
+    lock_patient!(patient_id)
 
     active_count =
       Repo.aggregate(

@@ -25,10 +25,12 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - [x] T2 S1,S3,S5 — `update_reactive_trigger/4` (condition, cooldown_hours, fire_once), cooldown reset honored by `eligible_reactive_triggers/2` and `fire_reactive_trigger/3`. Route: worker mw54d6qz-2-repp. Commit: domain
 - [x] T3 S4,S5 — active reactive limit on create/activate/resume. Route: worker mw54d6qz-2-repp. Commit: domain
 - [x] T4 S1-S4 — LiveView: cooldown/fire-once inputs, reactive edit form, limit message. Route: worker mw54mwd8-3-p9lw. Commit: ui
-- [ ] T5 — verification (Risk items 1 migration, 4 concurrency → independent verify), `mix precommit`. Route: gentle-ai-verify. Commit: —
+- [x] T5 — verification (Risk items 1 migration, 4 concurrency → independent verify), `mix precommit`. Route: gentle-ai-verify mw54ws75-4-tcfz. Commit: fix
 
 ## Log
 
 - L1 (user, 2026-11-06): "que tal empezar por la ##435" → chose sub-issue "#450 cooldown, fire-once y límites"; working tree: "Worktree aparte".
 - L2 (evidence, 2026-11-06): T1 RED compile error `unknown key :fire_once`; T2 RED 8/12 `UndefinedFunctionError update_reactive_trigger/4`; T3 RED 5/19. GREEN: reactive_limits_test 19/0; test/alethea/triggers/ + telegram_burst_reply_worker_test 133/0 (re-run by parent); compile --warnings-as-errors clean. Postgres container alethea-db-1 recreated with user approval on existing volume alethea_postgres_data.
 - L3 (evidence, 2026-11-06): T4 RED 6/13 new LiveView tests; GREEN triggers LiveView tests (reactive, live, management, dashboard summary) 54/0 re-run by parent. Worker's `mix format` on a CRLF working copy reflowed unrelated HEEx; parent reverted the 19 whitespace-only hunks (origin/main file passes --check-formatted via stdin) and normalized to LF.
+- L4 (evidence, 2026-11-06): verifier verdicts S1-S6 pass. Full suite 6 doctests, 2804 tests, 8 failures (all test/alethea/release_test.exs Windows/POSIX release-script baseline, not touched by this branch), 5 skipped; compile --warnings-as-errors and deps.unlock --check-unused exit 0; stdin format check exit 0 on all changed files.
+- L5 (fix, 2026-11-06): verifier finding 1 (medium, deadlock: activate/resume locked trigger then patient, burst reply worker locks patient then trigger) fixed by locking the patient row first in activate_trigger/resume_trigger. Finding 2 (crafted save_reactive_edit with no open edit crashed the LiveView) fixed with RED FunctionClauseError -> GREEN; triggers context + worker + LiveView tests 188/0. Open, not fixed: finding 3 (low) two firings possible within the same second as a condition edit; finding 4 (info) no concurrent-create test at the limit.

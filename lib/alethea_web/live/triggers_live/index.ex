@@ -271,6 +271,14 @@ defmodule AletheaWeb.TriggersLive.Index do
     {:noreply, assign(socket, :reactive_edit_form, to_form(params, as: "edit_reactive"))}
   end
 
+  # A save with no open edit form (only reachable by a crafted event) is ignored.
+  def handle_event(
+        "save_reactive_edit",
+        _params,
+        %{assigns: %{editing_reactive_id: nil}} = socket
+      ),
+      do: {:noreply, socket}
+
   def handle_event("save_reactive_edit", %{"edit_reactive" => params}, socket) do
     trigger_id = socket.assigns.editing_reactive_id
     professional = socket.assigns.current_professional

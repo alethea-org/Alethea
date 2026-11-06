@@ -377,6 +377,24 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
       assert has_element?(view, "#reactive-trigger-fire-once-badge-#{trigger.id}")
     end
 
+    test "ignores a save event when no reactive trigger is being edited", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      trigger = create_reactive!(professional, patient)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      render_hook(view, "save_reactive_edit", %{
+        "edit_reactive" => %{"condition" => "Otra condición", "cooldown_hours" => "2"}
+      })
+
+      assert has_element?(view, "#reactive-trigger-#{trigger.id}")
+      {:ok, unchanged} = Triggers.get_trigger(professional, patient.id, trigger.id)
+      assert unchanged.cooldown_hours == trigger.cooldown_hours
+      assert unchanged.decrypted_condition == trigger.decrypted_condition
+    end
+
     defp inactive!(trigger) do
       trigger |> Ecto.Changeset.change(status: "inactive") |> Repo.update!()
     end
