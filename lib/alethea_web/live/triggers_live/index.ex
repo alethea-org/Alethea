@@ -30,6 +30,8 @@ defmodule AletheaWeb.TriggersLive.Index do
           |> assign(:page_title, "Triggers · #{patient.alias}")
           |> assign(:patient, patient)
           |> assign(:active_tab, "active")
+          |> assign(:show_active_form, false)
+          |> assign(:show_reactive_form, false)
           |> assign(:preview_draft, nil)
           |> assign(:preview_instruction, nil)
           |> assign(:approving, false)
@@ -87,6 +89,29 @@ defmodule AletheaWeb.TriggersLive.Index do
   def handle_event("switch_tab", %{"tab" => tab}, socket)
       when tab in ["active", "reactive", "history"] do
     {:noreply, assign(socket, :active_tab, tab)}
+  end
+
+  def handle_event("show_new_trigger_form", %{"kind" => "active"}, socket) do
+    {:noreply, assign(socket, :show_active_form, true)}
+  end
+
+  def handle_event("show_new_trigger_form", %{"kind" => "reactive"}, socket) do
+    {:noreply, assign(socket, :show_reactive_form, true)}
+  end
+
+  def handle_event("hide_new_trigger_form", %{"kind" => "active"}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_active_form, false)
+     |> assign(:preview_draft, nil)
+     |> assign(:preview_instruction, nil)}
+  end
+
+  def handle_event("hide_new_trigger_form", %{"kind" => "reactive"}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_reactive_form, false)
+     |> clear_reactive_preview()}
   end
 
   # --- Reactive triggers (#448) ---
@@ -182,6 +207,7 @@ defmodule AletheaWeb.TriggersLive.Index do
             {:noreply,
              socket
              |> assign(:reactive_approving, false)
+             |> assign(:show_reactive_form, false)
              |> clear_reactive_preview()
              |> assign_reactive_form(default_reactive_params())
              |> stream_insert(:reactive_triggers, trigger, at: 0)
@@ -442,6 +468,7 @@ defmodule AletheaWeb.TriggersLive.Index do
               {:noreply,
                socket
                |> assign(:approving, false)
+               |> assign(:show_active_form, false)
                |> stream_insert(:active_triggers, trigger, at: 0)
                |> assign(:active_triggers_empty?, false)
                |> assign(:preview_draft, nil)
@@ -1050,54 +1077,69 @@ defmodule AletheaWeb.TriggersLive.Index do
 
       <%!-- Navegación de pestañas --%>
       <div
-        class="tabs"
-        style="display: flex; gap: 8px; margin-bottom: 24px; border-bottom: 1px solid var(--color-border);"
+        id="triggers-tabs"
+        class="review-tabs"
+        role="tablist"
+        aria-label="Secciones de triggers"
       >
         <button
           type="button"
+          role="tab"
           id="tab-active"
           phx-click="switch_tab"
           phx-value-tab="active"
-          class={[
-            "button-tab",
-            @active_tab == "active" && "button-tab--active font-bold border-b-2 border-primary"
-          ]}
-          style="padding: 8px 16px; cursor: pointer;"
+          aria-controls="active-tab-panel"
+          aria-selected={to_string(@active_tab == "active")}
+          class={["review-tab", @active_tab == "active" && "review-tab--active"]}
         >
           Activos
         </button>
         <button
           type="button"
+          role="tab"
           id="tab-reactive"
           phx-click="switch_tab"
           phx-value-tab="reactive"
-          class={[
-            "button-tab",
-            @active_tab == "reactive" && "button-tab--active font-bold border-b-2 border-primary"
-          ]}
-          style="padding: 8px 16px; cursor: pointer;"
+          aria-controls="reactive-tab-panel"
+          aria-selected={to_string(@active_tab == "reactive")}
+          class={["review-tab", @active_tab == "reactive" && "review-tab--active"]}
         >
           Reactivos
         </button>
         <button
           type="button"
+          role="tab"
           id="tab-history"
           phx-click="switch_tab"
           phx-value-tab="history"
-          class={[
-            "button-tab",
-            @active_tab == "history" && "button-tab--active font-bold border-b-2 border-primary"
-          ]}
-          style="padding: 8px 16px; cursor: pointer;"
+          aria-controls="history-tab-panel"
+          aria-selected={to_string(@active_tab == "history")}
+          class={["review-tab", @active_tab == "history" && "review-tab--active"]}
         >
           Historial
         </button>
       </div>
 
       <%!-- Panel de Pestaña Activos --%>
-      <div id="active-tab-panel" class={@active_tab != "active" && "hidden"}>
+      <div id="active-tab-panel" hidden={@active_tab != "active"}>
+        <div :if={!@show_active_form} style="margin-bottom: 28px;">
+          <button
+            type="button"
+            id="new-active-trigger-button"
+            phx-click="show_new_trigger_form"
+            phx-value-kind="active"
+            class="button-primary button-primary--sm"
+          >
+            <.icon name="hero-plus" class="size-4" style="margin-right: 4px;" /> Nuevo trigger activo
+          </button>
+        </div>
         <%!-- Formulario de Creación de Trigger --%>
-        <div class="pt-card" style="margin-bottom: 28px;">
+        <div
+          :if={@show_active_form}
+          id="new-active-trigger-card"
+          class="pt-card"
+          style="margin-bottom: 28px;"
+        >
           <div class="pt-card__head">
             <span class="pt-h2">Nuevo trigger activo</span>
           </div>
@@ -1197,6 +1239,15 @@ defmodule AletheaWeb.TriggersLive.Index do
                 >
                   <.icon name="hero-sparkles" class="size-4" style="margin-right: 4px;" />
                   Generar vista previa
+                </button>
+                <button
+                  type="button"
+                  id="cancel-new-active-trigger-button"
+                  phx-click="hide_new_trigger_form"
+                  phx-value-kind="active"
+                  class="button-secondary button-secondary--sm"
+                >
+                  Cancelar
                 </button>
               </div>
             </.form>
@@ -1480,8 +1531,25 @@ defmodule AletheaWeb.TriggersLive.Index do
         </div>
       </div>
       <%!-- Panel de Pestaña Reactivos (#448) --%>
-      <div id="reactive-tab-panel" class={@active_tab != "reactive" && "hidden"}>
-        <div class="pt-card" style="margin-bottom: 28px;">
+      <div id="reactive-tab-panel" hidden={@active_tab != "reactive"}>
+        <div :if={!@show_reactive_form} style="margin-bottom: 28px;">
+          <button
+            type="button"
+            id="new-reactive-trigger-button"
+            phx-click="show_new_trigger_form"
+            phx-value-kind="reactive"
+            class="button-primary button-primary--sm"
+          >
+            <.icon name="hero-plus" class="size-4" style="margin-right: 4px;" />
+            Nuevo trigger reactivo
+          </button>
+        </div>
+        <div
+          :if={@show_reactive_form}
+          id="new-reactive-trigger-card"
+          class="pt-card"
+          style="margin-bottom: 28px;"
+        >
           <div class="pt-card__head"><span class="pt-h2">Nuevo trigger reactivo</span></div>
 
           <div class="pt-card__body">
@@ -1544,6 +1612,15 @@ defmodule AletheaWeb.TriggersLive.Index do
                 >
                   <.icon name="hero-sparkles" class="size-4" style="margin-right: 4px;" />
                   Generar vista previa
+                </button>
+                <button
+                  type="button"
+                  id="cancel-new-reactive-trigger-button"
+                  phx-click="hide_new_trigger_form"
+                  phx-value-kind="reactive"
+                  class="button-secondary button-secondary--sm"
+                >
+                  Cancelar
                 </button>
               </div>
             </.form>
@@ -1772,7 +1849,7 @@ defmodule AletheaWeb.TriggersLive.Index do
         </div>
       </div>
       <%!-- Panel de Pestaña Historial --%>
-      <div id="history-tab-panel" class={@active_tab != "history" && "hidden"}>
+      <div id="history-tab-panel" hidden={@active_tab != "history"}>
         <div>
           <h2 class="pt-h2" style="margin-bottom: 16px;">Historial de envíos</h2>
 

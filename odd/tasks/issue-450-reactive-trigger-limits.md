@@ -11,6 +11,8 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - S4 (issue): "At most 20 active reactive triggers per patient (global configuration)." Acceptance: "Creating or activating a 21st reactive trigger is rejected with a clear message."
 - S5 (PRD #435): "Every create, edit, pause and resume of a trigger to be recorded in the audit log" and "Access is scoped to the patient's owning professional."
 - S6 (PRD #435, US7): "each reactive trigger to have a cooldown (24h by default, editable)".
+- S7 (user, manual test): "Los botones "Activos", "Reactivos" e "Historial" no siguen la estética en general de la UI, quiero que arregles eso." Each tab must show only its own panel (pre-existing bug: `.hidden`, `.tabs` and `.button-tab` are not defined in the stylesheet; reuse `.review-tabs` / `.review-tab--active`).
+- S8 (user decision "Botón por pestaña"): each tab lists its triggers and has a "Nuevo trigger activo" / "Nuevo trigger reactivo" button that expands the creation form (collapsed by default).
 
 ## Design decisions
 
@@ -26,6 +28,8 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - [x] T3 S4,S5 — active reactive limit on create/activate/resume. Route: worker mw54d6qz-2-repp. Commit: domain
 - [x] T4 S1-S4 — LiveView: cooldown/fire-once inputs, reactive edit form, limit message. Route: worker mw54mwd8-3-p9lw. Commit: ui
 - [x] T5 — verification (Risk items 1 migration, 4 concurrency → independent verify), `mix precommit`. Route: gentle-ai-verify mw54ws75-4-tcfz. Commit: fix
+- [x] T6 S7,S8 — triggers page tabs with `.review-tabs`, real panel hiding, per-tab "Nuevo trigger" button. Route: worker mw59zea5-7-2sfv. Commit: tabs
+- [ ] T7 — local testing setup: Ollama (LLM_MODEL) + real Telegram bot via docs/main-demo-operator-guide.md (user-owned bot token). Route: inline/user. Commit: — (no code expected)
 
 ## Log
 
@@ -35,3 +39,5 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - L4 (evidence, 2026-11-06): verifier verdicts S1-S6 pass. Full suite 6 doctests, 2804 tests, 8 failures (all test/alethea/release_test.exs Windows/POSIX release-script baseline, not touched by this branch), 5 skipped; compile --warnings-as-errors and deps.unlock --check-unused exit 0; stdin format check exit 0 on all changed files.
 - L5 (fix, 2026-11-06): verifier finding 1 (medium, deadlock: activate/resume locked trigger then patient, burst reply worker locks patient then trigger) fixed by locking the patient row first in activate_trigger/resume_trigger. Finding 2 (crafted save_reactive_edit with no open edit crashed the LiveView) fixed with RED FunctionClauseError -> GREEN; triggers context + worker + LiveView tests 188/0. Open, not fixed: finding 3 (low) two firings possible within the same second as a condition edit; finding 4 (info) no concurrent-create test at the limit.
 - L6 (evidence, 2026-11-06): re-verifier mw558t12-5-96oc on c56c254: S1-S6 pass; findings 1 (deadlock) and 2 (nil-edit crash) resolved, no remaining trigger-then-patient lock path. Migration rollback --step 1 and migrate exit 0 on alethea_test_issue450. compile --warnings-as-errors exit 0; full suite 6 doctests, 2805 tests, 8 failures (all test/alethea/release_test.exs baseline), 5 skipped; stdin format check exit 0 on 7 files. New low: save_reactive_edit without "edit_reactive" key raises FunctionClauseError (LiveView crash only). Info, pre-existing: pause_active_triggers_for_crisis locks several trigger rows without ORDER BY on crisis replay paths.
+- L7 (user, 2026-11-06, manual test): tabs off-style; "me muestra la sección "Nuevo trigger activo" y debajo la de "Nuevo trigger reactivo""; no "Guardar trigger" without an LLM; simulate script failed with `"1"` (needs the trigger UUID). Decisions: fix tabs "Sí, en esta rama"; alta "Botón por pestaña"; preview "Ollama local"; Telegram "Sí, ahora". Verified: tabs/panels come from 04409c3 (#440/#442) and cd18fab (#448), not #450.
+- L8 (evidence, 2026-11-06): T6 RED 20/37 (no new-trigger buttons, panels not hidden); GREEN triggers LiveView tests 58/0 re-run by parent; no whitespace-only hunks. Panels use the HTML `hidden` attribute (not `:if`) so LiveView stream items survive tab switches.

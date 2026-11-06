@@ -66,8 +66,8 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     view |> element("#tab-reactive") |> render_click()
 
     assert has_element?(view, "#reactive-tab-panel")
-    refute has_element?(view, "#reactive-tab-panel.hidden")
-    assert has_element?(view, "#active-tab-panel.hidden")
+    assert has_element?(view, "#reactive-tab-panel:not([hidden])")
+    assert has_element?(view, "#active-tab-panel[hidden]")
     assert has_element?(view, "#reactive-triggers-empty")
   end
 
@@ -80,6 +80,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     end)
 
     {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+    view |> element("#new-reactive-trigger-button") |> render_click()
     view |> element("#tab-reactive") |> render_click()
 
     fill_reactive_form(view, @condition, @instruction)
@@ -104,6 +105,8 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     assert has_element?(view, "#reactive-trigger-#{trigger.id}", @draft)
     refute has_element?(view, "#active-trigger-#{trigger.id}")
     refute has_element?(view, "#reactive-trigger-preview-card")
+    refute has_element?(view, "#reactive-trigger-form")
+    assert has_element?(view, "#new-reactive-trigger-button")
   end
 
   test "approval requires a preview", %{conn: conn, patient: patient} do
@@ -119,6 +122,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     expect(TriggerPreviewChainMock, :run, 0, fn _ -> flunk("must not draft") end)
 
     {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+    view |> element("#new-reactive-trigger-button") |> render_click()
 
     fill_reactive_form(view, "", @instruction)
     html = view |> form("#reactive-trigger-form") |> render_submit()
@@ -136,6 +140,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     expect(TriggerPreviewChainMock, :run, fn _ -> {:ok, %{draft: @draft}} end)
 
     {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+    view |> element("#new-reactive-trigger-button") |> render_click()
 
     fill_reactive_form(view, @condition, @instruction)
     view |> form("#reactive-trigger-form") |> render_submit()
@@ -239,6 +244,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
       expect(TriggerPreviewChainMock, :run, fn _ -> {:ok, %{draft: @draft}} end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-reactive-trigger-button") |> render_click()
       assert has_element?(view, "#reactive-trigger-cooldown-input[value='24']")
       assert has_element?(view, "#reactive-trigger-fire-once-input")
 
@@ -336,6 +342,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
       expect(TriggerPreviewChainMock, :run, fn _ -> {:ok, %{draft: @draft}} end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-reactive-trigger-button") |> render_click()
       fill_reactive_form(view, "Otra condición", @instruction)
       view |> form("#reactive-trigger-form") |> render_submit()
 
@@ -384,6 +391,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     } do
       trigger = create_reactive!(professional, patient)
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-reactive-trigger-button") |> render_click()
 
       render_hook(view, "save_reactive_edit", %{
         "edit_reactive" => %{"condition" => "Otra condición", "cooldown_hours" => "2"}
