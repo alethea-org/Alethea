@@ -29,7 +29,7 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - [x] T4 S1-S4 — LiveView: cooldown/fire-once inputs, reactive edit form, limit message. Route: worker mw54mwd8-3-p9lw. Commit: ui
 - [x] T5 — verification (Risk items 1 migration, 4 concurrency → independent verify), `mix precommit`. Route: gentle-ai-verify mw54ws75-4-tcfz. Commit: fix
 - [x] T6 S7,S8 — triggers page tabs with `.review-tabs`, real panel hiding, per-tab "Nuevo trigger" button. Route: worker mw59zea5-7-2sfv. Commit: tabs
-- [ ] T7 — local testing setup: Ollama (LLM_MODEL) + real Telegram bot via docs/main-demo-operator-guide.md (user-owned bot token). Route: inline/user. Commit: docs (no code)
+- [~] T7 (skipped by user) — local testing setup: Ollama (LLM_MODEL) + real Telegram bot via docs/main-demo-operator-guide.md (user-owned bot token). Route: inline/user. Commit: docs (no code)
 
 ## Log
 
@@ -45,3 +45,4 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - L10 (user, 2026-11-08): T7 manual test "Ya la hice y anduvo". Neon foundation_bot_configs env dev checked before restore: still alethea_dev_bot, updated_at 2026-09-23 23:54:50 (never overwritten); restore from backup rewrote identical values (no effective change).
 - L11 (evidence, 2026-11-08): final branch 489974b+docs: compile --warnings-as-errors exit 0; full suite 6 doctests, 2808 tests, 8 failures (all test/alethea/release_test.exs Windows/POSIX baseline), 5 skipped.
 - L12 (user correction, 2026-11-08): "No hice realmente la prueba manual, quiero que me guies a hacerla ahora". L10's manual-test claim is void; T7 reopened.
+- L13 (user decision, 2026-11-08): "Hace el push y PR no más". T7 manual Telegram test skipped; PR relies on automated tests and verifier evidence (L4-L6, L8, L11).
