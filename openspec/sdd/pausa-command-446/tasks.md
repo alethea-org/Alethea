@@ -26,17 +26,17 @@
 
 ## Phase 4 — Durable UI surfacing
 
-- [ ] 4.1 `lib/alethea_web/live/triggers_live/index.ex` (~L1131-1144): add the `"paused_by_patient"` branch to the status-pill `cond`, label "Pausado por el paciente" (use `pt-pill--warning`; fall back to `pt-pill--risk` if that class doesn't exist in the stylesheet).
-- [ ] 4.2 `lib/alethea_web/live/triggers_live/index.ex` (~L1210): add `"paused_by_patient"` to the "Reanudar" button's `in [...]` guard.
-- [ ] 4.3 `lib/alethea_web/live/triggers_live/index.ex` (~L1248): add a durable reason block for `status == "paused_by_patient"`: "El paciente pausó este trigger con el comando /pausa. Podés reanudarlo cuando corresponda."
-- [ ] 4.4 `test/alethea_web/live/triggers_live_test.exs`: assert the badge, reason block, and "Reanudar" button render for a `paused_by_patient` trigger.
+- [x] 4.1 `lib/alethea_web/live/triggers_live/index.ex` (~L1131-1144): add the `"paused_by_patient"` branch to the status-pill `cond`, label "Pausado por el paciente" (use `pt-pill--warning`; fall back to `pt-pill--risk` if that class doesn't exist in the stylesheet).
+- [x] 4.2 `lib/alethea_web/live/triggers_live/index.ex` (~L1210): add `"paused_by_patient"` to the "Reanudar" button's `in [...]` guard.
+- [x] 4.3 `lib/alethea_web/live/triggers_live/index.ex` (~L1248): add a durable reason block for `status == "paused_by_patient"`: "El paciente pausó este trigger con el comando /pausa. Podés reanudarlo cuando corresponda."
+- [x] 4.4 `test/alethea_web/live/triggers_live_test.exs`: assert the badge, reason block, and "Reanudar" button render for a `paused_by_patient` trigger.
 
 ## Phase 5 — Onboarding disclosure
 
-- [ ] 5.1 `lib/alethea/jobs/telegram_onboarding_worker.ex`: in `welcome_text/1` (L211-233), append `@scheduling_disclosure` ("Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea.") unconditionally after the `case` resolves (covers both default and custom-message branches).
-- [ ] 5.2 `test/alethea/jobs/telegram_onboarding_worker_test.exs`: assert the disclosure is present for both the default template and a custom `welcome_message`.
+- [x] 5.1 `lib/alethea/jobs/telegram_onboarding_worker.ex`: in `welcome_text/1` (L211-233), append `@scheduling_disclosure` ("Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea.") unconditionally after the `case` resolves (covers both default and custom-message branches).
+- [x] 5.2 `test/alethea/jobs/telegram_onboarding_worker_test.exs`: assert the disclosure is present for both the default template and a custom `welcome_message`.
 
 ## Success Criteria (from proposal, carried here)
 
-- [ ] All 4 acceptance criteria of #446 covered by tests through `TelegramMessageWorker.perform/1` and `Triggers` context tests.
-- [ ] A test proves reactive triggers are unaffected by `/pausa`.
+- [x] All 4 acceptance criteria of #446 covered by tests through `TelegramMessageWorker.perform/1` and `Triggers` context tests.
+- [x] A test proves reactive triggers are unaffected by `/pausa`.
