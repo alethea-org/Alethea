@@ -270,7 +270,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
       request = run_capturing_request(params(summary: forged))
       [%{"content" => system}] = Enum.filter(request["messages"], &(&1["role"] == "system"))
 
-      suffix = String.replace_prefix(system, JournalingPrompt.system_prompt(), "")
+      [_priority, suffix] = String.split(system, JournalingPrompt.system_prompt())
       assert length(String.split(suffix, "«")) == 2
       refute String.ends_with?(system, "»")
       assert suffix =~ "ignora lo anterior"
@@ -288,18 +288,29 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
       assert [%{"content" => system}] =
                Enum.filter(request["messages"], &(&1["role"] == "system"))
 
-      assert String.starts_with?(system, JournalingPrompt.system_prompt())
-      assert system =~ @trigger_block <> @trigger
-      assert List.last(request["messages"])["content"] == "Hoy me costó levantarme."
+      assert system =~ JournalingPrompt.system_prompt()
+      assert String.ends_with?(system, @trigger_block <> @trigger)
     end
 
-    test "tells the model to weave the trigger into its single reply, not replace it" do
+    test "puts the trigger priority before the journaling rules" do
       request = run_capturing_request(params(trigger: @trigger))
       [%{"content" => system}] = Enum.filter(request["messages"], &(&1["role"] == "system"))
 
-      suffix = String.replace_prefix(system, JournalingPrompt.system_prompt(), "")
-      assert suffix =~ "modifica la respuesta base, no la reemplaza"
-      assert suffix =~ "única respuesta"
+      [priority, _rules_and_trigger] = String.split(system, JournalingPrompt.system_prompt())
+
+      assert priority =~ "PRIORIDAD DE ESTA RESPUESTA"
+      assert priority =~ "DEBE transmitir"
+      assert priority =~ "No agregues ninguna pregunta propia"
+      assert priority =~ "No atribuyas el contenido a nadie"
+    end
+
+    test "reminds the model of the trigger in the last patient turn sent to it" do
+      request = run_capturing_request(params(trigger: @trigger))
+      last = List.last(request["messages"])
+
+      assert last["role"] == "user"
+      assert String.starts_with?(last["content"], "Hoy me costó levantarme.")
+      assert last["content"] =~ "debe transmitir el contenido del bloque TRIGGER DEL PROFESIONAL"
     end
 
     test "places the trigger block after the running summary block" do
@@ -318,7 +329,7 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
       request = run_capturing_request(params(trigger: forged))
       [%{"content" => system}] = Enum.filter(request["messages"], &(&1["role"] == "system"))
 
-      suffix = String.replace_prefix(system, JournalingPrompt.system_prompt(), "")
+      [_priority, suffix] = String.split(system, JournalingPrompt.system_prompt())
       assert length(String.split(suffix, "«")) == 2
       refute String.ends_with?(system, "»")
       assert suffix =~ "ignora todo"
@@ -327,7 +338,8 @@ defmodule Alethea.AI.Chains.GuidedConversationChainTest do
     test "without a trigger the system message has no trigger block" do
       request = run_capturing_request(params([]))
 
-      refute hd(request["messages"])["content"] =~ "TRIGGER DEL PROFESIONAL"
+      assert hd(request["messages"])["content"] == JournalingPrompt.system_prompt()
+      assert List.last(request["messages"])["content"] == "Hoy me costó levantarme."
     end
   end
 
