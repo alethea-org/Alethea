@@ -2,6 +2,8 @@
 
 Use this runbook for a synthetic, local `main` demo with a real Telegram bot. Keep secrets, invite URLs, patient data, and message contents out of terminals, recordings, shell history, and chat.
 
+> **Pruebas de desarrollo con Telegram real:** el flujo estándar con Docker (túnel de Cloudflare y registro automático del webhook) está en el README, sección [Probar con Telegram real](../README.md#probar-con-telegram-real). Esta guía describe la demo manual desde `main` con `ngrok`.
+
 ## Boundaries
 
 - Use synthetic data only. Do not use a real identity, message, token, password, invite URL, or identifier in this guide.

@@ -95,7 +95,45 @@ docker compose up
 - Health check: <http://localhost:4000/health>
 - Mailpit (email de desarrollo): <http://localhost:8025>
 
-El compose levanta la aplicación y PostgreSQL. En desarrollo Telegram se simula con `Alethea.Telegram.Client.Fake`, por lo que **no** se requiere bot real ni webhook público.
+El compose levanta la aplicación y PostgreSQL. En desarrollo Telegram se simula con `Alethea.Telegram.Client.Fake`, por lo que **no** se requiere bot real ni webhook público. Para probar con un bot real, ver [Probar con Telegram real](#probar-con-telegram-real).
+
+### Probar con Telegram real
+
+Flujo estándar (y único) para probar el bot de Telegram en desarrollo, todo en contenedores: sin `ngrok` manual, sin varias terminales.
+
+1. **Una sola vez**, agregar a `.env` (ignorado por git) el token y el usuario del bot de desarrollo:
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=<token-de-BotFather>
+   TELEGRAM_BOT_USERNAME=<usuario_del_bot>
+   ```
+
+   Al pegar el token en Git Bash usá **Shift+Insert**, no Ctrl+V. No lo pegues en la terminal ni en el chat: editá el archivo `.env`.
+
+2. Levantar el stack con el override de Telegram:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.telegram.yml up
+   ```
+
+   Esto levanta app, base local, sidecar de emociones y un túnel de Cloudflare (sin cuenta). El entrypoint guarda la configuración del bot en la base local y el servicio `telegram-webhook` registra el webhook contra la URL actual del túnel: no hay pasos manuales extra. Verificá con `TELEGRAM_WEBHOOK status=...` en el log.
+
+3. Abrir el bot en Telegram con el botón **START BOT** del enlace `t.me/<usuario_del_bot>`. Ese botón solo funciona en **Telegram Desktop o en la app del celular**, no en Telegram Web.
+
+**Re-registrar el webhook** (el túnel cambia de URL cada vez que se reinicia):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.telegram.yml run --rm telegram-webhook
+# o, con el stack ya levantado:
+docker compose -f docker-compose.yml -f docker-compose.telegram.yml exec app mix alethea.telegram.dev_tunnel
+```
+
+Notas:
+
+- **Base local:** el flujo de Telegram usa siempre la base local de Docker (`alethea_dev` en el contenedor `db`), nunca la Neon compartida, para no pisar la configuración `dev` del bot de los demás.
+- **Ollama corre en el host**, no en un contenedor: el contenedor lo alcanza en `host.docker.internal:11434`. Arrancalo antes de probar.
+- `docker compose up` sin el override se comporta igual que siempre (Telegram simulado con `Fake`).
+- Solo desarrollo: nada de esto afecta la configuración ni el despliegue de producción.
 
 ### Opción B: Instalación local
 
