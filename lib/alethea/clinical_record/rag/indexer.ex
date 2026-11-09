@@ -721,6 +721,7 @@ defmodule Alethea.ClinicalRecord.Rag.Indexer do
   defp trigger_status("inactive"), do: "inactivo"
   defp trigger_status("paused_by_crisis"), do: "pausado por crisis"
   defp trigger_status("paused_by_delivery_failures"), do: "pausado por fallos de entrega"
+  defp trigger_status("paused_by_patient"), do: "pausado por el paciente"
   defp trigger_status(other), do: other
 
   defp schedule_line(%{kind: "reactive"} = trigger) do

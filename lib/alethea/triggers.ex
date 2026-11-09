@@ -564,7 +564,12 @@ defmodule Alethea.Triggers do
             decrypt_trigger_fields(trigger, dek)
 
           %Trigger{status: status} = trigger
-          when status in ["active", "paused_by_crisis", "paused_by_delivery_failures"] ->
+          when status in [
+                 "active",
+                 "paused_by_crisis",
+                 "paused_by_delivery_failures",
+                 "paused_by_patient"
+               ] ->
             updated =
               trigger
               |> Trigger.changeset(%{status: "inactive"})

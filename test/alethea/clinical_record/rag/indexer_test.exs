@@ -861,6 +861,41 @@ defmodule Alethea.ClinicalRecord.Rag.IndexerTest do
       assert length(chunks) == 1
     end
 
+    test "a trigger paused by the patient indexes a Spanish status label (#446)", %{
+      professional: professional,
+      patient: patient
+    } do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, trigger} =
+        Alethea.Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "recordarle caminar despues de almorzar",
+          approved_text: "Sal a caminar despues de almorzar.",
+          schedule_type: "once",
+          date: DateTime.to_date(now) |> Date.add(1),
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Alethea.Triggers.pause_active_triggers_for_patient(patient.id)
+
+      assert :ok =
+               Indexer.index_event(%{
+                 "event" => "trigger_saved",
+                 "resource_type" => "trigger",
+                 "resource_id" => trigger.id,
+                 "patient_id" => patient.id,
+                 "professional_id" => professional.id
+               })
+
+      [chunk] = Chunk |> Repo.all() |> Enum.filter(&(&1.source_resource_id == trigger.id))
+
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      assert {:ok, text} = PatientVault.decrypt(chunk.encrypted_content, patient_dek)
+      assert text =~ "Estado: pausado por el paciente."
+      refute text =~ "paused_by_patient"
+    end
+
     test "a trigger resource_id that no longer resolves surfaces :not_found", %{
       professional: professional,
       patient: patient
