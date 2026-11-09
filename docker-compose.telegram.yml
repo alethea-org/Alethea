@@ -1,0 +1,73 @@
+# ============================================
+# Docker Compose override - Telegram real (development only)
+# ============================================
+# Standard way to test with a real Telegram bot locally:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.telegram.yml up
+#
+# Put TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME and (recommended) a fixed
+# TELEGRAM_WEBHOOK_SECRET in .env once (see README "Probar con Telegram real").
+# Starting the stack then:
+#   1. keeps the app on the LOCAL Docker database (never the shared Neon one),
+#   2. stores the bot credentials in the local dev BotConfig (entrypoint.sh),
+#   3. opens a Cloudflare quick tunnel (no account needed) to the app, and
+#   4. registers the Telegram webhook against the tunnel URL.
+# Re-register after a tunnel restart:
+#   docker compose -f docker-compose.yml -f docker-compose.telegram.yml \
+#     run --rm telegram-webhook
+#
+# Plain `docker compose up` does not read this file. Not for production.
+
+services:
+  app:
+    environment:
+      # Telegram flow always uses the local database, so nobody overwrites
+      # the shared Neon `dev` bot configuration.
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/alethea_dev
+      - TELEGRAM_CLIENT_ADAPTER=req
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-}
+      # Optional: entrypoint.sh generates a random secret when empty.
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
+      # Required by the real Telegram client; a fixed value is fine locally.
+      - TELEGRAM_CHAT_ID_PEPPER=${TELEGRAM_CHAT_ID_PEPPER:-dev-only-local-telegram-chat-id-pepper-0123456789}
+      # Lets `exec app mix alethea.telegram.dev_tunnel` reach the tunnel metrics.
+      - TUNNEL_METRICS_URL=http://tunnel:2000
+
+  # Cloudflare quick tunnel: publishes http://app:4000 on a random
+  # *.trycloudflare.com host and reports it at /quicktunnel on the metrics port.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: >-
+      tunnel --no-autoupdate --metrics 0.0.0.0:2000 --url http://app:4000
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: waits for the app and the tunnel, then registers the webhook.
+  telegram-webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    # Skip entrypoint.sh (migrate/seed belong to `app`); run the task directly.
+    entrypoint: ["mix"]
+    command: ["alethea.telegram.dev_tunnel", "--wait", "180"]
+    environment:
+      - MIX_ENV=dev
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/alethea_dev
+      - TELEGRAM_CLIENT_ADAPTER=req
+      - TELEGRAM_CHAT_ID_PEPPER=${TELEGRAM_CHAT_ID_PEPPER:-dev-only-local-telegram-chat-id-pepper-0123456789}
+      - TUNNEL_METRICS_URL=http://tunnel:2000
+      - APP_HEALTH_URL=http://app:4000/health
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - .:/app
+    depends_on:
+      app:
+        condition: service_healthy
+      tunnel:
+        condition: service_started
+    restart: "no"
