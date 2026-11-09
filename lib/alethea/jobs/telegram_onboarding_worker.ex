@@ -82,6 +82,13 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   # patient's device — see moduledoc "Why ip: telegram-webhook" above.
   @telegram_webhook_ip "telegram-webhook"
 
+  # REQ-W-scheduling-disclosure (#446, Phase 5): every onboarding welcome
+  # must disclose that the professional can also schedule one-off
+  # messages via `/pausa`'s counterpart feature, regardless of whether
+  # the text came from the system default or a professional's custom
+  # `welcome_message` — appended unconditionally in `welcome_text/1`.
+  @scheduling_disclosure "Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea."
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     token = Map.get(args, "token")
@@ -211,25 +218,30 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   defp welcome_text(patient) do
     name = first_name(patient.profile_name)
 
-    case custom_welcome_message(patient) do
-      nil ->
-        default_welcome_text(name)
+    base =
+      case custom_welcome_message(patient) do
+        nil ->
+          default_welcome_text(name)
 
-      custom ->
-        resolved = interpolate_welcome_name(custom, name)
+        custom ->
+          resolved = interpolate_welcome_name(custom, name)
 
-        # Judgment Day Round 5 (both judges, CRITICAL): a whitespace-only
-        # `welcome_message` with NO "%{name}" placeholder took the
-        # `interpolate_welcome_name/2` no-op branch untouched, bypassing
-        # the meaningless-message guard entirely (that guard used to live
-        # only inside the placeholder-present branch) — reachable through
-        # the real dashboard save flow, since Ecto's cast/4 only
-        # normalizes a literal "" to nil, not a whitespace-only string.
-        # Checking the FINAL resolved text here, regardless of which path
-        # produced it, closes that gap and supersedes the narrower
-        # in-branch check Round 4 added.
-        if meaningless_welcome?(resolved), do: default_welcome_text(name), else: resolved
-    end
+          # Judgment Day Round 5 (both judges, CRITICAL): a whitespace-only
+          # `welcome_message` with NO "%{name}" placeholder took the
+          # `interpolate_welcome_name/2` no-op branch untouched, bypassing
+          # the meaningless-message guard entirely (that guard used to live
+          # only inside the placeholder-present branch) — reachable through
+          # the real dashboard save flow, since Ecto's cast/4 only
+          # normalizes a literal "" to nil, not a whitespace-only string.
+          # Checking the FINAL resolved text here, regardless of which path
+          # produced it, closes that gap and supersedes the narrower
+          # in-branch check Round 4 added.
+          if meaningless_welcome?(resolved), do: default_welcome_text(name), else: resolved
+      end
+
+    # REQ-W-scheduling-disclosure (#446, Phase 5): appended unconditionally
+    # so a professional's custom `welcome_message` never silently drops it.
+    base <> " " <> @scheduling_disclosure
   end
 
   # REQ-W-preload-professional: `consume_patient_auth_code/3`'s

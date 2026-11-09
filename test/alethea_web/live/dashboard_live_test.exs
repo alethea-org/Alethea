@@ -209,6 +209,52 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
+  describe "real-time trigger pause notifications (#446)" do
+    setup %{professional: professional} do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional, %{alias: "Paciente pausado"})
+      %{patient: patient}
+    end
+
+    test "shows a notification when a patient pauses their scheduled messages with /pausa", %{
+      conn: conn,
+      patient: patient
+    } do
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(view.pid, {:trigger_paused_by_patient, %{patient_id: patient.id, count: 2}})
+
+      view |> element("button[aria-label='Notificaciones']") |> render_click()
+
+      assert has_element?(
+               view,
+               ".notif__msg",
+               "Paciente pausado pausó 2 mensaje(s) programado(s) con /pausa."
+             )
+    end
+
+    test "ignores the broadcast when the patient does not belong to the logged-in professional",
+         %{conn: conn} do
+      {:ok, other_professional} =
+        Accounts.create_professional(%{
+          email: "foreign-pause-#{System.unique_integer()}@alethea.com",
+          password: "password1234",
+          full_name: "Otro profesional"
+        })
+
+      foreign_patient = legacy_patient_fixture(other_professional)
+      {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+      send(view.pid, {:trigger_paused_by_patient, %{patient_id: foreign_patient.id, count: 1}})
+
+      view |> element("button[aria-label='Notificaciones']") |> render_click()
+
+      refute has_element?(view, ".notif__msg", "pausó")
+    end
+  end
+
   describe "Patient Detail" do
     setup do
       Application.put_env(:alethea, :use_mock_data, true)

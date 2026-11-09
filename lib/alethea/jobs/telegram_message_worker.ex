@@ -88,6 +88,12 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   @unregistered_copy "Hola. No reconozco este chat en nuestro sistema clínico. Si eres un paciente, por favor contacta a tu terapeuta para que te registre."
 
+  # #446: fixed, non-AI-generated confirmation sent after a patient's
+  # own `/pausa` command. Never persisted as a `Message` row, same
+  # no-journal path as `@unregistered_copy` (`enqueue_outbound/6` with
+  # `message_id: nil`).
+  @pausa_confirmation "Listo, pausamos tus mensajes programados. Podés escribirme cuando quieras."
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     message = Map.get(args, "message") || Map.fetch!(args, :message)
@@ -122,31 +128,59 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
        ) do
     telegram_message_id = Keyword.fetch!(opts, :telegram_message_id)
 
-    if empty_text?(text) do
-      handle_empty_inbound(foundation_patient, chat_id, hash_prefix)
-    else
-      # Refresh chat_id on every inbound message (ADR-011, S1, S3, #438)
-      case FoundationAccounts.store_encrypted_telegram_chat_id(foundation_patient, chat_id) do
-        {:ok, updated_foundation_patient} ->
-          continue_process_bound_message(
-            updated_foundation_patient,
-            chat_id,
-            chat_id_hash,
-            hash_prefix,
-            text,
-            telegram_message_id
-          )
+    cond do
+      # #446: `/pausa` is checked before `empty_text?/1` and short-circuits
+      # here, at the same pre-persistence point — the command text is
+      # never saved as a `Message`, never routed through `CrisisMonitor`
+      # or the journaling/burst-reply pipeline.
+      pause_command?(text) ->
+        handle_pause_command(foundation_patient, chat_id, chat_id_hash, hash_prefix)
 
-        {:error, reason} ->
-          Logger.error(
-            "TelegramMessageWorker: failed to encrypt/store chat_id " <>
-              "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
-          )
+      empty_text?(text) ->
+        handle_empty_inbound(foundation_patient, chat_id, hash_prefix)
 
-          raise "TelegramMessageWorker: failed to encrypt/store chat_id " <>
-                  "(reason=#{SafeReason.for_log(reason)})"
-      end
+      true ->
+        # Refresh chat_id on every inbound message (ADR-011, S1, S3, #438)
+        case FoundationAccounts.store_encrypted_telegram_chat_id(foundation_patient, chat_id) do
+          {:ok, updated_foundation_patient} ->
+            continue_process_bound_message(
+              updated_foundation_patient,
+              chat_id,
+              chat_id_hash,
+              hash_prefix,
+              text,
+              telegram_message_id
+            )
+
+          {:error, reason} ->
+            Logger.error(
+              "TelegramMessageWorker: failed to encrypt/store chat_id " <>
+                "(reason=#{SafeReason.for_log(reason)}, hash_prefix=#{hash_prefix})"
+            )
+
+            raise "TelegramMessageWorker: failed to encrypt/store chat_id " <>
+                    "(reason=#{SafeReason.for_log(reason)})"
+        end
     end
+  end
+
+  # #446: resolves the legacy patient and pauses their active-kind
+  # triggers, then confirms. Mirrors `handle_empty_inbound/3`'s
+  # unlinked/linked split — an unlinked foundation row has no legacy
+  # patient yet, so there is nothing to pause; drop silently.
+  defp handle_pause_command(%{legacy_patient_id: nil}, _chat_id, _chat_id_hash, hash_prefix) do
+    Logger.info(
+      "TelegramMessageWorker: /pausa on unlinked chat, ignoring (hash_prefix=#{hash_prefix})"
+    )
+
+    :ok
+  end
+
+  defp handle_pause_command(foundation_patient, chat_id, chat_id_hash, hash_prefix) do
+    {:ok, legacy_patient} = FoundationAccounts.legacy_patient(foundation_patient)
+    {:ok, _count} = Alethea.Triggers.pause_active_triggers_for_patient(legacy_patient.id)
+
+    enqueue_outbound(chat_id_hash, chat_id, nil, @pausa_confirmation, hash_prefix)
   end
 
   defp handle_empty_inbound(%{legacy_patient_id: nil}, _chat_id, hash_prefix) do
@@ -1193,6 +1227,14 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   defp empty_text?(text) when is_binary(text) do
     String.trim(text) == ""
   end
+
+  # #446: exact match only (not a substring match) — "necesito una
+  # pausa" is ordinary journaling content, not the command.
+  defp pause_command?(text) when is_binary(text) do
+    String.trim(text) |> String.downcase() == "/pausa"
+  end
+
+  defp pause_command?(_), do: false
 
   defp pepper! do
     Application.fetch_env!(:alethea, :telegram_chat_id_pepper)

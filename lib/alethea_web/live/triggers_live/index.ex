@@ -1142,6 +1142,13 @@ defmodule AletheaWeb.TriggersLive.Index do
                         >
                           Pausado por fallas de entrega
                         </span>
+                      <% trigger.status == "paused_by_patient" -> %>
+                        <span
+                          id={"trigger-status-badge-#{trigger.id}"}
+                          class="pt-pill pt-pill--warning"
+                        >
+                          Pausado por el paciente
+                        </span>
                       <% trigger.status == "fired" -> %>
                         <span id={"trigger-status-badge-#{trigger.id}"} class="pt-pill">
                           Finalizado
@@ -1207,7 +1214,7 @@ defmodule AletheaWeb.TriggersLive.Index do
                             >
                               Desactivar
                             </button>
-                          <% trigger.status in ["paused_by_crisis", "paused_by_delivery_failures"] -> %>
+                          <% trigger.status in ["paused_by_crisis", "paused_by_delivery_failures", "paused_by_patient"] -> %>
                             <button
                               type="button"
                               id={"resume-trigger-button-#{trigger.id}"}
@@ -1252,6 +1259,16 @@ defmodule AletheaWeb.TriggersLive.Index do
                     style="margin-top: 8px; margin-bottom: 8px; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; background: var(--color-surface-subtle); border-left: 3px solid #f59e0b;"
                   >
                     Pausado automáticamente tras 3 fallas consecutivas de entrega. Puedes reanudarlo cuando el canal esté disponible.
+                  </div>
+                <% end %>
+
+                <%= if trigger.status == "paused_by_patient" do %>
+                  <div
+                    id={"trigger-pause-reason-#{trigger.id}"}
+                    class="pt-alert pt-alert--warning"
+                    style="margin-top: 8px; margin-bottom: 8px; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; background: var(--color-surface-subtle); border-left: 3px solid #f59e0b;"
+                  >
+                    El paciente pausó este trigger con el comando /pausa. Podés reanudarlo cuando corresponda.
                   </div>
                 <% end %>
 
