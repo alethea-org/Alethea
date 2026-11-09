@@ -573,6 +573,30 @@ defmodule AletheaWeb.TriggersLive.Index do
     end
   end
 
+  def handle_event("archive_trigger", %{"id" => trigger_id}, socket) do
+    professional = socket.assigns.current_professional
+    patient = socket.assigns.patient
+
+    case Triggers.archive_trigger(professional, patient.id, trigger_id) do
+      {:ok, archived} ->
+        stream = if reactive?(archived), do: :reactive_triggers, else: :active_triggers
+
+        {:noreply,
+         socket
+         |> stream_delete(stream, archived)
+         |> put_flash(:info, "Trigger eliminado.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "No estás autorizado para modificar este trigger.")}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Trigger no encontrado.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudo eliminar el trigger.")}
+    end
+  end
+
   def handle_event("activate_trigger", %{"id" => trigger_id}, socket) do
     professional = socket.assigns.current_professional
     patient = socket.assigns.patient
@@ -1431,6 +1455,16 @@ defmodule AletheaWeb.TriggersLive.Index do
                         <% end %>
                       <% end %>
                     <% end %>
+                    <button
+                      type="button"
+                      id={"archive-trigger-button-#{trigger.id}"}
+                      phx-click="archive_trigger"
+                      phx-value-id={trigger.id}
+                      data-confirm="¿Eliminar este trigger? Deja de enviarse y desaparece de la lista. Su historial de envíos se conserva."
+                      class="button-secondary button-secondary--sm text-red-600 hover:text-red-700"
+                    >
+                      Eliminar
+                    </button>
                   </div>
                 </div>
 
@@ -1786,6 +1820,16 @@ defmodule AletheaWeb.TriggersLive.Index do
                         </button>
                       <% true -> %>
                     <% end %>
+                    <button
+                      type="button"
+                      id={"archive-reactive-trigger-button-#{trigger.id}"}
+                      phx-click="archive_trigger"
+                      phx-value-id={trigger.id}
+                      data-confirm="¿Eliminar este trigger? Deja de enviarse y desaparece de la lista. Su historial de envíos se conserva."
+                      class="button-secondary button-secondary--sm text-red-600 hover:text-red-700"
+                    >
+                      Eliminar
+                    </button>
                   </div>
                 </div>
 

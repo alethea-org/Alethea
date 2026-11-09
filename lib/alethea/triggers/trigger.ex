@@ -30,6 +30,9 @@ defmodule Alethea.Triggers.Trigger do
     # at or before `cooldown_reset_at` do not count towards the cooldown.
     field :fire_once, :boolean, default: false
     field :cooldown_reset_at, :utc_datetime
+    # Set by `Triggers.archive_trigger/3`; archived triggers are hidden from
+    # listings and stay non-firing. Never cast from user input.
+    field :archived_at, :utc_datetime
 
     field :decrypted_instruction, :string, virtual: true
     field :decrypted_draft_message, :string, virtual: true

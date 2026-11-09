@@ -4,6 +4,7 @@ defmodule AletheaWeb.TriggersManagementLiveTest do
 
   import Mox
   import Phoenix.LiveViewTest
+  import Ecto.Query, only: [from: 2]
   import Alethea.RagFixtures
 
   alias Alethea.Accounts
@@ -680,6 +681,70 @@ defmodule AletheaWeb.TriggersManagementLiveTest do
       refute has_element?(view, "#edit-trigger-button-#{t4.id}")
       refute has_element?(view, "#activate-trigger-button-#{t4.id}")
       refute has_element?(view, "#deactivate-trigger-button-#{t4.id}")
+    end
+  end
+
+  describe "archiving (Eliminar)" do
+    test "professional can delete an active trigger from the list", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      trigger = create_test_trigger(professional, patient)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#active-trigger-#{trigger.id}")
+
+      view |> element("#archive-trigger-button-#{trigger.id}") |> render_click()
+
+      refute has_element?(view, "#active-trigger-#{trigger.id}")
+      assert render(view) =~ "Trigger eliminado."
+      assert %DateTime{} = Repo.get!(Trigger, trigger.id).archived_at
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+    end
+
+    test "a fired trigger can still be deleted", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      trigger = create_test_trigger(professional, patient)
+
+      Repo.update_all(
+        from(t in Trigger, where: t.id == ^trigger.id),
+        set: [status: "fired"]
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      refute has_element?(view, "#edit-trigger-button-#{trigger.id}")
+      view |> element("#archive-trigger-button-#{trigger.id}") |> render_click()
+
+      refute has_element?(view, "#active-trigger-#{trigger.id}")
+      assert Repo.get!(Trigger, trigger.id).status == "fired"
+    end
+
+    test "professional can delete a reactive trigger", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      {:ok, trigger} =
+        Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+          "condition" => "Habla de su padre",
+          "instruction" => "Retomar la historia",
+          "draft_message" => "Texto reactivo",
+          "approved_text" => "Texto reactivo"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#tab-reactive") |> render_click()
+
+      assert has_element?(view, "#reactive-trigger-#{trigger.id}")
+      view |> element("#archive-reactive-trigger-button-#{trigger.id}") |> render_click()
+
+      refute has_element?(view, "#reactive-trigger-#{trigger.id}")
+      assert %DateTime{} = Repo.get!(Trigger, trigger.id).archived_at
     end
   end
 end
