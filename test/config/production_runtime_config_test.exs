@@ -17,6 +17,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     PatternProposalChain,
     RunningSummaryChain,
     SessionSummaryChain,
+    TriggerPreviewChain,
     WeeklySummaryChain
   }
 
@@ -729,7 +730,7 @@ defmodule Alethea.ProductionRuntimeConfigTest do
       end
     end
 
-    test "with DEMO_SYNTHETIC_DATA=true and AI_PROVIDER=anthropic, routes all 7 chains to Anthropic" do
+    test "with DEMO_SYNTHETIC_DATA=true and AI_PROVIDER=anthropic, routes all 8 chains to Anthropic" do
       overrides = %{
         "AI_PROVIDER" => "anthropic",
         "LOCAL_LLM_BASE_URL" => nil,
@@ -742,17 +743,18 @@ defmodule Alethea.ProductionRuntimeConfigTest do
 
       config = prod_config(overrides)
 
-      seven_chains = [
+      demo_chains = [
         GuidedConversationChain,
         SessionSummaryChain,
         WeeklySummaryChain,
         PatternProposalChain,
         ClinicalConsultationChain,
         ClinicalHypothesisChain,
-        FunctionalAnalysisDraftChain
+        FunctionalAnalysisDraftChain,
+        TriggerPreviewChain
       ]
 
-      for chain <- seven_chains do
+      for chain <- demo_chains do
         chain_conf = alethea(config, chain)
 
         assert chain_conf[:provider] == :anthropic,

@@ -1,6 +1,6 @@
 defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
   @moduledoc """
-  The synthetic demo profile (DEMO_SYNTHETIC_DATA=true) routes the six
+  The synthetic demo profile (DEMO_SYNTHETIC_DATA=true) routes the seven
   non-guided chains to Anthropic. These tests run each routed chain through
   `AnthropicChat` (stubbed with `Req.Test`) to prove the text-only adapter
   serves them: none of them sends tools, and each parses Claude's reply.
@@ -15,6 +15,7 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
     PatternProposalChain,
     RunningSummaryChain,
     SessionSummaryChain,
+    TriggerPreviewChain,
     WeeklySummaryChain
   }
 
@@ -25,6 +26,7 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
     PatternProposalChain,
     RunningSummaryChain,
     SessionSummaryChain,
+    TriggerPreviewChain,
     WeeklySummaryChain
   ]
 
@@ -172,6 +174,13 @@ defmodule Alethea.AI.Chains.SyntheticDemoRoutingTest do
 
     assert {:ok, draft} = FunctionalAnalysisDraftChain.run(%{sanitized_evidence: ["Evidencia"]})
     assert inspect(draft) =~ "Largo plazo."
+  end
+
+  test "trigger preview returns Claude's draft" do
+    expect_reply("Hola, ¿cómo estuvo tu semana?")
+
+    assert {:ok, %{draft: "Hola, ¿cómo estuvo tu semana?"}} =
+             TriggerPreviewChain.run(%{instruction: "Preguntar por su semana"})
   end
 
   # Asserts the chain sent a tool-free text request, then answers it.
