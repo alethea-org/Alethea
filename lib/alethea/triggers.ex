@@ -623,6 +623,9 @@ defmodule Alethea.Triggers do
           %Trigger{status: "paused_by_delivery_failures"} ->
             Repo.rollback(:paused_by_delivery_failures)
 
+          %Trigger{status: "paused_by_patient"} ->
+            Repo.rollback(:paused_by_patient)
+
           %Trigger{status: "active"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
 
@@ -675,7 +678,11 @@ defmodule Alethea.Triggers do
             Repo.rollback(:not_paused)
 
           %Trigger{status: status} = trigger
-          when status in ["paused_by_crisis", "paused_by_delivery_failures"] ->
+          when status in [
+                 "paused_by_crisis",
+                 "paused_by_delivery_failures",
+                 "paused_by_patient"
+               ] ->
             reactivate_or_resume_trigger(trigger, professional.id, "trigger_resumed", dek)
         end
       end)
@@ -723,6 +730,63 @@ defmodule Alethea.Triggers do
     else
       :error -> {:error, :invalid_patient_id}
     end
+  end
+
+  @doc """
+  Pauses all active-kind triggers of a patient on their own /pausa command (#446).
+  Moves status to `paused_by_patient`, cancels scheduled Oban jobs, writes content-free
+  audit logs, and broadcasts a professional notification. Trigger reactivo is untouched
+  (the `kind` filter below is the fix `pause_active_triggers_for_crisis/1` is missing).
+  """
+  @spec pause_active_triggers_for_patient(binary()) :: {:ok, integer()} | {:error, term()}
+  def pause_active_triggers_for_patient(patient_id) when is_binary(patient_id) do
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id) do
+      Repo.transaction(fn ->
+        query =
+          from(t in Trigger,
+            where:
+              t.patient_id == ^valid_patient_id and t.kind == "active" and t.status == "active",
+            lock: "FOR UPDATE"
+          )
+
+        triggers = Repo.all(query)
+
+        for trigger <- triggers do
+          trigger
+          |> Trigger.changeset(%{status: "paused_by_patient"})
+          |> Repo.update!()
+
+          delete_scheduled_jobs(trigger.id)
+
+          insert_content_free_audit!(
+            trigger.professional_id,
+            trigger.id,
+            "trigger_paused_by_patient"
+          )
+
+          enqueue_trigger_rag_event(%{trigger | status: "paused_by_patient"})
+        end
+
+        if triggers != [] do
+          broadcast_patient_pause(valid_patient_id, triggers)
+        end
+
+        length(triggers)
+      end)
+    else
+      :error -> {:error, :invalid_patient_id}
+    end
+  end
+
+  defp broadcast_patient_pause(patient_id, triggers) do
+    professional_id = triggers |> List.first() |> Map.fetch!(:professional_id)
+
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "psychologist:alerts",
+      {:trigger_paused_by_patient,
+       %{patient_id: patient_id, professional_id: professional_id, count: length(triggers)}}
+    )
   end
 
   @doc """

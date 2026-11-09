@@ -521,6 +521,143 @@ defmodule Alethea.TriggersTest do
     end
   end
 
+  describe "pause_active_triggers_for_patient/1 and resume_trigger/3 (Issue #446)" do
+    test "pauses active-kind triggers, leaves reactive-kind untouched, deletes jobs, audits, and broadcasts",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, active_trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion activa",
+          approved_text: "Texto activo",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, reactive_trigger} =
+        Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+          "condition" => "Habla de una discusión con su madre",
+          "instruction" => "Retomar el ejercicio de comunicación asertiva",
+          "draft_message" => "Texto reactivo",
+          "approved_text" => "Texto reactivo"
+        })
+
+      assert_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => active_trigger.id})
+
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+
+      assert {:ok, 1} = Triggers.pause_active_triggers_for_patient(patient.id)
+
+      # Active-kind trigger paused
+      assert Repo.get!(Trigger, active_trigger.id).status == "paused_by_patient"
+
+      # Reactive-kind trigger untouched
+      assert Repo.get!(Trigger, reactive_trigger.id).status == "active"
+
+      # Scheduled job deleted
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => active_trigger.id})
+
+      # Content-free audit log written
+      assert Repo.get_by(AuditLog,
+               resource_id: active_trigger.id,
+               action: "trigger_paused_by_patient",
+               professional_id: professional.id
+             )
+
+      refute Repo.get_by(AuditLog,
+               resource_id: reactive_trigger.id,
+               action: "trigger_paused_by_patient"
+             )
+
+      # Broadcast on psychologist:alerts
+      assert_receive {:trigger_paused_by_patient, payload}
+      assert payload.patient_id == patient.id
+      assert payload.professional_id == professional.id
+      assert payload.count == 1
+    end
+
+    test "is a no-op and does not broadcast when the patient has no active-kind triggers",
+         %{patient: patient} do
+      Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
+
+      assert {:ok, 0} = Triggers.pause_active_triggers_for_patient(patient.id)
+
+      refute_receive {:trigger_paused_by_patient, _payload}
+    end
+
+    test "resume_trigger accepts paused_by_patient, revalidates schedule, and re-enqueues",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_patient(patient.id)
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_patient"
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+
+      assert {:ok, resumed} = Triggers.resume_trigger(professional, patient.id, trigger.id)
+      assert resumed.status == "active"
+      assert Repo.get!(Trigger, trigger.id).status == "active"
+
+      assert_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => trigger.id})
+
+      assert Repo.get_by(AuditLog,
+               resource_id: trigger.id,
+               action: "trigger_resumed",
+               professional_id: professional.id
+             )
+    end
+
+    test "resume_trigger rejects an expired one-shot paused_by_patient trigger",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_patient(patient.id)
+
+      # Expire scheduled_at
+      past_dt = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      trigger
+      |> Ecto.Changeset.change(%{scheduled_at: past_dt})
+      |> Repo.update!()
+
+      assert {:error, {:expired_schedule, _msg}} =
+               Triggers.resume_trigger(professional, patient.id, trigger.id)
+    end
+
+    test "activate_trigger rejects paused_by_patient triggers",
+         %{professional: professional, patient: patient} do
+      future_date = Date.utc_today() |> Date.add(1)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion",
+          approved_text: "Texto",
+          date: future_date,
+          time: ~T[10:00:00]
+        })
+
+      {:ok, 1} = Triggers.pause_active_triggers_for_patient(patient.id)
+
+      assert {:error, :paused_by_patient} =
+               Triggers.activate_trigger(professional, patient.id, trigger.id)
+    end
+  end
+
   describe "list_active_triggers/2 and get_trigger/3" do
     test "lists and retrieves triggers with decrypted fields for owner",
          %{professional: professional, patient: patient} do

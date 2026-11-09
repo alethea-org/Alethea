@@ -72,7 +72,8 @@ defmodule Alethea.Triggers.Trigger do
       "inactive",
       "fired",
       "paused_by_crisis",
-      "paused_by_delivery_failures"
+      "paused_by_delivery_failures",
+      "paused_by_patient"
     ])
     |> validate_number(:consecutive_delivery_failures, greater_than_or_equal_to: 0)
     |> validate_kind_shape()
