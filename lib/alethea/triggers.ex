@@ -269,7 +269,9 @@ defmodule Alethea.Triggers do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -557,7 +559,7 @@ defmodule Alethea.Triggers do
            Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       triggers =
         Trigger
-        |> where([t], t.patient_id == ^valid_patient_id)
+        |> where([t], t.patient_id == ^valid_patient_id and is_nil(t.archived_at))
         |> order_by([t], asc: t.scheduled_at)
         |> Repo.all()
 
@@ -589,7 +591,7 @@ defmodule Alethea.Triggers do
         |> where(
           [t],
           t.patient_id == ^valid_patient_id and t.status == "active" and
-            not is_nil(t.approved_text)
+            not is_nil(t.approved_text) and is_nil(t.archived_at)
         )
         |> order_by([t], asc: t.scheduled_at)
         |> Repo.all()
@@ -619,7 +621,7 @@ defmodule Alethea.Triggers do
            Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       query =
         from(t in Trigger,
-          where: t.patient_id == ^valid_patient_id,
+          where: t.patient_id == ^valid_patient_id and is_nil(t.archived_at),
           group_by: t.kind,
           select: %{
             kind: t.kind,
@@ -707,7 +709,9 @@ defmodule Alethea.Triggers do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -748,6 +752,72 @@ defmodule Alethea.Triggers do
   end
 
   @doc """
+  Archives a trigger of either kind: the professional-facing "delete".
+
+  The row is kept because firings and produced messages reference it as
+  clinical/audit history. Archiving stops it for good (non-fired triggers
+  become `inactive`, scheduled jobs are removed), stamps `archived_at` so
+  listings and summaries hide it, and records a content-free audit entry.
+  Archiving an already archived trigger is a no-op.
+  """
+  @spec archive_trigger(Accounts.Professional.t(), binary(), binary()) ::
+          {:ok, Trigger.t()} | {:error, term()}
+  def archive_trigger(%Accounts.Professional{} = professional, patient_id, trigger_id)
+      when is_binary(patient_id) and is_binary(trigger_id) do
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
+         %Accounts.Patient{} = patient <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
+      Repo.transaction(fn ->
+        query =
+          from(t in Trigger,
+            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            lock: "FOR UPDATE"
+          )
+
+        case Repo.one(query) do
+          nil ->
+            Repo.rollback(:not_found)
+
+          %Trigger{archived_at: %DateTime{}} = trigger ->
+            trigger
+
+          %Trigger{} = trigger ->
+            status = if trigger.status == "fired", do: "fired", else: "inactive"
+
+            updated =
+              trigger
+              |> Ecto.Changeset.change(
+                status: status,
+                archived_at: DateTime.utc_now() |> DateTime.truncate(:second)
+              )
+              |> Repo.update!()
+
+            delete_scheduled_jobs(trigger.id)
+            insert_content_free_audit!(professional.id, trigger.id, "trigger_archived")
+            enqueue_trigger_rag_event(updated)
+
+            updated
+        end
+      end)
+      |> case do
+        {:ok, trigger} -> {:ok, decrypt_for_patient(trigger, patient)}
+        error -> error
+      end
+    else
+      :error -> {:error, :unauthorized}
+      nil -> {:error, :unauthorized}
+    end
+  end
+
+  defp decrypt_for_patient(trigger, patient) do
+    case Clinical.patient_dek(patient, "trigger_archive") do
+      {:ok, dek} -> decrypt_trigger_fields(trigger, dek)
+      _ -> trigger
+    end
+  end
+
+  @doc """
   Reactivates an inactive trigger (S1, S6).
   For one-shot triggers, returns an actionable error if the schedule expired.
   For recurring triggers, recomputes the next future occurrence in the patient's timezone
@@ -774,7 +844,9 @@ defmodule Alethea.Triggers do
 
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -836,7 +908,9 @@ defmodule Alethea.Triggers do
 
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -1108,7 +1182,9 @@ defmodule Alethea.Triggers do
         Repo.transaction(fn ->
           query =
             from(t in Trigger,
-              where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+              where:
+                t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                  is_nil(t.archived_at),
               lock: "FOR UPDATE"
             )
 
@@ -1191,7 +1267,9 @@ defmodule Alethea.Triggers do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
