@@ -33,10 +33,10 @@
 
 ## Phase 5 — Onboarding disclosure
 
-- [ ] 5.1 `lib/alethea/jobs/telegram_onboarding_worker.ex`: in `welcome_text/1` (L211-233), append `@scheduling_disclosure` ("Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea.") unconditionally after the `case` resolves (covers both default and custom-message branches).
-- [ ] 5.2 `test/alethea/jobs/telegram_onboarding_worker_test.exs`: assert the disclosure is present for both the default template and a custom `welcome_message`.
+- [x] 5.1 `lib/alethea/jobs/telegram_onboarding_worker.ex`: in `welcome_text/1` (L211-233), append `@scheduling_disclosure` ("Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea.") unconditionally after the `case` resolves (covers both default and custom-message branches).
+- [x] 5.2 `test/alethea/jobs/telegram_onboarding_worker_test.exs`: assert the disclosure is present for both the default template and a custom `welcome_message`.
 
 ## Success Criteria (from proposal, carried here)
 
-- [ ] All 4 acceptance criteria of #446 covered by tests through `TelegramMessageWorker.perform/1` and `Triggers` context tests.
-- [ ] A test proves reactive triggers are unaffected by `/pausa`.
+- [x] All 4 acceptance criteria of #446 covered by tests through `TelegramMessageWorker.perform/1` and `Triggers` context tests.
+- [x] A test proves reactive triggers are unaffected by `/pausa`.
