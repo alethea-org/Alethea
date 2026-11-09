@@ -12,11 +12,11 @@
 
 ## Phase 2 — Telegram worker: `/pausa` command
 
-- [ ] 2.1 `lib/alethea/jobs/telegram_message_worker.ex`: add `pause_command?/1` (trim + downcase, exact `"/pausa"` match).
-- [ ] 2.2 `lib/alethea/jobs/telegram_message_worker.ex`: in `process_bound_message/5` (L115), check `pause_command?/1` before `empty_text?/1`; on match, call new `handle_pause_command/4` instead of falling through to persistence.
-- [ ] 2.3 `lib/alethea/jobs/telegram_message_worker.ex`: add `handle_pause_command/4` (two clauses, mirroring `handle_empty_inbound/3`'s unlinked/linked split) — resolves the legacy patient, calls `Triggers.pause_active_triggers_for_patient/1`, then sends the fixed confirmation via `enqueue_outbound/6` with `message_id: nil` (same no-`Message`-row path as `enqueue_unregistered_reply/3`, L934-941).
-- [ ] 2.4 Confirmation copy constant: `"Listo, pausamos tus mensajes programados. Podés escribirme cuando quieras."`
-- [ ] 2.5 `test/alethea/jobs/telegram_message_worker_test.exs` (or new `telegram_message_worker_pause_test.exs`): drive `perform/1` with `/pausa`, `" /Pausa "`, and near-misses (`"pausa"`, `"necesito pausa"`); assert no `Message` row for the command, active-kind triggers paused, reactive-kind untouched, confirmation enqueued with no `message_id`, no scheduled `ActiveTriggerWorker` job remains.
+- [x] 2.1 `lib/alethea/jobs/telegram_message_worker.ex`: add `pause_command?/1` (trim + downcase, exact `"/pausa"` match).
+- [x] 2.2 `lib/alethea/jobs/telegram_message_worker.ex`: in `process_bound_message/5` (L115), check `pause_command?/1` before `empty_text?/1`; on match, call new `handle_pause_command/4` instead of falling through to persistence.
+- [x] 2.3 `lib/alethea/jobs/telegram_message_worker.ex`: add `handle_pause_command/4` (two clauses, mirroring `handle_empty_inbound/3`'s unlinked/linked split) — resolves the legacy patient, calls `Triggers.pause_active_triggers_for_patient/1`, then sends the fixed confirmation via `enqueue_outbound/6` with `message_id: nil` (same no-`Message`-row path as `enqueue_unregistered_reply/3`, L934-941).
+- [x] 2.4 Confirmation copy constant: `"Listo, pausamos tus mensajes programados. Podés escribirme cuando quieras."`
+- [x] 2.5 `test/alethea/jobs/telegram_message_worker_test.exs` (or new `telegram_message_worker_pause_test.exs`): drive `perform/1` with `/pausa`, `" /Pausa "`, and near-misses (`"pausa"`, `"necesito pausa"`); assert no `Message` row for the command, active-kind triggers paused, reactive-kind untouched, confirmation enqueued with no `message_id`, no scheduled `ActiveTriggerWorker` job remains.
 
 ## Phase 3 — Professional notification
 
