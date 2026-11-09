@@ -381,7 +381,7 @@ if config_env() == :prod do
 
   # ## Synthetic demo AI profile
   #
-  # DEMO_SYNTHETIC_DATA=true routes the six non-guided text generation chains
+  # DEMO_SYNTHETIC_DATA=true routes the seven non-guided text generation chains
   # to Claude with the same active model (the guided chain already follows
   # AI_PROVIDER). The three clinical chains declare a local-only
   # `supported_providers/0` contract; this profile overrides it on purpose,
@@ -400,7 +400,8 @@ if config_env() == :prod do
       Alethea.AI.Chains.PatternProposalChain,
       Alethea.AI.Chains.ClinicalConsultationChain,
       Alethea.AI.Chains.ClinicalHypothesisChain,
-      Alethea.AI.Chains.FunctionalAnalysisDraftChain
+      Alethea.AI.Chains.FunctionalAnalysisDraftChain,
+      Alethea.AI.Chains.TriggerPreviewChain
     ]
 
     Enum.each(synthetic_demo_chains, fn chain ->
