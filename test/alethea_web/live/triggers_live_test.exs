@@ -125,12 +125,80 @@ defmodule AletheaWeb.TriggersLiveTest do
     end
   end
 
+  describe "tabs and collapsible creation forms (S7, S8)" do
+    test "tabs use the segmented review-tabs pattern and only the selected panel is displayed",
+         %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#triggers-tabs.review-tabs[role='tablist']")
+      assert has_element?(view, "#tab-active.review-tab.review-tab--active[aria-selected='true']")
+      assert has_element?(view, "#tab-reactive.review-tab[aria-selected='false']")
+      assert has_element?(view, "#tab-history.review-tab[aria-selected='false']")
+
+      assert has_element?(view, "#active-tab-panel:not([hidden])")
+      assert has_element?(view, "#reactive-tab-panel[hidden]")
+      assert has_element?(view, "#history-tab-panel[hidden]")
+
+      view |> element("#tab-reactive") |> render_click()
+
+      assert has_element?(view, "#tab-reactive.review-tab--active[aria-selected='true']")
+      refute has_element?(view, "#tab-active.review-tab--active")
+      assert has_element?(view, "#reactive-tab-panel:not([hidden])")
+      assert has_element?(view, "#active-tab-panel[hidden]")
+      assert has_element?(view, "#history-tab-panel[hidden]")
+
+      view |> element("#tab-history") |> render_click()
+
+      assert has_element?(view, "#history-tab-panel:not([hidden])")
+      assert has_element?(view, "#active-tab-panel[hidden]")
+      assert has_element?(view, "#reactive-tab-panel[hidden]")
+    end
+
+    test "active creation form is collapsed until the new trigger button is clicked",
+         %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#new-active-trigger-button", "Nuevo trigger activo")
+      refute has_element?(view, "#trigger-form")
+
+      view |> element("#new-active-trigger-button") |> render_click()
+
+      assert has_element?(view, "#trigger-form")
+      refute has_element?(view, "#new-active-trigger-button")
+
+      view |> element("#cancel-new-active-trigger-button", "Cancelar") |> render_click()
+
+      refute has_element?(view, "#trigger-form")
+      assert has_element?(view, "#new-active-trigger-button")
+    end
+
+    test "reactive creation form is collapsed until the new trigger button is clicked",
+         %{conn: conn, patient: patient} do
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#tab-reactive") |> render_click()
+
+      assert has_element?(view, "#new-reactive-trigger-button", "Nuevo trigger reactivo")
+      refute has_element?(view, "#reactive-trigger-form")
+
+      view |> element("#new-reactive-trigger-button") |> render_click()
+
+      assert has_element?(view, "#reactive-trigger-form")
+      refute has_element?(view, "#new-reactive-trigger-button")
+
+      view |> element("#cancel-new-reactive-trigger-button", "Cancelar") |> render_click()
+
+      refute has_element?(view, "#reactive-trigger-form")
+      assert has_element?(view, "#new-reactive-trigger-button")
+    end
+  end
+
   describe "triggers page (S1, S2, S6, S10)" do
     test "renders active tab, creation form, and empty state", %{conn: conn, patient: patient} do
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
 
       assert has_element?(view, "#tab-active")
       assert has_element?(view, "#tab-history")
+      view |> element("#new-active-trigger-button") |> render_click()
       assert has_element?(view, "#trigger-form")
       assert has_element?(view, "#trigger-instruction-input")
       assert has_element?(view, "#trigger-date-input")
@@ -152,6 +220,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       future_date = Date.utc_today() |> Date.add(2) |> Date.to_iso8601()
       time = "16:30"
@@ -193,6 +262,7 @@ defmodule AletheaWeb.TriggersLiveTest do
 
     test "displays error on past date", %{conn: conn, patient: patient} do
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       past_date = Date.utc_today() |> Date.add(-1) |> Date.to_iso8601()
 
@@ -229,6 +299,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       future_date = Date.utc_today() |> Date.add(2) |> Date.to_iso8601()
 
@@ -275,6 +346,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       future_date = Date.utc_today() |> Date.add(2) |> Date.to_iso8601()
 
@@ -304,6 +376,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       future_date = Date.utc_today() |> Date.add(2) |> Date.to_iso8601()
 
@@ -650,6 +723,7 @@ defmodule AletheaWeb.TriggersLiveTest do
     test "switching recurrence updates schedule controls in form",
          %{conn: conn, patient: patient} do
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       # Initially "once"
       assert has_element?(view, "#trigger-date-input")
@@ -700,6 +774,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       end_date = Date.utc_today() |> Date.add(14) |> Date.to_iso8601()
 
@@ -753,6 +828,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       end_date = Date.utc_today() |> Date.add(30) |> Date.to_iso8601()
 
@@ -801,6 +877,7 @@ defmodule AletheaWeb.TriggersLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-active-trigger-button") |> render_click()
 
       # First switch frequency to weekly
       view

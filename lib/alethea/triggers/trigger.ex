@@ -26,6 +26,10 @@ defmodule Alethea.Triggers.Trigger do
     field :kind, :string, default: "active"
     field :condition, :binary
     field :cooldown_hours, :integer
+    # #450: a fire-once trigger deactivates after its first firing; firings
+    # at or before `cooldown_reset_at` do not count towards the cooldown.
+    field :fire_once, :boolean, default: false
+    field :cooldown_reset_at, :utc_datetime
 
     field :decrypted_instruction, :string, virtual: true
     field :decrypted_draft_message, :string, virtual: true
@@ -58,6 +62,8 @@ defmodule Alethea.Triggers.Trigger do
       :end_date,
       :condition,
       :cooldown_hours,
+      :fire_once,
+      :cooldown_reset_at,
       :consecutive_delivery_failures
     ])
     |> validate_required([

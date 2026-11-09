@@ -66,8 +66,8 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     view |> element("#tab-reactive") |> render_click()
 
     assert has_element?(view, "#reactive-tab-panel")
-    refute has_element?(view, "#reactive-tab-panel.hidden")
-    assert has_element?(view, "#active-tab-panel.hidden")
+    assert has_element?(view, "#reactive-tab-panel:not([hidden])")
+    assert has_element?(view, "#active-tab-panel[hidden]")
     assert has_element?(view, "#reactive-triggers-empty")
   end
 
@@ -80,6 +80,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     end)
 
     {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+    view |> element("#new-reactive-trigger-button") |> render_click()
     view |> element("#tab-reactive") |> render_click()
 
     fill_reactive_form(view, @condition, @instruction)
@@ -104,6 +105,8 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     assert has_element?(view, "#reactive-trigger-#{trigger.id}", @draft)
     refute has_element?(view, "#active-trigger-#{trigger.id}")
     refute has_element?(view, "#reactive-trigger-preview-card")
+    refute has_element?(view, "#reactive-trigger-form")
+    assert has_element?(view, "#new-reactive-trigger-button")
   end
 
   test "approval requires a preview", %{conn: conn, patient: patient} do
@@ -119,6 +122,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     expect(TriggerPreviewChainMock, :run, 0, fn _ -> flunk("must not draft") end)
 
     {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+    view |> element("#new-reactive-trigger-button") |> render_click()
 
     fill_reactive_form(view, "", @instruction)
     html = view |> form("#reactive-trigger-form") |> render_submit()
@@ -136,6 +140,7 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
     expect(TriggerPreviewChainMock, :run, fn _ -> {:ok, %{draft: @draft}} end)
 
     {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+    view |> element("#new-reactive-trigger-button") |> render_click()
 
     fill_reactive_form(view, @condition, @instruction)
     view |> form("#reactive-trigger-form") |> render_submit()
@@ -201,6 +206,206 @@ defmodule AletheaWeb.TriggersReactiveLiveTest do
 
     assert has_element?(view, "#firing-#{firing.id}", "Reactivo")
     refute has_element?(view, "#firing-message-link-#{firing.id}")
+  end
+
+  describe "cooldown, fire-once and limit (#450)" do
+    @limit_flash "Este paciente ya tiene 1 triggers reactivos activos. Desactiva uno antes de crear o activar otro."
+
+    defp put_limit(limit) do
+      original = Application.get_env(:alethea, :max_active_reactive_triggers)
+      Application.put_env(:alethea, :max_active_reactive_triggers, limit)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:alethea, :max_active_reactive_triggers, original),
+          else: Application.delete_env(:alethea, :max_active_reactive_triggers)
+      end)
+    end
+
+    defp create_reactive!(professional, patient, extra \\ %{}) do
+      {:ok, trigger} =
+        Triggers.create_and_approve_reactive_trigger(
+          professional,
+          patient.id,
+          Map.merge(
+            %{
+              "condition" => @condition,
+              "instruction" => @instruction,
+              "approved_text" => @draft
+            },
+            extra
+          )
+        )
+
+      trigger
+    end
+
+    test "creates a trigger with a custom cooldown and fire-once", %{conn: conn, patient: patient} do
+      expect(TriggerPreviewChainMock, :run, fn _ -> {:ok, %{draft: @draft}} end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-reactive-trigger-button") |> render_click()
+      assert has_element?(view, "#reactive-trigger-cooldown-input[value='24']")
+      assert has_element?(view, "#reactive-trigger-fire-once-input")
+
+      view
+      |> form("#reactive-trigger-form", %{
+        "reactive_trigger" => %{
+          "condition" => @condition,
+          "instruction" => @instruction,
+          "cooldown_hours" => "6",
+          "fire_once" => "true"
+        }
+      })
+      |> render_submit()
+
+      view |> element("#approve-reactive-trigger-button") |> render_click()
+
+      assert [%Trigger{cooldown_hours: 6, fire_once: true} = trigger] = Repo.all(Trigger)
+      assert has_element?(view, "#reactive-trigger-fire-once-badge-#{trigger.id}")
+      assert has_element?(view, "#reactive-trigger-#{trigger.id}", "6 h")
+    end
+
+    test "edits condition, cooldown and fire-once keeping the approval", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      trigger = create_reactive!(professional, patient)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      refute has_element?(view, "#reactive-trigger-fire-once-badge-#{trigger.id}")
+      view |> element("#edit-reactive-trigger-button-#{trigger.id}") |> render_click()
+      assert has_element?(view, "#reactive-trigger-edit-form-#{trigger.id}")
+
+      view
+      |> form("#reactive-trigger-edit-form-#{trigger.id}", %{
+        "edit_reactive" => %{
+          "condition" => "Habla de su trabajo",
+          "cooldown_hours" => "3",
+          "fire_once" => "true"
+        }
+      })
+      |> render_submit()
+
+      refute has_element?(view, "#reactive-trigger-edit-form-#{trigger.id}")
+      assert has_element?(view, "#reactive-trigger-fire-once-badge-#{trigger.id}")
+
+      {:ok, updated} = Triggers.get_trigger(professional, patient.id, trigger.id)
+      assert updated.decrypted_condition == "Habla de su trabajo"
+      assert updated.cooldown_hours == 3
+      assert updated.fire_once
+      assert updated.decrypted_approved_text == @draft
+      assert updated.status == "active"
+    end
+
+    test "an empty condition or invalid cooldown edit is rejected", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      trigger = create_reactive!(professional, patient)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#edit-reactive-trigger-button-#{trigger.id}") |> render_click()
+
+      html =
+        view
+        |> form("#reactive-trigger-edit-form-#{trigger.id}", %{
+          "edit_reactive" => %{"condition" => "  ", "cooldown_hours" => "5"}
+        })
+        |> render_submit()
+
+      assert html =~ "La condición no puede estar vacía."
+      assert has_element?(view, "#reactive-trigger-edit-form-#{trigger.id}")
+
+      html =
+        view
+        |> form("#reactive-trigger-edit-form-#{trigger.id}", %{
+          "edit_reactive" => %{"condition" => "Nueva", "cooldown_hours" => "0"}
+        })
+        |> render_submit()
+
+      assert html =~ "El enfriamiento debe ser de al menos 1 hora."
+
+      {:ok, unchanged} = Triggers.get_trigger(professional, patient.id, trigger.id)
+      assert unchanged.decrypted_condition == @condition
+      assert unchanged.cooldown_hours == 24
+    end
+
+    test "creating past the limit shows the limit message and creates nothing", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      put_limit(1)
+      create_reactive!(professional, patient)
+      expect(TriggerPreviewChainMock, :run, fn _ -> {:ok, %{draft: @draft}} end)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-reactive-trigger-button") |> render_click()
+      fill_reactive_form(view, "Otra condición", @instruction)
+      view |> form("#reactive-trigger-form") |> render_submit()
+
+      html = view |> element("#approve-reactive-trigger-button") |> render_click()
+
+      assert html =~ @limit_flash
+      assert Repo.aggregate(Trigger, :count) == 1
+    end
+
+    test "activating past the limit shows the limit message and stays inactive", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      create_reactive!(professional, patient)
+      second = create_reactive!(professional, patient, %{"condition" => "Otra"}) |> inactive!()
+      put_limit(1)
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      html = view |> element("#activate-reactive-trigger-button-#{second.id}") |> render_click()
+
+      assert html =~ @limit_flash
+      assert Repo.get!(Trigger, second.id).status == "inactive"
+      assert has_element?(view, "#reactive-trigger-status-badge-#{second.id}", "Inactivo")
+    end
+
+    test "a fired fire-once trigger renders as inactive with its badge", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      trigger = create_reactive!(professional, patient, %{"fire_once" => "true"})
+      trigger |> Ecto.Changeset.change(status: "inactive") |> Repo.update!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#reactive-trigger-status-badge-#{trigger.id}", "Inactivo")
+      assert has_element?(view, "#reactive-trigger-fire-once-badge-#{trigger.id}")
+    end
+
+    test "ignores a save event when no reactive trigger is being edited", %{
+      conn: conn,
+      professional: professional,
+      patient: patient
+    } do
+      trigger = create_reactive!(professional, patient)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+      view |> element("#new-reactive-trigger-button") |> render_click()
+
+      render_hook(view, "save_reactive_edit", %{
+        "edit_reactive" => %{"condition" => "Otra condición", "cooldown_hours" => "2"}
+      })
+
+      assert has_element?(view, "#reactive-trigger-#{trigger.id}")
+      {:ok, unchanged} = Triggers.get_trigger(professional, patient.id, trigger.id)
+      assert unchanged.cooldown_hours == trigger.cooldown_hours
+      assert unchanged.decrypted_condition == trigger.decrypted_condition
+    end
+
+    defp inactive!(trigger) do
+      trigger |> Ecto.Changeset.change(status: "inactive") |> Repo.update!()
+    end
   end
 
   defp fill_reactive_form(view, condition, instruction) do

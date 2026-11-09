@@ -8,6 +8,9 @@ defmodule Alethea.Triggers.TriggerFiring do
     field :status, :string, default: "fired"
     field :fired_at, :utc_datetime
     field :scheduled_at, :utc_datetime
+    # The (trigger_id, scheduled_at) uniqueness only applies to "active"
+    # (scheduled) firings; reactive firings are unique per message instead.
+    field :kind, :string, default: "active"
 
     belongs_to :trigger, Alethea.Triggers.Trigger
     belongs_to :message, Alethea.Clinical.Message
@@ -19,10 +22,11 @@ defmodule Alethea.Triggers.TriggerFiring do
 
   def changeset(firing, attrs) do
     firing
-    |> cast(attrs, [:trigger_id, :message_id, :status, :fired_at, :scheduled_at])
+    |> cast(attrs, [:trigger_id, :message_id, :status, :fired_at, :scheduled_at, :kind])
     |> default_scheduled_at()
     |> validate_required([:trigger_id, :status, :fired_at, :scheduled_at])
     |> validate_inclusion(:status, @valid_statuses)
+    |> validate_inclusion(:kind, ["active", "reactive"])
     |> validate_message_by_status()
     |> check_constraint(:message_id,
       name: :trigger_firings_status_message_check,

@@ -206,11 +206,14 @@ defmodule Alethea.Triggers do
         draft_message: enc_draft,
         approved_text: enc_approved,
         cooldown_hours: fetch_attr(attrs, :cooldown_hours) || @default_cooldown_hours,
+        fire_once: fetch_attr(attrs, :fire_once) || false,
         timezone: patient.timezone || "America/Santiago",
         status: "active"
       }
 
       Repo.transaction(fn ->
+        ensure_reactive_slot!(patient.id)
+
         case %Trigger{} |> Trigger.reactive_changeset(trigger_params) |> Repo.insert() do
           {:ok, trigger} ->
             insert_content_free_audit!(professional.id, trigger.id, "trigger_created")
@@ -237,6 +240,119 @@ defmodule Alethea.Triggers do
   end
 
   @doc """
+  Edits a reactive trigger's condition, cooldown and fire-once flag (#450).
+
+  Owner-scoped like `update_trigger_instruction/4`. Only the keys present in
+  `attrs` change: `condition` (re-encrypted with the patient DEK; blank gives
+  `{:error, :empty_condition}`), `cooldown_hours` (> 0) and `fire_once`. The
+  approved text is kept (it is drafted from the instruction, not the
+  condition). Changing the condition sets `cooldown_reset_at`, so earlier
+  firings stop counting towards the cooldown (firing history is kept).
+
+  Writes a content-free `trigger_updated` audit entry only when something
+  changed; an edit that changes nothing writes nothing.
+  """
+  @spec update_reactive_trigger(Accounts.Professional.t(), binary(), binary(), map()) ::
+          {:ok, Trigger.t()} | {:error, term()}
+  def update_reactive_trigger(
+        %Accounts.Professional{} = professional,
+        patient_id,
+        trigger_id,
+        attrs
+      )
+      when is_binary(patient_id) and is_binary(trigger_id) and is_map(attrs) do
+    with {:ok, new_condition} <- reactive_condition_edit(attrs),
+         {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
+         %Accounts.Patient{} = patient <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
+      Repo.transaction(fn ->
+        query =
+          from(t in Trigger,
+            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            lock: "FOR UPDATE"
+          )
+
+        case Repo.one(query) do
+          nil ->
+            Repo.rollback(:not_found)
+
+          %Trigger{kind: "reactive"} = trigger ->
+            dek = patient_dek!(patient, "reactive_trigger_update")
+            apply_reactive_edit(trigger, attrs, new_condition, professional.id, dek)
+
+          %Trigger{} ->
+            Repo.rollback(:not_reactive)
+        end
+      end)
+    else
+      :error -> {:error, :unauthorized}
+      nil -> {:error, :unauthorized}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reactive_condition_edit(attrs) do
+    case fetch_attr(attrs, :condition) do
+      nil ->
+        {:ok, nil}
+
+      raw ->
+        case raw |> to_string() |> String.trim() do
+          "" -> {:error, :empty_condition}
+          trimmed -> {:ok, trimmed}
+        end
+    end
+  end
+
+  defp apply_reactive_edit(trigger, attrs, new_condition, professional_id, dek) do
+    condition_changed? =
+      new_condition != nil and
+        PatientVault.decrypt(trigger.condition, dek) != {:ok, new_condition}
+
+    changes =
+      %{}
+      |> put_present(:cooldown_hours, fetch_attr(attrs, :cooldown_hours))
+      |> put_present(:fire_once, fetch_attr(attrs, :fire_once))
+      |> put_condition_change(condition_changed?, new_condition, dek)
+
+    changeset = Trigger.changeset(trigger, changes)
+
+    cond do
+      not changeset.valid? ->
+        Repo.rollback(changeset)
+
+      changeset.changes == %{} ->
+        decrypt_trigger_fields(trigger, dek)
+
+      true ->
+        changeset =
+          if condition_changed?,
+            do: Ecto.Changeset.put_change(changeset, :cooldown_reset_at, now_seconds()),
+            else: changeset
+
+        updated = Repo.update!(changeset)
+        insert_content_free_audit!(professional_id, trigger.id, "trigger_updated")
+        enqueue_trigger_rag_event(updated)
+        decrypt_trigger_fields(updated, dek)
+    end
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  defp put_condition_change(map, false, _condition, _dek), do: map
+
+  defp put_condition_change(map, true, condition, dek) do
+    case PatientVault.encrypt(condition, dek) do
+      {:ok, encrypted} -> Map.put(map, :condition, encrypted)
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp now_seconds, do: DateTime.utc_now() |> DateTime.truncate(:second)
+
+  @doc """
   Lists the reactive triggers of `patient` that may be offered to the
   trigger matcher right now (#448): kind `reactive`, status `active`,
   approved (an `approved_text` is present, which a changed instruction
@@ -255,6 +371,8 @@ defmodule Alethea.Triggers do
       from(f in TriggerFiring,
         where:
           f.trigger_id == parent_as(:trigger).id and
+            (is_nil(parent_as(:trigger).cooldown_reset_at) or
+               f.fired_at > parent_as(:trigger).cooldown_reset_at) and
             f.fired_at >
               fragment(
                 "? - make_interval(hours => ?)",
@@ -301,6 +419,7 @@ defmodule Alethea.Triggers do
       trigger_id: trigger_id,
       message_id: message_id,
       status: "fired",
+      kind: "reactive",
       fired_at: DateTime.truncate(fired_at, :second)
     })
     |> Repo.insert()
@@ -348,8 +467,13 @@ defmodule Alethea.Triggers do
       case reactive_fireability(locked, fired_at) do
         :fireable ->
           case record_reactive_firing(trigger_id, message_id, fired_at) do
-            {:ok, firing} -> firing
-            {:error, reason} -> Repo.rollback(reason)
+            {:ok, firing} ->
+              clear_cooldown_reset(locked)
+              deactivate_if_fire_once(locked)
+              firing
+
+            {:error, reason} ->
+              Repo.rollback(reason)
           end
 
         :cooldown ->
@@ -367,6 +491,33 @@ defmodule Alethea.Triggers do
     end)
   end
 
+  # A firing after a condition edit starts a fresh cooldown, so the reset
+  # marker is no longer needed. Clearing it makes that firing count even when
+  # it lands in the same second as the edit (`fired_at > reset_at` is false).
+  defp clear_cooldown_reset(%Trigger{cooldown_reset_at: nil}), do: :ok
+
+  defp clear_cooldown_reset(%Trigger{id: id}) do
+    Repo.update_all(from(t in Trigger, where: t.id == ^id), set: [cooldown_reset_at: nil])
+    :ok
+  end
+
+  # D1 (#450): a fire-once trigger turns inactive in the same locked
+  # transaction as its firing.
+  defp deactivate_if_fire_once(%Trigger{fire_once: true} = trigger) do
+    updated = trigger |> Trigger.changeset(%{status: "inactive"}) |> Repo.update!()
+
+    insert_content_free_audit!(
+      trigger.professional_id,
+      trigger.id,
+      "trigger_deactivated_fire_once"
+    )
+
+    enqueue_trigger_rag_event(updated)
+    :ok
+  end
+
+  defp deactivate_if_fire_once(_trigger), do: :ok
+
   defp reactive_fireability(
          %Trigger{kind: "reactive", status: "active", approved_text: approved} = trigger,
          fired_at
@@ -374,10 +525,17 @@ defmodule Alethea.Triggers do
        when not is_nil(approved) do
     window_start = DateTime.add(fired_at, -trigger.cooldown_hours * 3600, :second)
 
+    # Firings at or before `cooldown_reset_at` (a condition edit) do not count.
+    counted_since =
+      case trigger.cooldown_reset_at do
+        nil -> window_start
+        reset_at -> Enum.max([window_start, reset_at], DateTime)
+      end
+
     in_cooldown? =
       Repo.exists?(
         from(f in TriggerFiring,
-          where: f.trigger_id == ^trigger.id and f.fired_at > ^window_start
+          where: f.trigger_id == ^trigger.id and f.fired_at > ^counted_since
         )
       )
 
@@ -603,9 +761,17 @@ defmodule Alethea.Triggers do
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
          %Accounts.Patient{} = patient <-
-           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
-         {:ok, dek} <- Clinical.patient_dek(patient, "trigger_activate") do
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       Repo.transaction(fn ->
+        # Patient row before trigger row: the same lock order as the burst
+        # reply worker, so activating a reactive trigger cannot deadlock with
+        # its firing (#450).
+        lock_patient!(valid_patient_id)
+
+        # Inside the transaction: a rejection (limit, status) also rolls back
+        # the key-access audit that loading the DEK writes.
+        dek = patient_dek!(patient, "trigger_activate")
+
         query =
           from(t in Trigger,
             where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
@@ -657,9 +823,17 @@ defmodule Alethea.Triggers do
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
          %Accounts.Patient{} = patient <-
-           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
-         {:ok, dek} <- Clinical.patient_dek(patient, "trigger_resume") do
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       Repo.transaction(fn ->
+        # Patient row before trigger row: the same lock order as the burst
+        # reply worker, so activating a reactive trigger cannot deadlock with
+        # its firing (#450).
+        lock_patient!(valid_patient_id)
+
+        # Inside the transaction: a rejection (limit, status) also rolls back
+        # the key-access audit that loading the DEK writes.
+        dek = patient_dek!(patient, "trigger_resume")
+
         query =
           from(t in Trigger,
             where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
@@ -1274,6 +1448,53 @@ defmodule Alethea.Triggers do
     Application.get_env(:alethea, :trigger_preview_chain, TriggerPreviewChain)
   end
 
+  @default_max_active_reactive_triggers 20
+
+  @doc """
+  Returns the globally configured maximum of active reactive triggers per
+  patient (#450). Defaults to 20.
+  """
+  @spec max_active_reactive_triggers() :: pos_integer()
+  def max_active_reactive_triggers do
+    case Application.get_env(:alethea, :max_active_reactive_triggers) do
+      limit when is_integer(limit) and limit > 0 -> limit
+      _ -> @default_max_active_reactive_triggers
+    end
+  end
+
+  defp patient_dek!(patient, reason) do
+    case Clinical.patient_dek(patient, reason) do
+      {:ok, dek} -> dek
+      {:error, error} -> Repo.rollback(error)
+    end
+  end
+
+  defp lock_patient!(patient_id) do
+    Repo.one!(
+      from(p in Accounts.Patient, where: p.id == ^patient_id, lock: "FOR UPDATE", select: p.id)
+    )
+  end
+
+  # Must run inside the transaction that writes the new active reactive
+  # trigger. The `FOR UPDATE` lock on the patient row serializes concurrent
+  # create/activate/resume calls for the same patient, so the count cannot go
+  # stale before the write. Rolls back with `:reactive_limit_reached`.
+  defp ensure_reactive_slot!(patient_id) do
+    lock_patient!(patient_id)
+
+    active_count =
+      Repo.aggregate(
+        from(t in Trigger,
+          where: t.patient_id == ^patient_id and t.kind == "reactive" and t.status == "active"
+        ),
+        :count
+      )
+
+    if active_count >= max_active_reactive_triggers(),
+      do: Repo.rollback(:reactive_limit_reached),
+      else: :ok
+  end
+
   @default_daily_cap 5
 
   @doc """
@@ -1435,6 +1656,8 @@ defmodule Alethea.Triggers do
          audit_action,
          dek
        ) do
+    ensure_reactive_slot!(trigger.patient_id)
+
     updated =
       trigger
       |> Trigger.changeset(%{status: "active"})

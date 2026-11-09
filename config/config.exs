@@ -176,6 +176,9 @@ config :alethea, :retention_baseline_days, 3650
 # Cap for active trigger sends per patient per calendar day (Issue #444, S2, S4)
 config :alethea, :active_trigger_daily_cap, 5
 
+# Maximum active reactive triggers per patient (#450)
+config :alethea, :max_active_reactive_triggers, 20
+
 # Global configuration for LangChain chains
 #
 # `max_tokens` is the journaling reply-length bound (#392): replies are
