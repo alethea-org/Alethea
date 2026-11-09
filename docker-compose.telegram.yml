@@ -5,8 +5,9 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.telegram.yml up
 #
-# Put TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME in .env once (see
-# .env.example). Starting the stack then:
+# Put TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME and (recommended) a fixed
+# TELEGRAM_WEBHOOK_SECRET in .env once (see README "Probar con Telegram real").
+# Starting the stack then:
 #   1. keeps the app on the LOCAL Docker database (never the shared Neon one),
 #   2. stores the bot credentials in the local dev BotConfig (entrypoint.sh),
 #   3. opens a Cloudflare quick tunnel (no account needed) to the app, and
@@ -30,6 +31,8 @@ services:
       - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
       # Required by the real Telegram client; a fixed value is fine locally.
       - TELEGRAM_CHAT_ID_PEPPER=${TELEGRAM_CHAT_ID_PEPPER:-dev-only-local-telegram-chat-id-pepper-0123456789}
+      # Lets `exec app mix alethea.telegram.dev_tunnel` reach the tunnel metrics.
+      - TUNNEL_METRICS_URL=http://tunnel:2000
 
   # Cloudflare quick tunnel: publishes http://app:4000 on a random
   # *.trycloudflare.com host and reports it at /quicktunnel on the metrics port.
