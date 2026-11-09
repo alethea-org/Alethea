@@ -26,10 +26,11 @@ Development tooling only: production config, `Dockerfile`, `docker-compose.prod.
 - [x] T1 S5,S9 — `mix alethea.telegram.dev_tunnel` + tests (hostname parsing, no tunnel, no bot config, non-dev refusal, no secrets in output). Route: worker mw8htjb7-1-ga5y. Commit: e0b4a27
 - [x] T2 S1,S3,S4,S6,S8 — `docker-compose.telegram.yml` + `entrypoint.sh` branch; `docker compose ... config` structural check for both invocations. Route: worker mw8htjb7-1-ga5y. Commit: 25a3a66
 - [x] T3 S2,S7 — README "Probar con Telegram real" as the single standard flow; `docs/main-demo-operator-guide.md` points to it. Route: worker mw8htjb7-1-ga5y. Commit: 4ae8a17 (.env.example not edited: path blocked as sensitive by the edit guard)
-- [ ] T4 — verification (Risk item 5 environment → independent verify). Route: gentle-ai-verify.
+- [x] T4 — verification (Risk item 5 environment → independent verify). Route: gentle-ai-verify.
 
 ## Log
 
 - L1 (user, 2026-11-08): "podemos resolver esto que mencionas del túnel ahora? Podríamos modificar alguno de los archivos de desarrollo como para indicar que esa es la forma estándar de desarrollar así nadie se vuelve a confundir?"
 - L2 (user decisions, 2026-11-08): "Issue y rama nuevos desde main" → issue #484; "Local por defecto con Telegram".
 - L3 (evidence, 2026-11-08): worker RED 16/16 UndefinedFunctionError; GREEN 16/0; test/mix/tasks + test/alethea/telegram 247/0; compile --force --warnings-as-errors exit 0; `docker compose config -q` and override `config -q` OK; `sh -n entrypoint.sh` OK, LF. Deviations: override also sets TELEGRAM_CLIENT_ADAPTER=req and TELEGRAM_CHAT_ID_PEPPER (dev fallback); telegram-webhook uses entrypoint ["mix"]; tunnel waits for app healthy; extra --metrics-url/--app-url/APP_HEALTH_URL and --wait retries on setWebhook 400/transport errors; reuses WebhookRegistration.register/3. Runtime (containers) untested. Incident: rendering the merged compose config printed NEON_DATABASE_URL from the local .env into the worker transcript (not written to files).
+- L4 (evidence, 2026-11-08): verifier mw8ijcm3-2-ugu3: pass with findings; S1-S6, S8, S9 pass, S7 partial. M1 (exec app without TUNNEL_METRICS_URL), L1 (random secret per app restart), L3 (stale Fake-only README lines) fixed by parent; README voseo introduced by worker normalized to neutral Spanish. L2 (.env.example) blocked by edit guard. L4 flaky pacer_test.exs:416 outside diff. Override `config -q` OK after fix. Runtime (containers) unverified.
