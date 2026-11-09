@@ -234,6 +234,7 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
   defp notification_severity(:crisis_detected, _), do: :warning
   defp notification_severity(:risk_uncertain, _), do: :info
   defp notification_severity(:patient_created, _), do: :info
+  defp notification_severity(:trigger_paused_by_patient, _), do: :info
   defp notification_severity(_, _), do: :info
 
   defp notification_message(:crisis_detected, %{patient_alias: alias, level: level})
@@ -254,6 +255,11 @@ defmodule AletheaWeb.DashboardLive.Components.NotificationCenter do
   end
 
   defp notification_message(:patient_created, _), do: "Nuevo paciente registrado"
+
+  defp notification_message(:trigger_paused_by_patient, %{patient_alias: alias, count: count}) do
+    "#{alias} pausó #{count} mensaje(s) programado(s) con /pausa."
+  end
+
   defp notification_message(_, _), do: "Nueva notificación"
 
   defp severity_dot(:critical), do: "status-dot--risk"

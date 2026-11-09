@@ -522,6 +522,45 @@ defmodule AletheaWeb.TriggersLiveTest do
       assert reloaded.consecutive_delivery_failures == 0
     end
 
+    test "displays trigger paused by patient with badge, notice, and allows resume (#446)",
+         %{conn: conn, patient: patient, professional: professional} do
+      future_date = Date.utc_today() |> Date.add(2)
+
+      {:ok, trigger} =
+        Triggers.create_and_approve_trigger(professional, patient.id, %{
+          instruction: "Instruccion diaria",
+          approved_text: "Mensaje aprobado diario",
+          schedule_type: "daily",
+          time: ~T[10:00:00],
+          date: future_date
+        })
+
+      trigger
+      |> Trigger.changeset(%{status: "paused_by_patient"})
+      |> Repo.update!()
+
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/triggers")
+
+      assert has_element?(view, "#trigger-status-badge-#{trigger.id}", "Pausado por el paciente")
+      assert has_element?(view, "#trigger-pause-reason-#{trigger.id}")
+      assert render(view) =~ "El paciente pausó este trigger con el comando /pausa"
+      assert has_element?(view, "#resume-trigger-button-#{trigger.id}", "Reanudar")
+
+      # Resume the trigger
+      view
+      |> element("#resume-trigger-button-#{trigger.id}")
+      |> render_click()
+
+      # Now it is active again
+      assert render(view) =~ "Trigger reanudado exitosamente."
+      assert has_element?(view, "#trigger-status-badge-#{trigger.id}", "Activo")
+      refute render(view) =~ "Pausado por el paciente"
+      refute has_element?(view, "#trigger-pause-reason-#{trigger.id}")
+
+      reloaded = Repo.get!(Trigger, trigger.id)
+      assert reloaded.status == "active"
+    end
+
     test "truthful history shows queued before Telegram ack and sent after TelegramOutboundWorker with Fake (B4)",
          %{conn: conn, patient: patient, professional: professional} do
       {:ok, _} = safe_start_pacer()
