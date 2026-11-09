@@ -126,6 +126,89 @@ defmodule Alethea.Triggers.ArchiveTriggerTest do
     end
   end
 
+  describe "mutations on an archived trigger" do
+    setup %{professional: professional, patient: patient} do
+      active = active_trigger(professional, patient)
+      {:ok, _} = Triggers.archive_trigger(professional, patient.id, active.id)
+
+      {:ok, reactive} =
+        Triggers.create_and_approve_reactive_trigger(professional, patient.id, %{
+          "condition" => "Habla de su padre",
+          "instruction" => "Retomar la historia",
+          "draft_message" => "Texto reactivo",
+          "approved_text" => "Texto reactivo"
+        })
+
+      {:ok, _} = Triggers.archive_trigger(professional, patient.id, reactive.id)
+      Repo.delete_all(Oban.Job)
+
+      %{
+        active: Repo.get!(Trigger, active.id),
+        reactive: Repo.get!(Trigger, reactive.id)
+      }
+    end
+
+    test "activate_trigger cannot bring it back",
+         %{professional: professional, patient: patient, active: active} do
+      assert {:error, :not_found} = Triggers.activate_trigger(professional, patient.id, active.id)
+      assert_unchanged(active)
+      refute_enqueued(worker: ActiveTriggerWorker, args: %{"trigger_id" => active.id})
+    end
+
+    test "resume, deactivate and edits are rejected without changes",
+         %{professional: professional, patient: patient, active: active, reactive: reactive} do
+      assert {:error, :not_found} = Triggers.resume_trigger(professional, patient.id, active.id)
+
+      assert {:error, :not_found} =
+               Triggers.deactivate_trigger(professional, patient.id, active.id)
+
+      assert {:error, :not_found} =
+               Triggers.update_trigger_instruction(
+                 professional,
+                 patient.id,
+                 active.id,
+                 "Instruccion nueva"
+               )
+
+      assert {:error, :not_found} =
+               Triggers.reapprove_trigger(professional, patient.id, active.id, %{
+                 approved_text: "Otro texto",
+                 expected_revision: active.approval_revision
+               })
+
+      assert {:error, :not_found} =
+               Triggers.update_reactive_trigger(professional, patient.id, reactive.id, %{
+                 "cooldown_hours" => "6"
+               })
+
+      assert_unchanged(active)
+      assert_unchanged(reactive)
+    end
+  end
+
+  defp assert_unchanged(%Trigger{} = before) do
+    after_row = Repo.get!(Trigger, before.id)
+
+    assert Map.take(after_row, [
+             :status,
+             :archived_at,
+             :instruction,
+             :approved_text,
+             :approval_revision,
+             :cooldown_hours,
+             :updated_at
+           ]) ==
+             Map.take(before, [
+               :status,
+               :archived_at,
+               :instruction,
+               :approved_text,
+               :approval_revision,
+               :cooldown_hours,
+               :updated_at
+             ])
+  end
+
   describe "deactivate_trigger/3 (unchanged)" do
     test "still deactivates without archiving",
          %{professional: professional, patient: patient} do

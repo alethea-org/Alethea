@@ -269,7 +269,9 @@ defmodule Alethea.Triggers do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -707,7 +709,9 @@ defmodule Alethea.Triggers do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -840,7 +844,9 @@ defmodule Alethea.Triggers do
 
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -865,9 +871,6 @@ defmodule Alethea.Triggers do
 
           %Trigger{status: "active"} = trigger ->
             decrypt_trigger_fields(trigger, dek)
-
-          %Trigger{archived_at: %DateTime{}} ->
-            Repo.rollback(:not_found)
 
           %Trigger{status: "inactive"} = trigger ->
             reactivate_or_resume_trigger(trigger, professional.id, "trigger_activated", dek)
@@ -905,7 +908,9 @@ defmodule Alethea.Triggers do
 
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
@@ -1177,7 +1182,9 @@ defmodule Alethea.Triggers do
         Repo.transaction(fn ->
           query =
             from(t in Trigger,
-              where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+              where:
+                t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                  is_nil(t.archived_at),
               lock: "FOR UPDATE"
             )
 
@@ -1260,7 +1267,9 @@ defmodule Alethea.Triggers do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
-            where: t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id,
+            where:
+              t.id == ^valid_trigger_id and t.patient_id == ^valid_patient_id and
+                is_nil(t.archived_at),
             lock: "FOR UPDATE"
           )
 
