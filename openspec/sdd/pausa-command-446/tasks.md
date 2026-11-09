@@ -26,10 +26,10 @@
 
 ## Phase 4 — Durable UI surfacing
 
-- [ ] 4.1 `lib/alethea_web/live/triggers_live/index.ex` (~L1131-1144): add the `"paused_by_patient"` branch to the status-pill `cond`, label "Pausado por el paciente" (use `pt-pill--warning`; fall back to `pt-pill--risk` if that class doesn't exist in the stylesheet).
-- [ ] 4.2 `lib/alethea_web/live/triggers_live/index.ex` (~L1210): add `"paused_by_patient"` to the "Reanudar" button's `in [...]` guard.
-- [ ] 4.3 `lib/alethea_web/live/triggers_live/index.ex` (~L1248): add a durable reason block for `status == "paused_by_patient"`: "El paciente pausó este trigger con el comando /pausa. Podés reanudarlo cuando corresponda."
-- [ ] 4.4 `test/alethea_web/live/triggers_live_test.exs`: assert the badge, reason block, and "Reanudar" button render for a `paused_by_patient` trigger.
+- [x] 4.1 `lib/alethea_web/live/triggers_live/index.ex` (~L1131-1144): add the `"paused_by_patient"` branch to the status-pill `cond`, label "Pausado por el paciente" (use `pt-pill--warning`; fall back to `pt-pill--risk` if that class doesn't exist in the stylesheet).
+- [x] 4.2 `lib/alethea_web/live/triggers_live/index.ex` (~L1210): add `"paused_by_patient"` to the "Reanudar" button's `in [...]` guard.
+- [x] 4.3 `lib/alethea_web/live/triggers_live/index.ex` (~L1248): add a durable reason block for `status == "paused_by_patient"`: "El paciente pausó este trigger con el comando /pausa. Podés reanudarlo cuando corresponda."
+- [x] 4.4 `test/alethea_web/live/triggers_live_test.exs`: assert the badge, reason block, and "Reanudar" button render for a `paused_by_patient` trigger.
 
 ## Phase 5 — Onboarding disclosure
 
