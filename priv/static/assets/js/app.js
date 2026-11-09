@@ -74,6 +74,36 @@ let liveSocket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
   hooks: { ConsultationScroll, ConsultationComposer },
 });
 
+// Page loading indicator — a centered spinner shown while LiveView
+// navigates. It only appears after a short delay so fast loads don't flash.
+const PAGE_LOADER_DELAY_MS = 250;
+let pageLoaderTimer = null;
+
+const pageLoader = () => {
+  let el = document.getElementById("page-loader");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "page-loader";
+    el.className = "page-loader";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    el.innerHTML = '<span class="page-loader__spinner" aria-hidden="true"></span><span class="sr-only">Cargando…</span>';
+    document.body.appendChild(el);
+  }
+  return el;
+};
+
+window.addEventListener("phx:page-loading-start", () => {
+  clearTimeout(pageLoaderTimer);
+  pageLoaderTimer = setTimeout(() => pageLoader().classList.add("is-visible"), PAGE_LOADER_DELAY_MS);
+});
+
+window.addEventListener("phx:page-loading-stop", () => {
+  clearTimeout(pageLoaderTimer);
+  const el = document.getElementById("page-loader");
+  if (el) el.classList.remove("is-visible");
+});
+
 // Connect if there are any LiveViews on the page
 liveSocket.connect();
 

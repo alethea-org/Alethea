@@ -3496,3 +3496,80 @@ select.text-input {
   .evidence-source-card { padding: var(--spacing-sm); }
   .evidence-source-card__meta { align-items: flex-start; flex-direction: column; }
 }
+
+/* === Loading feedback ===
+   LiveView adds `phx-click-loading` / `phx-submit-loading` while it waits
+   for the server to acknowledge an event, and `app.js` toggles the page
+   loader during navigation. Both make slow responses visibly "in progress". */
+
+.page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 0s linear 120ms;
+}
+
+.page-loader.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  cursor: progress;
+  transition: opacity 120ms ease;
+}
+
+.page-loader__spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 3px solid var(--colors-surface-strong);
+  border-top-color: var(--colors-ink);
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
+}
+
+[phx-click].phx-click-loading,
+[phx-submit].phx-submit-loading {
+  cursor: progress;
+}
+
+button.phx-click-loading,
+button.phx-submit-loading,
+.phx-submit-loading button[type="submit"] {
+  opacity: 0.7;
+  pointer-events: none;
+  cursor: progress;
+}
+
+button.phx-click-loading::after,
+button.phx-submit-loading::after,
+.phx-submit-loading button[type="submit"]::after {
+  content: "";
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-left: 0.5em;
+  vertical-align: -0.1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-loader__spinner,
+  button.phx-click-loading::after,
+  button.phx-submit-loading::after,
+  .phx-submit-loading button[type="submit"]::after {
+    animation-duration: 2s;
+  }
+}
