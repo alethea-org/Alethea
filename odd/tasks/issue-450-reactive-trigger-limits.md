@@ -46,3 +46,4 @@ Owner-only access and content-free audit on every mutation, as in the rest of `A
 - L11 (evidence, 2026-11-08): final branch 489974b+docs: compile --warnings-as-errors exit 0; full suite 6 doctests, 2808 tests, 8 failures (all test/alethea/release_test.exs Windows/POSIX baseline), 5 skipped.
 - L12 (user correction, 2026-11-08): "No hice realmente la prueba manual, quiero que me guies a hacerla ahora". L10's manual-test claim is void; T7 reopened.
 - L13 (user decision, 2026-11-08): "Hace el push y PR no más". T7 manual Telegram test skipped; PR relies on automated tests and verifier evidence (L4-L6, L8, L11).
+- L14 (evidence, 2026-11-09): user "Restaura no más el bot del equipo en Neon". Neon foundation_bot_configs env dev restored from backup: before alethea_dev_teo_bot (2026-11-08 22:57:26), after alethea_dev_bot (2026-09-23 23:54:50). Manual Telegram test not completed.
