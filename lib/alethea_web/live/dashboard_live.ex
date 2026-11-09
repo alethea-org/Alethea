@@ -121,7 +121,7 @@ defmodule AletheaWeb.DashboardLive do
 
     if patient do
       # Auditoría de visualización de perfil (solo en modo real, IDs de mock no son UUIDs válidos)
-      if is_valid_uuid?(id) do
+      if valid_uuid?(id) do
         Accounts.log_action(%{
           action: "VIEW_PATIENT_PROFILE",
           resource_type: "Patient",
@@ -695,7 +695,7 @@ defmodule AletheaWeb.DashboardLive do
       end
 
     trigger_summary =
-      if use_mock? or not is_valid_uuid?(patient.id) do
+      if use_mock? or not valid_uuid?(patient.id) do
         default_trigger_summary()
       else
         case Triggers.get_trigger_summary(socket.assigns.current_professional, patient.id) do
@@ -786,13 +786,13 @@ defmodule AletheaWeb.DashboardLive do
     # TelegramMessageWorker.handle_crisis_path/9); this dashboard's
     # `patients` assign and `Accounts.get_patient_for_professional/2`
     # both key off the legacy `patients` table, so `legacy_patient_id`
-    # (when present) is the lookup key. `is_valid_uuid?` still branches
+    # (when present) is the lookup key. `valid_uuid?` still branches
     # to the mock-mode fallback (patients with non-UUID ids like "p2"),
     # which never sends `legacy_patient_id` — unrelated to this fix.
     lookup_id = Map.get(payload, :legacy_patient_id, patient_id)
 
     patient =
-      if is_valid_uuid?(lookup_id) do
+      if valid_uuid?(lookup_id) do
         Accounts.get_patient_for_professional(professional.id, lookup_id)
       else
         Enum.find(socket.assigns.patients, &(&1.id == patient_id))
@@ -833,6 +833,29 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  def handle_info({:trigger_paused_by_patient, %{patient_id: patient_id, count: count}}, socket) do
+    professional = socket.assigns.current_professional
+
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        {:noreply, socket}
+
+      patient ->
+        notif =
+          NotificationCenter.build_notification(:trigger_paused_by_patient, %{
+            patient_alias: patient.alias,
+            count: count
+          })
+
+        Phoenix.LiveView.send_update(NotificationCenter,
+          id: "notification-center",
+          new_notification: notif
+        )
+
+        {:noreply, socket}
+    end
+  end
+
   def handle_info(
         {:risk_uncertain, %{event_id: event_id, legacy_patient_id: patient_id}},
         %{assigns: %{use_mock_data: false}} = socket
@@ -840,7 +863,7 @@ defmodule AletheaWeb.DashboardLive do
       when is_binary(event_id) and is_binary(patient_id) do
     professional = socket.assigns.current_professional
 
-    if is_valid_uuid?(patient_id) and Regex.match?(~r/\A[0-9a-f]{64}\z/, event_id) do
+    if valid_uuid?(patient_id) and Regex.match?(~r/\A[0-9a-f]{64}\z/, event_id) do
       case Accounts.get_patient_for_professional(professional.id, patient_id) do
         nil ->
           {:noreply, socket}
@@ -1119,7 +1142,7 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
-  defp is_valid_uuid?(id) do
+  defp valid_uuid?(id) do
     match?({:ok, _}, Ecto.UUID.cast(id))
   end
 

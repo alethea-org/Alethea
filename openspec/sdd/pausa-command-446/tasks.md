@@ -20,9 +20,9 @@
 
 ## Phase 3 — Professional notification
 
-- [ ] 3.1 `lib/alethea_web/live/dashboard_live.ex`: add a `handle_info({:trigger_paused_by_patient, ...}, socket)` clause next to `:crisis_detected` (L778), building a notification via `NotificationCenter.build_notification/2` and `send_update`.
-- [ ] 3.2 `lib/alethea_web/live/dashboard_live/components/notification_center.ex`: add `notification_severity(:trigger_paused_by_patient, _)` (`:info`) and `notification_message(:trigger_paused_by_patient, ...)` → `"#{alias} pausó #{count} mensaje(s) programado(s) con /pausa."`.
-- [ ] 3.3 `test/alethea_web/live/dashboard_live_test.exs`: assert the PubSub broadcast produces the notification.
+- [x] 3.1 `lib/alethea_web/live/dashboard_live.ex`: add a `handle_info({:trigger_paused_by_patient, ...}, socket)` clause next to `:crisis_detected` (L778), building a notification via `NotificationCenter.build_notification/2` and `send_update`.
+- [x] 3.2 `lib/alethea_web/live/dashboard_live/components/notification_center.ex`: add `notification_severity(:trigger_paused_by_patient, _)` (`:info`) and `notification_message(:trigger_paused_by_patient, ...)` → `"#{alias} pausó #{count} mensaje(s) programado(s) con /pausa."`.
+- [x] 3.3 `test/alethea_web/live/dashboard_live_test.exs`: assert the PubSub broadcast produces the notification.
 
 ## Phase 4 — Durable UI surfacing
 
