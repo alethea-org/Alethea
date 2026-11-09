@@ -168,6 +168,37 @@ defmodule Alethea.Triggers.ReactiveLimitsTest do
       assert {:ok, []} = Triggers.eligible_reactive_triggers(patient, later)
     end
 
+    test "a condition edit in the same second as a firing lets it fire once more in that second",
+         %{professional: professional, patient: patient, trigger: trigger} do
+      fired_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(60, :second)
+
+      assert {:ok, %TriggerFiring{}} =
+               Triggers.fire_reactive_trigger(trigger.id, inbound_message(patient).id, fired_at)
+
+      assert {:ok, _} =
+               Triggers.update_reactive_trigger(professional, patient.id, trigger.id, %{
+                 "condition" => "Menciona problemas de sueño"
+               })
+
+      # Pin the reset to the firing's second: the edit and the firing share it.
+      Repo.update_all(from(t in Trigger, where: t.id == ^trigger.id),
+        set: [cooldown_reset_at: fired_at]
+      )
+
+      assert {:ok, [%Trigger{}]} = Triggers.eligible_reactive_triggers(patient, fired_at)
+
+      assert {:ok, %TriggerFiring{kind: "reactive"}} =
+               Triggers.fire_reactive_trigger(trigger.id, inbound_message(patient).id, fired_at)
+
+      # The post-edit firing starts a fresh cooldown, even within the same second.
+      assert {:ok, []} = Triggers.eligible_reactive_triggers(patient, fired_at)
+
+      assert {:ok, :skipped} =
+               Triggers.fire_reactive_trigger(trigger.id, inbound_message(patient).id, fired_at)
+
+      assert Repo.aggregate(TriggerFiring, :count) == 2
+    end
+
     test "editing only the cooldown does not reset it",
          %{professional: professional, patient: patient, trigger: trigger} do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -260,6 +291,29 @@ defmodule Alethea.Triggers.ReactiveLimitsTest do
       assert Repo.get!(Trigger, trigger.id) == before
       assert audits(trigger.id, "trigger_updated") == []
     end
+
+    test "a rejected edit writes no audit at all, including the key-access audit",
+         %{professional: professional, patient: patient, trigger: trigger} do
+      active = active_trigger(professional, patient)
+      audits_before = Repo.aggregate(AuditLog, :count)
+
+      assert {:error, :not_found} =
+               Triggers.update_reactive_trigger(professional, patient.id, Ecto.UUID.generate(), %{
+                 "fire_once" => "true"
+               })
+
+      assert {:error, :not_reactive} =
+               Triggers.update_reactive_trigger(professional, patient.id, active.id, %{
+                 "fire_once" => "true"
+               })
+
+      assert {:error, %Ecto.Changeset{}} =
+               Triggers.update_reactive_trigger(professional, patient.id, trigger.id, %{
+                 "cooldown_hours" => "0"
+               })
+
+      assert Repo.aggregate(AuditLog, :count) == audits_before
+    end
   end
 
   describe "active reactive trigger limit (S4, S5)" do
@@ -349,6 +403,28 @@ defmodule Alethea.Triggers.ReactiveLimitsTest do
 
       assert %Trigger{status: "paused_by_crisis"} = Repo.get!(Trigger, a.id)
       assert trigger_audit_count() == audits_before
+    end
+
+    test "a limit rejection on activate or resume leaves no audit and no job behind",
+         %{professional: professional, patient: patient} do
+      {:ok, a} = create_reactive(professional, patient)
+      {:ok, b} = create_reactive(professional, patient)
+      {:ok, _} = Triggers.deactivate_trigger(professional, patient.id, a.id)
+      b |> Ecto.Changeset.change(status: "paused_by_crisis") |> Repo.update!()
+      {:ok, _} = create_reactive(professional, patient)
+      {:ok, _} = create_reactive(professional, patient)
+
+      audits_before = Repo.aggregate(AuditLog, :count)
+      jobs_before = Repo.aggregate(Oban.Job, :count)
+
+      assert {:error, :reactive_limit_reached} =
+               Triggers.activate_trigger(professional, patient.id, a.id)
+
+      assert {:error, :reactive_limit_reached} =
+               Triggers.resume_trigger(professional, patient.id, b.id)
+
+      assert Repo.aggregate(AuditLog, :count) == audits_before
+      assert Repo.aggregate(Oban.Job, :count) == jobs_before
     end
 
     test "activating or resuming below the limit still works",

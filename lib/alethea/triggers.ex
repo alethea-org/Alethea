@@ -265,8 +265,7 @@ defmodule Alethea.Triggers do
          {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
          %Accounts.Patient{} = patient <-
-           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
-         {:ok, dek} <- Clinical.patient_dek(patient, "reactive_trigger_update") do
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       Repo.transaction(fn ->
         query =
           from(t in Trigger,
@@ -279,6 +278,7 @@ defmodule Alethea.Triggers do
             Repo.rollback(:not_found)
 
           %Trigger{kind: "reactive"} = trigger ->
+            dek = patient_dek!(patient, "reactive_trigger_update")
             apply_reactive_edit(trigger, attrs, new_condition, professional.id, dek)
 
           %Trigger{} ->
@@ -419,6 +419,7 @@ defmodule Alethea.Triggers do
       trigger_id: trigger_id,
       message_id: message_id,
       status: "fired",
+      kind: "reactive",
       fired_at: DateTime.truncate(fired_at, :second)
     })
     |> Repo.insert()
@@ -467,6 +468,7 @@ defmodule Alethea.Triggers do
         :fireable ->
           case record_reactive_firing(trigger_id, message_id, fired_at) do
             {:ok, firing} ->
+              clear_cooldown_reset(locked)
               deactivate_if_fire_once(locked)
               firing
 
@@ -487,6 +489,16 @@ defmodule Alethea.Triggers do
           :skipped
       end
     end)
+  end
+
+  # A firing after a condition edit starts a fresh cooldown, so the reset
+  # marker is no longer needed. Clearing it makes that firing count even when
+  # it lands in the same second as the edit (`fired_at > reset_at` is false).
+  defp clear_cooldown_reset(%Trigger{cooldown_reset_at: nil}), do: :ok
+
+  defp clear_cooldown_reset(%Trigger{id: id}) do
+    Repo.update_all(from(t in Trigger, where: t.id == ^id), set: [cooldown_reset_at: nil])
+    :ok
   end
 
   # D1 (#450): a fire-once trigger turns inactive in the same locked
@@ -744,13 +756,16 @@ defmodule Alethea.Triggers do
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
          %Accounts.Patient{} = patient <-
-           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
-         {:ok, dek} <- Clinical.patient_dek(patient, "trigger_activate") do
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       Repo.transaction(fn ->
         # Patient row before trigger row: the same lock order as the burst
         # reply worker, so activating a reactive trigger cannot deadlock with
         # its firing (#450).
         lock_patient!(valid_patient_id)
+
+        # Inside the transaction: a rejection (limit, status) also rolls back
+        # the key-access audit that loading the DEK writes.
+        dek = patient_dek!(patient, "trigger_activate")
 
         query =
           from(t in Trigger,
@@ -800,13 +815,16 @@ defmodule Alethea.Triggers do
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          {:ok, valid_trigger_id} <- Ecto.UUID.cast(trigger_id),
          %Accounts.Patient{} = patient <-
-           Accounts.get_patient_for_professional(professional.id, valid_patient_id),
-         {:ok, dek} <- Clinical.patient_dek(patient, "trigger_resume") do
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
       Repo.transaction(fn ->
         # Patient row before trigger row: the same lock order as the burst
         # reply worker, so activating a reactive trigger cannot deadlock with
         # its firing (#450).
         lock_patient!(valid_patient_id)
+
+        # Inside the transaction: a rejection (limit, status) also rolls back
+        # the key-access audit that loading the DEK writes.
+        dek = patient_dek!(patient, "trigger_resume")
 
         query =
           from(t in Trigger,
@@ -1372,6 +1390,13 @@ defmodule Alethea.Triggers do
     case Application.get_env(:alethea, :max_active_reactive_triggers) do
       limit when is_integer(limit) and limit > 0 -> limit
       _ -> @default_max_active_reactive_triggers
+    end
+  end
+
+  defp patient_dek!(patient, reason) do
+    case Clinical.patient_dek(patient, reason) do
+      {:ok, dek} -> dek
+      {:error, error} -> Repo.rollback(error)
     end
   end
 
