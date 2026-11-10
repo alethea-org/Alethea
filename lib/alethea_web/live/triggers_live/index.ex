@@ -21,10 +21,11 @@ defmodule AletheaWeb.TriggersLive.Index do
     with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
          %Accounts.Patient{} = patient <-
            Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
-      with {:ok, all_triggers} <- Triggers.list_triggers(professional, patient.id),
-           {:ok, firings} <- Triggers.list_firings(professional, patient.id) do
-        {reactive_triggers, triggers} = Enum.split_with(all_triggers, &reactive?/1)
-
+      with {:ok, active_page} <-
+             Triggers.list_triggers_page(professional, patient.id, kind: "active"),
+           {:ok, reactive_page} <-
+             Triggers.list_triggers_page(professional, patient.id, kind: "reactive"),
+           {:ok, firings_page} <- Triggers.list_firings_page(professional, patient.id) do
         socket =
           socket
           |> assign(:page_title, "Triggers · #{patient.alias}")
@@ -61,12 +62,12 @@ defmodule AletheaWeb.TriggersLive.Index do
           |> assign(:reactive_edit_form, nil)
           |> clear_reactive_preview()
           |> assign(:reactive_approving, false)
-          |> assign(:active_triggers_empty?, triggers == [])
-          |> assign(:reactive_triggers_empty?, reactive_triggers == [])
-          |> assign(:firings_empty?, firings == [])
-          |> stream(:active_triggers, triggers)
-          |> stream(:reactive_triggers, reactive_triggers)
-          |> stream(:firings, firings)
+          |> assign(:active_triggers_empty?, active_page.entries == [])
+          |> assign(:reactive_triggers_empty?, reactive_page.entries == [])
+          |> assign(:firings_empty?, firings_page.entries == [])
+          |> put_page(:active_triggers, active_page)
+          |> put_page(:reactive_triggers, reactive_page)
+          |> put_page(:firings, firings_page)
 
         {:ok, socket}
       else
@@ -85,7 +86,57 @@ defmodule AletheaWeb.TriggersLive.Index do
     end
   end
 
+  # Per-list assigns holding the keyset cursor and the "no more pages" flag.
+  @page_keys %{
+    active_triggers: {:active_triggers_cursor, :active_triggers_end?},
+    reactive_triggers: {:reactive_triggers_cursor, :reactive_triggers_end?},
+    firings: {:firings_cursor, :firings_end?}
+  }
+
+  # Appends one page to a list stream and tracks its cursor and end flag.
+  defp put_page(socket, list, %{entries: entries, more?: more?, cursor: cursor}) do
+    {cursor_key, end_key} = Map.fetch!(@page_keys, list)
+    cursor = cursor || socket.assigns[cursor_key]
+
+    socket
+    |> stream(list, entries)
+    |> assign(cursor_key, cursor)
+    |> assign(end_key, not more?)
+  end
+
+  # Fetches only the page after the stored cursor; a no-op once the end is reached.
+  defp load_more(socket, list, fetch) do
+    {cursor_key, end_key} = Map.fetch!(@page_keys, list)
+
+    if socket.assigns[end_key] do
+      {:noreply, socket}
+    else
+      case fetch.(socket.assigns.current_professional, socket.assigns.patient.id,
+             before: socket.assigns[cursor_key]
+           ) do
+        {:ok, page} -> {:noreply, put_page(socket, list, page)}
+        {:error, _reason} -> {:noreply, socket}
+      end
+    end
+  end
+
   @impl true
+  def handle_event("load_more_active_triggers", _params, socket) do
+    load_more(socket, :active_triggers, fn pro, patient_id, opts ->
+      Triggers.list_triggers_page(pro, patient_id, [kind: "active"] ++ opts)
+    end)
+  end
+
+  def handle_event("load_more_reactive_triggers", _params, socket) do
+    load_more(socket, :reactive_triggers, fn pro, patient_id, opts ->
+      Triggers.list_triggers_page(pro, patient_id, [kind: "reactive"] ++ opts)
+    end)
+  end
+
+  def handle_event("load_more_firings", _params, socket) do
+    load_more(socket, :firings, &Triggers.list_firings_page/3)
+  end
+
   def handle_event("switch_tab", %{"tab" => tab}, socket)
       when tab in ["active", "reactive", "history"] do
     {:noreply, assign(socket, :active_tab, tab)}
@@ -1319,7 +1370,9 @@ defmodule AletheaWeb.TriggersLive.Index do
 
           <div
             id="active-triggers"
+            class="scroll-panel"
             phx-update="stream"
+            phx-viewport-bottom={!@active_triggers_end? && "load_more_active_triggers"}
             style="display: flex; flex-direction: column; gap: 12px;"
           >
             <div
@@ -1579,6 +1632,16 @@ defmodule AletheaWeb.TriggersLive.Index do
               </div>
             </div>
           </div>
+          <div :if={!@active_triggers_end?} class="scroll-panel__more">
+            <button
+              type="button"
+              id="load-more-active-triggers"
+              class="button-secondary button-secondary--sm"
+              phx-click="load_more_active_triggers"
+            >
+              Cargar más
+            </button>
+          </div>
         </div>
       </div>
       <%!-- Panel de Pestaña Reactivos (#448) --%>
@@ -1720,7 +1783,9 @@ defmodule AletheaWeb.TriggersLive.Index do
 
           <div
             id="reactive-triggers"
+            class="scroll-panel"
             phx-update="stream"
+            phx-viewport-bottom={!@reactive_triggers_end? && "load_more_reactive_triggers"}
             style="display: flex; flex-direction: column; gap: 12px;"
           >
             <div
@@ -1907,6 +1972,16 @@ defmodule AletheaWeb.TriggersLive.Index do
               </div>
             </div>
           </div>
+          <div :if={!@reactive_triggers_end?} class="scroll-panel__more">
+            <button
+              type="button"
+              id="load-more-reactive-triggers"
+              class="button-secondary button-secondary--sm"
+              phx-click="load_more_reactive_triggers"
+            >
+              Cargar más
+            </button>
+          </div>
         </div>
       </div>
       <%!-- Panel de Pestaña Historial --%>
@@ -1920,7 +1995,9 @@ defmodule AletheaWeb.TriggersLive.Index do
 
           <div
             id="trigger-firings"
+            class="scroll-panel"
             phx-update="stream"
+            phx-viewport-bottom={!@firings_end? && "load_more_firings"}
             style="display: flex; flex-direction: column; gap: 12px;"
           >
             <div
@@ -1974,6 +2051,16 @@ defmodule AletheaWeb.TriggersLive.Index do
                 <% end %>
               </div>
             </div>
+          </div>
+          <div :if={!@firings_end?} class="scroll-panel__more">
+            <button
+              type="button"
+              id="load-more-firings"
+              class="button-secondary button-secondary--sm"
+              phx-click="load_more_firings"
+            >
+              Cargar más
+            </button>
           </div>
         </div>
       </div>
