@@ -1178,6 +1178,47 @@ defmodule Alethea.Clinical do
     )
   end
 
+  @session_summaries_page_size 20
+
+  @doc """
+  Returns one keyset page of the patient's session summaries since `since`,
+  newest first (`period_end` desc, `id` desc), plus whether more exist.
+
+  Options:
+    * `:limit` — page size (default #{@session_summaries_page_size}).
+    * `:before` — `{period_end, id}` of the last item of the previous page;
+      only items strictly after it in the ordering are returned.
+  """
+  @spec list_session_summaries_page(binary(), DateTime.t(), keyword()) ::
+          {[Summary.t()], boolean()}
+  def list_session_summaries_page(patient_id, since, opts \\ []) do
+    limit = Keyword.get(opts, :limit, @session_summaries_page_size)
+
+    query =
+      from(s in Summary,
+        where:
+          s.patient_id == ^patient_id and
+            s.type == "session" and
+            s.period_start >= ^since,
+        order_by: [desc: s.period_end, desc: s.id],
+        limit: ^(limit + 1)
+      )
+
+    query =
+      case Keyword.get(opts, :before) do
+        {period_end, id} ->
+          from(s in query,
+            where: s.period_end < ^period_end or (s.period_end == ^period_end and s.id < ^id)
+          )
+
+        nil ->
+          query
+      end
+
+    rows = Repo.all(query)
+    {Enum.take(rows, limit), length(rows) > limit}
+  end
+
   @doc """
   Devuelve el reporte semanal más reciente del paciente, o `nil` si no hay ninguno.
 

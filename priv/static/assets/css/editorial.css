@@ -1659,6 +1659,19 @@ select.text-input {
 .status-dot--ok { background: var(--colors-success); }
 .status-dot--info { background: var(--colors-info); }
 
+/* Bounded, internally scrolling list that loads more items on demand. */
+.scroll-panel {
+  max-height: 480px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.scroll-panel__more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+}
+
 /* Patient risk status and per-note risk change marker (clinical notes). */
 .status-pill {
   display: inline-flex;

@@ -436,22 +436,44 @@
     <%!-- Session snapshots — past clinical sessions --%>
     <h3 class="pt-h2">Sesiones anteriores</h3>
 
-    <div :if={@session_summaries == []} class="empty-state">
+    <div :if={@session_summaries_empty?} class="empty-state">
       <p class="empty-state__text" style="margin-bottom:0;">
         Sin sesiones con seguimiento clínico aún.
       </p>
     </div>
 
-    <div :if={@session_summaries != []} class="pta-timeline">
-      <div :for={summary <- @session_summaries} class="pta-timeline__item">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-          <strong style="font-size:13px;">{format_summary_date(summary.period_end)}</strong>
-          <span class={"pt-pill " <> status_pill(summary.status_level)}>
-            {summary.status_level}
-          </span>
-        </div>
+    <div
+      :if={!@session_summaries_empty?}
+      id="session-summaries-panel"
+      class="scroll-panel"
+      phx-viewport-bottom={!@session_summaries_end? && "load_more_session_summaries"}
+    >
+      <div id="session-summaries" phx-update="stream" class="pta-timeline">
+        <div
+          :for={{dom_id, summary} <- @streams.session_summaries}
+          id={dom_id}
+          class="pta-timeline__item"
+        >
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            <strong style="font-size:13px;">{format_summary_date(summary.period_end)}</strong>
+            <span class={"pt-pill " <> status_pill(summary.status_level)}>
+              {summary.status_level}
+            </span>
+          </div>
 
-        <p class="pt-muted">{summary.summary_text}</p>
+          <p class="pt-muted">{summary.summary_text}</p>
+        </div>
+      </div>
+
+      <div :if={!@session_summaries_end?} class="scroll-panel__more">
+        <button
+          id="load-more-session-summaries"
+          type="button"
+          class="button-secondary button-secondary--sm"
+          phx-click="load_more_session_summaries"
+        >
+          Cargar más
+        </button>
       </div>
     </div>
     <%!-- Schedule form + chat decrypt + Telegram invite (per-patient) --%>
