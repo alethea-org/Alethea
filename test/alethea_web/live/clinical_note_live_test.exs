@@ -224,6 +224,108 @@ defmodule AletheaWeb.ClinicalNoteLiveTest do
     end
   end
 
+  describe "pagination" do
+    defp insert_notes!(professional, patient, count) do
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+      base = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for n <- 1..count do
+        {:ok, ciphertext} = PatientVault.encrypt("Nota paginada #{n}", dek)
+
+        %ClinicalNote{inserted_at: DateTime.add(base, n - count - 1, :minute)}
+        |> ClinicalNote.changeset(%{
+          patient_id: patient.id,
+          professional_id: professional.id,
+          encrypted_body: ciphertext
+        })
+        |> Alethea.Repo.insert!()
+      end
+    end
+
+    defp rendered_note_count(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#clinical-notes-list > .pt-card")
+      |> Enum.count()
+    end
+
+    test "renders the newest 20 notes in a scroll panel and loads the rest on demand", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      insert_notes!(professional, patient, 25)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/clinical-notes")
+
+      assert has_element?(view, "#clinical-notes-list.scroll-panel")
+      assert has_element?(view, "#clinical-notes-list[phx-viewport-bottom=load_more_notes]")
+      assert rendered_note_count(view) == 20
+      assert has_element?(view, "#clinical-notes-list", "Nota paginada 25")
+      refute has_element?(view, "#clinical-notes-list", "Nota paginada 5")
+      assert has_element?(view, "#load-more-notes", "Cargar más")
+
+      view |> element("#load-more-notes") |> render_click()
+
+      assert rendered_note_count(view) == 25
+      assert has_element?(view, "#clinical-notes-list", "Nota paginada 1")
+      refute has_element?(view, "#load-more-notes")
+      refute has_element?(view, "#clinical-notes-list[phx-viewport-bottom]")
+    end
+
+    test "loading more after the end is harmless", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      insert_notes!(professional, patient, 25)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/clinical-notes")
+
+      render_hook(view, "load_more_notes", %{})
+      render_hook(view, "load_more_notes", %{})
+
+      assert rendered_note_count(view) == 25
+    end
+
+    test "shows no load-more button with 20 notes or fewer", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      insert_notes!(professional, patient, 20)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/clinical-notes")
+
+      assert rendered_note_count(view) == 20
+      refute has_element?(view, "#load-more-notes")
+    end
+
+    test "a new note appears at the top of a paginated list", %{
+      conn: conn,
+      patient: patient,
+      professional: professional
+    } do
+      insert_notes!(professional, patient, 25)
+      {:ok, view, _html} = live(conn, ~p"/patients/#{patient.id}/clinical-notes")
+
+      view
+      |> form("#clinical-note-form", clinical_note: %{body: "Nota recién creada"})
+      |> render_submit()
+
+      assert rendered_note_count(view) == 21
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#clinical-notes-list > .pt-card")
+             |> Enum.at(0)
+             |> LazyHTML.text() =~ "Nota recién creada"
+
+      view |> element("#load-more-notes") |> render_click()
+      assert rendered_note_count(view) == 26
+    end
+  end
+
   defp register_and_log_in_professional(%{conn: conn}) do
     professional = create_professional!()
     %{conn: log_in_professional(conn, professional), professional: professional}

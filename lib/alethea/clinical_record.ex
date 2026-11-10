@@ -167,6 +167,69 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
+  @clinical_notes_page_size 20
+
+  @typedoc "Keyset cursor: the `{inserted_at, id}` of the last note already shown."
+  @type clinical_note_cursor :: {DateTime.t(), Ecto.UUID.t()}
+
+  @doc """
+  Lists one page of clinical notes for an authorized patient, newest first
+  (`inserted_at` desc, `id` desc), decrypting only the notes in the page.
+
+  Options:
+
+    * `:limit` — page size (default #{@clinical_notes_page_size}).
+    * `:before` — a `t:clinical_note_cursor/0`; only notes strictly older than
+      it (in the listing order) are returned. Omit it for the first page.
+
+  Returns `{:ok, %{entries: notes, has_more?: boolean}}`, or
+  `{:error, :unauthorized}` when the professional may not see the patient.
+  """
+  @spec list_clinical_notes_page(Professional.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, %{entries: [ClinicalNote.t()], has_more?: boolean()}}
+          | {:error, :unauthorized | term()}
+  def list_clinical_notes_page(%Professional{} = professional, patient_id, opts) do
+    limit = Keyword.get(opts, :limit, @clinical_notes_page_size)
+
+    case Accounts.get_patient_for_professional(professional.id, patient_id) do
+      nil ->
+        deny_access(professional.id, patient_id)
+
+      patient ->
+        with {:ok, kek} <- Accounts.load_professional_kek(professional),
+             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
+          rows =
+            ClinicalNote
+            |> where([n], n.patient_id == ^patient.id)
+            |> notes_before(Keyword.get(opts, :before))
+            |> order_by([n], desc: n.inserted_at, desc: n.id)
+            |> limit(^(limit + 1))
+            |> Repo.all()
+
+          {page, rest} = Enum.split(rows, limit)
+
+          entries =
+            page
+            |> Repo.preload(:professional)
+            |> Enum.map(fn note ->
+              %{note | body: decrypt_or_placeholder(note.encrypted_body, dek)}
+            end)
+
+          {:ok, %{entries: entries, has_more?: rest != []}}
+        end
+    end
+  end
+
+  defp notes_before(query, nil), do: query
+
+  defp notes_before(query, {inserted_at, id}) do
+    where(
+      query,
+      [n],
+      n.inserted_at < ^inserted_at or (n.inserted_at == ^inserted_at and n.id < ^id)
+    )
+  end
+
   @doc """
   Lists target behaviors for an authorized patient in reverse-chronological
   order. Each result contains only the target behavior id, its decrypted
@@ -512,6 +575,35 @@ defmodule Alethea.ClinicalRecord do
   def list_evidence_sources(%Professional{} = professional, patient_id) do
     with_patient(professional, patient_id, fn patient, keyring ->
       EvidenceSource.list(patient.id, keyring)
+    end)
+  end
+
+  @doc """
+  Lists one page of the citable evidence sources of an authorized patient, in
+  the `list_evidence_sources/2` order, decrypting only that page. Accepts the
+  `EvidenceSource.list_page/3` options (`:limit`, `:before`; build the cursor
+  with `EvidenceSource.cursor/1`).
+  """
+  @spec list_evidence_sources_page(Professional.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, %{entries: [EvidenceSource.t()], has_more?: boolean()}}
+          | {:error, :unauthorized | term()}
+  def list_evidence_sources_page(%Professional{} = professional, patient_id, opts) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      EvidenceSource.list_page(patient.id, keyring, opts)
+    end)
+  end
+
+  @doc """
+  Fetches one citable evidence source (`"clinical_note"`, `"message"` or
+  `"session_transcript"`) of an authorized patient. Missing, malformed or
+  foreign ids return `{:error, :not_found}`.
+  """
+  @spec get_evidence_source(Professional.t(), Ecto.UUID.t(), String.t(), String.t()) ::
+          {:ok, EvidenceSource.t()}
+          | {:error, :unauthorized | :not_found | :unsupported_source | term()}
+  def get_evidence_source(%Professional{} = professional, patient_id, kind, source_id) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      EvidenceSource.fetch(kind, source_id, patient.id, keyring)
     end)
   end
 

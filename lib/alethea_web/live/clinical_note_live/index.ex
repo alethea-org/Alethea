@@ -21,8 +21,8 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
          |> push_navigate(to: ~p"/patients")}
 
       patient ->
-        case ClinicalRecord.list_clinical_notes(professional, patient_id) do
-          {:ok, notes} ->
+        case ClinicalRecord.list_clinical_notes_page(professional, patient_id, []) do
+          {:ok, %{entries: notes} = page} ->
             socket =
               socket
               |> assign(:page_title, "Notas clínicas · #{patient.alias}")
@@ -30,6 +30,7 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
               |> assign(:form, empty_form())
               |> assign(:notes_empty?, notes == [])
               |> stream(:clinical_notes, notes)
+              |> assign_notes_page(page)
 
             {:ok, socket}
 
@@ -46,6 +47,26 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
   end
 
   @impl true
+  def handle_event("load_more_notes", _params, %{assigns: %{notes_end?: true}} = socket),
+    do: {:noreply, socket}
+
+  def handle_event("load_more_notes", _params, socket) do
+    professional = socket.assigns.current_professional
+
+    case ClinicalRecord.list_clinical_notes_page(professional, socket.assigns.patient.id,
+           before: socket.assigns.notes_cursor
+         ) do
+      {:ok, %{entries: notes} = page} ->
+        {:noreply,
+         socket
+         |> stream(:clinical_notes, notes)
+         |> assign_notes_page(page)}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "No se pudieron cargar más notas clínicas.")}
+    end
+  end
+
   def handle_event("save_note", %{"clinical_note" => %{"body" => body} = params}, socket) do
     trimmed_body = String.trim(body)
     risk_change = parse_risk_change(params["risk_change"])
@@ -82,6 +103,20 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
           {:noreply, put_flash(socket, :error, "No se pudo crear la nota clínica.")}
       end
     end
+  end
+
+  # Keeps the keyset cursor at the oldest note loaded so far. A page with no
+  # entries keeps the previous cursor.
+  defp assign_notes_page(socket, %{entries: entries, has_more?: has_more?}) do
+    cursor =
+      case List.last(entries) do
+        nil -> Map.get(socket.assigns, :notes_cursor)
+        note -> {note.inserted_at, note.id}
+      end
+
+    socket
+    |> assign(:notes_cursor, cursor)
+    |> assign(:notes_end?, !has_more?)
   end
 
   defp empty_form, do: to_form(%{"body" => "", "risk_change" => "none"}, as: "clinical_note")
@@ -216,7 +251,9 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
 
         <div
           id="clinical-notes-list"
+          class="scroll-panel"
           phx-update="stream"
+          phx-viewport-bottom={!@notes_end? && "load_more_notes"}
           style="display: flex; flex-direction: column; gap: 16px;"
         >
           <div
@@ -255,6 +292,17 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
               </p>
             </div>
           </div>
+        </div>
+
+        <div :if={!@notes_end?} class="scroll-panel__more">
+          <button
+            type="button"
+            id="load-more-notes"
+            class="button-secondary button-secondary--sm"
+            phx-click="load_more_notes"
+          >
+            Cargar más
+          </button>
         </div>
       </div>
     </div>
