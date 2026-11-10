@@ -42,7 +42,11 @@ defmodule AletheaWeb.DashboardLive do
       |> assign(:selected_patient, nil)
       |> assign(:weekly_summary, nil)
       |> assign(:weekly_summary_status, :idle)
-      |> assign(:session_summaries, [])
+      |> stream(:session_summaries, [])
+      |> assign(:session_summaries_since, nil)
+      |> assign(:session_summaries_cursor, nil)
+      |> assign(:session_summaries_end?, true)
+      |> assign(:session_summaries_empty?, true)
       |> assign(:emotion_rows, [])
       |> assign(:emotion_chart_data, [])
       |> assign(:mood_signal, default_mood_signal())
@@ -179,6 +183,10 @@ defmodule AletheaWeb.DashboardLive do
       |> stream(:decrypted_messages, decrypted_messages, reset: true)
 
     {:noreply, socket}
+  end
+
+  def handle_event("load_more_session_summaries", _params, socket) do
+    {:noreply, load_more_session_summaries(socket)}
   end
 
   def handle_event("save_session_schedule", %{"day" => day, "time" => time}, socket) do
@@ -641,6 +649,58 @@ defmodule AletheaWeb.DashboardLive do
     end
   end
 
+  # Session summaries (last 30 days), paginated newest first so the
+  # "Sesiones anteriores" panel never loads the whole history at once.
+  defp load_first_session_summaries_page(socket, patient, true = _use_mock?) do
+    summaries = MockData.list_mock_summaries(patient.id, "session")
+
+    socket
+    |> stream(:session_summaries, summaries, reset: true)
+    |> assign(:session_summaries_since, nil)
+    |> assign(:session_summaries_cursor, nil)
+    |> assign(:session_summaries_end?, true)
+    |> assign(:session_summaries_empty?, Enum.empty?(summaries))
+  end
+
+  defp load_first_session_summaries_page(socket, patient, false = _use_mock?) do
+    since = DateTime.utc_now() |> DateTime.add(-30, :day)
+    {summaries, more?} = Alethea.Clinical.list_session_summaries_page(patient.id, since)
+
+    socket
+    |> stream(:session_summaries, summaries, reset: true)
+    |> assign(:session_summaries_since, since)
+    |> assign(:session_summaries_cursor, session_summary_cursor(summaries))
+    |> assign(:session_summaries_end?, not more?)
+    |> assign(:session_summaries_empty?, summaries == [])
+  end
+
+  defp load_more_session_summaries(%{assigns: %{session_summaries_end?: true}} = socket),
+    do: socket
+
+  defp load_more_session_summaries(socket) do
+    %{selected_patient: patient, session_summaries_since: since} = socket.assigns
+
+    {summaries, more?} =
+      Alethea.Clinical.list_session_summaries_page(patient.id, since,
+        before: socket.assigns.session_summaries_cursor
+      )
+
+    socket
+    |> stream(:session_summaries, summaries, at: -1)
+    |> assign(
+      :session_summaries_cursor,
+      session_summary_cursor(summaries) || socket.assigns.session_summaries_cursor
+    )
+    |> assign(:session_summaries_end?, not more?)
+  end
+
+  defp session_summary_cursor([]), do: nil
+
+  defp session_summary_cursor(summaries) do
+    last = List.last(summaries)
+    {last.period_end, last.id}
+  end
+
   defp find_patient(socket, id) do
     if socket.assigns.use_mock_data do
       Enum.find(socket.assigns.patients, &(&1.id == id))
@@ -658,19 +718,6 @@ defmodule AletheaWeb.DashboardLive do
         List.first(MockData.list_mock_summaries(patient.id, "weekly"))
       else
         Alethea.Clinical.latest_weekly_summary(patient.id)
-      end
-
-    # Session summaries (last 30 days)
-    session_summaries =
-      if use_mock? do
-        MockData.list_mock_summaries(patient.id, "session")
-      else
-        Alethea.Clinical.list_session_summaries(
-          patient.id,
-          DateTime.utc_now() |> DateTime.add(-30, :day)
-        )
-        |> Enum.filter(&(&1.type == "session"))
-        |> Enum.sort_by(& &1.period_end, {:desc, Date})
       end
 
     # Trends (last 7 days)
@@ -711,7 +758,7 @@ defmodule AletheaWeb.DashboardLive do
       to_form(%{"timezone" => patient.timezone || "Etc/UTC"})
     )
     |> assign(:weekly_summary, weekly_summary)
-    |> assign(:session_summaries, session_summaries)
+    |> load_first_session_summaries_page(patient, use_mock?)
     |> assign(:emotion_rows, emotion_rows)
     |> assign(:emotion_chart_data, emotion_chart_data)
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))

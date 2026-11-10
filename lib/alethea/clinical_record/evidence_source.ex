@@ -64,6 +64,109 @@ defmodule Alethea.ClinicalRecord.EvidenceSource do
     end
   end
 
+  @default_page_size 20
+
+  @typedoc """
+  Keyset cursor for `list_page/3`: `{priority, occurred_at, id}` of the last
+  source already shown. Priority 0 is an inbound message; 1 is anything else.
+  """
+  @type cursor :: {0 | 1, DateTime.t(), Ecto.UUID.t()}
+
+  @doc """
+  Lists one page of eligible sources in exactly the `list/2` order (inbound
+  messages first, then outbound messages and clinical notes; each group newest
+  first, ties broken by ascending id), decrypting only the returned page.
+
+  Options: `:limit` (default #{@default_page_size}) and `:before`, a
+  `t:cursor/0` (see `cursor/1`) — only sources after it in that order are
+  returned. Returns `{:ok, %{entries: [t()], has_more?: boolean()}}`.
+  """
+  @spec list_page(Ecto.UUID.t(), keyring(), keyword()) ::
+          {:ok, %{entries: [t()], has_more?: boolean()}} | {:error, term()}
+  def list_page(patient_id, keyring, opts) do
+    limit = Keyword.get(opts, :limit, @default_page_size)
+    cursor = Keyword.get(opts, :before)
+
+    # Each query fetches at most limit + 1 rows past the cursor; merging and
+    # taking limit + 1 then yields the page plus a "more exist" probe.
+    inbound =
+      if inbound_pending?(cursor) do
+        Journaling.Message
+        |> where([m], m.patient_id == ^patient_id and m.direction == "inbound")
+        |> after_cursor(cursor, 0, :timestamp)
+        |> page_query(:timestamp, limit)
+        |> Repo.all()
+        |> Enum.map(&{:message, &1, 0, &1.timestamp})
+      else
+        []
+      end
+
+    rest =
+      if length(inbound) > limit do
+        []
+      else
+        outbound =
+          Journaling.Message
+          |> where(
+            [m],
+            m.patient_id == ^patient_id and (is_nil(m.direction) or m.direction != "inbound")
+          )
+          |> after_cursor(cursor, 1, :timestamp)
+          |> page_query(:timestamp, limit)
+          |> Repo.all()
+          |> Enum.map(&{:message, &1, 1, &1.timestamp})
+
+        notes =
+          ClinicalNote
+          |> where([n], n.patient_id == ^patient_id)
+          |> after_cursor(cursor, 1, :inserted_at)
+          |> page_query(:inserted_at, limit)
+          |> Repo.all()
+          |> Enum.map(&{:clinical_note, &1, 1, &1.inserted_at})
+
+        Enum.sort_by(outbound ++ notes, fn {_kind, row, _priority, at} ->
+          {-DateTime.to_unix(utc_datetime(at), :microsecond), row.id}
+        end)
+      end
+
+    {page, probe} = Enum.split(Enum.take(inbound ++ rest, limit + 1), limit)
+
+    with {:ok, sources} <- decrypt_all(page, &decrypt_row(&1, keyring)) do
+      {:ok, %{entries: Enum.reverse(sources), has_more?: probe != []}}
+    end
+  end
+
+  @doc "Returns the `list_page/3` cursor that continues after `source`."
+  @spec cursor(t()) :: cursor()
+  def cursor(%__MODULE__{} = source) do
+    {priority, _negated_at, id} = sort_key(source)
+    {priority, source.occurred_at, id}
+  end
+
+  defp inbound_pending?(nil), do: true
+  defp inbound_pending?({priority, _at, _id}), do: priority == 0
+
+  # Rows of `priority` strictly after the cursor in (occurred_at desc, id asc)
+  # order. A cursor in an earlier priority group leaves this group unfiltered.
+  defp after_cursor(query, {priority, at, id}, priority, field) do
+    where(
+      query,
+      [r],
+      field(r, ^field) < ^at or (field(r, ^field) == ^at and r.id > ^id)
+    )
+  end
+
+  defp after_cursor(query, _cursor, _priority, _field), do: query
+
+  defp page_query(query, field, limit) do
+    query
+    |> order_by([r], desc: field(r, ^field), asc: r.id)
+    |> limit(^(limit + 1))
+  end
+
+  defp decrypt_row({:message, row, _priority, _at}, keyring), do: from_message(row, keyring)
+  defp decrypt_row({:clinical_note, row, _priority, _at}, keyring), do: from_note(row, keyring)
+
   @doc """
   Re-fetches one eligible source under the owning patient. Unsupported kinds
   and missing, malformed, or foreign ids are rejected without exposing rows.

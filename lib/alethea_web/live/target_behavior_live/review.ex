@@ -34,6 +34,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   alias Alethea.AI.Chains.FunctionalAnalysisDraftChain
   alias Alethea.AI.Sanitizer
   alias Alethea.ClinicalRecord
+  alias Alethea.ClinicalRecord.EvidenceSource
   alias Alethea.ClinicalRecord.FunctionalAnalysisContent
   alias Alethea.ClinicalRecord.FunctionalAnalysisDraft
   alias Alethea.ClinicalRecord.FunctionalAnalysisVersion
@@ -140,7 +141,11 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
           |> assign(:active_input_tab, :evidence)
           |> assign(:observation_form_open, false)
           |> assign(:citation_step, nil)
-          |> assign(:evidence_sources, [])
+          |> stream_configure(:evidence_sources, dom_id: &"evidence-source-#{&1.id}")
+          |> stream(:evidence_sources, [])
+          |> assign(:evidence_sources_empty?, true)
+          |> assign(:evidence_sources_cursor, nil)
+          |> assign(:evidence_sources_end?, true)
           |> assign(:selected_evidence_source, nil)
           |> assign(:citation_excerpt, nil)
           |> assign(:citation_error, nil)
@@ -293,13 +298,15 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
     professional = socket.assigns.current_professional
     patient_id = socket.assigns.patient_id
 
-    case ClinicalRecord.list_evidence_sources(professional, patient_id) do
-      {:ok, sources} ->
+    case ClinicalRecord.list_evidence_sources_page(professional, patient_id, []) do
+      {:ok, %{entries: sources} = page} ->
         {:noreply,
          socket
          |> reset_citation()
          |> assign(:citation_step, :select)
-         |> assign(:evidence_sources, sources)}
+         |> assign(:evidence_sources_empty?, sources == [])
+         |> stream(:evidence_sources, sources, reset: true)
+         |> assign_evidence_sources_page(page)}
 
       {:error, _reason} ->
         {:noreply,
@@ -311,11 +318,45 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   end
 
   @impl true
+  def handle_event("load_more_sources", _params, socket) do
+    if socket.assigns.citation_step == :select and not socket.assigns.evidence_sources_end? do
+      case ClinicalRecord.list_evidence_sources_page(
+             socket.assigns.current_professional,
+             socket.assigns.patient_id,
+             before: socket.assigns.evidence_sources_cursor
+           ) do
+        {:ok, %{entries: sources} = page} ->
+          {:noreply,
+           socket
+           |> stream(:evidence_sources, sources)
+           |> assign_evidence_sources_page(page)}
+
+        {:error, _reason} ->
+          {:noreply,
+           assign(socket, :citation_error, "No se pudieron cargar más fuentes de evidencia.")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
   def handle_event("select_evidence_source", %{"id" => id, "kind" => kind}, socket) do
+    # The feed is a stream (not kept server-side), so the selected source is
+    # re-fetched, scoped to the authorized patient. Only listed kinds qualify.
     source =
-      Enum.find(socket.assigns.evidence_sources, fn source ->
-        source.id == id and Atom.to_string(source.kind) == kind
-      end)
+      with true <- kind in ["clinical_note", "message"],
+           {:ok, source} <-
+             ClinicalRecord.get_evidence_source(
+               socket.assigns.current_professional,
+               socket.assigns.patient_id,
+               kind,
+               id
+             ) do
+        source
+      else
+        _ -> nil
+      end
 
     if source do
       {:noreply,
@@ -1677,11 +1718,28 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
   defp reset_citation(socket) do
     socket
     |> assign(:citation_step, nil)
-    |> assign(:evidence_sources, [])
+    |> stream(:evidence_sources, [], reset: true)
+    |> assign(:evidence_sources_empty?, true)
+    |> assign(:evidence_sources_cursor, nil)
+    |> assign(:evidence_sources_end?, true)
     |> assign(:selected_evidence_source, nil)
     |> assign(:citation_excerpt, nil)
     |> assign(:citation_error, nil)
     |> assign(:citation_form, to_form(%{"excerpt" => ""}, as: "citation"))
+  end
+
+  # Keeps the keyset cursor at the last source loaded so far. A page with no
+  # entries keeps the previous cursor.
+  defp assign_evidence_sources_page(socket, %{entries: entries, has_more?: has_more?}) do
+    cursor =
+      case List.last(entries) do
+        nil -> socket.assigns.evidence_sources_cursor
+        source -> EvidenceSource.cursor(source)
+      end
+
+    socket
+    |> assign(:evidence_sources_cursor, cursor)
+    |> assign(:evidence_sources_end?, !has_more?)
   end
 
   defp redirect_to_patients(socket, :unauthorized) do
@@ -2401,34 +2459,49 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
               <div
                 id="evidence-source-feed"
+                class="scroll-panel"
                 aria-labelledby="evidence-source-feed-label"
                 aria-describedby="evidence-source-feed-description"
+                phx-viewport-bottom={!@evidence_sources_end? && "load_more_sources"}
               >
-                <p :if={@evidence_sources == []} class="pt-muted">
+                <p :if={@evidence_sources_empty?} class="pt-muted">
                   No hay notas ni mensajes disponibles para citar.
                 </p>
 
+                <div id="evidence-source-feed-items" phx-update="stream">
+                  <button
+                    :for={{dom_id, source} <- @streams.evidence_sources}
+                    type="button"
+                    id={dom_id}
+                    phx-click="select_evidence_source"
+                    phx-value-id={source.id}
+                    phx-value-kind={source.kind}
+                    class={["evidence-source-card", evidence_source_card_class(source)]}
+                  >
+                    <span class="evidence-source-card__meta">
+                      <strong class="evidence-source-card__type">
+                        {evidence_source_type_label(source)}
+                      </strong>
+                      <span class="evidence-source-card__date">
+                        {format_datetime(source.occurred_at)}
+                      </span>
+                      <span class="evidence-source-card__provenance">
+                        {evidence_source_provenance(source)}
+                      </span>
+                    </span>
+                    <span class="evidence-source-card__content">{source.content}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div :if={!@evidence_sources_end?} class="scroll-panel__more">
                 <button
-                  :for={source <- @evidence_sources}
                   type="button"
-                  id={"evidence-source-#{source.id}"}
-                  phx-click="select_evidence_source"
-                  phx-value-id={source.id}
-                  phx-value-kind={source.kind}
-                  class={["evidence-source-card", evidence_source_card_class(source)]}
+                  id="load-more-sources"
+                  class="button-secondary button-secondary--sm"
+                  phx-click="load_more_sources"
                 >
-                  <span class="evidence-source-card__meta">
-                    <strong class="evidence-source-card__type">
-                      {evidence_source_type_label(source)}
-                    </strong>
-                    <span class="evidence-source-card__date">
-                      {format_datetime(source.occurred_at)}
-                    </span>
-                    <span class="evidence-source-card__provenance">
-                      {evidence_source_provenance(source)}
-                    </span>
-                  </span>
-                  <span class="evidence-source-card__content">{source.content}</span>
+                  Cargar más
                 </button>
               </div>
             </div>

@@ -575,6 +575,106 @@ defmodule Alethea.Triggers do
     end
   end
 
+  @default_page_size 20
+
+  @doc """
+  Lists one page of a patient's non-archived triggers of a single kind with
+  keyset pagination. Scheduled (`"active"`) triggers keep the soonest-first
+  order of `list_triggers/2` (`scheduled_at` asc, `id` asc); reactive ones
+  have no schedule and are listed newest first (`inserted_at` desc, `id` desc).
+
+  Options:
+    * `:kind` — `"active"` (scheduled, default) or `"reactive"`; filtered in the query.
+    * `:limit` — page size (default #{@default_page_size}).
+    * `:before` — cursor returned by a previous page; only older triggers are returned.
+
+  Returns `{:ok, %{entries: triggers, more?: boolean, cursor: cursor | nil}}`.
+  """
+  @spec list_triggers_page(Accounts.Professional.t(), binary(), keyword()) ::
+          {:ok, %{entries: [Trigger.t()], more?: boolean(), cursor: term()}}
+          | {:error, :unauthorized}
+  def list_triggers_page(%Accounts.Professional{} = professional, patient_id, opts \\ [])
+      when is_binary(patient_id) do
+    kind = Keyword.get(opts, :kind, "active")
+    limit = Keyword.get(opts, :limit, @default_page_size)
+
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         %Accounts.Patient{} = patient <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
+      rows =
+        Trigger
+        |> where(
+          [t],
+          t.patient_id == ^valid_patient_id and t.kind == ^kind and is_nil(t.archived_at)
+        )
+        |> trigger_page_order(kind, Keyword.get(opts, :before))
+        |> limit(^(limit + 1))
+        |> Repo.all()
+
+      {entries, more?} = split_page(rows, limit)
+
+      decrypted =
+        case Clinical.patient_dek(patient, "trigger_listing") do
+          {:ok, dek} -> Enum.map(entries, &decrypt_trigger_fields(&1, dek))
+          _ -> entries
+        end
+
+      {:ok,
+       %{
+         entries: decrypted,
+         more?: more?,
+         cursor: page_cursor(entries, &trigger_cursor(&1, kind))
+       }}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  defp trigger_page_order(query, "active", cursor) do
+    query =
+      case cursor do
+        {%DateTime{} = scheduled_at, id} ->
+          where(
+            query,
+            [t],
+            t.scheduled_at > ^scheduled_at or (t.scheduled_at == ^scheduled_at and t.id > ^id)
+          )
+
+        nil ->
+          query
+      end
+
+    order_by(query, [t], asc: t.scheduled_at, asc: t.id)
+  end
+
+  defp trigger_page_order(query, _reactive, cursor) do
+    query =
+      case cursor do
+        {%DateTime{} = inserted_at, id} ->
+          where(
+            query,
+            [t],
+            t.inserted_at < ^inserted_at or (t.inserted_at == ^inserted_at and t.id < ^id)
+          )
+
+        nil ->
+          query
+      end
+
+    order_by(query, [t], desc: t.inserted_at, desc: t.id)
+  end
+
+  defp trigger_cursor(trigger, "active"), do: {trigger.scheduled_at, trigger.id}
+  defp trigger_cursor(trigger, _reactive), do: {trigger.inserted_at, trigger.id}
+
+  defp split_page(rows, limit) do
+    {entries, rest} = Enum.split(rows, limit)
+    {entries, rest != []}
+  end
+
+  defp page_cursor([], _key_fun), do: nil
+  defp page_cursor(entries, key_fun), do: entries |> List.last() |> key_fun.()
+
   @doc """
   Lists active and approved triggers for a given patient.
   Decrypts instruction and approved_text using patient DEK.
@@ -1453,6 +1553,55 @@ defmodule Alethea.Triggers do
     else
       _ -> {:error, :unauthorized}
     end
+  end
+
+  @doc """
+  Lists one page of a patient's trigger firings, newest first
+  (`fired_at` desc, `id` desc) with keyset pagination.
+
+  Options:
+    * `:limit` — page size (default #{@default_page_size}).
+    * `:before` — cursor returned by a previous page; only older firings are returned.
+
+  Returns `{:ok, %{entries: firings, more?: boolean, cursor: cursor | nil}}`.
+  """
+  @spec list_firings_page(Accounts.Professional.t(), binary(), keyword()) ::
+          {:ok, %{entries: [TriggerFiring.t()], more?: boolean(), cursor: term()}}
+          | {:error, :unauthorized}
+  def list_firings_page(%Accounts.Professional{} = professional, patient_id, opts \\ [])
+      when is_binary(patient_id) do
+    limit = Keyword.get(opts, :limit, @default_page_size)
+
+    with {:ok, valid_patient_id} <- Ecto.UUID.cast(patient_id),
+         %Accounts.Patient{} <-
+           Accounts.get_patient_for_professional(professional.id, valid_patient_id) do
+      rows =
+        TriggerFiring
+        |> join(:inner, [f], t in assoc(f, :trigger))
+        |> where([f, t], t.patient_id == ^valid_patient_id)
+        |> firing_keyset_before(Keyword.get(opts, :before))
+        |> order_by([f], desc: f.fired_at, desc: f.id)
+        |> limit(^(limit + 1))
+        |> preload([:trigger, :message])
+        |> Repo.all()
+
+      {entries, more?} = split_page(rows, limit)
+
+      {:ok,
+       %{entries: entries, more?: more?, cursor: page_cursor(entries, &{&1.fired_at, &1.id})}}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  defp firing_keyset_before(query, nil), do: query
+
+  defp firing_keyset_before(query, {%DateTime{} = fired_at, id}) do
+    where(
+      query,
+      [f],
+      f.fired_at < ^fired_at or (f.fired_at == ^fired_at and f.id < ^id)
+    )
   end
 
   @doc """
