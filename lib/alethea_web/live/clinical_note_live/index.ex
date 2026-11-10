@@ -27,7 +27,7 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
               socket
               |> assign(:page_title, "Notas clínicas · #{patient.alias}")
               |> assign(:patient, patient)
-              |> assign(:form, to_form(%{"body" => ""}, as: "clinical_note"))
+              |> assign(:form, empty_form())
               |> assign(:notes_empty?, notes == [])
               |> stream(:clinical_notes, notes)
 
@@ -46,8 +46,9 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
   end
 
   @impl true
-  def handle_event("save_note", %{"clinical_note" => %{"body" => body}}, socket) do
+  def handle_event("save_note", %{"clinical_note" => %{"body" => body} = params}, socket) do
     trimmed_body = String.trim(body)
+    risk_change = parse_risk_change(params["risk_change"])
 
     if trimmed_body == "" do
       {:noreply,
@@ -57,22 +58,44 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
       professional = socket.assigns.current_professional
       patient = socket.assigns.patient
 
-      case ClinicalRecord.create_clinical_note(professional, patient.id, trimmed_body) do
+      case ClinicalRecord.create_clinical_note(professional, patient.id, trimmed_body,
+             risk_change: risk_change
+           ) do
         {:ok, note} ->
           note_with_body = %{note | body: trimmed_body, professional: professional}
 
           {:noreply,
            socket
            |> assign(:notes_empty?, false)
-           |> assign(:form, to_form(%{"body" => ""}, as: "clinical_note"))
+           |> assign(:form, empty_form())
+           |> assign(:patient, apply_risk_flag(patient, risk_change))
            |> stream_insert(:clinical_notes, note_with_body, at: 0)
            |> put_flash(:info, "Nota clínica creada exitosamente.")}
+
+        {:error, :risk_already_active} ->
+          {:noreply, put_flash(socket, :error, "El paciente ya tiene un riesgo activo.")}
+
+        {:error, :risk_not_active} ->
+          {:noreply, put_flash(socket, :error, "El paciente no tiene un riesgo activo.")}
 
         {:error, _reason} ->
           {:noreply, put_flash(socket, :error, "No se pudo crear la nota clínica.")}
       end
     end
   end
+
+  defp empty_form, do: to_form(%{"body" => "", "risk_change" => "none"}, as: "clinical_note")
+
+  defp parse_risk_change("activated"), do: :activated
+  defp parse_risk_change("deactivated"), do: :deactivated
+  defp parse_risk_change(_), do: nil
+
+  defp apply_risk_flag(patient, :activated), do: %{patient | urgent_intervention: true}
+  defp apply_risk_flag(patient, :deactivated), do: %{patient | urgent_intervention: false}
+  defp apply_risk_flag(patient, nil), do: patient
+
+  defp risk_change_label("activated"), do: "Riesgo activado"
+  defp risk_change_label("deactivated"), do: "Riesgo desactivado"
 
   defp format_datetime(%DateTime{} = datetime) do
     Calendar.strftime(datetime, "%d/%m/%Y %H:%M")
@@ -98,6 +121,17 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
           <h1 class="pt-h1">Notas clínicas · {@patient.alias}</h1>
           <p class="pt-muted">Registro canónico de notas clínicas del paciente.</p>
         </div>
+        <span
+          id="patient-risk-status"
+          class={["status-pill", @patient.urgent_intervention && "status-pill--risk"]}
+        >
+          <span class={[
+            "status-dot",
+            if(@patient.urgent_intervention, do: "status-dot--risk", else: "status-dot--ok")
+          ]}>
+          </span>
+          {if @patient.urgent_intervention, do: "Riesgo activo", else: "Sin riesgo activo"}
+        </span>
       </div>
 
       <%!-- Card de Creación de Nota --%>
@@ -129,6 +163,31 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
               placeholder="Describí las observaciones clínicas, evolución o aspectos relevantes..."
               rows="4"
             />
+            <fieldset id="risk-change-fieldset" style="margin-top: 12px; border: 0; padding: 0;">
+              <legend class="pt-eyebrow" style="margin-bottom: 6px;">Riesgo del paciente</legend>
+              <div style="display: flex; flex-wrap: wrap; gap: 16px;">
+                <label
+                  :for={
+                    {value, label} <- [
+                      {"none", "Sin cambios"},
+                      {"activated", "Activar riesgo"},
+                      {"deactivated", "Desactivar riesgo"}
+                    ]
+                  }
+                  for={"risk-change-#{value}"}
+                  style="display: inline-flex; align-items: center; gap: 6px; font-size: 14px;"
+                >
+                  <input
+                    type="radio"
+                    id={"risk-change-#{value}"}
+                    name={@form[:risk_change].name}
+                    value={value}
+                    checked={@form[:risk_change].value == value}
+                  />
+                  {label}
+                </label>
+              </div>
+            </fieldset>
             <div class="form-actions" style="margin-top: 12px;">
               <button
                 type="submit"
@@ -176,6 +235,15 @@ defmodule AletheaWeb.ClinicalNoteLive.Index do
                     do: note.professional.full_name || note.professional.email,
                     else: "Profesional"}
                 </strong>
+                <span
+                  :if={note.risk_change}
+                  class={[
+                    "risk-change-badge status-pill",
+                    note.risk_change == "activated" && "status-pill--risk"
+                  ]}
+                >
+                  {risk_change_label(note.risk_change)}
+                </span>
               </div>
               <span class="pt-eyebrow" style="margin: 0;">
                 {format_datetime(note.inserted_at)}

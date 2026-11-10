@@ -1659,6 +1659,24 @@ select.text-input {
 .status-dot--ok { background: var(--colors-success); }
 .status-dot--info { background: var(--colors-info); }
 
+/* Patient risk status and per-note risk change marker (clinical notes). */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-pill);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--colors-ink);
+}
+.status-pill--risk {
+  border-color: var(--colors-danger);
+  color: var(--colors-danger);
+}
+
 /* =================================================================
    Empty states — a hairline frame, never a dashed novelty box.
 ================================================================= */
