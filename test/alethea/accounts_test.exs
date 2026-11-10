@@ -229,6 +229,23 @@ defmodule Alethea.AccountsTest do
     end
   end
 
+  describe "flag_urgent_intervention/1" do
+    test "sets the flag in the database even when given a stale flagged struct", %{
+      professional: pro,
+      kek: kek
+    } do
+      {:ok, patient} = Accounts.create_patient(%{alias: "Stale", professional_id: pro.id}, kek)
+      {:ok, stale_flagged} = Accounts.update_patient(patient, %{urgent_intervention: true})
+
+      # A professional deactivates the risk after the struct was loaded.
+      {:ok, _} = Accounts.update_patient(stale_flagged, %{urgent_intervention: false})
+
+      assert {:ok, flagged} = Accounts.flag_urgent_intervention(stale_flagged)
+      assert flagged.urgent_intervention
+      assert Accounts.get_patient!(patient.id).urgent_intervention
+    end
+  end
+
   describe "patient timezone inheritance and update (Issue #439, S1, S2, S3, S4)" do
     test "update_patient/2 preserves its atom-key whitelist", %{professional: pro, kek: kek} do
       {:ok, patient} =
