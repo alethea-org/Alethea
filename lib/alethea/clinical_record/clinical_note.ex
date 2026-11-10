@@ -23,6 +23,9 @@ defmodule Alethea.ClinicalRecord.ClinicalNote do
     field :encrypted_body, :binary
     field :encryption_version, :integer, default: 1
     field :body, :string, virtual: true
+    # "activated" | "deactivated" | nil — the patient's risk flag change
+    # this note documents, written once at insert time.
+    field :risk_change, :string
 
     belongs_to :patient, Alethea.Accounts.Patient
     belongs_to :professional, Alethea.Accounts.Professional
@@ -36,7 +39,15 @@ defmodule Alethea.ClinicalRecord.ClinicalNote do
   """
   def changeset(clinical_note, attrs) do
     clinical_note
-    |> cast(attrs, [:encrypted_body, :encryption_version, :patient_id, :professional_id])
+    |> cast(attrs, [
+      :encrypted_body,
+      :encryption_version,
+      :patient_id,
+      :professional_id,
+      :risk_change
+    ])
     |> validate_required([:encrypted_body, :patient_id, :professional_id])
+    |> validate_inclusion(:risk_change, ["activated", "deactivated"])
+    |> check_constraint(:risk_change, name: :clinical_notes_risk_change_valid)
   end
 end

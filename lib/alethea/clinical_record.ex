@@ -95,8 +95,18 @@ defmodule Alethea.ClinicalRecord do
   all-or-nothing. The resulting `ClinicalNote` row is immutable
   (no update changeset, no `updated_at`, DB-level `BEFORE UPDATE`
   trigger — see `Alethea.ClinicalRecord.ClinicalNote`).
+
+  ## Options
+
+    * `:risk_change` — `:activated` or `:deactivated`. Records the change
+      on the note and sets the patient's `urgent_intervention` flag in the
+      same transaction (with a `patient_risk_*` audit row). The patient
+      row is locked while the current flag is checked: activating an
+      already active risk returns `{:error, :risk_already_active}` and
+      deactivating an inactive one returns `{:error, :risk_not_active}`,
+      persisting nothing.
   """
-  @spec create_clinical_note(Professional.t(), Ecto.UUID.t(), String.t()) ::
+  @spec create_clinical_note(Professional.t(), Ecto.UUID.t(), String.t(), keyword()) ::
           {:ok, ClinicalNote.t()}
           | {:error,
              :unauthorized
@@ -104,9 +114,13 @@ defmodule Alethea.ClinicalRecord do
              | :empty_plaintext
              | :invalid_key_size
              | :encryption_failed
+             | :risk_already_active
+             | :risk_not_active
              | Ecto.Changeset.t()
              | term()}
-  def create_clinical_note(%Professional{} = professional, patient_id, body) do
+  def create_clinical_note(%Professional{} = professional, patient_id, body, opts \\ []) do
+    risk_change = Keyword.get(opts, :risk_change)
+
     case Accounts.get_patient_for_professional(professional.id, patient_id) do
       nil ->
         deny_access(professional.id, patient_id)
@@ -115,7 +129,7 @@ defmodule Alethea.ClinicalRecord do
         with {:ok, kek} <- Accounts.load_professional_kek(professional),
              {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
              {:ok, ciphertext} <- PatientVault.encrypt(body, dek) do
-          insert_clinical_note(professional, patient, ciphertext)
+          insert_clinical_note(professional, patient, ciphertext, risk_change)
         end
     end
   end
@@ -2625,14 +2639,17 @@ defmodule Alethea.ClinicalRecord do
     end
   end
 
-  defp insert_clinical_note(professional, patient, ciphertext) do
+  defp insert_clinical_note(professional, patient, ciphertext, risk_change)
+       when risk_change in [nil, :activated, :deactivated] do
     Ecto.Multi.new()
+    |> apply_risk_change(professional, patient, risk_change)
     |> Ecto.Multi.insert(
       :record,
       ClinicalNote.changeset(%ClinicalNote{}, %{
         patient_id: patient.id,
         professional_id: professional.id,
-        encrypted_body: ciphertext
+        encrypted_body: ciphertext,
+        risk_change: risk_change && Atom.to_string(risk_change)
       })
     )
     |> Ecto.Multi.insert(:audit, fn %{record: record} ->
@@ -2652,9 +2669,42 @@ defmodule Alethea.ClinicalRecord do
       {:ok, %{record: record}} ->
         {:ok, record}
 
+      {:error, :risk, reason, _changes} ->
+        {:error, reason}
+
       {:error, step, reason, _changes} ->
         Logger.warning("clinical_record multi failed at #{step}")
         {:error, reason}
     end
+  end
+
+  defp apply_risk_change(multi, _professional, _patient, nil), do: multi
+
+  defp apply_risk_change(multi, professional, patient, risk_change) do
+    flag = risk_change == :activated
+
+    multi
+    |> Ecto.Multi.run(:risk, fn repo, _changes ->
+      locked =
+        Patient
+        |> where([p], p.id == ^patient.id)
+        |> lock("FOR UPDATE")
+        |> repo.one!()
+
+      cond do
+        locked.urgent_intervention == flag and flag -> {:error, :risk_already_active}
+        locked.urgent_intervention == flag -> {:error, :risk_not_active}
+        true -> locked |> Patient.changeset(%{urgent_intervention: flag}) |> repo.update()
+      end
+    end)
+    |> Ecto.Multi.insert(:risk_audit, fn _changes ->
+      Audit.changeset(%Audit{
+        professional_id: professional.id,
+        action: "patient_risk_#{risk_change}",
+        resource_type: "patient",
+        resource_id: patient.id,
+        outcome: "success"
+      })
+    end)
   end
 end

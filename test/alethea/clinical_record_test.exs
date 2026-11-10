@@ -229,6 +229,118 @@ defmodule Alethea.ClinicalRecordTest do
     end
   end
 
+  describe "create_clinical_note/4 — risk change" do
+    defp risk_audit_actions(professional) do
+      AuditLog
+      |> where([a], a.professional_id == ^professional.id)
+      |> where([a], a.action in ["patient_risk_activated", "patient_risk_deactivated"])
+      |> select([a], {a.action, a.resource_type, a.resource_id})
+      |> Repo.all()
+    end
+
+    test "activating risk records it on the note, flags the patient and audits it", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:ok, %ClinicalNote{} = note} =
+               ClinicalRecord.create_clinical_note(
+                 professional,
+                 patient.id,
+                 "Ideación activa en sesión",
+                 risk_change: :activated
+               )
+
+      assert note.risk_change == "activated"
+      assert Repo.get!(ClinicalNote, note.id).risk_change == "activated"
+      assert Repo.get!(Accounts.Patient, patient.id).urgent_intervention
+
+      assert risk_audit_actions(professional) == [
+               {"patient_risk_activated", "patient", patient.id}
+             ]
+
+      assert_enqueued(worker: ClinicalRecordOutboxWorker)
+    end
+
+    test "deactivating risk records it on the note and clears the patient flag", %{
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, _} = Accounts.update_patient(patient, %{urgent_intervention: true})
+
+      assert {:ok, note} =
+               ClinicalRecord.create_clinical_note(
+                 professional,
+                 patient.id,
+                 "Riesgo contenido, plan de seguridad acordado",
+                 risk_change: :deactivated
+               )
+
+      assert note.risk_change == "deactivated"
+      refute Repo.get!(Accounts.Patient, patient.id).urgent_intervention
+
+      assert risk_audit_actions(professional) == [
+               {"patient_risk_deactivated", "patient", patient.id}
+             ]
+    end
+
+    test "activating an already active risk is rejected and persists nothing", %{
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, _} = Accounts.update_patient(patient, %{urgent_intervention: true})
+
+      assert {:error, :risk_already_active} =
+               ClinicalRecord.create_clinical_note(professional, patient.id, "Nota",
+                 risk_change: :activated
+               )
+
+      assert Repo.aggregate(ClinicalNote, :count) == 0
+      assert Repo.get!(Accounts.Patient, patient.id).urgent_intervention
+      assert risk_audit_actions(professional) == []
+      refute_enqueued(worker: ClinicalRecordOutboxWorker)
+    end
+
+    test "deactivating when no risk is active is rejected and persists nothing", %{
+      professional: professional,
+      patient: patient
+    } do
+      assert {:error, :risk_not_active} =
+               ClinicalRecord.create_clinical_note(professional, patient.id, "Nota",
+                 risk_change: :deactivated
+               )
+
+      assert Repo.aggregate(ClinicalNote, :count) == 0
+      refute Repo.get!(Accounts.Patient, patient.id).urgent_intervention
+      assert risk_audit_actions(professional) == []
+      refute_enqueued(worker: ClinicalRecordOutboxWorker)
+    end
+
+    test "a note without risk change leaves the patient flag untouched", %{
+      professional: professional,
+      patient: patient
+    } do
+      {:ok, _} = Accounts.update_patient(patient, %{urgent_intervention: true})
+
+      assert {:ok, note} = ClinicalRecord.create_clinical_note(professional, patient.id, "Nota")
+
+      assert note.risk_change == nil
+      assert Repo.get!(Accounts.Patient, patient.id).urgent_intervention
+      assert risk_audit_actions(professional) == []
+    end
+
+    test "an unauthorized professional cannot change the patient's risk", %{patient: patient} do
+      other_professional = create_professional!()
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.create_clinical_note(other_professional, patient.id, "Nota",
+                 risk_change: :activated
+               )
+
+      refute Repo.get!(Accounts.Patient, patient.id).urgent_intervention
+      assert Repo.aggregate(ClinicalNote, :count) == 0
+    end
+  end
+
   describe "list_clinical_notes/2" do
     test "lists decrypted notes for an authorized patient in reverse chronological order with preloaded professional",
          %{professional: professional, patient: patient} do

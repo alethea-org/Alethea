@@ -1055,7 +1055,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
         nil ->
           Repo.transaction(fn ->
             with {:ok, _updated_patient} <-
-                   Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true}),
+                   Alethea.Accounts.flag_urgent_intervention(legacy_patient),
                  {:ok, _paused_count} <-
                    Alethea.Triggers.pause_active_triggers_for_crisis(legacy_patient.id),
                  {:ok, _diagnosis} <-
@@ -1210,7 +1210,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       Repo.transaction(fn ->
         :ok = Clinical.lock_patient_conversation!(legacy_patient.id)
 
-        case Alethea.Accounts.update_patient(legacy_patient, %{urgent_intervention: true}) do
+        case Alethea.Accounts.flag_urgent_intervention(legacy_patient) do
           {:ok, patient} -> patient
           {:error, reason} -> Repo.rollback(reason)
         end

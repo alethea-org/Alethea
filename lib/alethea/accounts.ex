@@ -203,6 +203,25 @@ defmodule Alethea.Accounts do
   end
 
   @doc """
+  Sets `urgent_intervention: true` with an unconditional UPDATE.
+
+  Unlike `update_patient/2`, it does not diff against the given struct, so a
+  stale struct already loaded as flagged still writes the flag after a
+  professional cleared it from a clinical note in the meantime.
+  """
+  def flag_urgent_intervention(%Patient{id: id}) do
+    {_count, _} =
+      Patient
+      |> where([p], p.id == ^id)
+      |> Repo.update_all(set: [urgent_intervention: true, updated_at: DateTime.utc_now(:second)])
+
+    case Repo.get(Patient, id) do
+      nil -> {:error, :not_found}
+      patient -> {:ok, patient}
+    end
+  end
+
+  @doc """
   Converts a patient's local date and time to UTC using their timezone.
   """
   defdelegate convert_patient_local_to_utc(patient, date, time),
