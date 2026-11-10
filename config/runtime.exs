@@ -117,9 +117,8 @@ config :alethea, :database_monitoring,
 config :alethea, :crisis_support_message, """
 Entiendo que estás pasando por algo muy difícil. Lo que sientes importa.
 Por favor, comunícate con tu terapeuta directamente o llama a una línea de crisis:
-🇨🇱 Salud Responde: 600 360 7777 (24/7)
-🇨🇱 ACHS: 600 222 4357
-Si estás en peligro inmediato, llama al 131 (SAMU).
+🇦🇷 Centro de Asistencia al Suicida: 0800 345 1435 (gratuito, todo el país)
+Si estás en peligro inmediato, llama al 911.
 """
 
 if config_env() == :prod do
