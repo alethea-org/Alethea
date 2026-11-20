@@ -87,6 +87,7 @@ defmodule AletheaWeb.Router do
     pipe_through([:landing])
 
     get("/", PageController, :home)
+    post("/waitlist", WaitlistController, :create)
   end
 
   scope "/", AletheaWeb do
