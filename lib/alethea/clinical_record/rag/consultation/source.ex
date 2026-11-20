@@ -18,17 +18,31 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Source do
           excerpt: String.t(),
           kind: String.t(),
           occurred_at: DateTime.t(),
-          reference: reference_map()
+          reference: reference_map(),
+          speaker: String.t() | nil,
+          audio_start_seconds: float() | nil,
+          audio_end_seconds: float() | nil
         }
 
   @enforce_keys [:excerpt, :kind, :occurred_at, :reference]
-  defstruct [:excerpt, :kind, :occurred_at, :reference]
+  defstruct [
+    :excerpt,
+    :kind,
+    :occurred_at,
+    :reference,
+    :speaker,
+    :audio_start_seconds,
+    :audio_end_seconds
+  ]
 
   @doc """
   Maps each `Rag.Retrieval.search/4` envelope result 1:1 into a
   `%Source{}`, verbatim: `excerpt` from `content`, `kind` from
   `source_resource_type`, `occurred_at` from `source_occurred_at`, and a
   stable `reference` map. Nothing is added, dropped, or reordered.
+
+  Session-transcript results also carry `speaker`, `audio_start_seconds`
+  and `audio_end_seconds`; they stay `nil` for every other kind.
   """
   @spec from_results([map()]) :: [t()]
   def from_results(results) when is_list(results) do
@@ -42,7 +56,10 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.Source do
           resource_type: result.source_resource_type,
           resource_id: result.source_resource_id,
           target_behavior_id: result.target_behavior_id
-        }
+        },
+        speaker: Map.get(result, :speaker),
+        audio_start_seconds: Map.get(result, :audio_start_seconds),
+        audio_end_seconds: Map.get(result, :audio_end_seconds)
       }
     end)
   end
