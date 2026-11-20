@@ -11,7 +11,7 @@ defmodule Alethea.ClinicalRecord.SessionTranscriptContent do
   @sentinel "ALETHEA_SESSION_TRANSCRIPT_SPANS\n"
   @format "alethea.session-transcript-spans"
   @version 1
-  @speakers ~w(patient therapist)
+  @speakers ~w(patient therapist unknown)
 
   @enforce_keys [:spans]
   defstruct spans: []
@@ -23,7 +23,11 @@ defmodule Alethea.ClinicalRecord.SessionTranscriptContent do
 
   @span_keys MapSet.new([:start, :end, :speaker, :text])
 
-  @doc "Returns the accepted speaker values, `~w(patient therapist)`."
+  @doc """
+  Returns the accepted speaker values, `~w(patient therapist unknown)`.
+  `"unknown"` marks spans whose speaker the transcription could not
+  attribute (rendered as "Sesión").
+  """
   @spec speakers() :: [String.t()]
   def speakers, do: @speakers
 

@@ -131,6 +131,13 @@
           Notas clínicas
         </.link>
         <.link
+          id="patient-sessions-link"
+          navigate={~p"/patients/#{@selected_patient.id}/sessions"}
+          class="button-secondary button-secondary--sm"
+        >
+          Sesiones grabadas
+        </.link>
+        <.link
           id="patient-triggers-link"
           navigate={~p"/patients/#{@selected_patient.id}/triggers"}
           class="button-secondary button-secondary--sm"

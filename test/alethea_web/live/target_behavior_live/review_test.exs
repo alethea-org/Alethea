@@ -7015,6 +7015,34 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
              )
     end
 
+    test "labels an unknown-speaker transcript excerpt as Sesión", %{
+      conn: conn,
+      professional: professional,
+      patient: patient,
+      target_behavior: target_behavior
+    } do
+      candidate =
+        insert_session_transcript_chunk!(
+          professional,
+          patient,
+          "Relato grabado sin hablantes identificados",
+          "unknown",
+          30.0,
+          45.0
+        )
+
+      {:ok, view, _html} =
+        live(conn, ~p"/patients/#{patient.id}/target_behaviors/#{target_behavior.id}/review")
+
+      render_async(view)
+
+      assert has_element?(
+               view,
+               "#suggested-candidate-#{candidate.id} .badge--speaker-unknown",
+               "Sesión"
+             )
+    end
+
     test "citing a transcript chunk via any of the three citation paths persists the chunk's own markers, ignores forged client values, and shows them on the timeline (table-driven, R2-R5/R9)" do
       for cite_path <- [:cite_all, :trim, :search] do
         professional = create_professional!()

@@ -1,0 +1,28 @@
+# Session recording → transcript → patient RAG
+
+Objective: the professional records (or uploads) a therapy session from the patient's page; a provider-agnostic speech-to-text adapter transcribes it; the encrypted transcript joins the patient's clinical record so the RAG consultation answers and cites it with the minute. Branch `feat/session-recording` (from `main`). Delivery: ask-on-risk. Runner: `mix test` / `mix precommit`.
+
+## Specs
+
+- S1 Provider-agnostic transcription: "Hagámoslo agnóstico al proveedor". Contract `Alethea.AI.Whisper` (existing behaviour, kept): `transcribe(audio :: binary(), opts) :: {:ok, %{text: String.t(), language: String.t() | nil, duration: number() | nil, segments: [%{start: number(), end: number(), text: String.t(), speaker: non_neg_integer() | nil}]}} | {:error, term()}`. `opts`: `:content_type` (MIME of the audio), `:language` (default `"es"`). Adapters:
+  - `Alethea.AI.Whisper.Deepgram`: `POST {base_url}/v1/listen?model=…&language=es&utterances=true&diarize_model=latest&punctuate=true&smart_format=true`, header `Authorization: Token <key>`, raw audio body with its content type. Segments from `results.utterances[]` (`start`, `end`, `transcript`, `speaker`); when an utterance lacks `speaker`, use the majority `words[].speaker`. Duration from `metadata.duration`. "Si usamos Deep Gram lo reconoce" (diarization).
+  - `Alethea.AI.Whisper.OpenAICompatible`: `POST {base_url}/audio/transcriptions` multipart (`file`, `model`, `language`, `response_format=verbose_json`, `timestamp_granularities[]=segment`), `Authorization: Bearer <key>` when a key is set. Segments from `segments[]` with `speaker: nil`. Works with OpenAI, Groq, local Whisper servers.
+  - Config: `WHISPER_ENABLED` stays the capability switch (true no longer raises). When true, `TRANSCRIPTION_PROVIDER` is required: `deepgram` (needs `DEEPGRAM_API_KEY`; optional `DEEPGRAM_MODEL` default `nova-3`, `DEEPGRAM_BASE_URL` default `https://api.deepgram.com`) or `openai_compatible` (needs `WHISPER_ENDPOINT_URL`; optional `WHISPER_API_KEY`, `WHISPER_MODEL` default `whisper-1`). Optional `WHISPER_RECEIVE_TIMEOUT_MS` (default 600000). Missing/invalid values raise at boot like the embeddings block. Dev without the switch → `Whisper.Disabled`.
+- S2 Recording flow: page `/patients/:patient_id/sessions` (linked from the patient dashboard actions). The professional confirms "El paciente dio su consentimiento para grabar la sesión" before recording or uploading. Record in the browser (MediaRecorder, audio only) or upload a file (webm, ogg, mp3, m4a, wav, mp4 audio). Upload through LiveView uploads. The audio is stored encrypted with the patient's key only until transcription, then deleted: "Delete after transcribing" (user decision). Transcription runs in Oban, never in the request. Statuses visible in the list: transcribing, needs speakers, ready, failed (with retry).
+- S3 Speakers: when the provider returns two or more speakers, the recording waits for the professional to say who is who: for each speaker show two sample lines and choose "Vos (profesional)" / "Paciente"; any extra speaker may be marked as either. When the provider returns no speakers (or one), spans are stored with speaker `"unknown"` (shown as "Sesión"); this needs `"unknown"` accepted by `SessionTranscriptContent` and by the `clinical_record_rag_chunks` speaker check constraint. After mapping, `ClinicalRecord.create_session_transcript/3` creates the transcript (existing encryption, audit, outbox → RAG indexing) and the recording links to it.
+- S4 Transcript view: a ready recording shows its transcript with speaker label and `mm:ss` start per span.
+- S5 Consultation citations show transcript speaker and time: `Consultation.Source`, `Rag.Citation`, `GroundedChat.SourceCitation` and the `citation/1` component carry `speaker`, `audio_start_seconds`, `audio_end_seconds`; the label reads "Sesión grabada" with e.g. "Paciente · 12:40". `kind_label("session_transcript")` exists.
+- S6 Security: only the owning professional sees/acts on a patient's recordings (existing `get_patient_for_professional` scoping); audio and segments encrypted with the patient keyring; audio column nulled after transcription and on failure after the last attempt; audit entries for recording created / transcribed / speakers assigned (no content).
+
+## Tasks
+
+- T1 S1 transcription adapters + runtime config + tests + docs — delegated (writer A, parallel)
+- T2 S2-S4, S6 recording domain, migration(s), Oban worker, LiveView + recorder hook, dashboard link, `"unknown"` speaker + tests + docs — delegated (writer B, parallel)
+- T3 S5 consultation citation speaker/time + tests — delegated (writer C, parallel)
+- Route evidence: three independent units with disjoint edit surfaces, several minutes each, launched together; parent context near the long-session backstop.
+
+## Log
+
+- L1 (2026-11-20) "Me re gustaría que ahora podamos hacer todas las funcionalidades que faltan, empezando por la de que se puedan grabar las sesiones con el paciente y queden guardadas en el RAG. Hagámoslo agnóstico al proveedor"
+- L2 Decisions (AskUserQuestion): audio → "Delete after transcribing (Recommended)"; speakers → "Si usamos Deep Gram lo reconoce". Resolved as: Deepgram adapter with diarization + professional maps speaker numbers to roles; non-diarizing providers store `"unknown"`.
+- L3 Existing pieces reused: `SessionTranscript` + `SessionTranscriptContent` (encrypted spans), `ClinicalRecord.create_session_transcript/3` (audit + outbox), RAG indexer `chunk_spans/1`, evidence citations in target-behavior review. Gap: nothing produced transcripts; consultation chat dropped speaker/time.

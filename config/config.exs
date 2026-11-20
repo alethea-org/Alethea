@@ -58,6 +58,9 @@ config :alethea, Oban,
     schedulers: 5,
     reports: 5,
     ai_analysis: 5,
+    # Session-recording transcription (speech-to-text provider calls can
+    # take minutes per recording).
+    transcription: 2,
     telegram_inbound: 10,
     telegram_outbound: 10,
     # `telegram_outbound_crisis` (REQ-C7-crisis-priority-lane; PR #3b /

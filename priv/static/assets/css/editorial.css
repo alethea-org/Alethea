@@ -3604,3 +3604,20 @@ button.phx-submit-loading::after,
     animation-duration: 2s;
   }
 }
+
+/* Session recording (session-recording S2-S4) */
+.session-recorder { margin: 12px 0 16px; }
+.session-recorder__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.session-recorder__elapsed { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 48px; }
+.session-recorder__upload { display: flex; flex-direction: column; gap: 6px; }
+.session-speakers__speaker { border: 0; padding: 0; margin: 0 0 14px; }
+.session-speakers__sample {
+  margin: 4px 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--colors-border-strong);
+  font-size: 14px;
+}
+.session-transcript { display: flex; flex-direction: column; gap: 6px; }
+.session-transcript__span { margin: 0; font-size: 14px; line-height: 1.6; }
+.session-transcript__time { font-variant-numeric: tabular-nums; margin-right: 8px; opacity: 0.7; }
+.session-transcript__speaker { margin-right: 6px; }
