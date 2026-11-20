@@ -328,6 +328,25 @@ defmodule Alethea.Jobs.TelegramVoiceNoteTest do
       refute_enqueued(worker: TelegramOutboundWorker)
       refute_enqueued(worker: EmotionAnalysisWorker)
     end
+
+    test "a sticker from a chat with no patient gets the unregistered reply, like text" do
+      message = %{
+        "message_id" => 1,
+        "date" => 1,
+        "chat" => %{"id" => 999_111, "type" => "private"},
+        "sticker" => %{"file_id" => "sticker-file-id"}
+      }
+
+      assert :ok =
+               TelegramMessageWorker.perform(%Oban.Job{
+                 args: %{"telegram_update_id" => 731, "message" => message}
+               })
+
+      assert [_unregistered] = all_enqueued(worker: TelegramOutboundWorker)
+      assert Repo.aggregate(Message, :count, :id) == 0
+      assert Fake.downloads() == []
+      refute_enqueued(worker: TelegramVoiceNoteWorker)
+    end
   end
 
   # ----------------------------------------------------------------
