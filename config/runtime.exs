@@ -70,6 +70,18 @@ if config_env() == :dev do
     base_url: System.get_env("EMOTION_SIDECAR_URL", "http://127.0.0.1:8080")
 end
 
+# Transcription slot (session recordings). WHISPER_ENABLED unset or false
+# wires `Alethea.AI.Whisper.Disabled`; true requires TRANSCRIPTION_PROVIDER
+# (deepgram | openai_compatible) and that provider's settings, and missing or
+# invalid values fail the boot. See `Alethea.AI.Whisper.runtime_config/1` and
+# docs/features/transcription-providers.md. :test keeps the Fake from
+# config/test.exs.
+if config_env() in [:dev, :prod] do
+  for {key, value} <- Alethea.AI.Whisper.runtime_config(System.get_env()) do
+    config :alethea, key, value
+  end
+end
+
 # Issue #198 — the emotion analyzer is a development-only capability with
 # no clinical-validity claim. Issue #402 makes its production state
 # explicit: the :prod block below wires the :emotion_analyzer slot either
@@ -521,19 +533,8 @@ if config_env() == :prod do
     config :alethea, :ai_embeddings, Alethea.AI.Embeddings.Disabled
   end
 
-  # Transcription has no production adapter yet (only the Fake exists), so
-  # it is always disabled and asking for it fails the boot.
-  case System.get_env("WHISPER_ENABLED") do
-    value when value in [nil, "false"] ->
-      config :alethea, :ai_whisper, Alethea.AI.Whisper.Disabled
-
-    "true" ->
-      raise "environment variable WHISPER_ENABLED cannot be true: " <>
-              "no production transcription adapter exists yet. Unset it or set it to false."
-
-    _other ->
-      raise "environment variable WHISPER_ENABLED must be exactly true or false."
-  end
+  # Transcription (WHISPER_ENABLED / TRANSCRIPTION_PROVIDER) is wired by the
+  # shared :dev/:prod block above `if config_env() == :prod`.
 
   # Reactive-trigger matching (#448, #449). When enabled, backed by
   # `Alethea.AI.TriggerMatcher.Jev` using TypeSafe System One. When disabled,

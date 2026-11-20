@@ -49,6 +49,7 @@ defmodule Alethea.AI.WhisperTest do
       assert transcription.text == ""
       assert transcription.segments == []
       assert transcription.language == nil
+      assert transcription.duration == nil
     end
 
     test "transcribe/2 with a raw binary returns the empty transcription" do
@@ -76,6 +77,127 @@ defmodule Alethea.AI.WhisperTest do
       assert {:ok, t1} = Fake.transcribe("/a", model: "whisper-large")
       assert {:ok, t2} = Fake.transcribe("/a", model: "whisper-tiny")
       assert t1 == t2
+    end
+  end
+
+  describe "runtime_config/1" do
+    alias Alethea.AI.Whisper.{Deepgram, Disabled, OpenAICompatible}
+
+    test "an unset or false switch wires the Disabled adapter" do
+      assert Whisper.runtime_config(%{}) == [ai_whisper: Disabled]
+      assert Whisper.runtime_config(%{"WHISPER_ENABLED" => "false"}) == [ai_whisper: Disabled]
+    end
+
+    test "any other switch value raises" do
+      assert_raise RuntimeError, ~r/WHISPER_ENABLED must be exactly true or false/, fn ->
+        Whisper.runtime_config(%{"WHISPER_ENABLED" => "yes"})
+      end
+    end
+
+    test "an enabled switch without a provider raises" do
+      assert_raise RuntimeError, ~r/TRANSCRIPTION_PROVIDER is missing or empty/, fn ->
+        Whisper.runtime_config(%{"WHISPER_ENABLED" => "true"})
+      end
+    end
+
+    test "an unknown provider raises" do
+      assert_raise RuntimeError,
+                   ~r/TRANSCRIPTION_PROVIDER must be deepgram or openai_compatible/,
+                   fn ->
+                     Whisper.runtime_config(%{
+                       "WHISPER_ENABLED" => "true",
+                       "TRANSCRIPTION_PROVIDER" => "x"
+                     })
+                   end
+    end
+
+    test "deepgram selects its adapter with defaults" do
+      env = %{
+        "WHISPER_ENABLED" => "true",
+        "TRANSCRIPTION_PROVIDER" => "deepgram",
+        "DEEPGRAM_API_KEY" => " dg-key "
+      }
+
+      assert Whisper.runtime_config(env) == [
+               {:ai_whisper, Deepgram},
+               {Deepgram,
+                [
+                  api_key: "dg-key",
+                  model: "nova-3",
+                  base_url: "https://api.deepgram.com",
+                  receive_timeout: 600_000
+                ]}
+             ]
+    end
+
+    test "deepgram honours its optional overrides" do
+      env = %{
+        "WHISPER_ENABLED" => "true",
+        "TRANSCRIPTION_PROVIDER" => "deepgram",
+        "DEEPGRAM_API_KEY" => "dg-key",
+        "DEEPGRAM_MODEL" => "nova-2",
+        "DEEPGRAM_BASE_URL" => "https://dg.example.com",
+        "WHISPER_RECEIVE_TIMEOUT_MS" => "1000"
+      }
+
+      assert [{:ai_whisper, Deepgram}, {Deepgram, settings}] = Whisper.runtime_config(env)
+      assert settings[:model] == "nova-2"
+      assert settings[:base_url] == "https://dg.example.com"
+      assert settings[:receive_timeout] == 1000
+    end
+
+    test "deepgram without its key raises without echoing values" do
+      assert_raise RuntimeError, ~r/DEEPGRAM_API_KEY is missing or empty/, fn ->
+        Whisper.runtime_config(%{
+          "WHISPER_ENABLED" => "true",
+          "TRANSCRIPTION_PROVIDER" => "deepgram",
+          "DEEPGRAM_API_KEY" => "  "
+        })
+      end
+    end
+
+    test "openai_compatible selects its adapter with defaults and an optional key" do
+      env = %{
+        "WHISPER_ENABLED" => "true",
+        "TRANSCRIPTION_PROVIDER" => "openai_compatible",
+        "WHISPER_ENDPOINT_URL" => "https://api.groq.com/openai/v1"
+      }
+
+      assert Whisper.runtime_config(env) == [
+               {:ai_whisper, OpenAICompatible},
+               {OpenAICompatible,
+                [
+                  endpoint_url: "https://api.groq.com/openai/v1",
+                  api_key: nil,
+                  model: "whisper-1",
+                  receive_timeout: 600_000
+                ]}
+             ]
+
+      env = Map.merge(env, %{"WHISPER_API_KEY" => "gsk", "WHISPER_MODEL" => "whisper-large-v3"})
+      assert [_, {OpenAICompatible, settings}] = Whisper.runtime_config(env)
+      assert settings[:api_key] == "gsk"
+      assert settings[:model] == "whisper-large-v3"
+    end
+
+    test "openai_compatible without an endpoint raises" do
+      assert_raise RuntimeError, ~r/WHISPER_ENDPOINT_URL is missing or empty/, fn ->
+        Whisper.runtime_config(%{
+          "WHISPER_ENABLED" => "true",
+          "TRANSCRIPTION_PROVIDER" => "openai_compatible"
+        })
+      end
+    end
+
+    test "a non-positive receive timeout raises" do
+      assert_raise RuntimeError, ~r/WHISPER_RECEIVE_TIMEOUT_MS must be a positive integer/, fn ->
+        Whisper.runtime_config(%{
+          "WHISPER_ENABLED" => "true",
+          "TRANSCRIPTION_PROVIDER" => "openai_compatible",
+          "WHISPER_ENDPOINT_URL" => "http://localhost:8000/v1",
+          "WHISPER_RECEIVE_TIMEOUT_MS" => "0"
+        })
+      end
     end
   end
 end
