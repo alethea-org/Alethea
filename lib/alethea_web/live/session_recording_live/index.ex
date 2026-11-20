@@ -3,10 +3,12 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
   Patient-scoped session recordings (session-recording S2/S3/S4).
 
   The professional confirms the patient's consent, then records the session
-  in the browser (`SessionRecorder` hook, MediaRecorder) or uploads an audio
-  file. Both paths go through the `:audio` LiveView upload; the finished
-  entry is stored encrypted by `ClinicalRecord.create_session_recording/3`
-  and transcribed in Oban. The list follows status changes live over PubSub.
+  in the browser (`SessionRecorder` hook, MediaRecorder). The hook streams the
+  audio while recording (session-recording S2): `"start"` creates the
+  recording, each `"chunk"` (base64, about every 10 s) is stored encrypted as
+  soon as it arrives and acknowledged, and `"finish"` hands it to Oban for
+  transcription. There is no file upload. The list follows status changes
+  live over PubSub.
   """
   use AletheaWeb, :live_view
 
@@ -14,12 +16,6 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
   alias Alethea.AI
   alias Alethea.ClinicalRecord
   alias Alethea.ClinicalRecord.SessionRecordings
-
-  # `audio/*` covers ogg and m4a, whose extensions the `mime` package does not
-  # know (allow_upload rejects unknown extensions); the explicit extensions
-  # cover files browsers report as video (webm, mp4).
-  @accept ~w(audio/* .webm .mp3 .wav .mp4)
-  @max_file_size 300_000_000
 
   @impl true
   def mount(%{"patient_id" => patient_id}, _session, socket) do
@@ -39,15 +35,9 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
        |> assign(:consent?, false)
        |> assign(:consent_form, consent_form(false))
        |> assign(:details, %{})
+       |> assign(:active_recording_ids, MapSet.new())
        |> assign(:recordings_empty?, recordings == [])
-       |> stream(:recordings, recordings)
-       |> allow_upload(:audio,
-         accept: @accept,
-         max_entries: 1,
-         max_file_size: @max_file_size,
-         auto_upload: true,
-         progress: &handle_progress/3
-       )}
+       |> stream(:recordings, recordings)}
     else
       _unauthorized ->
         {:ok,
@@ -57,7 +47,7 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
     end
   end
 
-  # ── Consent + upload ────────────────────────────────────────────────
+  # ── Consent + recording ─────────────────────────────────────────
 
   @impl true
   def handle_event("toggle_consent", %{"consent" => %{"confirmed" => confirmed}}, socket) do
@@ -69,13 +59,81 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
      |> assign(:consent_form, consent_form(consent?))}
   end
 
-  def handle_event("validate_upload", _params, socket), do: {:noreply, socket}
+  def handle_event("start", params, socket) do
+    %{current_professional: professional, patient: patient} = socket.assigns
 
-  def handle_event("save_upload", _params, socket), do: {:noreply, socket}
+    with true <- socket.assigns.consent? and socket.assigns.transcription_enabled?,
+         {:ok, recording} <-
+           ClinicalRecord.start_session_recording(professional, patient.id, %{
+             consent: true,
+             content_type: Map.get(params, "content_type")
+           }) do
+      {:reply, %{id: recording.id},
+       socket
+       |> assign(
+         :active_recording_ids,
+         MapSet.put(socket.assigns.active_recording_ids, recording.id)
+       )
+       |> assign(:recordings_empty?, false)
+       |> stream_insert(:recordings, recording, at: 0)}
+    else
+      false ->
+        {:reply, %{error: "consent_required"},
+         put_flash(socket, :error, "Confirmá el consentimiento del paciente antes de grabar.")}
 
-  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :audio, ref)}
+      {:error, _reason} ->
+        {:reply, %{error: "start_failed"},
+         put_flash(socket, :error, "No se pudo iniciar la grabación.")}
+    end
   end
+
+  def handle_event("chunk", %{"id" => id, "seq" => seq, "data" => data}, socket)
+      when is_binary(id) and is_integer(seq) and is_binary(data) do
+    %{current_professional: professional, patient: patient} = socket.assigns
+
+    with {:ok, audio} <- Base.decode64(data),
+         :ok <-
+           ClinicalRecord.append_session_recording_chunk(
+             professional,
+             patient.id,
+             id,
+             seq,
+             audio
+           ) do
+      {:reply, %{ok: true, seq: seq}, track_active(socket, id)}
+    else
+      :error -> {:reply, %{error: "invalid_chunk"}, socket}
+      {:error, reason} -> {:reply, %{error: chunk_error(reason)}, socket}
+    end
+  end
+
+  def handle_event("chunk", _params, socket),
+    do: {:reply, %{error: "invalid_chunk"}, socket}
+
+  def handle_event("finish", %{"id" => id}, socket) when is_binary(id) do
+    %{current_professional: professional, patient: patient} = socket.assigns
+
+    case ClinicalRecord.finish_session_recording(professional, patient.id, id) do
+      {:ok, recording} ->
+        message =
+          if recording.status == "failed",
+            do: "La grabación no tenía audio, así que no se guardó.",
+            else: "Grabación guardada. La transcripción está en curso."
+
+        {:reply, %{ok: true},
+         socket
+         |> assign(:active_recording_ids, MapSet.delete(socket.assigns.active_recording_ids, id))
+         |> stream_insert(:recordings, recording, at: 0)
+         |> put_flash(if(recording.status == "failed", do: :error, else: :info), message)}
+
+      {:error, _reason} ->
+        {:reply, %{error: "finish_failed"},
+         put_flash(socket, :error, "No se pudo finalizar la grabación.")}
+    end
+  end
+
+  def handle_event("finish", _params, socket),
+    do: {:reply, %{error: "finish_failed"}, socket}
 
   # ── Row actions ─────────────────────────────────────────────────────
 
@@ -167,47 +225,27 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
     end
   end
 
-  defp handle_progress(:audio, entry, socket) do
-    cond do
-      not entry.done? ->
-        {:noreply, socket}
+  # After a reconnect the LiveView process is new: the first chunk it
+  # receives marks that recording as being recorded on this page again.
+  defp track_active(socket, id) do
+    %{current_professional: professional, patient: patient, active_recording_ids: ids} =
+      socket.assigns
 
-      not (socket.assigns.consent? and socket.assigns.transcription_enabled?) ->
-        {:noreply,
-         socket
-         |> cancel_upload(:audio, entry.ref)
-         |> put_flash(:error, "Confirmá el consentimiento del paciente antes de grabar o subir.")}
-
-      true ->
-        audio =
-          consume_uploaded_entry(socket, entry, fn %{path: path} -> {:ok, File.read!(path)} end)
-
-        save_recording(socket, audio, content_type(entry))
+    with false <- MapSet.member?(ids, id),
+         {:ok, recording} <- ClinicalRecord.get_session_recording(professional, patient.id, id) do
+      socket
+      |> assign(:active_recording_ids, MapSet.put(ids, id))
+      |> stream_insert(:recordings, recording)
+    else
+      _ -> socket
     end
   end
 
-  defp save_recording(socket, audio, content_type) do
-    %{current_professional: professional, patient: patient} = socket.assigns
-
-    case ClinicalRecord.create_session_recording(professional, patient.id, %{
-           audio: audio,
-           content_type: content_type,
-           consent: true
-         }) do
-      {:ok, recording} ->
-        {:noreply,
-         socket
-         |> assign(:recordings_empty?, false)
-         |> stream_insert(:recordings, recording, at: 0)
-         |> put_flash(:info, "Grabación guardada. La transcripción está en curso.")}
-
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "No se pudo guardar la grabación.")}
-    end
-  end
-
-  defp content_type(%{client_type: type}) when is_binary(type) and type != "", do: type
-  defp content_type(%{client_name: name}), do: MIME.from_path(name)
+  # Codes the hook understands: it stops resending on a permanent error.
+  defp chunk_error(:not_recording), do: "not_recording"
+  defp chunk_error(:chunk_too_large), do: "chunk_too_large"
+  defp chunk_error(:recording_too_long), do: "recording_too_long"
+  defp chunk_error(_reason), do: "invalid_chunk"
 
   defp put_detail(socket, id, detail) do
     %{current_professional: professional, patient: patient} = socket.assigns
@@ -230,11 +268,13 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
 
   # ── View helpers ────────────────────────────────────────────────────
 
+  defp status_label("recording"), do: "Grabando…"
   defp status_label("transcribing"), do: "Transcribiendo"
   defp status_label("needs_speakers"), do: "Falta identificar hablantes"
   defp status_label("ready"), do: "Lista"
   defp status_label("failed"), do: "Falló"
 
+  defp status_class("recording"), do: "pt-pill--warn"
   defp status_class("transcribing"), do: "pt-pill--neutral"
   defp status_class("needs_speakers"), do: "pt-pill--warn"
   defp status_class("ready"), do: "pt-pill--ok"
@@ -245,6 +285,11 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
 
   defp error_message("transcription_disabled"), do: "La transcripción no está configurada."
   defp error_message("empty_transcript"), do: "No se detectó habla en la grabación."
+  defp error_message("empty_recording"), do: "La grabación terminó sin audio."
+
+  defp error_message("stalled"),
+    do: "La transcripción se interrumpió y no pudo completarse."
+
   defp error_message("audio_unavailable"), do: "El audio de la grabación no estaba disponible."
   defp error_message(_code), do: "El servicio de transcripción devolvió un error."
 
@@ -263,14 +308,6 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
 
   defp format_duration(nil), do: nil
   defp format_duration(seconds), do: timestamp(seconds)
-
-  defp upload_error_message(:too_large), do: "El archivo supera los 300 MB."
-
-  defp upload_error_message(:not_accepted),
-    do: "Formato no admitido. Usá webm, ogg, mp3, m4a, wav o mp4."
-
-  defp upload_error_message(:too_many_files), do: "Subí un archivo por vez."
-  defp upload_error_message(_error), do: "No se pudo subir el archivo."
 
   @impl true
   def render(assigns) do
@@ -291,7 +328,7 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
         </.link>
         <h1 class="pt-h1">Sesiones grabadas · {@patient.alias}</h1>
         <p class="pt-muted">
-          Grabá o subí una sesión. La transcripción se suma a la historia clínica del paciente y el audio se elimina al terminar.
+          Grabá la sesión desde acá. El audio se guarda cifrado mientras grabás, la transcripción se suma a la historia clínica del paciente y el audio se elimina al terminar.
         </p>
       </div>
 
@@ -310,7 +347,7 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
             <div>
               <p class="flash__title">Transcripción no configurada</p>
               <p class="flash__msg">
-                Este entorno no tiene un servicio de transcripción configurado, así que no se pueden grabar ni subir sesiones.
+                Este entorno no tiene un servicio de transcripción configurado, así que no se pueden grabar sesiones.
               </p>
             </div>
           </div>
@@ -357,36 +394,10 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
                 Finalizar
               </button>
               <span class="session-recorder__elapsed" data-recorder-elapsed>00:00</span>
+              <span class="pt-muted session-recorder__saved" data-recorder-saved></span>
               <span class="pt-muted session-recorder__status" data-recorder-status></span>
             </div>
           </div>
-
-          <form
-            id="upload-form"
-            phx-change="validate_upload"
-            phx-submit="save_upload"
-            class="session-recorder__upload"
-          >
-            <label for={@uploads.audio.ref} class="pt-eyebrow">O subí un archivo de audio</label>
-            <.live_file_input upload={@uploads.audio} disabled={!@capture_enabled?} />
-            <div :for={entry <- @uploads.audio.entries} id={"upload-entry-#{entry.ref}"}>
-              <span>{entry.client_name} · {entry.progress}%</span>
-              <button
-                type="button"
-                class="button-secondary button-secondary--sm"
-                phx-click="cancel_upload"
-                phx-value-ref={entry.ref}
-              >
-                Cancelar
-              </button>
-              <p :for={err <- upload_errors(@uploads.audio, entry)} class="pt-muted">
-                {upload_error_message(err)}
-              </p>
-            </div>
-            <p :for={err <- upload_errors(@uploads.audio)} class="pt-muted">
-              {upload_error_message(err)}
-            </p>
-          </form>
         </div>
       </div>
 
@@ -396,7 +407,7 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
         <div :if={@recordings_empty?} id="session-recordings-empty" class="empty-state">
           <.icon name="hero-chat-bubble-left-right" class="empty-state__icon" />
           <p class="empty-state__title">Sin sesiones grabadas</p>
-          <p class="empty-state__text">Las sesiones que grabes o subas aparecen acá.</p>
+          <p class="empty-state__text">Las sesiones que grabes aparecen acá.</p>
         </div>
 
         <div
@@ -424,6 +435,14 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
 
             <div class="pt-card__body">
               <%= case recording.status do %>
+                <% "recording" -> %>
+                  <p id={"recording-live-#{recording.id}"} class="pt-muted" style="margin: 0;">
+                    <%= if MapSet.member?(@active_recording_ids, recording.id) do %>
+                      Grabando. El audio se guarda cada pocos segundos.
+                    <% else %>
+                      Grabación interrumpida: se procesará automáticamente.
+                    <% end %>
+                  </p>
                 <% "transcribing" -> %>
                   <p class="pt-muted" style="margin: 0;">
                     Transcribiendo la sesión. Esta lista se actualiza sola.
@@ -450,7 +469,7 @@ defmodule AletheaWeb.SessionRecordingLive.Index do
                       </button>
                     <% else %>
                       <span class="pt-muted">
-                        El audio ya se eliminó, así que no se puede reintentar. Volvé a grabar o subir la sesión.
+                        El audio ya se eliminó, así que no se puede reintentar. Volvé a grabar la sesión.
                       </span>
                     <% end %>
                   </p>

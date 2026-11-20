@@ -5,24 +5,42 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
   import Alethea.RagFixtures
 
   alias Alethea.ClinicalRecord
-  alias Alethea.ClinicalRecord.{Audit, SessionRecording, SessionTranscript}
+  alias Alethea.ClinicalRecord.{Audit, SessionRecording, SessionRecordingChunk, SessionTranscript}
   alias Alethea.TranscriptionStub
   alias AletheaJobs.{ClinicalRecordOutboxWorker, SessionTranscriptionWorker}
 
-  @audio "fake-ogg-audio-bytes"
+  @audio "fake-webm-audio-bytes"
 
   setup do
     professional = create_professional!()
     patient = create_patient!(professional)
 
     {:ok, recording} =
-      ClinicalRecord.create_session_recording(professional, patient.id, %{
-        audio: @audio,
-        content_type: "audio/ogg",
-        consent: true
+      ClinicalRecord.start_session_recording(professional, patient.id, %{
+        consent: true,
+        content_type: "audio/webm;codecs=opus"
       })
 
+    :ok =
+      ClinicalRecord.append_session_recording_chunk(
+        professional,
+        patient.id,
+        recording.id,
+        0,
+        @audio
+      )
+
+    {:ok, recording} =
+      ClinicalRecord.finish_session_recording(professional, patient.id, recording.id)
+
     %{professional: professional, patient: patient, recording: recording}
+  end
+
+  defp chunk_count(recording_id) do
+    Repo.aggregate(
+      from(c in SessionRecordingChunk, where: c.session_recording_id == ^recording_id),
+      :count
+    )
   end
 
   defp run(recording, attempt \\ 1) do
@@ -46,6 +64,62 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
     assert job.changes.max_attempts == 3
   end
 
+  test "transcribes the chunks concatenated in seq order", %{
+    professional: professional,
+    patient: patient
+  } do
+    TranscriptionStub.install(%{
+      text: "Una sola voz.",
+      language: "es",
+      duration: 3.0,
+      segments: [%{start: 0.0, end: 3.0, text: "Una sola voz.", speaker: nil}]
+    })
+
+    {:ok, recording} =
+      ClinicalRecord.start_session_recording(professional, patient.id, %{
+        consent: true,
+        content_type: "audio/mp4"
+      })
+
+    for {seq, data} <- [{2, "CCC"}, {0, "AAA"}, {1, "BBB"}] do
+      :ok =
+        ClinicalRecord.append_session_recording_chunk(
+          professional,
+          patient.id,
+          recording.id,
+          seq,
+          data
+        )
+    end
+
+    {:ok, recording} =
+      ClinicalRecord.finish_session_recording(professional, patient.id, recording.id)
+
+    assert :ok = run(recording)
+
+    assert_received {:transcription_stub_called, "AAABBBCCC", opts}
+    assert opts[:content_type] == "audio/mp4"
+    assert Repo.get!(SessionRecording, recording.id).status == "ready"
+    assert chunk_count(recording.id) == 0
+  end
+
+  test "a transcribing recording whose chunks are gone fails as audio_unavailable", %{
+    recording: recording
+  } do
+    TranscriptionStub.install({:error, :timeout})
+
+    Repo.delete_all(
+      from c in SessionRecordingChunk, where: c.session_recording_id == ^recording.id
+    )
+
+    assert :ok = run(recording)
+
+    refute_received {:transcription_stub_called, _audio, _opts}
+    stored = Repo.get!(SessionRecording, recording.id)
+    assert stored.status == "failed"
+    assert stored.error_code == "audio_unavailable"
+  end
+
   test "a diarized result waits for speakers and deletes the audio", %{recording: recording} do
     TranscriptionStub.install(%{
       text: "Hola. Hola.",
@@ -60,12 +134,12 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
     assert :ok = run(recording)
 
     assert_received {:transcription_stub_called, @audio, opts}
-    assert opts[:content_type] == "audio/ogg"
+    assert opts[:content_type] == "audio/webm;codecs=opus"
     assert opts[:language] == "es"
 
     stored = Repo.get!(SessionRecording, recording.id)
     assert stored.status == "needs_speakers"
-    assert stored.encrypted_audio == nil
+    assert chunk_count(recording.id) == 0
     assert is_binary(stored.encrypted_segments)
     assert stored.audio_duration_seconds == 10
     assert stored.session_transcript_id == nil
@@ -93,7 +167,7 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
 
       stored = Repo.get!(SessionRecording, recording.id)
       assert stored.status == "ready"
-      assert stored.encrypted_audio == nil
+      assert chunk_count(recording.id) == 0
       assert is_binary(stored.session_transcript_id)
 
       assert {:ok, %SessionTranscript{spans: spans, audio_duration_seconds: 3}} =
@@ -126,7 +200,7 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
 
     stored = Repo.get!(SessionRecording, recording.id)
     assert stored.status == "transcribing"
-    assert is_binary(stored.encrypted_audio)
+    assert chunk_count(recording.id) == 1
     assert stored.error_code == nil
   end
 
@@ -139,7 +213,7 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
 
     stored = Repo.get!(SessionRecording, recording.id)
     assert stored.status == "failed"
-    assert stored.encrypted_audio == nil
+    assert chunk_count(recording.id) == 0
     assert stored.error_code == "provider_error"
     assert "session_recording_failed" in audit_actions(recording.id)
   end
@@ -152,14 +226,14 @@ defmodule AletheaJobs.SessionTranscriptionWorkerTest do
     stored = Repo.get!(SessionRecording, recording.id)
     assert stored.status == "failed"
     assert stored.error_code == "empty_transcript"
-    assert stored.encrypted_audio == nil
+    assert chunk_count(recording.id) == 0
   end
 
   test "a recording no longer transcribing is skipped", %{recording: recording} do
     TranscriptionStub.install({:error, :timeout})
 
     recording
-    |> SessionRecording.transition_changeset(%{status: "failed", encrypted_audio: nil})
+    |> SessionRecording.transition_changeset(%{status: "failed"})
     |> Repo.update!()
 
     assert :ok = run(recording)

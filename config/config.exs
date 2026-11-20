@@ -125,7 +125,10 @@ config :alethea, Oban,
        # Issue #390. Resolves Telegram reply delivery claims that were
        # never given an outcome — see
        # `AletheaJobs.TelegramDeliverySweepWorker`.
-       {"*/5 * * * *", AletheaJobs.TelegramDeliverySweepWorker}
+       {"*/5 * * * *", AletheaJobs.TelegramDeliverySweepWorker},
+       # session-recording S7. Finalizes abandoned recordings and fails
+       # transcriptions stuck without a job, deleting their audio.
+       {"*/10 * * * *", AletheaJobs.SessionRecordingCleanupWorker}
      ]}
   ]
 

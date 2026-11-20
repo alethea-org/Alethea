@@ -7,8 +7,8 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
   professional for the patient and loaded the patient's keyring; callers go
   through the `Alethea.ClinicalRecord` public functions, never here directly.
 
-  Encryption: audio and diarized segments are encrypted under the patient's
-  clinical-record DEK, like `SessionTranscript`. Neither audio nor transcript
+  Encryption: audio chunks and diarized segments are encrypted under the
+  patient's clinical-record DEK, like `SessionTranscript`. Neither audio nor transcript
   text is ever logged; audit rows carry identifiers only.
   """
 
@@ -17,7 +17,7 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
   import Ecto.Query
 
   alias Alethea.ClinicalRecord
-  alias Alethea.ClinicalRecord.{Audit, SessionRecording}
+  alias Alethea.ClinicalRecord.{Audit, SessionRecording, SessionRecordingChunk}
   alias Alethea.Encryption.PatientVault
   alias Alethea.Repo
   alias AletheaJobs.SessionTranscriptionWorker
@@ -26,33 +26,40 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
   @segments_version 1
   @assignable_speakers ~w(patient therapist)
 
+  # MediaRecorder output: Opus in WebM (Chrome, Firefox) or MP4 (Safari).
+  @content_types ~w(audio/webm audio/mp4)
+  @max_chunk_bytes 512 * 1024
+  # Four hours of ~10 s chunks, with headroom for uneven timeslices.
+  @max_chunks 1_600
+  # Four hours at ~24 kbps is ~45 MB.
+  @max_recording_bytes 60_000_000
+  @live_job_states ~w(available scheduled executing retryable)
+
   @doc "PubSub topic carrying `{:session_recording_updated, recording_id}` per patient."
   @spec topic(Ecto.UUID.t()) :: String.t()
   def topic(patient_id), do: "session_recordings:#{patient_id}"
 
-  @doc "Whether a failed recording can still be transcribed again (its audio is stored)."
+  @doc "Whether a failed recording can still be transcribed again (its audio chunks are stored)."
   @spec retryable?(SessionRecording.t()) :: boolean()
-  def retryable?(%SessionRecording{status: "failed", encrypted_audio: audio}),
-    do: is_binary(audio)
-
+  def retryable?(%SessionRecording{status: "failed", audio_stored?: stored?}), do: stored?
   def retryable?(%SessionRecording{}), do: false
 
-  # ── Create ────────────────────────────────────────────────────────────
+  @doc "Largest accepted chunk, in bytes (plaintext)."
+  def max_chunk_bytes, do: @max_chunk_bytes
+
+  # ── Start ─────────────────────────────────────────────────────────────
 
   @doc false
-  def create(professional, patient, keyring, attrs) do
+  def start(professional, patient, attrs) do
     with :ok <- validate_consent(attrs),
-         {:ok, audio} <- fetch_audio(attrs),
-         {:ok, content_type} <- fetch_content_type(attrs),
-         {:ok, ciphertext} <- PatientVault.encrypt(audio, keyring.clinical_record_dek) do
+         {:ok, content_type} <- fetch_content_type(attrs) do
       now = DateTime.utc_now()
 
       changeset =
         %SessionRecording{patient_id: patient.id, professional_id: professional.id}
         |> SessionRecording.create_changeset(%{
-          recorded_at: Map.get(attrs, :recorded_at) || now,
+          recorded_at: now,
           content_type: content_type,
-          encrypted_audio: ciphertext,
           consent_confirmed_at: now
         })
 
@@ -60,9 +67,6 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
       |> Ecto.Multi.insert(:record, changeset)
       |> Ecto.Multi.insert(:audit, fn %{record: record} ->
         audit(professional.id, "session_recording_created", record.id)
-      end)
-      |> Oban.insert(:job, fn %{record: record} ->
-        SessionTranscriptionWorker.new(%{"session_recording_id" => record.id})
       end)
       |> Repo.transaction()
       |> finalize()
@@ -72,15 +76,218 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
   defp validate_consent(%{consent: true}), do: :ok
   defp validate_consent(_attrs), do: {:error, :consent_required}
 
-  defp fetch_audio(%{audio: audio}) when is_binary(audio) and byte_size(audio) > 0,
-    do: {:ok, audio}
+  # MediaRecorder reports e.g. `audio/webm;codecs=opus`; only the base type
+  # decides, the parameters are kept for the provider.
+  defp fetch_content_type(%{content_type: type}) when is_binary(type) do
+    base = type |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase()
 
-  defp fetch_audio(_attrs), do: {:error, :empty_audio}
-
-  defp fetch_content_type(%{content_type: type}) when is_binary(type) and type != "",
-    do: {:ok, type}
+    if base in @content_types and byte_size(type) <= 100,
+      do: {:ok, String.trim(type)},
+      else: {:error, :invalid_content_type}
+  end
 
   defp fetch_content_type(_attrs), do: {:error, :invalid_content_type}
+
+  # ── Chunks ────────────────────────────────────────────────────────────
+
+  @doc false
+  def append_chunk(patient, keyring, recording_id, seq, data) do
+    with :ok <- validate_chunk(seq, data),
+         {:ok, uuid} <- cast_id(recording_id),
+         {:ok, ciphertext} <- PatientVault.encrypt(data, keyring.clinical_record_dek) do
+      # FOR SHARE: appends never block each other but wait for (and then see)
+      # a concurrent finish, which locks the row FOR UPDATE.
+      Repo.transaction(fn ->
+        with {:ok, _recording} <- lock_recording(uuid, patient.id),
+             :ok <- validate_total_size(uuid, byte_size(data)) do
+          Repo.insert_all(
+            SessionRecordingChunk,
+            [
+              %{
+                id: Ecto.UUID.generate(),
+                session_recording_id: uuid,
+                seq: seq,
+                encrypted_data: ciphertext,
+                byte_size: byte_size(data),
+                inserted_at: DateTime.utc_now()
+              }
+            ],
+            on_conflict: :nothing,
+            conflict_target: [:session_recording_id, :seq]
+          )
+
+          :ok
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, :ok} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp validate_chunk(seq, _data) when not is_integer(seq) or seq < 0,
+    do: {:error, :invalid_chunk}
+
+  defp validate_chunk(_seq, data) when not is_binary(data) or byte_size(data) == 0,
+    do: {:error, :invalid_chunk}
+
+  defp validate_chunk(_seq, data) when byte_size(data) > @max_chunk_bytes,
+    do: {:error, :chunk_too_large}
+
+  defp validate_chunk(seq, _data) when seq >= @max_chunks, do: {:error, :recording_too_long}
+  defp validate_chunk(_seq, _data), do: :ok
+
+  defp validate_total_size(recording_id, incoming) do
+    stored =
+      SessionRecordingChunk
+      |> where([c], c.session_recording_id == ^recording_id)
+      |> select([c], coalesce(sum(c.byte_size), 0))
+      |> Repo.one()
+
+    if stored + incoming > @max_recording_bytes,
+      do: {:error, :recording_too_long},
+      else: :ok
+  end
+
+  defp lock_recording(id, patient_id) do
+    SessionRecording
+    |> where([r], r.id == ^id and r.patient_id == ^patient_id)
+    |> lock("FOR SHARE")
+    |> Repo.one()
+    |> case do
+      %SessionRecording{status: "recording"} = recording -> {:ok, recording}
+      %SessionRecording{} -> {:error, :not_recording}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  # ── Finish ────────────────────────────────────────────────────────────
+
+  @doc false
+  def finish(professional, %SessionRecording{} = recording) do
+    Repo.transaction(fn ->
+      with {:ok, recording} <- lock_in_status(recording.id, "recording"),
+           {:ok, updated} <- close_recording(professional.id, recording) do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> broadcast_on_ok()
+  end
+
+  # Must run inside a transaction holding the row lock. With audio the
+  # recording moves on to transcription (job enqueued in the same
+  # transaction); without any chunk it fails as `empty_recording`.
+  defp close_recording(professional_id, recording) do
+    if chunks_stored?(recording.id) do
+      with {:ok, updated} <-
+             recording
+             |> SessionRecording.transition_changeset(%{status: "transcribing", error_code: nil})
+             |> Repo.update(),
+           {:ok, _job} <-
+             Oban.insert(SessionTranscriptionWorker.new(%{"session_recording_id" => updated.id})) do
+        {:ok, %{updated | audio_stored?: true}}
+      end
+    else
+      mark_failed(professional_id, recording, "empty_recording")
+    end
+  end
+
+  # ── Cleanup (cron) ────────────────────────────────────────────────────
+
+  @doc false
+  def clean_up(now, abandoned_after_seconds, stalled_after_seconds) do
+    abandoned_cutoff = DateTime.add(now, -abandoned_after_seconds, :second)
+
+    stalled_cutoff =
+      now |> DateTime.add(-stalled_after_seconds, :second) |> DateTime.truncate(:second)
+
+    finalized =
+      abandoned_cutoff
+      |> abandoned_recording_ids()
+      |> Enum.count(&match?({:ok, _}, finalize_abandoned(&1, abandoned_cutoff)))
+
+    failed =
+      stalled_cutoff
+      |> stalled_recording_ids()
+      |> Enum.count(&match?({:ok, _}, fail_stalled(&1, stalled_cutoff)))
+
+    %{finalized: finalized, stalled: failed}
+  end
+
+  defp last_activity_query do
+    last_chunk =
+      SessionRecordingChunk
+      |> group_by([c], c.session_recording_id)
+      |> select([c], %{id: c.session_recording_id, last_at: max(c.inserted_at)})
+
+    from r in SessionRecording,
+      left_join: c in subquery(last_chunk),
+      on: c.id == r.id,
+      where: r.status == "recording"
+  end
+
+  defp abandoned_recording_ids(cutoff) do
+    last_activity_query()
+    |> where([r, c], coalesce(c.last_at, r.recorded_at) < ^cutoff)
+    |> select([r], r.id)
+    |> Repo.all()
+  end
+
+  defp finalize_abandoned(id, cutoff) do
+    Repo.transaction(fn ->
+      with {:ok, recording} <- lock_in_status(id, "recording"),
+           true <- still_abandoned?(id, cutoff) || {:error, :active},
+           {:ok, updated} <- close_recording(recording.professional_id, recording) do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> broadcast_on_ok()
+  end
+
+  defp still_abandoned?(id, cutoff) do
+    last_activity_query()
+    |> where([r, c], r.id == ^id and coalesce(c.last_at, r.recorded_at) < ^cutoff)
+    |> Repo.exists?()
+  end
+
+  defp stalled_recording_ids(cutoff) do
+    SessionRecording
+    |> where([r], r.status == "transcribing" and r.updated_at < ^cutoff)
+    |> select([r], r.id)
+    |> Repo.all()
+    |> Enum.reject(&transcription_job_alive?/1)
+  end
+
+  defp fail_stalled(id, cutoff) do
+    Repo.transaction(fn ->
+      with {:ok, recording} <- lock_in_status(id, "transcribing"),
+           true <- DateTime.compare(recording.updated_at, cutoff) == :lt || {:error, :active},
+           :ok <- if(transcription_job_alive?(id), do: {:error, :active}, else: :ok),
+           {:ok, updated} <- mark_failed(recording.professional_id, recording, "stalled") do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> log_failure_on_ok("stalled")
+    |> broadcast_on_ok()
+  end
+
+  defp transcription_job_alive?(recording_id) do
+    worker = inspect(SessionTranscriptionWorker)
+
+    Oban.Job
+    |> where([j], j.worker == ^worker and j.state in ^@live_job_states)
+    |> where([j], fragment("?->>'session_recording_id' = ?", j.args, ^recording_id))
+    |> Repo.exists?()
+  end
 
   # ── Read ──────────────────────────────────────────────────────────────
 
@@ -89,18 +296,47 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
     SessionRecording
     |> where([r], r.patient_id == ^patient.id)
     |> order_by([r], desc: r.inserted_at, desc: r.id)
+    |> with_audio_stored()
     |> Repo.all()
   end
 
   @doc false
   def fetch(patient, recording_id) do
-    with {:ok, uuid} <- Ecto.UUID.cast(recording_id),
+    with {:ok, uuid} <- cast_id(recording_id),
          %SessionRecording{} = recording <-
-           Repo.get_by(SessionRecording, id: uuid, patient_id: patient.id) do
+           SessionRecording
+           |> where([r], r.id == ^uuid and r.patient_id == ^patient.id)
+           |> with_audio_stored()
+           |> Repo.one() do
       {:ok, recording}
     else
       _ -> {:error, :not_found}
     end
+  end
+
+  defp with_audio_stored(query) do
+    select_merge(query, [r], %{
+      audio_stored?:
+        fragment(
+          "EXISTS (SELECT 1 FROM session_recording_chunks c WHERE c.session_recording_id = ?)",
+          r.id
+        )
+    })
+  end
+
+  defp cast_id(id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> {:ok, uuid}
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp cast_id(_id), do: {:error, :not_found}
+
+  defp chunks_stored?(recording_id) do
+    SessionRecordingChunk
+    |> where([c], c.session_recording_id == ^recording_id)
+    |> Repo.exists?()
   end
 
   @doc false
@@ -147,7 +383,7 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
       # Re-read the row under a lock: two submits that both loaded the
       # recording while it needed speakers must not both create a transcript.
       Repo.transaction(fn ->
-        with {:ok, recording} <- lock_needing_speakers(recording.id),
+        with {:ok, recording} <- lock_in_status(recording.id, "needs_speakers"),
              {:ok, transcript} <- create_transcript(professional, patient, recording, spans),
              {:ok, updated} <-
                recording
@@ -173,9 +409,11 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
   def assign_speakers(_professional, _patient, _keyring, %SessionRecording{}, _mapping),
     do: {:error, :invalid_status}
 
-  defp lock_needing_speakers(id) do
+  # Re-reads the row FOR UPDATE and requires `status`, so two requests that
+  # loaded the same recording cannot both move it on.
+  defp lock_in_status(id, status) do
     SessionRecording
-    |> where([r], r.id == ^id and r.status == "needs_speakers")
+    |> where([r], r.id == ^id and r.status == ^status)
     |> lock("FOR UPDATE")
     |> Repo.one()
     |> case do
@@ -220,23 +458,22 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
 
   @doc false
   def retry(%SessionRecording{} = recording) do
-    if retryable?(recording) do
-      Ecto.Multi.new()
-      |> Ecto.Multi.update(
-        :record,
-        SessionRecording.transition_changeset(recording, %{
-          status: "transcribing",
-          error_code: nil
-        })
-      )
-      |> Oban.insert(:job, fn %{record: record} ->
-        SessionTranscriptionWorker.new(%{"session_recording_id" => record.id})
-      end)
-      |> Repo.transaction()
-      |> finalize()
-    else
-      {:error, :not_retryable}
-    end
+    Repo.transaction(fn ->
+      with {:ok, recording} <- lock_in_status(recording.id, "failed"),
+           true <- chunks_stored?(recording.id) || {:error, :not_retryable},
+           {:ok, updated} <-
+             recording
+             |> SessionRecording.transition_changeset(%{status: "transcribing", error_code: nil})
+             |> Repo.update(),
+           {:ok, _job} <-
+             Oban.insert(SessionTranscriptionWorker.new(%{"session_recording_id" => updated.id})) do
+        %{updated | audio_stored?: true}
+      else
+        {:error, :invalid_status} -> Repo.rollback(:not_retryable)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> broadcast_on_ok()
   end
 
   # ── Transcription (worker) ────────────────────────────────────────────
@@ -303,11 +540,11 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
                |> SessionRecording.transition_changeset(%{
                  status: "needs_speakers",
                  encrypted_segments: ciphertext,
-                 encrypted_audio: nil,
                  audio_duration_seconds: duration,
                  error_code: nil
                })
                |> Repo.update(),
+             :ok <- delete_chunks(recording.id),
              {:ok, _audit} <-
                Repo.insert(audit(professional.id, "session_recording_transcribed", recording.id)) do
           updated
@@ -329,11 +566,11 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
              |> SessionRecording.transition_changeset(%{
                status: "ready",
                session_transcript_id: transcript.id,
-               encrypted_audio: nil,
                audio_duration_seconds: duration,
                error_code: nil
              })
              |> Repo.update(),
+           :ok <- delete_chunks(recording.id),
            {:ok, _audit} <-
              Repo.insert(audit(professional.id, "session_recording_transcribed", recording.id)) do
         updated
@@ -345,26 +582,44 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
   end
 
   defp fail(professional, recording, code) do
-    Logger.warning("session recording transcription failed: #{code}")
-
     Repo.transaction(fn ->
-      with {:ok, updated} <-
-             recording
-             |> SessionRecording.transition_changeset(%{
-               status: "failed",
-               encrypted_audio: nil,
-               error_code: code
-             })
-             |> Repo.update(),
-           {:ok, _audit} <-
-             Repo.insert(audit(professional.id, "session_recording_failed", recording.id)) do
-        updated
-      else
+      case mark_failed(professional.id, recording, code) do
+        {:ok, updated} -> updated
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+    |> log_failure_on_ok(code)
     |> broadcast_on_ok()
   end
+
+  # Must run inside a transaction. Deletes the audio chunks: a failed
+  # recording keeps no audio.
+  defp mark_failed(professional_id, recording, code) do
+    with {:ok, updated} <-
+           recording
+           |> SessionRecording.transition_changeset(%{status: "failed", error_code: code})
+           |> Repo.update(),
+         :ok <- delete_chunks(recording.id),
+         {:ok, _audit} <-
+           Repo.insert(audit(professional_id, "session_recording_failed", recording.id)) do
+      {:ok, %{updated | audio_stored?: false}}
+    end
+  end
+
+  defp delete_chunks(recording_id) do
+    SessionRecordingChunk
+    |> where([c], c.session_recording_id == ^recording_id)
+    |> Repo.delete_all()
+
+    :ok
+  end
+
+  defp log_failure_on_ok({:ok, _recording} = result, code) do
+    Logger.warning("session recording failed: #{code}")
+    result
+  end
+
+  defp log_failure_on_ok(error, _code), do: error
 
   defp create_transcript(professional, patient, recording, spans) do
     ClinicalRecord.create_session_transcript(professional, patient.id, %{
@@ -489,13 +744,28 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
     end
   end
 
-  defp decrypt_audio(%SessionRecording{encrypted_audio: nil}, _keyring),
-    do: {:error, :audio_unavailable}
+  # MediaRecorder timeslice chunks concatenate, in order, into one valid file.
+  defp decrypt_audio(%SessionRecording{id: id}, keyring) do
+    SessionRecordingChunk
+    |> where([c], c.session_recording_id == ^id)
+    |> order_by([c], asc: c.seq)
+    |> select([c], c.encrypted_data)
+    |> Repo.all()
+    |> case do
+      [] ->
+        {:error, :audio_unavailable}
 
-  defp decrypt_audio(%SessionRecording{encrypted_audio: ciphertext}, keyring) do
-    case PatientVault.decrypt(ciphertext, keyring.clinical_record_dek) do
-      {:ok, audio} -> {:ok, audio}
-      {:error, _reason} -> {:error, :audio_unavailable}
+      ciphertexts ->
+        Enum.reduce_while(ciphertexts, {:ok, []}, fn ciphertext, {:ok, acc} ->
+          case PatientVault.decrypt(ciphertext, keyring.clinical_record_dek) do
+            {:ok, data} -> {:cont, {:ok, [acc | data]}}
+            {:error, _reason} -> {:halt, {:error, :audio_unavailable}}
+          end
+        end)
+        |> case do
+          {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+          error -> error
+        end
     end
   end
 

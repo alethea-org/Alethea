@@ -3605,11 +3605,11 @@ button.phx-submit-loading::after,
   }
 }
 
-/* Session recording (session-recording S2-S4) */
+/* Session recording (session-recording S2-S4, S7) */
 .session-recorder { margin: 12px 0 16px; }
 .session-recorder__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .session-recorder__elapsed { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 48px; }
-.session-recorder__upload { display: flex; flex-direction: column; gap: 6px; }
+.session-recorder__saved { font-size: 13px; font-variant-numeric: tabular-nums; }
 .session-speakers__speaker { border: 0; padding: 0; margin: 0 0 14px; }
 .session-speakers__sample {
   margin: 4px 0;

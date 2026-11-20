@@ -6,7 +6,15 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
 
   alias Alethea.Accounts
   alias Alethea.ClinicalRecord
-  alias Alethea.ClinicalRecord.{Audit, SessionRecording, SessionRecordings, SessionTranscript}
+
+  alias Alethea.ClinicalRecord.{
+    Audit,
+    SessionRecording,
+    SessionRecordingChunk,
+    SessionRecordings,
+    SessionTranscript
+  }
+
   alias Alethea.Encryption.PatientVault
   alias Alethea.TranscriptionStub
   alias AletheaJobs.{ClinicalRecordOutboxWorker, SessionTranscriptionWorker}
@@ -32,15 +40,44 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
     %{professional: professional, patient: patient}
   end
 
-  defp create_recording!(professional, patient) do
+  defp start_recording!(professional, patient) do
     {:ok, recording} =
-      ClinicalRecord.create_session_recording(professional, patient.id, %{
-        audio: @audio,
-        content_type: "audio/webm",
-        consent: true
+      ClinicalRecord.start_session_recording(professional, patient.id, %{
+        consent: true,
+        content_type: "audio/webm;codecs=opus"
       })
 
     recording
+  end
+
+  defp append!(professional, patient, recording, seq, data) do
+    :ok =
+      ClinicalRecord.append_session_recording_chunk(
+        professional,
+        patient.id,
+        recording.id,
+        seq,
+        data
+      )
+  end
+
+  # A finished recording with one chunk (`@audio`), waiting for transcription.
+  defp create_recording!(professional, patient) do
+    recording = start_recording!(professional, patient)
+    append!(professional, patient, recording, 0, @audio)
+
+    {:ok, recording} =
+      ClinicalRecord.finish_session_recording(professional, patient.id, recording.id)
+
+    recording
+  end
+
+  defp chunks(recording_id) do
+    Repo.all(
+      from c in SessionRecordingChunk,
+        where: c.session_recording_id == ^recording_id,
+        order_by: c.seq
+    )
   end
 
   defp clinical_record_dek(professional, patient) do
@@ -53,41 +90,37 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
     Repo.all(from a in Audit, where: a.action == ^action and a.resource_id == ^recording_id)
   end
 
-  describe "create_session_recording/3" do
-    test "stores the audio encrypted, audits and enqueues transcription", %{
+  describe "start_session_recording/3" do
+    test "creates a recording in progress and audits it", %{
       professional: professional,
       patient: patient
     } do
       Phoenix.PubSub.subscribe(Alethea.PubSub, SessionRecordings.topic(patient.id))
-      recording = create_recording!(professional, patient)
+      recording = start_recording!(professional, patient)
 
       stored = Repo.get!(SessionRecording, recording.id)
-      assert stored.status == "transcribing"
-      assert stored.content_type == "audio/webm"
+      assert stored.status == "recording"
+      assert stored.content_type == "audio/webm;codecs=opus"
       assert stored.patient_id == patient.id
       assert stored.professional_id == professional.id
       assert %DateTime{} = stored.consent_confirmed_at
-      refute stored.encrypted_audio == @audio
-
-      assert {:ok, @audio} =
-               PatientVault.decrypt(
-                 stored.encrypted_audio,
-                 clinical_record_dek(professional, patient)
-               )
+      assert %DateTime{} = stored.recorded_at
 
       assert [%Audit{professional_id: prof_id, resource_type: "session_recording"} = audit] =
                audits("session_recording_created", recording.id)
 
       assert prof_id == professional.id
       assert audit.details == %{"outcome" => "success"}
-
-      assert_enqueued(
-        worker: SessionTranscriptionWorker,
-        args: %{"session_recording_id" => recording.id},
-        queue: :transcription
-      )
-
+      refute_enqueued(worker: SessionTranscriptionWorker)
       assert_receive {:session_recording_updated, id} when id == recording.id
+    end
+
+    test "accepts audio/mp4 for Safari", %{professional: professional, patient: patient} do
+      assert {:ok, %SessionRecording{content_type: "audio/mp4"}} =
+               ClinicalRecord.start_session_recording(professional, patient.id, %{
+                 consent: true,
+                 content_type: "audio/mp4"
+               })
     end
 
     test "requires consent and stores nothing without it", %{
@@ -95,28 +128,58 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
       patient: patient
     } do
       assert {:error, :consent_required} =
-               ClinicalRecord.create_session_recording(professional, patient.id, %{
-                 audio: @audio,
+               ClinicalRecord.start_session_recording(professional, patient.id, %{
                  content_type: "audio/webm"
                })
 
       assert Repo.aggregate(SessionRecording, :count) == 0
-      refute_enqueued(worker: SessionTranscriptionWorker)
+
+      assert Repo.aggregate(
+               from(a in Audit, where: a.action == "session_recording_created"),
+               :count
+             ) ==
+               0
     end
 
-    test "another professional cannot create, list, get or assign", %{
+    test "rejects content types other than webm or mp4 audio", %{
       professional: professional,
       patient: patient
     } do
-      recording = create_recording!(professional, patient)
+      for type <- ["audio/ogg", "video/webm", "text/plain", "", nil] do
+        assert {:error, :invalid_content_type} =
+                 ClinicalRecord.start_session_recording(professional, patient.id, %{
+                   consent: true,
+                   content_type: type
+                 })
+      end
+
+      assert Repo.aggregate(SessionRecording, :count) == 0
+    end
+
+    test "another professional cannot start, append, finish, list, get or assign", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = start_recording!(professional, patient)
       intruder = create_professional!()
 
       assert {:error, :unauthorized} =
-               ClinicalRecord.create_session_recording(intruder, patient.id, %{
-                 audio: @audio,
-                 content_type: "audio/webm",
-                 consent: true
+               ClinicalRecord.start_session_recording(intruder, patient.id, %{
+                 consent: true,
+                 content_type: "audio/webm"
                })
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.append_session_recording_chunk(
+                 intruder,
+                 patient.id,
+                 recording.id,
+                 0,
+                 @audio
+               )
+
+      assert {:error, :unauthorized} =
+               ClinicalRecord.finish_session_recording(intruder, patient.id, recording.id)
 
       assert {:error, :unauthorized} =
                ClinicalRecord.list_session_recordings(intruder, patient.id)
@@ -139,27 +202,193 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
               a.action == "clinical_record_access_denied" and a.professional_id == ^intruder.id
         )
 
-      assert length(denials) == 4
+      assert length(denials) == 6
       assert Repo.aggregate(SessionRecording, :count) == 1
+      assert chunks(recording.id) == []
+      assert Repo.get!(SessionRecording, recording.id).status == "recording"
     end
 
     test "a recording of another patient is not found and the denial is audited", %{
       professional: professional,
       patient: patient
     } do
-      recording = create_recording!(professional, patient)
+      recording = start_recording!(professional, patient)
       other_patient = create_patient!(professional)
 
       assert {:error, :not_found} =
                ClinicalRecord.get_session_recording(professional, other_patient.id, recording.id)
 
-      assert [%Audit{resource_type: "session_recording"}] =
+      assert {:error, :not_found} =
+               ClinicalRecord.append_session_recording_chunk(
+                 professional,
+                 other_patient.id,
+                 recording.id,
+                 0,
+                 @audio
+               )
+
+      assert {:error, :not_found} =
+               ClinicalRecord.finish_session_recording(
+                 professional,
+                 other_patient.id,
+                 recording.id
+               )
+
+      assert [_, _, _] =
                Repo.all(
                  from a in Audit,
                    where:
                      a.action == "clinical_record_access_denied" and
-                       a.resource_id == ^recording.id
+                       a.resource_id == ^recording.id and
+                       a.resource_type == "session_recording"
                )
+
+      assert chunks(recording.id) == []
+      assert Repo.get!(SessionRecording, recording.id).status == "recording"
+    end
+  end
+
+  describe "append_session_recording_chunk/5" do
+    test "stores each chunk encrypted with the patient's key, without auditing", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = start_recording!(professional, patient)
+      append!(professional, patient, recording, 0, "AAA")
+      append!(professional, patient, recording, 1, "BBB")
+
+      dek = clinical_record_dek(professional, patient)
+
+      assert [%{seq: 0} = first, %{seq: 1} = second] = chunks(recording.id)
+      refute first.encrypted_data == "AAA"
+      assert first.byte_size == 3
+      assert {:ok, "AAA"} = PatientVault.decrypt(first.encrypted_data, dek)
+      assert {:ok, "BBB"} = PatientVault.decrypt(second.encrypted_data, dek)
+
+      assert Repo.aggregate(from(a in Audit, where: a.resource_id == ^recording.id), :count) ==
+               1
+    end
+
+    test "resending a stored seq is acknowledged without storing it twice", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = start_recording!(professional, patient)
+      append!(professional, patient, recording, 0, "AAA")
+      append!(professional, patient, recording, 0, "AAA")
+
+      assert [%{seq: 0}] = chunks(recording.id)
+    end
+
+    test "rejects a chunk over 512 KB and an empty or badly numbered chunk", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = start_recording!(professional, patient)
+      too_big = :binary.copy("a", 512 * 1024 + 1)
+
+      assert {:error, :chunk_too_large} =
+               ClinicalRecord.append_session_recording_chunk(
+                 professional,
+                 patient.id,
+                 recording.id,
+                 0,
+                 too_big
+               )
+
+      for {seq, data} <- [{0, ""}, {-1, "AAA"}, {"0", "AAA"}] do
+        assert {:error, :invalid_chunk} =
+                 ClinicalRecord.append_session_recording_chunk(
+                   professional,
+                   patient.id,
+                   recording.id,
+                   seq,
+                   data
+                 )
+      end
+
+      assert {:error, :recording_too_long} =
+               ClinicalRecord.append_session_recording_chunk(
+                 professional,
+                 patient.id,
+                 recording.id,
+                 1_600,
+                 "AAA"
+               )
+
+      assert chunks(recording.id) == []
+    end
+
+    test "is rejected once the recording is finished", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = create_recording!(professional, patient)
+
+      assert {:error, :not_recording} =
+               ClinicalRecord.append_session_recording_chunk(
+                 professional,
+                 patient.id,
+                 recording.id,
+                 1,
+                 "late"
+               )
+
+      assert [%{seq: 0}] = chunks(recording.id)
+    end
+  end
+
+  describe "finish_session_recording/3" do
+    test "moves the recording to transcription and enqueues the worker", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = start_recording!(professional, patient)
+      append!(professional, patient, recording, 0, @audio)
+      Phoenix.PubSub.subscribe(Alethea.PubSub, SessionRecordings.topic(patient.id))
+
+      assert {:ok, %SessionRecording{status: "transcribing"}} =
+               ClinicalRecord.finish_session_recording(professional, patient.id, recording.id)
+
+      assert Repo.get!(SessionRecording, recording.id).status == "transcribing"
+      assert [_chunk] = chunks(recording.id)
+
+      assert_enqueued(
+        worker: SessionTranscriptionWorker,
+        args: %{"session_recording_id" => recording.id},
+        queue: :transcription
+      )
+
+      assert_receive {:session_recording_updated, id} when id == recording.id
+    end
+
+    test "a recording without chunks fails as empty_recording", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = start_recording!(professional, patient)
+
+      assert {:ok, %SessionRecording{status: "failed", error_code: "empty_recording"}} =
+               ClinicalRecord.finish_session_recording(professional, patient.id, recording.id)
+
+      stored = Repo.get!(SessionRecording, recording.id)
+      assert stored.status == "failed"
+      assert stored.error_code == "empty_recording"
+      assert [_] = audits("session_recording_failed", recording.id)
+      refute_enqueued(worker: SessionTranscriptionWorker)
+    end
+
+    test "finishing twice fails the second time and enqueues one job", %{
+      professional: professional,
+      patient: patient
+    } do
+      recording = create_recording!(professional, patient)
+
+      assert {:error, :invalid_status} =
+               ClinicalRecord.finish_session_recording(professional, patient.id, recording.id)
+
+      assert [_job] = all_enqueued(worker: SessionTranscriptionWorker)
+      assert Repo.get!(SessionRecording, recording.id).status == "transcribing"
     end
   end
 
@@ -241,7 +470,7 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
       stored = Repo.get!(SessionRecording, recording.id)
       assert stored.session_transcript_id == transcript_id
       assert stored.encrypted_segments == nil
-      assert stored.encrypted_audio == nil
+      assert chunks(recording.id) == []
 
       assert {:ok, %SessionTranscript{spans: spans, audio_duration_seconds: 42}} =
                ClinicalRecord.get_session_transcript(professional, patient.id, transcript_id)
@@ -304,6 +533,9 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
           attempt: 3
         )
 
+      assert {:ok, %SessionRecording{status: "failed", audio_stored?: false}} =
+               ClinicalRecord.get_session_recording(professional, patient.id, recording.id)
+
       assert {:error, :not_retryable} =
                ClinicalRecord.retry_session_recording(professional, patient.id, recording.id)
     end
@@ -318,13 +550,17 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
       |> SessionRecording.transition_changeset(%{status: "failed", error_code: "provider_error"})
       |> Repo.update!()
 
+      assert {:ok, %SessionRecording{audio_stored?: true} = failed} =
+               ClinicalRecord.get_session_recording(professional, patient.id, recording.id)
+
+      assert SessionRecordings.retryable?(failed)
+
       assert {:ok, %SessionRecording{status: "transcribing", error_code: nil}} =
                ClinicalRecord.retry_session_recording(professional, patient.id, recording.id)
 
-      assert_enqueued(
-        worker: SessionTranscriptionWorker,
-        args: %{"session_recording_id" => recording.id}
-      )
+      # The first job is still pending, so uniqueness keeps a single one.
+      assert [_job] = all_enqueued(worker: SessionTranscriptionWorker)
+      assert Repo.get!(SessionRecording, recording.id).status == "transcribing"
     end
   end
 end
