@@ -144,8 +144,11 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
         |> Enum.reject(&(String.trim(&1.text) == ""))
         |> Enum.map(&%{&1 | speaker: Map.fetch!(mapping, &1.speaker)})
 
+      # Re-read the row under a lock: two submits that both loaded the
+      # recording while it needed speakers must not both create a transcript.
       Repo.transaction(fn ->
-        with {:ok, transcript} <- create_transcript(professional, patient, recording, spans),
+        with {:ok, recording} <- lock_needing_speakers(recording.id),
+             {:ok, transcript} <- create_transcript(professional, patient, recording, spans),
              {:ok, updated} <-
                recording
                |> SessionRecording.transition_changeset(%{
@@ -169,6 +172,17 @@ defmodule Alethea.ClinicalRecord.SessionRecordings do
 
   def assign_speakers(_professional, _patient, _keyring, %SessionRecording{}, _mapping),
     do: {:error, :invalid_status}
+
+  defp lock_needing_speakers(id) do
+    SessionRecording
+    |> where([r], r.id == ^id and r.status == "needs_speakers")
+    |> lock("FOR UPDATE")
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :invalid_status}
+      recording -> {:ok, recording}
+    end
+  end
 
   defp normalize_mapping(mapping) when is_map(mapping) do
     Enum.reduce_while(mapping, {:ok, %{}}, fn {key, role}, {:ok, acc} ->

@@ -16,9 +16,9 @@ Objective: the professional records (or uploads) a therapy session from the pati
 
 ## Tasks
 
-- T1 S1 transcription adapters + runtime config + tests + docs — delegated (writer A, parallel)
-- T2 S2-S4, S6 recording domain, migration(s), Oban worker, LiveView + recorder hook, dashboard link, `"unknown"` speaker + tests + docs — delegated (writer B, parallel)
-- T3 S5 consultation citation speaker/time + tests — delegated (writer C, parallel)
+- T1 S1 transcription adapters + runtime config + tests + docs — delegated (writer A, parallel) — done 5ba9e85
+- T2 S2-S4, S6 recording domain, migration(s), Oban worker, LiveView + recorder hook, dashboard link, `"unknown"` speaker + tests + docs — delegated (writer B, parallel) — done 64dea51, race fix after verify
+- T3 S5 consultation citation speaker/time + tests — delegated (writer C, parallel) — done 8885dd1
 - Route evidence: three independent units with disjoint edit surfaces, several minutes each, launched together; parent context near the long-session backstop.
 
 ## Log
@@ -26,3 +26,5 @@ Objective: the professional records (or uploads) a therapy session from the pati
 - L1 (2026-11-20) "Me re gustaría que ahora podamos hacer todas las funcionalidades que faltan, empezando por la de que se puedan grabar las sesiones con el paciente y queden guardadas en el RAG. Hagámoslo agnóstico al proveedor"
 - L2 Decisions (AskUserQuestion): audio → "Delete after transcribing (Recommended)"; speakers → "Si usamos Deep Gram lo reconoce". Resolved as: Deepgram adapter with diarization + professional maps speaker numbers to roles; non-diarizing providers store `"unknown"`.
 - L3 Existing pieces reused: `SessionTranscript` + `SessionTranscriptContent` (encrypted spans), `ClinicalRecord.create_session_transcript/3` (audit + outbox), RAG indexer `chunk_spans/1`, evidence citations in target-behavior review. Gap: nothing produced transcripts; consultation chat dropped speaker/time.
+- L4 Full suite after the three units: 2973 passed, 5 skipped. Production runtime config test updated to the new contract (WHISPER_ENABLED=true selects a provider).
+- L5 Independent verifier: S1, S2, S4, S5, S6 PASS; S3 PARTIAL. B1: concurrent speaker assignment created duplicate transcripts. Fixed by re-reading the row FOR UPDATE with status needs_speakers inside the transaction; regression test failed on old code, passes now. Non-blocking, open: N1 a crash/timeout on the final attempt leaves a recording `transcribing` with its audio (no reaper); N2 300 MB upload read fully into memory and OpenAI's hosted endpoint caps files at 25 MB; N3 foreign-patient mount writes no denial audit; N4 rolling back the speaker migration fails once "unknown" chunks exist; N5 missing cross-professional tests for retry and samples.

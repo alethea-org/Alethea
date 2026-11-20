@@ -200,6 +200,31 @@ defmodule Alethea.ClinicalRecord.SessionRecordingTest do
                )
     end
 
+    test "two requests that both loaded the recording create only one transcript", %{
+      professional: professional,
+      patient: patient,
+      recording: recording
+    } do
+      stale = Repo.get!(SessionRecording, recording.id)
+      patient = Accounts.get_patient_for_professional(professional.id, patient.id)
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, record_dek} = Accounts.ensure_clinical_record_dek(patient, kek)
+      keyring = %{patient_dek: patient_dek, clinical_record_dek: record_dek}
+      mapping = %{0 => "therapist", 1 => "patient"}
+
+      assert {:ok, _} =
+               SessionRecordings.assign_speakers(professional, patient, keyring, stale, mapping)
+
+      assert {:error, :invalid_status} =
+               SessionRecordings.assign_speakers(professional, patient, keyring, stale, mapping)
+
+      assert Repo.aggregate(
+               from(t in SessionTranscript, where: t.patient_id == ^patient.id),
+               :count
+             ) == 1
+    end
+
     test "assign creates a transcript with the mapped speakers", %{
       professional: professional,
       patient: patient,
