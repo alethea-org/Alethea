@@ -15,9 +15,10 @@ Objective: a patient's voice note (or audio) sent to the bot is transcribed with
 
 ## Tasks
 
-- T1 S1-S5 — delegated (writer; parent context at long-session backstop)
+- [x] T1 S1-S5 — delegated (writer; parent context at long-session backstop) — RED 14/14 failing → GREEN; commit pending (parent)
 
 ## Log
 
 - L1 (2026-11-20) "vamos con las notas de voz del paciente en telegram"
 - L2 Plan accepted implicitly by the request; audio never stored (consistent with the session-recording decision "Delete after transcribing").
+- L3 (2026-11-20) T1 implemented: `TelegramMessageWorker` routes a linked patient's textless `voice`/`audio` update to new `TelegramVoiceNoteWorker` (`:transcription` queue, 3 attempts, unique per update_id), which downloads via new `Telegram.Client.download_file/1` callback (Req: getFile + file download; Fake records file_ids), transcribes, then calls `TelegramMessageWorker.process_voice_transcript/2` (same pipeline as text). New nullable `messages.media_type` ("voice", DB check) set right after `find_or_save_telegram_inbound/4` (clinical.ex left untouched); dashboard chat shows "Nota de voz". S3 copies via `send_voice_notice/2` (no Message row). Side fix: a real textless update (no "text" key) used to raise MatchError in `perform/1`; it is now dropped as documented (S5). Next: parent commit + review.

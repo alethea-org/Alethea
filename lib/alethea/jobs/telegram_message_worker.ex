@@ -13,10 +13,13 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
     2. Resolve patient via `Foundation.Accounts.lookup_patient_by_chat_hash/1`.
        If `:not_found`, enqueue a one-shot TelegramOutboundWorker with
        the "unregistered" copy and return `:ok` (REQ-C3-worker-resolves-patient).
-    3. If the message has no text (sticker / voice / photo without
-       caption), drop it: no Message row, no outbound job, return
-       `:ok` (REQ-C5-persist-inbound-message "empty text payloads
-       are dropped").
+    3. If the message has no text, a `voice` / `audio` payload is handed
+       to `Alethea.Jobs.TelegramVoiceNoteWorker` (download + transcription
+       on the `:transcription` queue), which feeds the transcript back
+       through `process_voice_transcript/2`. Any other textless message
+       (sticker / photo without caption) is dropped: no Message row, no
+       outbound job, return `:ok` (REQ-C5-persist-inbound-message "empty
+       text payloads are dropped").
     4. Persist inbound `Message` via `Clinical.find_or_save_telegram_inbound/4`
        with `direction: "inbound"`, `source: "spontaneous"` unless a
        delivered Trigger activo message was acknowledged within the last
@@ -77,7 +80,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
   alias Alethea.Telegram.{ChatIdHash, LogRedactor, RiskSignal}
-  alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
+  alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker, TelegramVoiceNoteWorker}
 
   alias AletheaJobs.{
     EmotionAnalysisWorker,
@@ -97,15 +100,52 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     message = Map.get(args, "message") || Map.fetch!(args, :message)
-    %{"chat" => %{"id" => chat_id}, "message_id" => telegram_message_id, "text" => text} = message
+    update_id = Map.get(args, "telegram_update_id") || Map.get(args, :telegram_update_id)
+
+    # Textless updates (voice, photo, sticker) carry no "text" key at all.
+    handle_inbound(message, Map.get(message, "text"), telegram_update_id: update_id)
+  end
+
+  @doc """
+  Runs the transcript of a patient's voice note through the same
+  pipeline as a written message (persistence, emotion analysis, crisis
+  detection, burst reply, session handling); the stored inbound is
+  marked `media_type: "voice"`. Called by
+  `Alethea.Jobs.TelegramVoiceNoteWorker` with the original Telegram
+  `message` map, so the Telegram `message_id` keeps the inbound
+  idempotent across retries and redeliveries.
+  """
+  @spec process_voice_transcript(map(), String.t()) :: :ok | {:error, term()}
+  def process_voice_transcript(message, transcript) when is_binary(transcript) do
+    handle_inbound(message, transcript, media_type: "voice")
+  end
+
+  @doc """
+  Sends a fixed, non-AI notice about a voice note (unsupported, too long,
+  not understood) to the message's chat. Like the `/pausa` confirmation,
+  it is never persisted as a `Message` and never reaches the AI pipeline.
+  """
+  @spec send_voice_notice(map(), String.t()) :: :ok
+  def send_voice_notice(%{"chat" => %{"id" => chat_id}}, body) when is_binary(body) do
+    chat_id_hash = ChatIdHash.hash(chat_id, pepper!())
+    enqueue_outbound(chat_id_hash, chat_id, nil, body, LogRedactor.prefix(chat_id_hash))
+  end
+
+  defp handle_inbound(message, text, opts) do
+    %{"chat" => %{"id" => chat_id}, "message_id" => telegram_message_id} = message
 
     chat_id_hash = ChatIdHash.hash(chat_id, pepper!())
     hash_prefix = LogRedactor.prefix(chat_id_hash)
 
     case FoundationAccounts.lookup_patient_by_chat_hash(chat_id_hash) do
       {:ok, foundation_patient} ->
-        process_bound_message(foundation_patient, chat_id, chat_id_hash, hash_prefix, text,
-          telegram_message_id: telegram_message_id
+        process_bound_message(
+          foundation_patient,
+          chat_id,
+          chat_id_hash,
+          hash_prefix,
+          text,
+          [telegram_message_id: telegram_message_id, message: message] ++ opts
         )
 
       :not_found ->
@@ -136,6 +176,10 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
       pause_command?(text) ->
         handle_pause_command(foundation_patient, chat_id, chat_id_hash, hash_prefix)
 
+      empty_text?(text) and voice_payload(Keyword.fetch!(opts, :message)) != nil and
+          Keyword.has_key?(opts, :telegram_update_id) ->
+        handle_voice_inbound(foundation_patient, chat_id, hash_prefix, opts)
+
       empty_text?(text) ->
         handle_empty_inbound(foundation_patient, chat_id, hash_prefix)
 
@@ -149,7 +193,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
               chat_id_hash,
               hash_prefix,
               text,
-              telegram_message_id
+              telegram_message_id,
+              Keyword.get(opts, :media_type)
             )
 
           {:error, reason} ->
@@ -192,14 +237,60 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   end
 
   defp handle_empty_inbound(foundation_patient, chat_id, hash_prefix) do
-    # Linked patient: refresh encrypted chat_id on every inbound, including empty payloads.
-    # Encryption failure on a linked patient must fail loudly (scrubbed retryable failure).
-    case FoundationAccounts.store_encrypted_telegram_chat_id(foundation_patient, chat_id) do
-      {:ok, _updated_patient} ->
+    refresh_chat_id!(foundation_patient, chat_id, hash_prefix)
+    Logger.info("TelegramMessageWorker: dropping empty-text update (hash_prefix=#{hash_prefix})")
+    :ok
+  end
+
+  # Voice note from an unlinked foundation row: no legacy patient to
+  # journal for, so it is dropped like any other textless update.
+  defp handle_voice_inbound(%{legacy_patient_id: nil}, _chat_id, hash_prefix, _opts) do
+    Logger.info(
+      "TelegramMessageWorker: dropping voice update on unlinked chat (hash_prefix=#{hash_prefix})"
+    )
+
+    :ok
+  end
+
+  # Voice note from a linked patient: download + transcription run in
+  # their own job on the `:transcription` queue (S4) so slow providers
+  # never hold a `:telegram_inbound` slot. The job is unique per
+  # Telegram update, like this worker.
+  defp handle_voice_inbound(foundation_patient, chat_id, hash_prefix, opts) do
+    refresh_chat_id!(foundation_patient, chat_id, hash_prefix)
+
+    %{
+      telegram_update_id: Keyword.fetch!(opts, :telegram_update_id),
+      message: Keyword.fetch!(opts, :message)
+    }
+    |> TelegramVoiceNoteWorker.new()
+    |> Oban.insert()
+    |> case do
+      {:ok, _job} ->
         Logger.info(
-          "TelegramMessageWorker: dropping empty-text update (hash_prefix=#{hash_prefix})"
+          "TelegramMessageWorker: voice update queued for transcription (hash_prefix=#{hash_prefix})"
         )
 
+        :ok
+
+      {:error, reason} ->
+        raise "TelegramMessageWorker: failed to enqueue TelegramVoiceNoteWorker " <>
+                "(reason=#{SafeReason.for_log(reason)})"
+    end
+  end
+
+  @doc false
+  # The `voice` (voice note) or `audio` (audio file) payload of a Telegram
+  # message, or `nil`.
+  def voice_payload(%{"voice" => %{"file_id" => _} = voice}), do: voice
+  def voice_payload(%{"audio" => %{"file_id" => _} = audio}), do: audio
+  def voice_payload(_message), do: nil
+
+  # Linked patient: refresh encrypted chat_id on every inbound, including empty payloads.
+  # Encryption failure on a linked patient must fail loudly (scrubbed retryable failure).
+  defp refresh_chat_id!(foundation_patient, chat_id, hash_prefix) do
+    case FoundationAccounts.store_encrypted_telegram_chat_id(foundation_patient, chat_id) do
+      {:ok, _updated_patient} ->
         :ok
 
       {:error, reason} ->
@@ -219,7 +310,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
          chat_id_hash,
          hash_prefix,
          text,
-         telegram_message_id
+         telegram_message_id,
+         media_type
        ) do
     # The crisis branch reads `legacy_patient.professional.crisis_message`,
     # so we preload the `:professional` association here (the safe
@@ -247,6 +339,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
           raise "TelegramMessageWorker: failed to persist inbound " <>
                   "(reason=#{SafeReason.for_log(reason)})"
       end
+      |> mark_media_type!(media_type)
 
     # PR-1 (#86): enqueue the session-timeout job right after the
     # successful inbound save, BEFORE the CrisisMonitor.detect/1
@@ -1220,6 +1313,16 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # ----------------------------------------------------------------
   # Pure helpers
   # ----------------------------------------------------------------
+
+  # Voice notes (S2): the marker is written right after the inbound is
+  # persisted and before anything reads it. A re-execution resumes the
+  # same row and finds the marker already set.
+  defp mark_media_type!(inbound, nil), do: inbound
+  defp mark_media_type!(%Message{media_type: media_type} = inbound, media_type), do: inbound
+
+  defp mark_media_type!(inbound, media_type) do
+    inbound |> Message.media_type_changeset(media_type) |> Repo.update!()
+  end
 
   defp empty_text?(nil), do: true
   defp empty_text?(""), do: true
