@@ -47,7 +47,8 @@
           Lo que tu paciente vive entre sesiones, <em>listo para la próxima.</em>
         </h1>
         <p class="lx-lede">
-          Tu paciente escribe por Telegram. Vos llegás a la sesión sabiendo cómo fue su semana.
+          Journaling interactivo por Telegram: tu paciente escribe y una IA lo acompaña. Vos llegás
+          a la sesión sabiendo cómo fue su semana.
         </p>
         <div class="lx-actions">
           <a href="#lista-de-espera" class="lx-btn lx-btn--primary">
@@ -58,6 +59,29 @@
       </div>
 
       <div class="lx-hero__visual" aria-hidden="true">
+        <div class="lx-card lx-card--float lx-hero__card">
+          <p class="lx-label">Panel · Martín R.</p>
+          <p class="lx-hero__title">Resumen listo para la sesión del jueves</p>
+          <div class="lx-chips">
+            <span class="lx-chip lx-chip--fear">miedo</span>
+            <span class="lx-chip lx-chip--anger">enojo</span>
+            <span class="lx-chip lx-chip--sad">tristeza</span>
+          </div>
+          <div class="lx-bars">
+            <div :for={day <- emotion_week()} class="lx-bars__day">
+              <div class="lx-bars__stack">
+                <i
+                  :for={{kind, pct} <- day.mix}
+                  class={"lx-bar lx-bar--#{kind}"}
+                  style={"--h:#{pct}%"}
+                >
+                </i>
+              </div>
+              <span>{day.label}</span>
+            </div>
+          </div>
+          <p class="lx-card__text">3 mensajes nuevos esta semana</p>
+        </div>
         <div class="lx-phone lx-phone--hero">
           <div class="lx-phone__bar">
             <span class="lx-avatar">A</span> Alethea <small>bot</small>
@@ -73,17 +97,6 @@
               Que no pude decir lo que pensaba. Otra vez.
             </p>
           </div>
-        </div>
-        <div class="lx-card lx-card--float lx-hero__card">
-          <p class="lx-label">Panel · Martín R.</p>
-          <div class="lx-chips">
-            <span class="lx-chip lx-chip--fear">miedo</span>
-            <span class="lx-chip lx-chip--anger">enojo</span>
-            <span class="lx-chip lx-chip--sad">tristeza</span>
-          </div>
-          <p class="lx-card__text">
-            3 mensajes nuevos · resumen listo antes de la sesión del jueves
-          </p>
         </div>
       </div>
     </div>
@@ -149,11 +162,11 @@
 
     <.scene
       id="diario"
-      eyebrow="Diario con IA y triggers"
-      title="Una IA que acompaña, guiada por vos."
+      eyebrow="Journaling interactivo y triggers"
+      title="Journaling interactivo, guiado por vos."
       duo
       beats={[
-        "Tu paciente escribe cuando lo necesita. Alethea pregunta y ayuda a ordenar, sin diagnosticar.",
+        "Tu paciente escribe cuando lo necesita y Alethea siempre responde: pregunta y ayuda a ordenar, sin diagnosticar.",
         "Con un trigger activo programás un mensaje. Por ejemplo, recordarle la tarea que charlaron el martes.",
         "O acompañarlo justo antes de un momento difícil. Vos das la instrucción, la IA redacta y nada sale sin tu aprobación.",
         "Con un trigger reactivo, Alethea retoma un tema cuando tu paciente lo menciona.",
@@ -533,7 +546,9 @@
       <div class="lx-principles">
         <article>
           <h3 class="lx-h3">No hace terapia.</h3>
-          <p class="lx-body">La terapia es la sesión. El chat es un registro entre sesiones.</p>
+          <p class="lx-body">
+            La terapia es la sesión. El journaling es un registro entre sesiones.
+          </p>
         </article>
         <article>
           <h3 class="lx-h3">No le muestra datos clínicos al paciente.</h3>

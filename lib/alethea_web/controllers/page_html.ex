@@ -10,7 +10,7 @@ defmodule AletheaWeb.PageHTML do
 
   @tour_steps [
     {"invitacion", "Invitación"},
-    {"diario", "Diario con IA y triggers"},
+    {"diario", "Journaling interactivo y triggers"},
     {"emociones", "Análisis de emociones"},
     {"crisis", "Detección de crisis"},
     {"briefing", "Briefing semanal"},
