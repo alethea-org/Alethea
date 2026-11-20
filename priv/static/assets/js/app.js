@@ -67,11 +67,104 @@ const ConsultationComposer = {
   },
 };
 
+// Billing — Paddle.js overlay checkout (#453). Loads Paddle.js once, fills
+// each plan card with its localized price, and opens checkout in Spanish.
+// Completing checkout only tells the server to show a "processing" state;
+// access is granted by the verified Paddle webhook, never by the browser.
+const PADDLE_JS_URL = "https://cdn.paddle.com/paddle/v2/paddle.js";
+let paddleReady = null;
+
+const loadPaddle = (config) => {
+  if (paddleReady) return paddleReady;
+  paddleReady = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = PADDLE_JS_URL;
+    script.async = true;
+    script.onload = () => {
+      if (config.environment === "sandbox") window.Paddle.Environment.set("sandbox");
+      window.Paddle.Initialize({
+        token: config.client_token,
+        eventCallback: (event) => {
+          if (event.name === "checkout.completed" && window.__paddleCheckoutHook) {
+            window.__paddleCheckoutHook.pushEvent("checkout_completed", {});
+          }
+        },
+      });
+      resolve(window.Paddle);
+    };
+    script.onerror = () => {
+      paddleReady = null;
+      reject(new Error("paddle.js failed to load"));
+    };
+    document.head.appendChild(script);
+  });
+  return paddleReady;
+};
+
+const PaddleCheckout = {
+  mounted() {
+    this.config = JSON.parse(this.el.dataset.config);
+    window.__paddleCheckoutHook = this;
+
+    this.onClick = (e) => {
+      const button = e.target.closest("[data-checkout]");
+      if (!button) return;
+      loadPaddle(this.config)
+        .then((Paddle) =>
+          Paddle.Checkout.open({
+            items: [{ priceId: button.dataset.checkout, quantity: 1 }],
+            customer: { email: this.config.email },
+            customData: this.config.custom_data,
+            settings: { displayMode: "overlay", locale: "es" },
+          })
+        )
+        .catch(() => this.pushEvent("checkout_failed", {}));
+    };
+    this.el.addEventListener("click", this.onClick);
+
+    loadPaddle(this.config)
+      .then((Paddle) =>
+        Paddle.PricePreview({
+          items: this.config.price_ids.map((priceId) => ({ priceId, quantity: 1 })),
+        })
+      )
+      .then((result) => this.fillPrices(result))
+      .catch(() => {});
+  },
+  fillPrices(result) {
+    const lineItems = result?.data?.details?.lineItems || [];
+    lineItems.forEach((item) => {
+      const card = this.el.querySelector(`[data-price-id="${item.price?.id}"]`);
+      if (!card) return;
+      const name = item.price?.name || item.product?.name;
+      if (name) card.querySelector("[data-price-name]").textContent = name;
+      const total = item.formattedTotals?.total;
+      if (total) card.querySelector("[data-price-total]").textContent = total;
+      const cycle = item.price?.billingCycle;
+      if (cycle) {
+        const units = {
+          day: ["día", "días"],
+          week: ["semana", "semanas"],
+          month: ["mes", "meses"],
+          year: ["año", "años"],
+        };
+        const [one, many] = units[cycle.interval] || [cycle.interval, cycle.interval];
+        card.querySelector("[data-price-cycle]").textContent =
+          cycle.frequency === 1 ? `por ${one}` : `cada ${cycle.frequency} ${many}`;
+      }
+    });
+  },
+  destroyed() {
+    this.el.removeEventListener("click", this.onClick);
+    if (window.__paddleCheckoutHook === this) window.__paddleCheckoutHook = null;
+  },
+};
+
 // LiveView Setup
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
 let liveSocket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
   params: { _csrf_token: csrfToken },
-  hooks: { ConsultationScroll, ConsultationComposer },
+  hooks: { ConsultationScroll, ConsultationComposer, PaddleCheckout },
 });
 
 // Page loading indicator — a centered spinner shown while LiveView

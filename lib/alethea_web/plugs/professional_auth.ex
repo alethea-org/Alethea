@@ -4,6 +4,7 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
 
   alias Alethea.Accounts
   alias Alethea.Accounts.AdmissionPolicy
+  alias Alethea.Billing
   alias Alethea.Encryption.ProfessionalKek
 
   require Logger
@@ -86,10 +87,21 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
     end
   end
 
+  # Paid-access gate for the clinical workspace. Runs after
+  # `:require_authenticated_professional`, so a professional is assigned.
+  def on_mount(:require_entitled_professional, _params, _session, socket) do
+    if Billing.entitled?(socket.assigns.current_professional) do
+      {:cont, socket}
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: "/billing")}
+    end
+  end
+
   def init(action)
       when action in [
              :fetch_current_professional,
              :require_authenticated_professional,
+             :require_entitled_professional,
              :redirect_if_authenticated,
              :require_admin
            ],
@@ -102,6 +114,9 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
 
   def call(conn, :redirect_if_authenticated), do: redirect_if_authenticated(conn, [])
   def call(conn, :require_admin), do: require_admin(conn, [])
+
+  def call(conn, :require_entitled_professional),
+    do: require_entitled_professional(conn, [])
 
   @doc """
   Plug: lets only admins (`Alethea.Accounts.Admin`) through. Anyone else,
@@ -135,6 +150,16 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
       conn
       |> put_session(:return_to, conn.request_path)
       |> redirect(to: "/login")
+      |> halt()
+    end
+  end
+
+  def require_entitled_professional(conn, _opts) do
+    if Billing.entitled?(conn.assigns.current_professional) do
+      conn
+    else
+      conn
+      |> redirect(to: "/billing")
       |> halt()
     end
   end
