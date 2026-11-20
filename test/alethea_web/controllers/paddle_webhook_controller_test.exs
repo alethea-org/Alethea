@@ -277,4 +277,119 @@ defmodule AletheaWeb.PaddleWebhookControllerTest do
       assert Enum.all?(logs, &(&1.resource_type == "billing_subscription"))
     end
   end
+
+  describe "linking a Paddle subscription to a professional" do
+    test "a late event from an abandoned subscription does not take over the new one",
+         %{conn: conn, professional: p} do
+      t0 = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      post_paddle(
+        conn,
+        subscription_event("subscription.paused", p.id, %{
+          subscription_id: "sub_A",
+          status: "paused",
+          occurred_at: t0
+        })
+      )
+
+      drain()
+      refute Alethea.Billing.entitled?(p)
+
+      post_paddle(
+        build_conn(),
+        subscription_event("subscription.created", p.id, %{
+          subscription_id: "sub_B",
+          occurred_at: DateTime.add(t0, 60, :second)
+        })
+      )
+
+      drain()
+      assert Alethea.Billing.entitled?(p)
+
+      post_paddle(
+        build_conn(),
+        subscription_event("subscription.canceled", p.id, %{
+          subscription_id: "sub_A",
+          status: "canceled",
+          period_ends_at: nil,
+          occurred_at: DateTime.add(t0, 120, :second)
+        })
+      )
+
+      drain()
+
+      sub = subscription(p)
+      assert sub.paddle_subscription_id == "sub_B"
+      assert sub.status == "active"
+    end
+
+    test "custom_data without the server-issued link token cannot claim a professional",
+         %{conn: conn, professional: victim} do
+      post_paddle(
+        conn,
+        subscription_event("subscription.created", victim.id, %{subscription_id: "sub_V"})
+      )
+
+      drain()
+
+      for token <- [nil, "forged", Alethea.Billing.link_token(Ecto.UUID.generate())] do
+        post_paddle(
+          build_conn(),
+          subscription_event("subscription.created", victim.id, %{
+            subscription_id: "sub_X_#{System.unique_integer([:positive])}",
+            status: "canceled",
+            period_ends_at: nil,
+            link_token: token
+          })
+        )
+
+        drain()
+      end
+
+      sub = subscription(victim)
+      assert sub.paddle_subscription_id == "sub_V"
+      assert sub.status == "active"
+      assert audit_count(victim) == 1
+    end
+
+    test "a transaction that arrives before its subscription event does not block it",
+         %{conn: conn, professional: p} do
+      t0 = DateTime.utc_now()
+      ends_at = t0 |> DateTime.add(30, :day) |> DateTime.truncate(:second)
+
+      transaction = %{
+        "event_id" => "evt_txn_first",
+        "event_type" => "transaction.completed",
+        "occurred_at" => DateTime.to_iso8601(DateTime.add(t0, 5, :second)),
+        "data" => %{
+          "id" => "txn_first",
+          "subscription_id" => "sub_test_1",
+          "customer_id" => "ctm_test_1",
+          "custom_data" => %{
+            "professional_id" => p.id,
+            "link_token" => Alethea.Billing.link_token(p.id)
+          }
+        }
+      }
+
+      post_paddle(conn, transaction)
+      drain()
+      assert subscription(p) == nil
+
+      post_paddle(
+        build_conn(),
+        subscription_event("subscription.activated", p.id, %{
+          occurred_at: t0,
+          period_ends_at: ends_at
+        })
+      )
+
+      drain()
+
+      sub = subscription(p)
+      assert sub.status == "active"
+      assert sub.current_period_ends_at == ends_at
+      assert sub.price_id == price_id()
+    end
+  end
 end

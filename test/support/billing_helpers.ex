@@ -43,7 +43,13 @@ defmodule AletheaWeb.BillingHelpers do
         "id" => Map.get(overrides, :subscription_id, "sub_test_1"),
         "status" => Map.get(overrides, :status, "active"),
         "customer_id" => "ctm_test_1",
-        "custom_data" => %{"professional_id" => professional_id},
+        "custom_data" => %{
+          "professional_id" => professional_id,
+          "link_token" =>
+            Map.get_lazy(overrides, :link_token, fn ->
+              professional_id && Alethea.Billing.link_token(professional_id)
+            end)
+        },
         "items" => [%{"price" => %{"id" => @price_id}, "quantity" => 1}],
         "current_billing_period" => %{
           "starts_at" => DateTime.to_iso8601(DateTime.utc_now()),

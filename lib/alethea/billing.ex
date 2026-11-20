@@ -89,10 +89,10 @@ defmodule Alethea.Billing do
   Idempotent on the Paddle `event_id` and order-safe on `occurred_at`:
   an event older than the last one applied to the subscription is
   recorded but does not change state. Returns `{:ok, outcome}` where
-  outcome is `:applied`, `:duplicate`, `:stale` or `:unlinked`.
+  outcome is `:applied`, `:duplicate`, `:stale`, `:superseded` or `:unlinked`.
   """
   @spec apply_event(Event.t()) ::
-          {:ok, :applied | :duplicate | :stale | :unlinked} | {:error, term()}
+          {:ok, :applied | :duplicate | :stale | :superseded | :unlinked} | {:error, term()}
   def apply_event(%Event{} = event) do
     Repo.transaction(fn ->
       with :new <- claim_event(event),
@@ -113,6 +113,10 @@ defmodule Alethea.Billing do
         :stale ->
           mark_outcome(event, "stale")
           :stale
+
+        :superseded ->
+          mark_outcome(event, "superseded")
+          :superseded
 
         {:error, reason} ->
           Repo.rollback(reason)
@@ -169,19 +173,59 @@ defmodule Alethea.Billing do
       by_subscription ->
         {:ok, by_subscription}
 
-      event.professional_id && Repo.get(Professional, event.professional_id) ->
-        existing =
-          from(s in Subscription,
-            where: s.professional_id == ^event.professional_id,
-            lock: "FOR UPDATE"
-          )
-          |> Repo.one()
-
-        {:ok, existing || %Subscription{professional_id: event.professional_id}}
+      linkable?(event) ->
+        from(s in Subscription,
+          where: s.professional_id == ^event.professional_id,
+          lock: "FOR UPDATE"
+        )
+        |> Repo.one()
+        |> link(event)
 
       true ->
         :unlinked
     end
+  end
+
+  # An event for a Paddle subscription Alethea has not stored yet. It may
+  # create the professional's row, or replace the stored subscription, only
+  # when it starts a new paid subscription. A late event from an older,
+  # abandoned subscription (or a status-less transaction) never takes over
+  # the row.
+  defp link(nil, %Event{status: nil}), do: :unlinked
+
+  defp link(nil, %Event{} = event),
+    do: {:ok, %Subscription{professional_id: event.professional_id}}
+
+  defp link(%Subscription{} = existing, %Event{status: status})
+       when status in ["active", "trialing"],
+       do: {:ok, existing}
+
+  defp link(%Subscription{}, %Event{}), do: :superseded
+
+  # `custom_data` is set client-side in Paddle.js, so the professional id in
+  # it is trusted only with the server-issued link token from
+  # `checkout_config/1`. Without it, anyone could pay and relink another
+  # professional's subscription.
+  defp linkable?(%Event{professional_id: id, link_token: token})
+       when is_binary(id) and is_binary(token) do
+    Plug.Crypto.secure_compare(token, link_token(id)) and Repo.get(Professional, id) != nil
+  end
+
+  defp linkable?(_event), do: false
+
+  @doc """
+  HMAC that binds a checkout's `custom_data.professional_id` to this
+  server. Keyed with the Paddle webhook secret.
+  """
+  @spec link_token(binary()) :: String.t()
+  def link_token(professional_id) do
+    :crypto.mac(
+      :hmac,
+      :sha256,
+      webhook_secret() || "",
+      "alethea-billing-link:" <> professional_id
+    )
+    |> Base.url_encode64(padding: false)
   end
 
   # Status-less events (`transaction.completed`) only link ids, so they
@@ -213,13 +257,9 @@ defmodule Alethea.Billing do
 
   defp watermark(_subscription, %Event{occurred_at: occurred_at}), do: occurred_at
 
-  # `transaction.completed` carries no status: it only links ids. A
-  # transaction that arrives before any subscription event cannot create
-  # a row on its own, so it falls back to `active`, the state Paddle
-  # reports for a subscription right after its first payment.
-  defp status_attrs(subscription, %Event{status: nil}) do
-    %{status: subscription.status || "active"}
-  end
+  # `transaction.completed` carries no status: it only links ids on an
+  # existing row (it never creates one, see `link/2`).
+  defp status_attrs(subscription, %Event{status: nil}), do: %{status: subscription.status}
 
   defp status_attrs(subscription, %Event{} = event) do
     %{
@@ -268,7 +308,8 @@ defmodule Alethea.Billing do
 
   @doc """
   Client-side configuration for Paddle.js overlay checkout. Carries only
-  the professional's email and Alethea id.
+  the professional's email and Alethea id (plus the link token that
+  authenticates that id when it comes back in a webhook).
   """
   @spec checkout_config(Professional.t()) :: map()
   def checkout_config(%Professional{} = professional) do
@@ -277,7 +318,7 @@ defmodule Alethea.Billing do
       environment: environment(),
       price_ids: config(:price_ids, []),
       email: professional.email,
-      custom_data: %{professional_id: professional.id}
+      custom_data: %{professional_id: professional.id, link_token: link_token(professional.id)}
     }
   end
 

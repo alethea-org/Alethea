@@ -118,7 +118,12 @@ defmodule AletheaWeb.BillingGateTest do
         |> Jason.decode!()
 
       assert config["email"] == p.email
-      assert config["custom_data"] == %{"professional_id" => p.id}
+
+      assert config["custom_data"] == %{
+               "professional_id" => p.id,
+               "link_token" => Alethea.Billing.link_token(p.id)
+             }
+
       assert config["price_ids"] == [price_id()]
       assert config["client_token"] == "test_client_token"
       assert config["environment"] == "sandbox"

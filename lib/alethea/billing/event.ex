@@ -31,6 +31,7 @@ defmodule Alethea.Billing.Event do
     :paddle_subscription_id,
     :paddle_customer_id,
     :professional_id,
+    :link_token,
     :status,
     :price_id,
     :current_period_ends_at,
@@ -80,6 +81,7 @@ defmodule Alethea.Billing.Event do
          paddle_subscription_id: sub_id,
          paddle_customer_id: string_or_nil(data["customer_id"]),
          professional_id: professional_id(data["custom_data"]),
+         link_token: link_token(data["custom_data"]),
          status: status,
          price_id: first_price_id(data["items"]),
          current_period_ends_at: period_end,
@@ -98,6 +100,7 @@ defmodule Alethea.Billing.Event do
            paddle_subscription_id: sub_id,
            paddle_customer_id: string_or_nil(data["customer_id"]),
            professional_id: professional_id(data["custom_data"]),
+           link_token: link_token(data["custom_data"]),
            price_id: first_price_id(data["items"])
          }}
 
@@ -128,6 +131,9 @@ defmodule Alethea.Billing.Event do
   end
 
   defp professional_id(_), do: nil
+
+  defp link_token(%{"link_token" => token}) when is_binary(token), do: token
+  defp link_token(_), do: nil
 
   defp first_price_id([%{"price" => %{"id" => id}} | _]) when is_binary(id), do: id
   defp first_price_id([%{"price_id" => id} | _]) when is_binary(id), do: id

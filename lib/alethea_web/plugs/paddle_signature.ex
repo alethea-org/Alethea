@@ -5,8 +5,9 @@ defmodule AletheaWeb.Plugs.PaddleSignature do
   Verifies the `Paddle-Signature` header against the raw request body
   (cached by `AletheaWeb.Plugs.CacheBodyReader`) with the configured
   webhook secret, via `Alethea.Billing.Signature`. On any failure it
-  responds 401 with an empty body and halts, without logging the request,
-  so a forged notification never reaches the controller.
+  responds 401 with an empty body and halts, adding no log line of its
+  own (the standard request log still records the request), so a forged
+  notification never reaches the controller.
   """
 
   import Plug.Conn
