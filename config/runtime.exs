@@ -43,6 +43,57 @@ if config_env() in [:dev, :prod] do
          |> Enum.reject(&(&1 == ""))
 end
 
+# ## Paddle Billing (#453)
+#
+# Paid access is enforced only when PADDLE_WEBHOOK_SECRET is set; then
+# PADDLE_API_KEY, PADDLE_CLIENT_TOKEN and PADDLE_PRICE_IDS (comma-separated)
+# are required too. PADDLE_ENVIRONMENT is `sandbox` (default) or
+# `production`. The synthetic demo profile (DEMO_SYNTHETIC_DATA=true) never
+# enforces paid access.
+if config_env() in [:dev, :prod] do
+  paddle_env = fn name ->
+    case System.get_env(name) do
+      nil -> nil
+      value -> if String.trim(value) == "", do: nil, else: String.trim(value)
+    end
+  end
+
+  paddle_required = fn name ->
+    paddle_env.(name) ||
+      raise "environment variable #{name} is required when PADDLE_WEBHOOK_SECRET is set."
+  end
+
+  paddle_webhook_secret = paddle_env.("PADDLE_WEBHOOK_SECRET")
+  paddle_demo_profile = System.get_env("DEMO_SYNTHETIC_DATA") == "true"
+
+  if paddle_webhook_secret do
+    paddle_environment =
+      case paddle_env.("PADDLE_ENVIRONMENT") || "sandbox" do
+        env when env in ["sandbox", "production"] -> env
+        _ -> raise "environment variable PADDLE_ENVIRONMENT must be sandbox or production."
+      end
+
+    paddle_price_ids =
+      "PADDLE_PRICE_IDS"
+      |> paddle_required.()
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if paddle_price_ids == [] do
+      raise "environment variable PADDLE_PRICE_IDS must list at least one price id."
+    end
+
+    config :alethea, Alethea.Billing,
+      enabled: not paddle_demo_profile,
+      environment: paddle_environment,
+      webhook_secret: paddle_webhook_secret,
+      api_key: paddle_required.("PADDLE_API_KEY"),
+      client_token: paddle_required.("PADDLE_CLIENT_TOKEN"),
+      price_ids: paddle_price_ids
+  end
+end
+
 if config_env() in [:dev, :prod] do
   real_telegram_client? =
     config_env() == :prod or System.get_env("TELEGRAM_CLIENT_ADAPTER") == "req"

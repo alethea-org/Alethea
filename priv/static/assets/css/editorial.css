@@ -3604,3 +3604,44 @@ button.phx-submit-loading::after,
     animation-duration: 2s;
   }
 }
+
+/* ── Billing (/billing, #453) ─────────────────────────────────── */
+.billing-card {
+  background: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline);
+  border-radius: var(--rounded-sm);
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  color: var(--colors-body);
+}
+.billing-card__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--colors-ink);
+  margin-bottom: var(--spacing-xxs);
+}
+.billing-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: var(--spacing-md);
+}
+.billing-intro {
+  color: var(--colors-muted);
+  margin-bottom: var(--spacing-md);
+}
+.billing-plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-md);
+}
+.billing-plan { display: flex; flex-direction: column; gap: 8px; margin-bottom: 0; }
+.billing-plan__price {
+  font-size: var(--typography-title-lg-size);
+  color: var(--colors-ink);
+  font-weight: 600;
+}
+.billing-plan__cycle { color: var(--colors-muted); font-size: 13px; min-height: 1em; }
+.billing-plan .button-primary { margin-top: auto; }
+.billing-footer { margin-top: var(--spacing-lg); color: var(--colors-muted); font-size: 13px; }
+.billing-footer a { text-decoration: underline; }
