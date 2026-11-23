@@ -46,6 +46,10 @@ defmodule AletheaWeb.Router do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional)
   end
 
+  pipeline :require_admin do
+    plug(AletheaWeb.Plugs.ProfessionalAuth, :require_admin)
+  end
+
   pipeline :redirect_if_auth do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :redirect_if_authenticated)
   end
@@ -87,6 +91,7 @@ defmodule AletheaWeb.Router do
     pipe_through([:landing])
 
     get("/", PageController, :home)
+    post("/waitlist", WaitlistController, :create)
   end
 
   scope "/", AletheaWeb do
@@ -103,6 +108,23 @@ defmodule AletheaWeb.Router do
     pipe_through(:browser)
 
     delete("/logout", SessionController, :delete)
+  end
+
+  # Operator pages. Only professionals listed in ADMIN_EMAILS get in;
+  # everyone else sees the regular 404.
+  scope "/admin", AletheaWeb do
+    pipe_through([:browser, :require_auth, :require_admin])
+
+    get("/waitlist.csv", AdminWaitlistController, :export)
+
+    live_session :admin,
+      on_mount: [
+        {AletheaWeb.Plugs.ProfessionalAuth, :mount_current_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_admin}
+      ] do
+      live("/waitlist", Admin.WaitlistLive, :index)
+    end
   end
 
   scope "/", AletheaWeb do

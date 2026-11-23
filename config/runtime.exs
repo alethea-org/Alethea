@@ -32,6 +32,17 @@ if config_env() == :dev do
   config :alethea, :telegram_client, telegram_client
 end
 
+# Operators who can open the /admin pages (e.g. the launch waitlist).
+# Comma-separated emails of registered professionals; empty means nobody.
+if config_env() in [:dev, :prod] do
+  config :alethea,
+         :admin_emails,
+         (System.get_env("ADMIN_EMAILS") || "")
+         |> String.split(",")
+         |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+         |> Enum.reject(&(&1 == ""))
+end
+
 if config_env() in [:dev, :prod] do
   real_telegram_client? =
     config_env() == :prod or System.get_env("TELEGRAM_CLIENT_ADAPTER") == "req"

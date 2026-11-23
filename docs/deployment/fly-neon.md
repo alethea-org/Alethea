@@ -96,6 +96,7 @@ A deploy without `TELEGRAM_BOT_TOKEN` writes nothing, but the release command st
 | `POOL_SIZE`, `DATABASE_CONNECT_TIMEOUT_MS`, `DATABASE_QUEUE_TARGET_MS`, `DATABASE_QUEUE_INTERVAL_MS` | see [Topology](#topology) | Database pool tuning. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Hosted provider endpoint. |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1/messages` | Full Anthropic Messages endpoint, not an OpenAI-compatible base URL. |
+| `ADMIN_EMAILS` | empty (nobody) | Comma-separated emails of registered professionals who can open `/admin/waitlist` (launch waitlist list and CSV download). Anyone else gets a 404. |
 | `DEMO_RESTRICTED_ACCESS` | `false` | Must be exactly `true` or `false`. When `true`, restricts registration, login, and active sessions to emails in `DEMO_ALLOWED_EMAILS`. |
 | `DEMO_SYNTHETIC_DATA` | `false` | Exactly `true` or `false` (blank counts as unset). When `true`, routes the six non-guided text chains to Claude; the guided chain already follows `AI_PROVIDER`. Requires `AI_PROVIDER=anthropic` and `DEMO_RESTRICTED_ACCESS=true`, otherwise the boot fails. The weekly report screen uses the weekly summary chain, so it is covered. |
 | `EMBEDDINGS_MODEL` | adapter default (`bge-m3`) | Embeddings model name. |

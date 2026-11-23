@@ -1,10 +1,11 @@
 <%!--
   Landing root layout — the HTML document for the public marketing
-  page (`GET /`). Like `auth.html.heex` it carries no app shell
-  (no sidebar/topbar), but unlike auth it does NOT wrap the body in
-  `#auth-layout` — the landing needs to be full-bleed so the
-  editorial hero, the signature bands and the CTA strip can use the
-  full viewport width.
+  page (`GET /`). No app shell and no LiveView socket: the page is
+  static HTML plus `landing.js` (scroll reveals, side dots, progress).
+
+  The inline script tags `<html>` with `lx-js` before first paint so
+  the reveal states apply only when JS runs; without it every scene
+  renders visible.
 
   See the `:landing` pipeline in `lib/alethea_web/router.ex`.
 --%>
@@ -12,36 +13,32 @@
 <html lang="es">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title default="Alethea" suffix=" · Centro de Control Clínico">
+    <meta name="theme-color" content="#ffffff" />
+    <meta
+      name="description"
+      content="Alethea acompaña a tus pacientes entre sesiones por Telegram y te entrega su registro analizado: emociones, alertas de riesgo, resumen semanal y una historia clínica a la que le podés preguntar."
+    />
+    <.live_title default="Alethea" suffix=" · Acompañamiento entre sesiones">
       {assigns[:page_title]}
     </.live_title>
     <link rel="icon" href={~p"/favicon.svg"} type="image/svg+xml" />
+    <script>
+      document.documentElement.classList.add("lx-js");
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap"
       rel="stylesheet"
-    /> <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/editorial.css"} />
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix.js"}>
-    </script>
-
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/phoenix_html.js"}>
-    </script>
-
-    <script
-      defer
-      phx-track-static
-      type="text/javascript"
-      src={~p"/assets/js/phoenix_live_view.js"}
-    >
-    </script>
-
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/landing.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/landing.js"}>
     </script>
   </head>
 
-  <body>{@inner_content}</body>
+  <body class="lx-body">{@inner_content}</body>
 </html>
