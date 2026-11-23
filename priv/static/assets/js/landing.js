@@ -28,10 +28,20 @@
     beats: [...el.querySelectorAll("[data-beat]")],
     ticks: [...el.querySelectorAll("[data-tick]")],
     parts: [...el.querySelectorAll("[data-at]")].map((part) => [part, Number(part.dataset.at)]),
+    // Top-level mockup pieces with every beat that touches them, for the
+    // phone layout, which shows one piece at a time.
+    pieces: [...el.querySelectorAll(".lx-stage__visual > *")].map((piece) => ({
+      el: piece,
+      ats: [piece, ...piece.querySelectorAll("[data-at]")]
+        .map((node) => Number(node.dataset.at))
+        .filter((at) => at > 0),
+    })),
     beat: -1,
   }));
 
   const wide = window.matchMedia("(min-width: 1100px) and (min-height: 640px)");
+  // Phones and tablets in portrait get the story too, stacked vertically.
+  const narrow = window.matchMedia("(max-width: 1099px) and (min-height: 560px)");
   const calm = window.matchMedia("(prefers-reduced-motion: reduce)");
   let pinned = false;
 
@@ -44,6 +54,20 @@
     });
     scene.ticks.forEach((el, i) => el.classList.toggle("is-on", i + 1 === beat));
     scene.parts.forEach(([el, at]) => el.classList.toggle("is-on", at <= beat));
+
+    // Phone layout: focus the piece holding the newest revealed part (the
+    // later piece wins a tie), so the visual follows the sentence.
+    let focus = scene.pieces[0];
+    let newest = 0;
+    scene.pieces.forEach((piece) => {
+      const reached = piece.ats.filter((at) => at <= beat);
+      const top = reached.length ? Math.max(...reached) : 0;
+      if (top >= newest && top > 0) {
+        newest = top;
+        focus = piece;
+      }
+    });
+    scene.pieces.forEach((piece) => piece.el.classList.toggle("is-focus", piece === focus));
   };
 
   // The beat a scene is on, from how far its top has travelled past the
@@ -85,20 +109,23 @@
   };
 
   const setMode = () => {
-    pinned = wide.matches && !calm.matches;
+    pinned = (wide.matches || narrow.matches) && !calm.matches;
     html.classList.toggle("lx-pin", pinned);
+    html.classList.toggle("lx-pin-narrow", pinned && narrow.matches);
     if (!pinned) {
       scenes.forEach((scene) => {
         scene.beat = -1;
         [...scene.beats, ...scene.ticks, ...scene.parts.map(([el]) => el)].forEach((el) =>
           el.classList.remove("is-on", "is-past"),
         );
+        scene.pieces.forEach((piece) => piece.el.classList.remove("is-focus"));
       });
     }
     schedule();
   };
 
   wide.addEventListener("change", setMode);
+  narrow.addEventListener("change", setMode);
   calm.addEventListener("change", setMode);
   window.addEventListener("scroll", schedule, { passive: true });
   window.addEventListener("resize", schedule);
