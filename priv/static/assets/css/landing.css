@@ -396,6 +396,50 @@ body.lx-body { margin: 0; background: var(--colors-canvas); }
 .lx-footer p { font-size: 13px; color: var(--colors-muted); max-width: 560px; }
 .lx-footer__links { display: flex; gap: 20px; font-size: 14px; color: var(--colors-body); }
 
+/* ── Phone story (`html.lx-pin-narrow`) ──
+   Same pinned story on narrow screens, stacked: the text (title + one beat)
+   on top, and below it one mockup piece at a time, the one landing.js marks
+   `.is-focus` for the current beat. Heights use the small viewport unit so
+   mobile browser bars don't hide anything. */
+.lx-pin-narrow .lx-scene { height: calc(100svh + var(--beats) * 70svh); }
+.lx-pin-narrow .lx-stage { height: 100svh; align-items: stretch; padding: 76px 0 20px; }
+.lx-pin-narrow .lx-stage .lx-shell { max-width: 100%; height: 100%; }
+.lx-pin-narrow .lx-stage__grid {
+  grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px; height: 100%; align-items: start;
+}
+.lx-pin-narrow .lx-scene--statement .lx-stage { align-items: center; }
+.lx-pin-narrow .lx-scene--statement .lx-stage .lx-shell { height: auto; }
+.lx-pin-narrow .lx-stage__text { max-width: none; }
+.lx-pin-narrow .lx-count { margin-bottom: 10px; font-size: 12px; }
+.lx-pin-narrow .lx-stage__text .lx-h2 { font-size: clamp(24px, 6.6vw, 34px); margin-bottom: 12px; }
+.lx-pin-narrow .lx-stage__text .lx-beat { font-size: clamp(16px, 4.3vw, 19px); line-height: 1.45; }
+.lx-pin-narrow .lx-beats { min-height: 4.4em; }
+.lx-pin-narrow .lx-ticks { margin-top: 12px; }
+.lx-pin-narrow .lx-ticks i { width: 20px; }
+.lx-pin-narrow .lx-ticks i.is-on { width: 32px; }
+
+.lx-pin-narrow .lx-stage__visual,
+.lx-pin-narrow .lx-stage__visual--duo { display: block; position: relative; height: 100%; min-height: 0; }
+.lx-pin-narrow .lx-stage__visual > * {
+  /* top+bottom 0 with auto margins centres a piece that fits and pins a
+     taller one to the top instead of pushing it out of view. */
+  position: absolute; top: 0; bottom: 0; left: 0; right: 0; margin: auto;
+  height: fit-content; width: min(100%, 380px); max-width: 380px; translate: none;
+  transition: opacity 0.45s var(--lx-ease), transform 0.6s var(--lx-ease);
+}
+.lx-pin-narrow .lx-stage__visual > .lx-phone { width: 270px; }
+.lx-pin-narrow .lx-stage__visual > :not(.is-focus) { opacity: 0 !important; pointer-events: none; }
+.lx-pin-narrow .lx-stage .lx-chat { height: min(270px, 32svh); }
+@media (max-height: 760px) { .lx-pin-narrow .lx-stage__visual { zoom: 0.88; } }
+.lx-pin-narrow .lx-card { padding: 16px; box-shadow: var(--shadow-overlay); }
+.lx-pin-narrow .lx-dots { display: none; }
+
+/* Hero on phones: copy first, a compact composition below. */
+.lx-pin-narrow .lx-hero { min-height: calc(100svh - 64px); padding: 28px 0 72px; }
+.lx-pin-narrow .lx-hero .lx-lede { font-size: 16px; margin-top: 16px; }
+.lx-pin-narrow .lx-hero .lx-actions { margin-top: 20px; }
+
 /* ── Reveal in flow mode (JS only) ── */
 .lx-js:not(.lx-pin) [data-scene] .lx-stage > * {
   opacity: 0; transform: translateY(28px);
