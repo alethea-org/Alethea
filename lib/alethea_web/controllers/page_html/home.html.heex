@@ -1,265 +1,665 @@
-<%!-- ═══════════════════════════════════════════════════════════
-     Alethea · Landing — editorial long-scroll.
+<%!--
+  Alethea · public landing (`GET /`).
 
-     The page follows the design system's section rhythm: no two
-     consecutive bands share a surface, and every major band carries
-     the 96px vertical constant (`.band`).
+  A scroll story on the app's editorial design system. Scope and sources:
+  odd/tasks/landing-redesign.md.
 
-       white hero  →  coral + forest signature split
-                   →  white three-step body
-                   →  cream callout band
-                   →  dark navy CTA card
-                   →  light gray CTA strip
-                   →  footer
+  The tour is a list of `<.scene>`s (see `AletheaWeb.PageHTML.scene/1`): a
+  title, a few short beats and a mockup whose `data-at="N"` parts appear from
+  beat N on. `landing.js` pins each scene on wide screens and advances the
+  beats with the scroll; without it the page reads as a normal document.
+--%>
+<div class="lx" id="landing">
+  <div class="lx-progress" aria-hidden="true"><span data-progress></span></div>
 
-     There is no gradient, mesh or atmospheric backdrop anywhere:
-     the hero is white canvas and the brand voltage lives entirely
-     in the signature surface cards.
-═══════════════════════════════════════════════════════════════ --%>
-<div class="ptl">
-  <div class="ptl-shell">
-    <nav class="ptl-nav">
-      <.link navigate={~p"/"} class="ptl-brand">
-        <span class="ptl-brand__mark"><img src={~p"/images/logo.svg"} alt="" width="17" /></span>
+  <header class="lx-nav">
+    <div class="lx-shell lx-nav__inner">
+      <a href={~p"/"} class="lx-brand" aria-label="Alethea, inicio">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4.5 20 12 3.5 19.5 20" /><path d="M3 13.75h18" />
+        </svg>
         Alethea
-      </.link>
-      <div class="ptl-navlinks">
-        <.link navigate={~p"/login"} class="ptl-link">Iniciar sesión</.link>
-        <.link navigate={~p"/register"} class="ptl-cta ptl-cta--sm">Crear cuenta</.link>
+      </a>
+      <nav class="lx-nav__links" aria-label="Secciones">
+        <a href="#como-funciona" class="lx-nav__link lx-hide-sm">Cómo funciona</a>
+        <a href="#historia-clinica" class="lx-nav__link lx-hide-sm">Historia clínica</a>
+        <a href="#privacidad" class="lx-nav__link lx-hide-sm">Privacidad</a>
+        <a href={~p"/login"} class="lx-nav__link">Ingresar</a>
+        <a href="#lista-de-espera" class="lx-btn lx-btn--primary lx-btn--sm">Lista de espera</a>
+      </nav>
+    </div>
+  </header>
+
+  <%!-- ── Hero ── --%>
+  <section class="lx-hero" id="inicio">
+    <div class="lx-shell lx-hero__grid">
+      <div class="lx-hero__copy">
+        <p class="lx-eyebrow">Para psicólogas y psicólogos</p>
+        <h1 class="lx-display">
+          Lo que tu paciente vive entre sesiones, <em>listo para la próxima.</em>
+        </h1>
+        <p class="lx-lede">
+          Journaling interactivo por Telegram: tu paciente escribe y una IA lo acompaña. Vos llegás
+          a la sesión sabiendo cómo fue su semana.
+        </p>
+        <div class="lx-actions">
+          <a href="#lista-de-espera" class="lx-btn lx-btn--primary">
+            Sumarme a la lista de espera
+          </a>
+          <a href="#como-funciona" class="lx-btn lx-btn--ghost">Ver cómo funciona</a>
+        </div>
       </div>
+
+      <div class="lx-hero__visual" aria-hidden="true">
+        <div class="lx-card lx-card--float lx-hero__card">
+          <p class="lx-label">Panel · Martín R.</p>
+          <p class="lx-hero__title">Resumen listo para la sesión del jueves</p>
+          <div class="lx-chips">
+            <span class="lx-chip lx-chip--fear">miedo</span>
+            <span class="lx-chip lx-chip--anger">enojo</span>
+            <span class="lx-chip lx-chip--sad">tristeza</span>
+          </div>
+          <div class="lx-bars">
+            <div :for={day <- emotion_week()} class="lx-bars__day">
+              <div class="lx-bars__stack">
+                <i
+                  :for={{kind, pct} <- day.mix}
+                  class={"lx-bar lx-bar--#{kind}"}
+                  style={"--h:#{pct}%"}
+                >
+                </i>
+              </div>
+              <span>{day.label}</span>
+            </div>
+          </div>
+          <p class="lx-card__text">3 mensajes nuevos esta semana</p>
+        </div>
+        <div class="lx-phone lx-phone--hero">
+          <div class="lx-phone__bar">
+            <span class="lx-avatar">A</span> Alethea <small>bot</small>
+          </div>
+          <div class="lx-chat">
+            <p class="lx-msg lx-msg--in" style="--d:0">
+              Hoy discutí con mi jefe y me quedé toda la tarde con un nudo en el pecho.
+            </p>
+            <p class="lx-msg lx-msg--out" style="--d:1">
+              Gracias por contarlo. ¿Qué fue lo que más te quedó dando vueltas?
+            </p>
+            <p class="lx-msg lx-msg--in" style="--d:2">
+              Que no pude decir lo que pensaba. Otra vez.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <a href="#la-semana" class="lx-scrollhint" aria-label="Seguir leyendo"><span></span></a>
+  </section>
+
+  <%!-- ── Opening statement ── --%>
+  <section class="lx-scene lx-scene--statement" id="la-semana" data-scene style="--beats:3">
+    <div class="lx-stage">
+      <div class="lx-shell">
+        <div class="lx-beats lx-beats--statement">
+          <p class="lx-beat" data-beat="1">Ves a tu paciente <em>una hora</em> por semana.</p>
+          <p class="lx-beat" data-beat="2">Las otras <em>167</em> pasan lejos del consultorio.</p>
+          <p class="lx-beat" data-beat="3">Alethea te acerca lo que pasa en el medio.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <%!-- ── Scroll story ── --%>
+  <div class="lx-tour" id="como-funciona">
+    <nav class="lx-dots" aria-label="Recorrido">
+      <a
+        :for={{id, label} <- tour_steps()}
+        href={"##{id}"}
+        class="lx-dot"
+        data-dot={id}
+        aria-label={label}
+      >
+        <span>{label}</span>
+      </a>
     </nav>
 
-    <section class="ptla-hero">
-      <div>
-        <p class="pt-eyebrow" style="margin-bottom:14px;">Diario clínico entre sesiones</p>
-
-        <h1 class="ptla-title">Llegá a la sesión sabiendo cómo estuvo la semana.</h1>
-
-        <p class="ptla-lede">
-          Tu paciente escribe por Telegram cuando lo necesita. Alethea analiza el
-          registro y te entrega un resumen semanal con métricas, listo para leer
-          antes del encuentro.
-        </p>
-
-        <div class="ptla-actions">
-          <.link navigate={~p"/register"} class="button-primary">Crear cuenta</.link>
-          <.link navigate={~p"/login"} class="button-secondary">Ya tengo cuenta</.link>
+    <.scene
+      id="invitacion"
+      eyebrow="Invitación"
+      title="Tu paciente entra en un minuto."
+      duo
+      beats={[
+        "Desde tu panel generás un enlace de Telegram y un código.",
+        "Tu paciente lo abre. Sin app nueva, sin usuario, sin contraseña.",
+        "Recibe tu mensaje de bienvenida y ya puede escribir."
+      ]}
+    >
+      <div class="lx-card" data-at="1">
+        <p class="lx-label">Invitar paciente</p>
+        <p class="lx-field">t.me/AletheaBot?start=<span class="lx-mono">a9f3…</span></p>
+        <div class="lx-code">
+          <span>4</span><span>8</span><span>1</span><span>2</span><span>7</span><span>3</span>
         </div>
-
-        <p class="ptla-proof">
-          Cada paciente tiene su propia clave de cifrado. Ni el equipo de Alethea
-          ni terceros pueden leer el contenido clínico.
-        </p>
+        <p class="lx-card__text">Enlace de un solo uso, con vencimiento.</p>
       </div>
-
-      <div class="ptla-shot" aria-hidden="true">
-        <div class="ptla-shot__bar">
-          <span class="ptla-shot__dot"></span> <span class="ptla-shot__dot"></span>
-          <span class="ptla-shot__dot"></span>
+      <div class="lx-phone lx-phone--sm" data-at="2">
+        <div class="lx-phone__bar"><span class="lx-avatar">A</span> Alethea</div>
+        <div class="lx-chat">
+          <p class="lx-msg lx-msg--in" data-at="2">/start</p>
+          <p class="lx-msg lx-msg--out" data-at="3">
+            Hola Martín, soy Alethea. Laura te invitó a usar este espacio para escribir entre sesiones.
+          </p>
         </div>
+      </div>
+    </.scene>
 
-        <div class="ptla-shot__body">
-          <div class="ptla-shot__line" style="width:45%;"></div>
+    <.scene
+      id="diario"
+      eyebrow="Journaling interactivo y triggers"
+      title="Journaling interactivo, guiado por vos."
+      duo
+      beats={[
+        "Tu paciente escribe cuando lo necesita y Alethea siempre responde: pregunta y ayuda a ordenar, sin diagnosticar.",
+        "Con un trigger activo programás un mensaje. Por ejemplo, recordarle la tarea que charlaron el martes.",
+        "O acompañarlo justo antes de un momento difícil. Vos das la instrucción, la IA redacta y nada sale sin tu aprobación.",
+        "Con un trigger reactivo, Alethea retoma un tema cuando tu paciente lo menciona.",
+        "Cada disparo queda registrado. Y si tu paciente necesita un respiro, escribe /pausa."
+      ]}
+    >
+      <div class="lx-card" data-at="2">
+        <p class="lx-label">Triggers · Martín R.</p>
+        <div class="lx-trigger" data-at="2">
+          <div class="lx-trigger__head">
+            <span class="lx-tag lx-tag--mint">Activo</span>
+            <span class="lx-trigger__when">Jueves · 18:00</span>
+            <span class="lx-status">Aprobado</span>
+          </div>
+          <p class="lx-trigger__text">Recordarle la tarea que charlamos el martes.</p>
+        </div>
+        <div class="lx-trigger" data-at="3">
+          <div class="lx-trigger__head">
+            <span class="lx-tag lx-tag--mint">Activo</span>
+            <span class="lx-trigger__when">Viernes · 08:30</span>
+            <span class="lx-status">Aprobado</span>
+          </div>
+          <p class="lx-trigger__text">
+            Antes del examen, que se acuerde del cuento del gigante y el enano.
+          </p>
+        </div>
+        <div class="lx-trigger" data-at="4">
+          <div class="lx-trigger__head">
+            <span class="lx-tag lx-tag--peach">Reactivo</span>
+            <span class="lx-trigger__when">Si habla de bloquearse</span>
+            <span class="lx-status">Aprobado</span>
+          </div>
+          <p class="lx-trigger__text">Proponerle la respiración que practicamos.</p>
+        </div>
+        <div class="lx-row" data-at="5">
+          <p>3 disparos registrados esta semana</p>
+          <span class="lx-mono">ver mensajes</span>
+        </div>
+      </div>
+      <div class="lx-phone lx-phone--sm" data-at="1">
+        <div class="lx-phone__bar"><span class="lx-avatar">A</span> Alethea</div>
+        <div class="lx-chat">
+          <p class="lx-msg lx-msg--in" data-at="1">
+            Hoy fue un día pesado, no pude estudiar nada.
+          </p>
+          <p class="lx-msg lx-msg--out" data-at="1">Te leo. ¿Qué fue lo que más te costó?</p>
+          <p class="lx-msg lx-msg--out" data-at="2">
+            Hola Martín. ¿Pudiste hacer la tarea que charlaron con Laura el martes?
+          </p>
+          <p class="lx-msg lx-msg--out" data-at="3">
+            En un rato entrás al examen. Acordate del cuento del gigante y el enano.
+          </p>
+          <p class="lx-msg lx-msg--in" data-at="4">Tengo miedo de quedarme en blanco.</p>
+          <p class="lx-msg lx-msg--out" data-at="4">
+            Es entendible. ¿Probamos la respiración que practicaste con Laura antes de entrar?
+          </p>
+        </div>
+      </div>
+    </.scene>
 
-          <div class="ptla-shot__line" style="width:85%;"></div>
-
-          <div class="ptla-shot__line" style="width:70%;"></div>
-
-          <div class="ptla-shot__bars">
-            <i style="height:38%;"></i> <i style="height:64%;"></i> <i style="height:48%;"></i>
-            <i style="height:88%;"></i> <i style="height:56%;"></i> <i style="height:72%;"></i>
-            <i style="height:40%;"></i>
+    <.scene
+      id="emociones"
+      eyebrow="Análisis de emociones"
+      title="Cada mensaje, leído también por su emoción."
+      beats={[
+        "Cada mensaje pasa por un modelo de análisis emocional entrenado en español.",
+        "Lo clasifica: alegría, tristeza, enojo, miedo o neutral.",
+        "Y vos ves la semana completa, día por día.",
+        "Tu paciente no completa ninguna escala. Solo escribe."
+      ]}
+    >
+      <div class="lx-card" data-at="1">
+        <p class="lx-label">Mensajes analizados</p>
+        <div class="lx-row">
+          <p>“No pude dormir pensando en mañana.”</p>
+          <span class="lx-chip lx-chip--fear" data-at="2">miedo</span>
+        </div>
+        <div class="lx-row">
+          <p>“Salí a caminar con mi hermana, estuvo lindo.”</p>
+          <span class="lx-chip lx-chip--joy" data-at="2">alegría</span>
+        </div>
+        <div class="lx-row">
+          <p>“Me dio mucha bronca que no me escucharan.”</p>
+          <span class="lx-chip lx-chip--anger" data-at="2">enojo</span>
+        </div>
+      </div>
+      <div class="lx-card" data-at="3">
+        <p class="lx-label">Tendencias · últimos 7 días</p>
+        <div class="lx-bars">
+          <div :for={day <- emotion_week()} class="lx-bars__day">
+            <div class="lx-bars__stack">
+              <i
+                :for={{kind, pct} <- day.mix}
+                class={"lx-bar lx-bar--#{kind}"}
+                style={"--h:#{pct}%"}
+              >
+              </i>
+            </div>
+            <span>{day.label}</span>
           </div>
         </div>
+        <div class="lx-legend">
+          <span class="lx-chip lx-chip--joy">alegría</span>
+          <span class="lx-chip lx-chip--sad">tristeza</span>
+          <span class="lx-chip lx-chip--anger">enojo</span>
+          <span class="lx-chip lx-chip--fear">miedo</span>
+          <span class="lx-chip lx-chip--neutral">neutral</span>
+        </div>
       </div>
-    </section>
+    </.scene>
+
+    <.scene
+      id="crisis"
+      eyebrow="Detección de crisis"
+      title="Si aparece lenguaje de riesgo, respondés vos."
+      duo
+      beats={[
+        "Alethea detecta expresiones de riesgo en lo que escribe tu paciente.",
+        "La IA se corre. Tu paciente recibe al instante el mensaje de contención que vos dejaste escrito.",
+        "En tu panel aparece la alerta y el paciente pasa al primer lugar.",
+        "Los mensajes programados se pausan. Tu paciente nunca lee “se detectó una crisis”."
+      ]}
+    >
+      <div class="lx-card lx-card--alert" data-at="3">
+        <p class="lx-label">Intervención urgente</p>
+        <p class="lx-trigger__title">Martín R. · hace 2 min</p>
+        <p class="lx-card__text">
+          Lenguaje de riesgo detectado. Se envió tu mensaje de contención.
+        </p>
+        <div class="lx-actions lx-actions--sm">
+          <span class="lx-btn lx-btn--primary lx-btn--sm">Abrir paciente</span>
+        </div>
+      </div>
+      <div class="lx-phone lx-phone--sm" data-at="1">
+        <div class="lx-phone__bar"><span class="lx-avatar">A</span> Alethea</div>
+        <div class="lx-chat">
+          <p class="lx-msg lx-msg--in" data-at="1">Ya no sé si tiene sentido seguir.</p>
+          <p class="lx-msg lx-msg--out lx-msg--care" data-at="2">
+            Martín, gracias por escribirlo. No estás solo. Si sentís que corrés peligro, llamá ahora al 135 o al 911. Laura ya está al tanto.
+          </p>
+        </div>
+      </div>
+    </.scene>
+
+    <.scene
+      id="briefing"
+      eyebrow="Briefing semanal"
+      title="Un resumen que se escribe solo."
+      beats={[
+        "Dos horas antes de cada sesión, Alethea resume lo que pasó desde la anterior.",
+        "Con un nivel de estado y cuatro métricas a la vista.",
+        "Llegás sabiendo dónde quedó la semana. La sesión no arranca de cero."
+      ]}
+    >
+      <div class="lx-card lx-card--wide" data-at="1">
+        <div class="lx-card__head">
+          <p class="lx-label">Resumen semanal · Martín R.</p>
+          <span class="lx-tag lx-tag--peach" data-at="2">Atención</span>
+        </div>
+        <p class="lx-card__text lx-card__text--lg">
+          Semana con tensión laboral sostenida. Dos discusiones en el trabajo y dificultad para
+          dormir antes de reuniones. El fin de semana aparecen momentos de alivio con su familia.
+        </p>
+        <div class="lx-metrics" data-at="2">
+          <div><span class="lx-metric">Alta</span><small>Ansiedad</small></div>
+          <div><span class="lx-metric">Media</span><small>Social</small></div>
+          <div><span class="lx-metric">0</span><small>Crisis</small></div>
+          <div><span class="lx-metric">5</span><small>Sesiones de chat</small></div>
+        </div>
+      </div>
+    </.scene>
+
+    <.scene
+      id="historia-clinica"
+      eyebrow="Historia clínica conversacional"
+      title="Preguntale a la historia clínica."
+      beats={[
+        "Escribís una pregunta, como se la harías a un colega.",
+        "Alethea responde con material real: mensajes, sesiones, notas, observaciones y análisis funcionales.",
+        "Cada afirmación cita su fuente.",
+        "Y lo que es hipótesis queda marcado como hipótesis."
+      ]}
+    >
+      <div class="lx-card lx-card--wide lx-rag" data-at="1">
+        <p class="lx-label">Consulta · Martín R.</p>
+        <p class="lx-rag__q">
+          ¿Cuándo aparecieron los problemas de sueño y con qué los relaciona?
+        </p>
+        <div class="lx-rag__a">
+          <p data-at="2">
+            Los menciona por primera vez el 4 de noviembre
+            <span class="lx-cite" data-at="3">1</span>
+            y los
+            vuelve a nombrar antes de cada reunión de equipo <span class="lx-cite" data-at="3">2</span>.
+            En tu nota del 7/11 registraste anticipación ansiosa ante figuras de autoridad <span
+              class="lx-cite"
+              data-at="3"
+            >3</span>.
+          </p>
+          <p class="lx-hypo" data-at="4">
+            <span class="lx-tag lx-tag--mint">Hipótesis</span>
+            El insomnio parece ligado a la anticipación de conflictos, más que a la carga de trabajo.
+          </p>
+        </div>
+        <ol class="lx-sources" data-at="3">
+          <li><span class="lx-cite">1</span> Mensaje del paciente · 04/11</li>
+          <li><span class="lx-cite">2</span> Mensajes del paciente · 11/11 y 18/11</li>
+          <li><span class="lx-cite">3</span> Nota clínica · 07/11</li>
+        </ol>
+      </div>
+    </.scene>
+
+    <.scene
+      id="sesiones"
+      eyebrow="Sesiones grabadas"
+      title="Tus sesiones, también en la historia."
+      beats={[
+        "Grabás la sesión, con el consentimiento de tu paciente.",
+        "La conversación transcrita se suma a su historia clínica.",
+        "“¿De qué hablamos la sesión pasada?” tiene respuesta, con el minuto exacto."
+      ]}
+    >
+      <div class="lx-card" data-at="1">
+        <div class="lx-card__head">
+          <p class="lx-label">Sesión 12 · Martín R.</p>
+          <span class="lx-rec">Grabando · 41:05</span>
+        </div>
+        <div class="lx-wave">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+        <div class="lx-row" data-at="2">
+          <p>Transcripción agregada a la historia clínica</p>
+          <span class="lx-status">Lista</span>
+        </div>
+      </div>
+      <div class="lx-card lx-card--wide lx-rag" data-at="3">
+        <p class="lx-rag__q">¿De qué hablamos la sesión pasada?</p>
+        <div class="lx-rag__a">
+          <p>
+            Trabajaron la discusión con su jefe y practicaron cómo plantear un desacuerdo <span class="lx-cite">1</span>.
+            Quedó en registrar un momento por día en que se animara a opinar <span class="lx-cite">2</span>.
+          </p>
+        </div>
+        <ol class="lx-sources">
+          <li><span class="lx-cite">1</span> Sesión del 14/11 · min 12:40</li>
+          <li><span class="lx-cite">2</span> Sesión del 14/11 · min 41:05</li>
+        </ol>
+      </div>
+    </.scene>
+
+    <.scene
+      id="analisis-funcional"
+      eyebrow="Análisis funcional"
+      title="Análisis E-O-R-C con evidencia."
+      beats={[
+        "Definís la conducta objetivo de tu paciente.",
+        "Armás el análisis citando lo que tu paciente comunicó.",
+        "La IA propone patrones. Vos aceptás, editás o descartás.",
+        "Y cada conducta queda marcada: espontánea o provocada por un mensaje programado."
+      ]}
+    >
+      <div class="lx-card lx-card--wide" data-at="1">
+        <p class="lx-label">Conducta objetivo · Evitar expresar desacuerdo</p>
+        <div class="lx-eorc" data-at="2">
+          <div>
+            <b>E</b>
+            <p>Reunión con su jefe</p>
+            <span class="lx-cite">msj 11/11</span>
+          </div>
+          <div>
+            <b>O</b>
+            <p>Nudo en el pecho, insomnio previo</p>
+            <span class="lx-cite">msj 10/11</span>
+          </div>
+          <div>
+            <b>R</b>
+            <p>Se queda callado y asiente</p>
+            <span class="lx-cite">msj 11/11</span>
+          </div>
+          <div>
+            <b>C</b>
+            <p>Alivio inmediato, enojo después</p>
+            <span class="lx-cite">nota 14/11</span>
+          </div>
+        </div>
+        <div class="lx-proposal" data-at="3">
+          <p>
+            <span class="lx-tag lx-tag--peach">Propuesta de la IA</span>
+            Se repite con figuras de autoridad, no con pares.
+          </p>
+          <div class="lx-proposal__actions">
+            <span class="lx-btn lx-btn--primary lx-btn--xs">Aceptar</span>
+            <span class="lx-btn lx-btn--ghost lx-btn--xs">Editar</span>
+            <span class="lx-btn lx-btn--ghost lx-btn--xs">Descartar</span>
+          </div>
+        </div>
+        <div class="lx-chips" data-at="4">
+          <span class="lx-chip lx-chip--neutral">espontánea</span>
+          <span class="lx-chip lx-chip--neutral">provocada</span>
+        </div>
+      </div>
+    </.scene>
+
+    <.scene
+      id="notas"
+      eyebrow="Notas clínicas"
+      title="Notas que no se reescriben."
+      beats={[
+        "Tus notas quedan cifradas. No se editan ni se borran: se agrega una nueva.",
+        "Desde una nota activás o bajás el riesgo del paciente.",
+        "Cada cambio queda auditado."
+      ]}
+    >
+      <div class="lx-card lx-card--wide" data-at="1">
+        <div class="lx-card__head">
+          <p class="lx-label">Nueva nota clínica</p>
+          <span class="lx-status">Inmutable</span>
+        </div>
+        <p class="lx-field lx-field--area">
+          Sesión 12. Trabajamos asertividad con role-play. Refiere menos insomnio. Sin indicadores de riesgo actuales.
+        </p>
+        <div class="lx-radio" data-at="2">
+          <span>Sin cambio</span><span>Activar riesgo</span><span class="is-on">Bajar riesgo</span>
+        </div>
+      </div>
+      <div class="lx-card" data-at="3">
+        <p class="lx-label">Historial</p>
+        <div class="lx-row">
+          <p>Lic. Laura Méndez · 18/11</p>
+          <span class="lx-tag lx-tag--mint">Bajó el riesgo</span>
+        </div>
+        <div class="lx-row">
+          <p>Lic. Laura Méndez · 07/11</p>
+          <span class="lx-tag lx-tag--peach">Activó el riesgo</span>
+        </div>
+      </div>
+    </.scene>
+
+    <.scene
+      id="privacidad"
+      eyebrow="Privacidad"
+      title="Cada paciente, con su propia llave."
+      beats={[
+        "Mensajes, notas y sesiones se cifran con una clave propia de cada paciente.",
+        "Se descifran solo cuando vos los abrís. Y cada apertura queda registrada.",
+        "Tus pacientes están aislados de los de cualquier otro profesional.",
+        "Y tu paciente nunca ve análisis, métricas ni datos clínicos. Aunque los pida."
+      ]}
+    >
+      <div class="lx-card" data-at="1">
+        <p class="lx-label">Conversación cifrada</p>
+        <p class="lx-field lx-mono lx-cipher">9f2c·a71e·04bd·e5c8·3a90·…</p>
+        <span class="lx-btn lx-btn--ghost lx-btn--sm">Descifrar conversación</span>
+      </div>
+      <div class="lx-card" data-at="2">
+        <p class="lx-label">Auditoría</p>
+        <div class="lx-row">
+          <p>Descifrado del chat · Martín R.</p>
+          <span class="lx-mono">18/11 10:42</span>
+        </div>
+        <div class="lx-row">
+          <p>Nota clínica creada · Martín R.</p>
+          <span class="lx-mono">18/11 11:30</span>
+        </div>
+        <div class="lx-row">
+          <p>Riesgo actualizado · Martín R.</p>
+          <span class="lx-mono">18/11 11:30</span>
+        </div>
+      </div>
+    </.scene>
   </div>
-  <%!-- ── Signature split — the page's first voltage moment ── --%>
-  <section class="band band--tight">
-    <div class="ptl-shell signature-split">
-      <article class="signature-coral-card">
-        <h2 class="signature-title">El registro crudo, ya convertido en historia clínica.</h2>
 
-        <p>Lo que el paciente escribe durante la semana entra al pipeline de
-          inferencia y sale como registro estructurado: sentimiento, tendencias
-          de conducta y eventos de crisis, cada uno anclado al mensaje que lo
-          originó.</p>
-
-        <div class="signature-actions">
-          <.link navigate={~p"/register"} class="button-secondary-on-dark">Crear cuenta</.link>
-        </div>
-      </article>
-
-      <article class="signature-forest-card">
-        <h2 class="signature-title">Espontáneo o elicitado, siempre distinguido.</h2>
-
-        <p>Cada conducta registrada queda etiquetada según si la trajo el paciente
-          o la provocó una pregunta del asistente. La diferencia importa en la
-          lectura clínica, así que el sistema nunca la borra.</p>
-      </article>
-    </div>
-  </section>
-  <%!-- ── White body — the three-step onboarding ── --%>
-  <section class="band">
-    <div class="ptl-shell">
-      <div class="band__head">
-        <h2 class="band__title">Tres pasos entre la invitación y el briefing.</h2>
-
-        <p class="band__lede">
-          Sin app que instalar, sin usuario que recordar y sin fricción para el
-          paciente.
-        </p>
-      </div>
-
-      <div class="demo-grid">
-        <article class="demo-grid-card">
-          <span class="ptla-num">01</span>
-          <h3 class="demo-grid-card__title">Invitás al paciente</h3>
-
-          <p class="demo-grid-card__text">
-            Generás un enlace de Telegram desde el panel. El paciente entra sin
-            app, sin usuario y sin contraseña.
+  <%!-- ── Principles ── --%>
+  <section class="lx-band" aria-labelledby="principios">
+    <div class="lx-shell">
+      <h2 class="lx-h2 lx-center" id="principios">Lo que Alethea no hace, a propósito.</h2>
+      <div class="lx-principles">
+        <article>
+          <h3 class="lx-h3">No hace terapia.</h3>
+          <p class="lx-body">
+            La terapia es la sesión. El journaling es un registro entre sesiones.
           </p>
         </article>
-
-        <article class="demo-grid-card">
-          <span class="ptla-num">02</span>
-          <h3 class="demo-grid-card__title">Escribe durante la semana</h3>
-
-          <p class="demo-grid-card__text">
-            La IA acompaña con un tono clínicamente neutro y distingue lo
-            espontáneo de lo elicitado en el registro.
-          </p>
+        <article>
+          <h3 class="lx-h3">No le muestra datos clínicos al paciente.</h3>
+          <p class="lx-body">Tu paciente solo ve su conversación.</p>
         </article>
-
-        <article class="demo-grid-card">
-          <span class="ptla-num">03</span>
-          <h3 class="demo-grid-card__title">Leés el resumen</h3>
-
-          <p class="demo-grid-card__text">
-            Resumen semanal con métricas emocionales y alertas de riesgo, con
-            enlace al mensaje que originó cada insight.
-          </p>
+        <article>
+          <h3 class="lx-h3">No envía nada que no aprobaste.</h3>
+          <p class="lx-body">Los mensajes programados salen solo con tu aprobación.</p>
         </article>
       </div>
     </div>
   </section>
-  <%!-- ── Cream callout band ── --%>
-  <section class="band band--tight">
-    <div class="ptl-shell">
-      <div class="cream-callout-card">
-        <h2 class="band__title">Lo que ves al abrir el briefing.</h2>
 
-        <p class="band__lede" style="margin-bottom:24px;">
-          Una sola columna de lectura, en el orden en que preparás la sesión.
-        </p>
+  <%!-- ── Launch waitlist ── --%>
+  <section class="lx-band" id="lista-de-espera" aria-labelledby="waitlist-title">
+    <div class="lx-shell">
+      <div class="lx-waitlist">
+        <div>
+          <p class="lx-eyebrow">Lanzamiento</p>
+          <h2 class="lx-waitlist__title" id="waitlist-title">
+            Sé de los primeros en llegar a la sesión <em>con la semana leída.</em>
+          </h2>
+          <p class="lx-waitlist__lede">
+            Estamos abriendo Alethea de a pocos profesionales. Anotate y te escribimos cuando sea tu turno.
+          </p>
+          <ul class="lx-waitlist__perks">
+            <li>Acceso antes del lanzamiento público.</li>
+            <li>Te acompañamos a sumar tu primer paciente.</li>
+            <li>Sin compromiso: anotarte no te obliga a nada.</li>
+          </ul>
+        </div>
 
-        <div class="demo-grid">
-          <div class="demo-grid-card">
-            <h3 class="demo-grid-card__title">Resumen semanal</h3>
+        <div class="lx-waitlist__card">
+          <p
+            :if={msg = Phoenix.Flash.get(@flash, :waitlist)}
+            class="lx-waitlist__ok"
+            id="waitlist-joined"
+            role="status"
+          >
+            {msg}
+          </p>
 
-            <p class="demo-grid-card__text">
-              El texto del período con su nivel de estado y la fecha de cierre.
-            </p>
-          </div>
-
-          <div class="demo-grid-card">
-            <h3 class="demo-grid-card__title">Cuatro métricas</h3>
-
-            <p class="demo-grid-card__text">
-              Ansiedad, social, eventos de crisis y sesiones registradas.
-            </p>
-          </div>
-
-          <div class="demo-grid-card">
-            <h3 class="demo-grid-card__title">Tendencias</h3>
-
-            <p class="demo-grid-card__text">
-              Distribución emocional de los últimos siete días, día por día.
-            </p>
-          </div>
-
-          <div class="demo-grid-card">
-            <h3 class="demo-grid-card__title">Historial cifrado</h3>
-
-            <p class="demo-grid-card__text">
-              El chat se descifra bajo demanda y cada apertura queda auditada.
-            </p>
-          </div>
+          <.form
+            :if={!Phoenix.Flash.get(@flash, :waitlist)}
+            for={@waitlist_form}
+            action={~p"/waitlist"}
+            id="waitlist-form"
+            class="lx-waitlist__form"
+          >
+            <div>
+              <p class="lx-waitlist__card-title">Sumate a la lista de espera</p>
+              <p class="lx-waitlist__card-text">Te lleva diez segundos.</p>
+            </div>
+            <.input
+              field={@waitlist_form[:name]}
+              type="text"
+              label="Nombre y apellido"
+              placeholder="Laura Méndez"
+              autocomplete="name"
+              required
+            />
+            <.input
+              field={@waitlist_form[:email]}
+              type="email"
+              label="Email"
+              placeholder="laura@consultorio.com"
+              autocomplete="email"
+              required
+            />
+            <div class="lx-trap" aria-hidden="true">
+              <label for="waitlist_website">No completar</label>
+              <input
+                type="text"
+                id="waitlist_website"
+                name="waitlist[website]"
+                value=""
+                tabindex="-1"
+                autocomplete="off"
+              />
+            </div>
+            <button type="submit" class="lx-btn lx-btn--primary">Quiero mi lugar</button>
+            <p class="lx-note">Solo usamos tu email para avisarte del lanzamiento.</p>
+          </.form>
         </div>
       </div>
     </div>
   </section>
-  <%!-- ── Dark navy CTA card ── --%>
-  <section class="band band--tight">
-    <div class="ptl-shell">
-      <article class="hero-card-dark">
-        <h2 class="signature-title">Ningún insight sin su mensaje de origen.</h2>
 
-        <p>Todo dato que aparece en el panel apunta al mensaje que lo produjo. Si
-          una tendencia no se puede rastrear hasta el registro del paciente, no
-          se muestra.</p>
-
-        <div class="signature-actions">
-          <.link navigate={~p"/register"} class="button-secondary-on-dark">Empezar ahora</.link>
-        </div>
-      </article>
-    </div>
-  </section>
-  <%!-- ── Light gray CTA strip ── --%>
-  <section class="band band--tight">
-    <div class="ptl-shell">
-      <div class="cta-band-light">
-        <h2 class="cta-band-light__title">Empezá a preparar sesiones con Alethea.</h2>
-
-        <p class="cta-band-light__text">
-          Creá tu cuenta profesional, invitá al primer paciente y leé su primer
-          resumen la semana que viene.
-        </p>
-        <.link navigate={~p"/register"} class="button-primary">Crear cuenta</.link>
-      </div>
-    </div>
-  </section>
-  <%!-- ── Footer ── --%>
-  <footer class="ptl-shell ptl-footer">
-    <div class="footer-cols">
-      <div>
-        <h4>Plataforma</h4>
-
-        <ul>
-          <li><span>Diario clínico</span></li>
-
-          <li><span>Resumen semanal</span></li>
-
-          <li><span>Tendencias emocionales</span></li>
-        </ul>
-      </div>
-
-      <div>
-        <h4>Privacidad</h4>
-
-        <ul>
-          <li><span>Cifrado por paciente</span></li>
-
-          <li><span>Borrado criptográfico</span></li>
-
-          <li><span>Auditoría de descifrado</span></li>
-        </ul>
-      </div>
-
-      <div>
-        <h4>Cuenta</h4>
-
-        <ul>
-          <li><.link navigate={~p"/login"}>Iniciar sesión</.link></li>
-
-          <li><.link navigate={~p"/register"}>Crear cuenta</.link></li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="footer-legal">
-      <span>Alethea — Centro de Control Clínico</span> <span>Cifrado a nivel de paciente</span>
+  <footer class="lx-footer">
+    <div class="lx-shell lx-footer__inner">
+      <span class="lx-brand lx-brand--muted">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4.5 20 12 3.5 19.5 20" /><path d="M3 13.75h18" />
+        </svg>
+        Alethea
+      </span>
+      <p>
+        Alethea es una herramienta de apoyo para profesionales de la salud mental. No reemplaza la sesión ni la atención de emergencias.
+      </p>
+      <nav class="lx-footer__links" aria-label="Cuenta">
+        <a href={~p"/login"}>Ingresar</a>
+        <a href="#lista-de-espera">Lista de espera</a>
+      </nav>
     </div>
   </footer>
 </div>

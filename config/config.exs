@@ -15,6 +15,10 @@ config :alethea,
 # release, so runtime code reads `Application.fetch_env!(:alethea, :env)`.
 config :alethea, :env, config_env()
 
+# Paddle Billing (#453). Disabled unless config/runtime.exs finds the Paddle
+# environment variables; while disabled every professional is entitled.
+config :alethea, Alethea.Billing, enabled: false
+
 # Configure the endpoint
 config :alethea, AletheaWeb.Endpoint,
   url: [host: "localhost"],
@@ -62,6 +66,8 @@ config :alethea, Oban,
     # take minutes per recording).
     transcription: 2,
     telegram_inbound: 10,
+    # Paddle Billing webhook notifications (Alethea.Jobs.PaddleEventWorker).
+    billing: 5,
     telegram_outbound: 10,
     # `telegram_outbound_crisis` (REQ-C7-crisis-priority-lane; PR #3b /
     # TASK-3b-2) is a dedicated queue for crisis-bypass replies. Two

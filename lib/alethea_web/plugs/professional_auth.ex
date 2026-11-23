@@ -4,6 +4,7 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
 
   alias Alethea.Accounts
   alias Alethea.Accounts.AdmissionPolicy
+  alias Alethea.Billing
   alias Alethea.Encryption.ProfessionalKek
 
   require Logger
@@ -69,6 +70,15 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
     end
   end
 
+  # LiveView counterpart of `require_admin/2`, for the connected mount.
+  def on_mount(:require_admin, _params, _session, socket) do
+    if Alethea.Accounts.Admin.admin?(socket.assigns[:current_professional]) do
+      {:cont, socket}
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: "/dashboard")}
+    end
+  end
+
   def on_mount(:require_authenticated_professional, _params, _session, socket) do
     if socket.assigns.current_professional do
       {:cont, socket}
@@ -77,11 +87,23 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
     end
   end
 
+  # Paid-access gate for the clinical workspace. Runs after
+  # `:require_authenticated_professional`, so a professional is assigned.
+  def on_mount(:require_entitled_professional, _params, _session, socket) do
+    if Billing.entitled?(socket.assigns.current_professional) do
+      {:cont, socket}
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: "/billing")}
+    end
+  end
+
   def init(action)
       when action in [
              :fetch_current_professional,
              :require_authenticated_professional,
-             :redirect_if_authenticated
+             :require_entitled_professional,
+             :redirect_if_authenticated,
+             :require_admin
            ],
       do: action
 
@@ -91,6 +113,28 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
     do: require_authenticated_professional(conn, [])
 
   def call(conn, :redirect_if_authenticated), do: redirect_if_authenticated(conn, [])
+  def call(conn, :require_admin), do: require_admin(conn, [])
+
+  def call(conn, :require_entitled_professional),
+    do: require_entitled_professional(conn, [])
+
+  @doc """
+  Plug: lets only admins (`Alethea.Accounts.Admin`) through. Anyone else,
+  logged in or not, gets the regular 404 page so `/admin` doesn't reveal
+  that it exists. Runs after `require_authenticated_professional`.
+  """
+  def require_admin(conn, _opts) do
+    if Alethea.Accounts.Admin.admin?(conn.assigns[:current_professional]) do
+      conn
+    else
+      conn
+      |> Plug.Conn.put_status(:not_found)
+      |> Phoenix.Controller.put_root_layout(false)
+      |> Phoenix.Controller.put_view(html: AletheaWeb.ErrorHTML)
+      |> Phoenix.Controller.render(:"404", layout: false)
+      |> halt()
+    end
+  end
 
   def fetch_current_professional(conn, _opts) do
     case get_session(conn, :professional_id) do
@@ -106,6 +150,16 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
       conn
       |> put_session(:return_to, conn.request_path)
       |> redirect(to: "/login")
+      |> halt()
+    end
+  end
+
+  def require_entitled_professional(conn, _opts) do
+    if Billing.entitled?(conn.assigns.current_professional) do
+      conn
+    else
+      conn
+      |> redirect(to: "/billing")
       |> halt()
     end
   end

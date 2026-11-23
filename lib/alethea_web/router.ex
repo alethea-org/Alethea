@@ -46,6 +46,14 @@ defmodule AletheaWeb.Router do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional)
   end
 
+  pipeline :require_admin do
+    plug(AletheaWeb.Plugs.ProfessionalAuth, :require_admin)
+  end
+
+  pipeline :require_entitlement do
+    plug(AletheaWeb.Plugs.ProfessionalAuth, :require_entitled_professional)
+  end
+
   pipeline :redirect_if_auth do
     plug(AletheaWeb.Plugs.ProfessionalAuth, :redirect_if_authenticated)
   end
@@ -83,10 +91,24 @@ defmodule AletheaWeb.Router do
     get("/auth", TelegramAuthController, :consume)
   end
 
+  # Paddle Billing webhook. `PaddleSignature` verifies the
+  # `Paddle-Signature` HMAC against the raw body before the controller runs.
+  pipeline :paddle_webhook do
+    plug(:accepts, ["json"])
+    plug(AletheaWeb.Plugs.PaddleSignature)
+  end
+
+  scope "/webhooks/paddle", AletheaWeb do
+    pipe_through(:paddle_webhook)
+
+    post("/", PaddleWebhookController, :create)
+  end
+
   scope "/", AletheaWeb do
     pipe_through([:landing])
 
     get("/", PageController, :home)
+    post("/waitlist", WaitlistController, :create)
   end
 
   scope "/", AletheaWeb do
@@ -105,13 +127,45 @@ defmodule AletheaWeb.Router do
     delete("/logout", SessionController, :delete)
   end
 
+  # Operator pages. Only professionals listed in ADMIN_EMAILS get in;
+  # everyone else sees the regular 404.
+  scope "/admin", AletheaWeb do
+    pipe_through([:browser, :require_auth, :require_admin])
+
+    get("/waitlist.csv", AdminWaitlistController, :export)
+
+    live_session :admin,
+      on_mount: [
+        {AletheaWeb.Plugs.ProfessionalAuth, :mount_current_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_admin}
+      ] do
+      live("/waitlist", Admin.WaitlistLive, :index)
+    end
+  end
+
+  # Billing stays reachable for professionals without paid access, so a
+  # lapsed professional can always see their status, pay, or log out.
   scope "/", AletheaWeb do
     pipe_through([:browser, :require_auth])
+
+    live_session :billing,
+      on_mount: [
+        {AletheaWeb.Plugs.ProfessionalAuth, :mount_current_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional}
+      ] do
+      live("/billing", BillingLive, :index)
+    end
+  end
+
+  scope "/", AletheaWeb do
+    pipe_through([:browser, :require_auth, :require_entitlement])
 
     live_session :require_authenticated_professional,
       on_mount: [
         {AletheaWeb.Plugs.ProfessionalAuth, :mount_current_professional},
-        {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional}
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_authenticated_professional},
+        {AletheaWeb.Plugs.ProfessionalAuth, :require_entitled_professional}
       ] do
       live("/dashboard", DashboardLive, :index)
       live("/dashboard/patients/:id", DashboardLive, :show)
