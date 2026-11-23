@@ -68,12 +68,19 @@ kill_timeout = 40
   # Fly's proxy redirects HTTP to HTTPS; the app's own force_ssl does the same
   # for anything that reaches it with `x-forwarded-proto: http`.
   force_https = true
-  # Always on. Oban queues and its cron run with no HTTP traffic, so the
-  # Machine must never be stopped for being idle.
-  auto_stop_machines = "off"
-  # Lets the proxy start the Machine again if it was stopped by hand.
+  # Landing phase (only the public landing page and the launch waitlist are
+  # in use): the Machine suspends when idle and the proxy resumes it on the
+  # next request, so an idle app costs only its disk. While suspended, Oban
+  # and its cron (Telegram delivery sweep, daily scheduler, retention sweep)
+  # do not run.
+  #
+  # Before onboarding real patients, go back to always on:
+  #   auto_stop_machines = "off"
+  #   min_machines_running = 1
+  # and memory = "1gb" below, then `fly deploy`.
+  auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [http_service.concurrency]
     # LiveView holds one long-lived WebSocket per open page, so the proxy
@@ -100,4 +107,6 @@ kill_timeout = 40
   # Modest default. Capacity is a pending decision: revisit after observing
   # memory under the synthetic-data run.
   size = "shared-cpu-1x"
-  memory = "1gb"
+  # Landing phase: 512 MB is enough (no ML runs in-process). Use 1gb when
+  # the clinical workspace goes live.
+  memory = "512mb"

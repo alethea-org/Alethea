@@ -22,7 +22,7 @@ been executed against Fly, Neon or Telegram yet: see
 
 | Piece | Decision | Why |
 | --- | --- | --- |
-| Compute | One always-on Fly Machine in `gru` (São Paulo) | Oban queues and cron must run with no HTTP traffic, so `fly.toml` sets `auto_stop_machines = "off"` and `min_machines_running = 1`. |
+| Compute | One Fly Machine in `gru` (São Paulo), 512 MB, in the **landing phase** | Only the public landing and waitlist are in use, so `fly.toml` sets `auto_stop_machines = "suspend"` and `min_machines_running = 0`: the Machine suspends when idle and resumes on the next request. Oban and its cron don't run while it is suspended. Before onboarding patients, switch back to `auto_stop_machines = "off"`, `min_machines_running = 1` and `memory = "1gb"` (Oban queues and cron must run with no HTTP traffic). |
 | Database | Neon project in AWS `sa-east-1`, reached over the public internet with verified TLS | Same metro as `gru`. `ECTO_IPV6` and `DNS_CLUSTER_QUERY` stay unset: no Fly private network, no clustering. |
 | Database host | Neon's **direct** host (no `-pooler` in the name) for everything | The pooler is PgBouncer in transaction mode: it breaks `LISTEN/NOTIFY` (Oban's Postgres notifier) and session advisory locks (migrations). |
 | Migrations | Only from the deploy release command, `/app/bin/release` | Migration `20260618234145` disables the migration lock, so two runners at once are not protected from each other. |
