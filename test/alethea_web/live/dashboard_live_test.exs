@@ -450,6 +450,43 @@ defmodule AletheaWeb.DashboardLiveTest do
     end
   end
 
+  describe "chat history voice notes (real mode, telegram voice notes S2)" do
+    test "labels a transcribed voice note with \"Nota de voz\" and leaves text unlabeled", %{
+      conn: conn,
+      professional: professional
+    } do
+      Application.put_env(:alethea, :use_mock_data, false)
+      on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
+
+      patient = legacy_patient_fixture(professional, %{alias: "Paciente voz"})
+
+      {:ok, voice} =
+        Alethea.Clinical.save_message(
+          patient,
+          "transcripción del audio",
+          nil,
+          "inbound",
+          "spontaneous"
+        )
+
+      voice
+      |> Alethea.Clinical.Message.media_type_changeset("voice")
+      |> Repo.update!()
+
+      {:ok, written} =
+        Alethea.Clinical.save_message(patient, "mensaje escrito", nil, "inbound", "spontaneous")
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+      view |> element("#decrypt-chat-button") |> render_click()
+
+      assert has_element?(view, "#decrypted_messages-#{voice.id}", "transcripción del audio")
+      assert has_element?(view, "#decrypted_messages-#{voice.id}-voice", "Nota de voz")
+      assert has_element?(view, "#decrypted_messages-#{written.id}", "mensaje escrito")
+      refute has_element?(view, "#decrypted_messages-#{written.id}-voice")
+      assert view |> render() |> String.split("Nota de voz") |> length() == 2
+    end
+  end
+
   describe "save_session_schedule (real mode, #102 reminder cancellation)" do
     test "cancels the pending reminder and shows the success flash", %{
       conn: conn,

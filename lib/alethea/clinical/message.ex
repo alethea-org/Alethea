@@ -36,6 +36,12 @@ defmodule Alethea.Clinical.Message do
     # `Alethea.Clinical` (never cast).
     field(:exploration_questions, :integer)
     field(:closing_invitation_sent, :boolean)
+    # Inbound media marker (Telegram voice notes, S2): "voice" when the
+    # content is the transcript of a patient's voice note, `NULL` for a
+    # written message. Non-sensitive metadata. Set programmatically through
+    # `media_type_changeset/2` (never cast); DB check
+    # `messages_media_type_check` keeps it in the allowed set.
+    field(:media_type, :string)
     field(:encrypted_content, :binary)
     field(:encryption_version, :integer, default: 1)
     field(:synced_to_graph, :boolean, default: false)
@@ -98,5 +104,18 @@ defmodule Alethea.Clinical.Message do
       name: :messages_patient_telegram_message_id_unique
     )
     |> unique_constraint(:reply_to_message_id, name: :messages_reply_to_message_id_unique)
+  end
+
+  @media_types ["voice"]
+
+  @doc """
+  Marks a persisted message with its inbound media type (`"voice"`).
+  Trusted-caller only: the value never comes from a cast.
+  """
+  def media_type_changeset(message, media_type) do
+    message
+    |> change(media_type: media_type)
+    |> validate_inclusion(:media_type, @media_types)
+    |> check_constraint(:media_type, name: :messages_media_type_check)
   end
 end

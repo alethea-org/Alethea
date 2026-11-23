@@ -132,6 +132,67 @@ defmodule Alethea.Telegram.Client.Req do
     end
   end
 
+  @doc """
+  Downloads a patient's voice note: `GET /bot<token>/getFile?file_id=…`
+  for the `file_path`, then `GET /file/bot<token>/<file_path>` for the
+  bytes. Errors never carry the URL (it embeds the bot token) nor the
+  response body:
+
+    - non-200 / `ok: false` → `{:error, {:http_error, status}}`
+    - connection never established → `{:error, :network}`
+    - other transport failures → `{:error, {:transport, atom}}`
+    - unexpected shapes or exceptions → `{:error, :invalid_response}`
+  """
+  @impl Client
+  def download_file(file_id) when is_binary(file_id) do
+    token = BotToken.bot_token()
+    req_options = Application.get_env(:alethea, :telegram_client_req_options, [])
+
+    try do
+      with {:ok, file_path} <- fetch_file_path(token, file_id, req_options) do
+        fetch_file(token, file_path, req_options)
+      end
+    rescue
+      _exception -> {:error, :invalid_response}
+    catch
+      :exit, _reason -> {:error, :invalid_response}
+      :throw, _value -> {:error, :invalid_response}
+    end
+  end
+
+  defp fetch_file_path(token, file_id, req_options) do
+    "#{@base_url}/bot#{token}/getFile"
+    |> Req.get([params: [file_id: file_id], retry: false] ++ req_options)
+    |> case do
+      {:ok, %{status: 200, body: %{"ok" => true, "result" => %{"file_path" => path}}}}
+      when is_binary(path) and path != "" ->
+        {:ok, path}
+
+      response ->
+        download_error(response)
+    end
+  end
+
+  defp fetch_file(token, file_path, req_options) do
+    "#{@base_url}/file/bot#{token}/#{file_path}"
+    |> Req.get([decode_body: false, retry: false] ++ req_options)
+    |> case do
+      {:ok, %{status: 200, body: body}} when is_binary(body) -> {:ok, body}
+      response -> download_error(response)
+    end
+  end
+
+  defp download_error({:ok, %{status: status}}) when is_integer(status),
+    do: {:error, {:http_error, status}}
+
+  defp download_error({:error, %{reason: reason}}) when reason in @connection_not_established,
+    do: {:error, :network}
+
+  defp download_error({:error, %{reason: reason}}) when is_atom(reason),
+    do: {:error, {:transport, reason}}
+
+  defp download_error(_response), do: {:error, :invalid_response}
+
   # ----------------------------------------------------------------
   # 200 OK handlers
   # ----------------------------------------------------------------

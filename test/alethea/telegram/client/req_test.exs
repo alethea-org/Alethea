@@ -299,4 +299,82 @@ defmodule Alethea.Telegram.Client.ReqTest do
       refute log =~ @body
     end
   end
+
+  # ----------------------------------------------------------------
+  # download_file/1 (Telegram voice notes, S1/S4)
+  # ----------------------------------------------------------------
+
+  describe "download_file/1" do
+    test "resolves the file with getFile, then returns the downloaded bytes" do
+      test_pid = self()
+
+      Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+        send(test_pid, {:request, conn.request_path, conn.query_string})
+
+        case conn.request_path do
+          "/bot" <> _ ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{"ok" => true, "result" => %{"file_path" => "voice/file_7.oga"}})
+            )
+
+          "/file/bot" <> _ ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "audio/ogg")
+            |> Plug.Conn.resp(200, <<0, 1, 2, 3>>)
+        end
+      end)
+
+      assert {:ok, <<0, 1, 2, 3>>} = Client.Req.download_file("file-abc")
+
+      assert_received {:request, "/bot" <> rest, "file_id=file-abc"}
+      assert rest == @fake_bot_token <> "/getFile"
+      assert_received {:request, path, _query}
+      assert path == "/file/bot" <> @fake_bot_token <> "/voice/file_7.oga"
+    end
+
+    test "an HTTP error returns the status only, never the URL or body" do
+      Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(
+          400,
+          Jason.encode!(%{"ok" => false, "description" => "Bad Request: file is too big"})
+        )
+      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert {:error, {:http_error, 400}} = Client.Req.download_file("file-abc")
+        end)
+
+      refute log =~ @fake_bot_token
+    end
+
+    test "getFile ok:false is an error" do
+      Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => false}))
+      end)
+
+      assert {:error, {:http_error, 200}} = Client.Req.download_file("file-abc")
+    end
+
+    test "transport failures are reported without the URL" do
+      Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+        Req.Test.transport_error(conn, :econnrefused)
+      end)
+
+      assert {:error, :network} = Client.Req.download_file("file-abc")
+
+      Req.Test.stub(Alethea.Telegram.Client.Req, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, {:transport, :timeout}} = Client.Req.download_file("file-abc")
+    end
+  end
 end

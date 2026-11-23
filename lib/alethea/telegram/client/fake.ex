@@ -88,6 +88,25 @@ defmodule Alethea.Telegram.Client.Fake do
           "Alethea.Telegram.Client.Fake.send_message/2 expects (positive_integer, binary), got (#{inspect(chat_id)}, #{inspect(text)})"
   end
 
+  @default_download_result {:ok, "fake-telegram-audio"}
+
+  @doc """
+  Records the `file_id` and returns the scripted download result
+  (default `{:ok, "fake-telegram-audio"}`; see `set_download_result/1`).
+  """
+  @impl Client
+  def download_file(file_id) when is_binary(file_id) do
+    GenServer.call(__MODULE__, {:download, file_id})
+  end
+
+  @doc "Returns the `file_id`s passed to `download_file/1`, oldest first."
+  @spec downloads() :: [String.t()]
+  def downloads, do: GenServer.call(__MODULE__, :downloads)
+
+  @doc "Sets the result every later `download_file/1` call returns."
+  @spec set_download_result({:ok, binary()} | {:error, term()}) :: :ok
+  def set_download_result(result), do: GenServer.call(__MODULE__, {:set_download_result, result})
+
   @doc """
   Returns the list of all sends recorded so far, in insertion order.
   Each entry is `%{chat_id: pos_integer, text: binary, message_id: pos_integer}`.
@@ -164,7 +183,7 @@ defmodule Alethea.Telegram.Client.Fake do
           @table
       end
 
-    {:ok, %{table: table, queued_responses: []}}
+    {:ok, initial_state(table)}
   end
 
   @impl true
@@ -209,12 +228,30 @@ defmodule Alethea.Telegram.Client.Fake do
     {:reply, sends, state}
   end
 
-  def handle_call(:reset, _from, %{table: table} = state) do
+  def handle_call(:reset, _from, %{table: table}) do
     :ets.delete_all_objects(table)
-    {:reply, :ok, %{state | queued_responses: []}}
+    {:reply, :ok, initial_state(table)}
   end
+
+  def handle_call({:download, file_id}, _from, state) do
+    {:reply, state.download_result, %{state | downloads: [file_id | state.downloads]}}
+  end
+
+  def handle_call(:downloads, _from, state), do: {:reply, Enum.reverse(state.downloads), state}
+
+  def handle_call({:set_download_result, result}, _from, state),
+    do: {:reply, :ok, %{state | download_result: result}}
 
   def handle_call({:queue_responses, responses}, _from, state) do
     {:reply, :ok, %{state | queued_responses: responses}}
+  end
+
+  defp initial_state(table) do
+    %{
+      table: table,
+      queued_responses: [],
+      downloads: [],
+      download_result: @default_download_result
+    }
   end
 end

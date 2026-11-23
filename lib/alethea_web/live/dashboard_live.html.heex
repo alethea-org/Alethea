@@ -588,7 +588,16 @@
               id={id}
               class={["chat-line", msg.direction == "outbound" && "chat-line--out"]}
             >
-              <div class="pta-chatlog__time">{Calendar.strftime(msg.timestamp, "%H:%M")}</div>
+              <div class="pta-chatlog__time">
+                {Calendar.strftime(msg.timestamp, "%H:%M")}
+                <span
+                  :if={msg.media_type == "voice"}
+                  id={"#{id}-voice"}
+                  class="pta-chatlog__media"
+                >
+                  Nota de voz
+                </span>
+              </div>
 
               <div class="chat-bubble">{msg.encrypted_content}</div>
             </div>

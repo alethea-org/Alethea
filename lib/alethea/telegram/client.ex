@@ -116,4 +116,14 @@ defmodule Alethea.Telegram.Client do
   """
   @callback send_message(chat_id(), message_text()) ::
               {:ok, telegram_message_id()} | {:error, send_error()}
+
+  @doc """
+  Downloads the file Telegram stores under `file_id` (a patient's voice
+  note): resolves it with `getFile`, then fetches the bytes. Returns
+  `{:ok, binary}` or `{:error, reason}`; every error is retryable.
+
+  The download URL embeds the bot token, so implementations must never
+  log it or return it inside an error, and must never log the bytes.
+  """
+  @callback download_file(file_id :: String.t()) :: {:ok, binary()} | {:error, term()}
 end
