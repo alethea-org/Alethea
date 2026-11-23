@@ -5,9 +5,17 @@ defmodule AletheaWeb.RegistrationController do
   alias Alethea.Accounts.AdmissionPolicy
   alias Alethea.Accounts.Professional
 
-  def new(conn, _params) do
-    changeset = Professional.changeset(%Professional{}, %{})
-    render(conn, :new, changeset: changeset)
+  # While admission is restricted, registration is closed to the public:
+  # visitors go to the launch waitlist. The operator shares
+  # `/register?invitacion=1` with allowed people; the allowlist is still
+  # enforced on submit, so the link grants nothing by itself.
+  def new(conn, params) do
+    if AdmissionPolicy.restricted?() and params["invitacion"] != "1" do
+      redirect(conn, to: "/#lista-de-espera")
+    else
+      changeset = Professional.changeset(%Professional{}, %{})
+      render(conn, :new, changeset: changeset)
+    end
   end
 
   def create(conn, %{"professional" => professional_params}) do

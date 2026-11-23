@@ -32,7 +32,7 @@
         <a href="#como-funciona" class="lx-nav__link lx-hide-sm">Cómo funciona</a>
         <a href="#historia-clinica" class="lx-nav__link lx-hide-sm">Historia clínica</a>
         <a href="#privacidad" class="lx-nav__link lx-hide-sm">Privacidad</a>
-        <a href={~p"/login"} class="lx-nav__link">Ingresar</a>
+        <a :if={@show_login?} href={~p"/login"} class="lx-nav__link">Ingresar</a>
         <a href="#lista-de-espera" class="lx-btn lx-btn--primary lx-btn--sm">Lista de espera</a>
       </nav>
     </div>
@@ -696,7 +696,7 @@
         Alethea es una herramienta de apoyo para profesionales de la salud mental. No reemplaza la sesión ni la atención de emergencias.
       </p>
       <nav class="lx-footer__links" aria-label="Cuenta">
-        <a href={~p"/login"}>Ingresar</a>
+        <a :if={@show_login?} href={~p"/login"}>Ingresar</a>
         <a href="#lista-de-espera">Lista de espera</a>
       </nav>
     </div>

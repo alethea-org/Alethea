@@ -24,7 +24,10 @@ defmodule AletheaWeb.WaitlistController do
         conn
         |> put_status(:unprocessable_entity)
         |> put_view(AletheaWeb.PageHTML)
-        |> render(:home, waitlist_form: Phoenix.Component.to_form(changeset, as: :waitlist))
+        |> render(:home,
+          waitlist_form: Phoenix.Component.to_form(changeset, as: :waitlist),
+          show_login?: not Alethea.Accounts.AdmissionPolicy.restricted?()
+        )
     end
   end
 

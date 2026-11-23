@@ -21,6 +21,23 @@ defmodule AletheaWeb.LandingTest do
     end
   end
 
+  describe "login link" do
+    setup do
+      previous = Application.get_env(:alethea, :demo_restricted_access)
+      on_exit(fn -> Application.put_env(:alethea, :demo_restricted_access, previous) end)
+    end
+
+    test "is hidden from the landing while access is restricted", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, true)
+      refute conn |> get(~p"/") |> html_response(200) =~ ~s(href="/login")
+    end
+
+    test "is shown on the landing when access is open", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, false)
+      assert conn |> get(~p"/") |> html_response(200) =~ ~s(href="/login")
+    end
+  end
+
   describe "POST /waitlist" do
     test "stores a normalised entry and confirms", %{conn: conn} do
       conn =

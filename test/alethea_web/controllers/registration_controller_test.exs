@@ -27,6 +27,29 @@ defmodule AletheaWeb.RegistrationControllerTest do
     :ok
   end
 
+  describe "GET /register" do
+    test "when unrestricted, shows the registration form", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, false)
+
+      assert conn |> get(~p"/register") |> html_response(200) =~ ~s(id="registration-form")
+    end
+
+    test "when restricted, sends visitors to the launch waitlist", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, true)
+      Application.put_env(:alethea, :demo_allowed_emails, ["tester@example.com"])
+
+      assert conn |> get(~p"/register") |> redirected_to() == "/#lista-de-espera"
+    end
+
+    test "when restricted, the invitation link still shows the form", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, true)
+      Application.put_env(:alethea, :demo_allowed_emails, ["tester@example.com"])
+
+      assert conn |> get(~p"/register?invitacion=1") |> html_response(200) =~
+               ~s(id="registration-form")
+    end
+  end
+
   describe "POST /register" do
     test "when unrestricted, creates professional and redirects to /login", %{conn: conn} do
       Application.put_env(:alethea, :demo_restricted_access, false)
