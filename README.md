@@ -95,7 +95,46 @@ docker compose up
 - Health check: <http://localhost:4000/health>
 - Mailpit (email de desarrollo): <http://localhost:8025>
 
-El compose levanta la aplicación y PostgreSQL. En desarrollo Telegram se simula con `Alethea.Telegram.Client.Fake`, por lo que **no** se requiere bot real ni webhook público.
+El compose levanta la aplicación y PostgreSQL. En desarrollo Telegram se simula con `Alethea.Telegram.Client.Fake`, por lo que **no** se requiere bot real ni webhook público. Para probar con un bot real, ver [Probar con Telegram real](#probar-con-telegram-real).
+
+### Probar con Telegram real
+
+Flujo estándar (y único) para probar el bot de Telegram en desarrollo, todo en contenedores: sin `ngrok` manual, sin varias terminales.
+
+1. **Una sola vez**, agregar a `.env` (ignorado por git) el token y el usuario del bot de desarrollo, y un secreto fijo para el webhook:
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=<token-de-BotFather>
+   TELEGRAM_BOT_USERNAME=<usuario_del_bot>
+   TELEGRAM_WEBHOOK_SECRET=<resultado de: openssl rand -hex 32>
+   ```
+
+   Editar el archivo `.env` con un editor de texto; no hace falta exportar nada en la terminal. Si se omite `TELEGRAM_WEBHOOK_SECRET`, el contenedor genera uno nuevo en cada arranque de `app` y hay que re-registrar el webhook después de cada reinicio.
+
+2. Levantar el stack con el override de Telegram:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.telegram.yml up
+   ```
+
+   Esto levanta app, base local, sidecar de emociones y un túnel de Cloudflare (sin cuenta). El entrypoint guarda la configuración del bot en la base local y el servicio `telegram-webhook` registra el webhook contra la URL actual del túnel: no hay pasos manuales extra. Verificar la línea `TELEGRAM_WEBHOOK status=...` en el log.
+
+3. Abrir el bot en Telegram con el botón **START BOT** del enlace `t.me/<usuario_del_bot>`. Ese botón solo funciona en **Telegram Desktop o en la app del celular**, no en Telegram Web.
+
+**Re-registrar el webhook** (el túnel cambia de URL cada vez que se reinicia, y el secreto cambia en cada reinicio de `app` si no está fijo en `.env`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.telegram.yml run --rm telegram-webhook
+# o, con el stack ya levantado:
+docker compose -f docker-compose.yml -f docker-compose.telegram.yml exec app mix alethea.telegram.dev_tunnel
+```
+
+Notas:
+
+- **Base local:** el flujo de Telegram usa siempre la base local de Docker (`alethea_dev` en el contenedor `db`), nunca la Neon compartida, para no pisar la configuración `dev` del bot de los demás.
+- **Ollama corre en el host**, no en un contenedor: el contenedor lo alcanza en `host.docker.internal:11434`. Hay que iniciarlo antes de probar.
+- `docker compose up` sin el override se comporta igual que siempre (Telegram simulado con `Fake`).
+- Solo desarrollo: nada de esto afecta la configuración ni el despliegue de producción.
 
 ### Opción B: Instalación local
 
@@ -177,13 +216,13 @@ La primera query después de un rato de inactividad tarda más: Neon suspende el
 
 ### Configuración opcional de IA
 
-En desarrollo **no** se requieren credenciales externas: el cliente de Telegram (`Alethea.Telegram.Client.Fake`) y todos los servicios de IA (LLM, Whisper, RoBERTa, embeddings) usan implementaciones `Fake`. Solo se activan proveedores reales si se configuran:
+En desarrollo **no** se requieren credenciales externas: el cliente de Telegram (`Alethea.Telegram.Client.Fake`, salvo con el override de [Telegram real](#probar-con-telegram-real), que usa `Req`) y todos los servicios de IA (LLM, Whisper, RoBERTa, embeddings) usan implementaciones `Fake`. Solo se activan proveedores reales si se configuran:
 
 - **LLM (Phi-4 mini):** el adaptador de producción corre en **Groq** (ver [ADR-001](openspec/adr/001-llm-en-groq.md)). Alternativa local vía [Ollama](https://ollama.com): `LOCAL_LLM_BASE_URL=http://localhost:11434/v1`. El modelo se define con `LLM_MODEL` (default `phi-4-mini`).
 - **Whisper (transcripción de sesiones clínicas):** Groq en producción.
 - **RoBERTa (análisis de emociones):** **local** vía `Bumblebee` + `Nx` (`lib/alethea/ai/roberta_worker.ex`). Como alternativa puede usarse la API de Hugging Face configurando `HUGGINGFACE_API_KEY`.
 - **Embeddings:** Hugging Face Inference API con modelo multilingüe (ver [ADR-002](openspec/adr/002-embeddings-hf-multilingue.md)).
-- **Cliente Telegram:** `Alethea.Telegram.Client.Fake` en dev/test, `Alethea.Telegram.Client.Req` (HTTP vía [`Req`](https://hexdocs.pm/req)) en producción.
+- **Cliente Telegram:** `Alethea.Telegram.Client.Fake` en dev/test (el override `docker-compose.telegram.yml` usa `Req` en dev), `Alethea.Telegram.Client.Req` (HTTP vía [`Req`](https://hexdocs.pm/req)) en producción.
 
 ---
 
