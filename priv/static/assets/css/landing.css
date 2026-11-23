@@ -147,6 +147,8 @@ body.lx-body { margin: 0; background: var(--colors-canvas); }
 .lx-beats--statement { justify-items: center; gap: var(--spacing-md); }
 .lx-beats--statement .lx-beat { font-size: clamp(28px, 5vw, 64px); font-weight: 500; line-height: 1.12; letter-spacing: -0.02em; color: var(--colors-ink); max-width: 16em; }
 .lx-beats--statement em { font-style: normal; color: var(--colors-signature-coral); }
+.lx-scene--manifesto .lx-eyebrow { margin-bottom: var(--spacing-xl); }
+.lx-beats--manifesto .lx-beat { font-size: clamp(24px, 3.4vw, 46px); line-height: 1.2; max-width: 22em; }
 
 .lx-scrollhint { display: none; }
 
