@@ -8,7 +8,8 @@ defmodule AletheaWeb.PageController do
       redirect(conn, to: "/dashboard")
     else
       render(conn, :home,
-        waitlist_form: Phoenix.Component.to_form(Waitlist.change_entry(), as: :waitlist)
+        waitlist_form: Phoenix.Component.to_form(Waitlist.change_entry(), as: :waitlist),
+        show_login?: not Alethea.Accounts.AdmissionPolicy.restricted?()
       )
     end
   end

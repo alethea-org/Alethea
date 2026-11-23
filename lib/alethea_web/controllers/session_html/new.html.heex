@@ -83,8 +83,11 @@
       </button>
     </form>
 
-    <p class="auth-form__foot">
+    <p :if={!Alethea.Accounts.AdmissionPolicy.restricted?()} class="auth-form__foot">
       ¿No tenés cuenta? <.link navigate={~p"/register"}>Registrate acá</.link>
+    </p>
+    <p :if={Alethea.Accounts.AdmissionPolicy.restricted?()} class="auth-form__foot">
+      ¿Todavía no tenés acceso? <a href="/#lista-de-espera">Sumate a la lista de espera</a>
     </p>
 
     <p class="auth-form__note">

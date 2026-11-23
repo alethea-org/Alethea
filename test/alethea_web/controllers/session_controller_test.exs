@@ -41,6 +41,21 @@ defmodule AletheaWeb.SessionControllerTest do
     professional
   end
 
+  describe "GET /login footer" do
+    test "points to the waitlist instead of registration while restricted", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, true)
+      html = conn |> get(~p"/login") |> html_response(200)
+
+      assert html =~ "Sumate a la lista de espera"
+      refute html =~ ~s(href="/register")
+    end
+
+    test "offers registration when access is open", %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, false)
+      assert conn |> get(~p"/login") |> html_response(200) =~ ~s(href="/register")
+    end
+  end
+
   describe "POST /login (admission gating)" do
     test "when restricted and email is unlisted, rejects with invalid credentials error and sets no session or cookie",
          %{conn: conn} do
