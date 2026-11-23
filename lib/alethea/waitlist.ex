@@ -2,6 +2,8 @@ defmodule Alethea.Waitlist do
   @moduledoc """
   Launch waitlist collected from the public landing page.
   """
+  import Ecto.Query, only: [from: 2]
+
   alias Alethea.Repo
   alias Alethea.Waitlist.Entry
 
@@ -27,5 +29,10 @@ defmodule Alethea.Waitlist do
     else
       {:error, %{changeset | action: :insert}}
     end
+  end
+
+  @doc "Every signup, newest first."
+  def list_entries do
+    Repo.all(from(e in Entry, order_by: [desc: e.inserted_at, desc: e.id]))
   end
 end

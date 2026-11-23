@@ -69,6 +69,15 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
     end
   end
 
+  # LiveView counterpart of `require_admin/2`, for the connected mount.
+  def on_mount(:require_admin, _params, _session, socket) do
+    if Alethea.Accounts.Admin.admin?(socket.assigns[:current_professional]) do
+      {:cont, socket}
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: "/dashboard")}
+    end
+  end
+
   def on_mount(:require_authenticated_professional, _params, _session, socket) do
     if socket.assigns.current_professional do
       {:cont, socket}
@@ -81,7 +90,8 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
       when action in [
              :fetch_current_professional,
              :require_authenticated_professional,
-             :redirect_if_authenticated
+             :redirect_if_authenticated,
+             :require_admin
            ],
       do: action
 
@@ -91,6 +101,25 @@ defmodule AletheaWeb.Plugs.ProfessionalAuth do
     do: require_authenticated_professional(conn, [])
 
   def call(conn, :redirect_if_authenticated), do: redirect_if_authenticated(conn, [])
+  def call(conn, :require_admin), do: require_admin(conn, [])
+
+  @doc """
+  Plug: lets only admins (`Alethea.Accounts.Admin`) through. Anyone else,
+  logged in or not, gets the regular 404 page so `/admin` doesn't reveal
+  that it exists. Runs after `require_authenticated_professional`.
+  """
+  def require_admin(conn, _opts) do
+    if Alethea.Accounts.Admin.admin?(conn.assigns[:current_professional]) do
+      conn
+    else
+      conn
+      |> Plug.Conn.put_status(:not_found)
+      |> Phoenix.Controller.put_root_layout(false)
+      |> Phoenix.Controller.put_view(html: AletheaWeb.ErrorHTML)
+      |> Phoenix.Controller.render(:"404", layout: false)
+      |> halt()
+    end
+  end
 
   def fetch_current_professional(conn, _opts) do
     case get_session(conn, :professional_id) do
