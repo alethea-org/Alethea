@@ -10,8 +10,8 @@ defmodule Alethea.ClinicalRecord.SessionTranscriptContentTest do
   @base_span %{start: 0.0, end: 1.5, speaker: "patient", text: "Hello"}
 
   describe "speakers/0" do
-    test "lists the two accepted speaker values" do
-      assert SessionTranscriptContent.speakers() == ~w(patient therapist)
+    test "lists the three accepted speaker values" do
+      assert SessionTranscriptContent.speakers() == ~w(patient therapist unknown)
     end
   end
 
@@ -23,6 +23,16 @@ defmodule Alethea.ClinicalRecord.SessionTranscriptContentTest do
       ]
 
       assert {:ok, %SessionTranscriptContent{spans: ^spans}} = SessionTranscriptContent.new(spans)
+    end
+
+    test "accepts spans whose speaker is unknown and round-trips them" do
+      spans = [%{@base_span | speaker: "unknown"}]
+
+      assert {:ok, content} = SessionTranscriptContent.new(spans)
+      assert content.spans == spans
+
+      assert {:ok, %SessionTranscriptContent{spans: ^spans}} =
+               content |> SessionTranscriptContent.serialize() |> SessionTranscriptContent.parse()
     end
   end
 

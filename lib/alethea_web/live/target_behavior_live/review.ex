@@ -2145,6 +2145,7 @@ defmodule AletheaWeb.TargetBehaviorLive.Review do
 
   defp speaker_label("patient"), do: "Paciente"
   defp speaker_label("therapist"), do: "Terapeuta"
+  defp speaker_label("unknown"), do: "Sesión"
 
   defp evidence_source_type_label(%{kind: :clinical_note}), do: "Nota clínica"
 

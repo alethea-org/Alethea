@@ -72,5 +72,30 @@ defmodule Alethea.ClinicalRecord.Rag.Consultation.SourceTest do
     test "an empty envelope yields no sources" do
       assert Source.from_results([]) == []
     end
+
+    test "carries speaker and audio span of a session_transcript result verbatim" do
+      [source] =
+        Source.from_results([
+          result(
+            source_resource_type: "session_transcript",
+            speaker: "patient",
+            audio_start_seconds: 760.4,
+            audio_end_seconds: 785.9
+          )
+        ])
+
+      assert source.kind == "session_transcript"
+      assert source.speaker == "patient"
+      assert source.audio_start_seconds == 760.4
+      assert source.audio_end_seconds == 785.9
+    end
+
+    test "leaves speaker and audio span nil when the result has none (non-transcript kinds)" do
+      [source] = Source.from_results([result([])])
+
+      assert source.speaker == nil
+      assert source.audio_start_seconds == nil
+      assert source.audio_end_seconds == nil
+    end
   end
 end

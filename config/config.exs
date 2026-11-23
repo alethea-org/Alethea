@@ -62,6 +62,9 @@ config :alethea, Oban,
     schedulers: 5,
     reports: 5,
     ai_analysis: 5,
+    # Session-recording transcription (speech-to-text provider calls can
+    # take minutes per recording).
+    transcription: 2,
     telegram_inbound: 10,
     # Paddle Billing webhook notifications (Alethea.Jobs.PaddleEventWorker).
     billing: 5,
@@ -128,7 +131,10 @@ config :alethea, Oban,
        # Issue #390. Resolves Telegram reply delivery claims that were
        # never given an outcome — see
        # `AletheaJobs.TelegramDeliverySweepWorker`.
-       {"*/5 * * * *", AletheaJobs.TelegramDeliverySweepWorker}
+       {"*/5 * * * *", AletheaJobs.TelegramDeliverySweepWorker},
+       # session-recording S7. Finalizes abandoned recordings and fails
+       # transcriptions stuck without a job, deleting their audio.
+       {"*/10 * * * *", AletheaJobs.SessionRecordingCleanupWorker}
      ]}
   ]
 

@@ -186,6 +186,7 @@ defmodule AletheaWeb.Router do
 
       live("/patients/:patient_id/consultation", ConsultationLive, :index)
       live("/patients/:patient_id/clinical-notes", ClinicalNoteLive.Index, :index)
+      live("/patients/:patient_id/sessions", SessionRecordingLive.Index, :index)
       live("/patients/:patient_id/triggers", TriggersLive.Index, :index)
       live("/patients/:patient_id/triggers/messages/:message_id", TriggersLive.MessageView, :show)
 

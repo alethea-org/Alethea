@@ -23,7 +23,8 @@ defmodule AletheaWeb.GroundedChat.SourceCitation do
   "never cite unverifiable content" guarantee left in this chain.
 
   `score` and `chunk_index` stay `nil` — `Source.t()` doesn't carry
-  them, and `citation/1` never renders them.
+  them, and `citation/1` never renders them. `speaker` and the audio span
+  are copied from the source (session transcripts only; `nil` otherwise).
   """
 
   alias Alethea.ClinicalRecord.Rag.Citation
@@ -51,7 +52,10 @@ defmodule AletheaWeb.GroundedChat.SourceCitation do
       occurred_at: source.occurred_at,
       excerpt: source.excerpt,
       score: nil,
-      chunk_index: nil
+      chunk_index: nil,
+      speaker: source.speaker,
+      audio_start_seconds: source.audio_start_seconds,
+      audio_end_seconds: source.audio_end_seconds
     }
   end
 end

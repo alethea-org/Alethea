@@ -596,13 +596,17 @@ defmodule AletheaWeb.CoreComponents do
     doc: "optional navigation affordance rendered in <summary>; the caller owns the route (#235c)"
 
   def citation(%{citation: %Citation{}} = assigns) do
-    assigns = assign(assigns, :dom_id, assigns.id || "citation-#{assigns.citation.source_ref}")
+    assigns =
+      assigns
+      |> assign(:dom_id, assigns.id || "citation-#{assigns.citation.source_ref}")
+      |> assign(:speaker_time, speaker_time(assigns.citation))
 
     ~H"""
     <details id={@dom_id} class="citation" open={@expanded}>
       <summary class="citation__summary">
         <span class="citation__kind">{kind_label(@citation.kind)}</span>
         <span class="citation__date">{format_date(@citation.occurred_at)}</span>
+        <span :if={@speaker_time} class="citation__speaker">{@speaker_time}</span>
         <span class="citation__ref">{@citation.source_ref}</span>
         <span :if={@link != []} class="citation__link">{render_slot(@link)}</span>
       </summary>
@@ -644,6 +648,26 @@ defmodule AletheaWeb.CoreComponents do
     """
   end
 
+  # Session-transcript cites show who spoke and when, e.g.
+  # "Paciente · min 12:40 – 13:05" (time via the Workbench AudioMarker).
+  # nil for every other kind, so their markup is unchanged.
+  defp speaker_time(%Citation{speaker: nil}), do: nil
+
+  defp speaker_time(%Citation{
+         speaker: speaker,
+         audio_start_seconds: start,
+         audio_end_seconds: stop
+       })
+       when is_number(start) and is_number(stop) do
+    "#{speaker_label(speaker)} · #{AletheaWeb.TargetBehaviorLive.AudioMarker.format_range(start, stop)}"
+  end
+
+  defp speaker_time(%Citation{speaker: speaker}), do: speaker_label(speaker)
+
+  defp speaker_label("patient"), do: "Paciente"
+  defp speaker_label("therapist"), do: "Profesional"
+  defp speaker_label(_unknown), do: "Sesión"
+
   defp format_date(%DateTime{} = dt) do
     dt |> DateTime.to_date() |> Date.to_iso8601()
   end
@@ -658,5 +682,6 @@ defmodule AletheaWeb.CoreComponents do
   defp kind_label("ai_proposal"), do: "Propuesta de IA (aceptada)"
   defp kind_label("functional_analysis_draft"), do: "Borrador de análisis funcional"
   defp kind_label("patient_message"), do: "Mensaje del paciente"
+  defp kind_label("session_transcript"), do: "Sesión grabada"
   defp kind_label(other), do: other
 end

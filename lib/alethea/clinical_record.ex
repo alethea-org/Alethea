@@ -34,6 +34,8 @@ defmodule Alethea.ClinicalRecord do
     FunctionalAnalysisDraft,
     FunctionalAnalysisVersion,
     Outbox,
+    SessionRecording,
+    SessionRecordings,
     SessionTranscript,
     SessionTranscriptContent,
     TargetBehavior
@@ -561,6 +563,250 @@ defmodule Alethea.ClinicalRecord do
       end)
       |> Repo.transaction()
       |> finalize_record_multi()
+    end
+  end
+
+  @doc """
+  Starts a session recording streamed from the browser (session-recording
+  S2/S6). Commits the recording row (`"recording"`) and a content-free
+  `session_recording_created` audit row; audio arrives later through
+  `append_session_recording_chunk/5`.
+
+  `attrs`: `consent: true` — the professional's confirmation that the patient
+  agreed to the recording; without it nothing is stored
+  (`{:error, :consent_required}`) — and `:content_type`, the MediaRecorder MIME
+  (`audio/webm` or `audio/mp4`, parameters such as `;codecs=opus` allowed).
+  """
+  @spec start_session_recording(Professional.t(), Ecto.UUID.t(), map()) ::
+          {:ok, SessionRecording.t()}
+          | {:error,
+             :unauthorized | :consent_required | :invalid_content_type | Ecto.Changeset.t()}
+  def start_session_recording(%Professional{} = professional, patient_id, attrs)
+      when is_map(attrs) do
+    with_patient(professional, patient_id, fn patient, _keyring ->
+      SessionRecordings.start(professional, patient, attrs)
+    end)
+  end
+
+  @doc """
+  Stores chunk `seq` (0-based) of a `"recording"` session, encrypted under the
+  patient's clinical-record DEK (session-recording S2). Idempotent per
+  `(recording, seq)`: resending a stored chunk returns `:ok` and stores
+  nothing. Rejects chunks over 512 KB (`:chunk_too_large`), recordings beyond
+  about four hours (`:recording_too_long`) and recordings no longer recording
+  (`:not_recording`). No audit row per chunk.
+  """
+  @spec append_session_recording_chunk(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          non_neg_integer(),
+          binary()
+        ) ::
+          :ok
+          | {:error,
+             :unauthorized
+             | :not_found
+             | :not_recording
+             | :invalid_chunk
+             | :chunk_too_large
+             | :recording_too_long
+             | term()}
+  def append_session_recording_chunk(
+        %Professional{} = professional,
+        patient_id,
+        recording_id,
+        seq,
+        data
+      ) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      case SessionRecordings.append_chunk(patient, keyring, recording_id, seq, data) do
+        {:error, :not_found} ->
+          fetch_owned_session_recording(professional, patient, recording_id)
+          {:error, :not_found}
+
+        result ->
+          result
+      end
+    end)
+  end
+
+  @doc """
+  Finishes a `"recording"` session (session-recording S2): under a row lock it
+  moves to `"transcribing"` and enqueues `AletheaJobs.SessionTranscriptionWorker`
+  in the same transaction. A recording without any chunk becomes `"failed"`
+  with error code `"empty_recording"`. Finishing a recording that is no longer
+  recording returns `{:error, :invalid_status}`.
+  """
+  @spec finish_session_recording(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, SessionRecording.t()}
+          | {:error, :unauthorized | :not_found | :invalid_status | term()}
+  def finish_session_recording(%Professional{} = professional, patient_id, recording_id) do
+    with_patient(professional, patient_id, fn patient, _keyring ->
+      with {:ok, recording} <-
+             fetch_owned_session_recording(professional, patient, recording_id) do
+        SessionRecordings.finish(professional, recording)
+      end
+    end)
+  end
+
+  @doc """
+  Periodic cleanup (`AletheaJobs.SessionRecordingCleanupWorker`, session-recording
+  S7), across all patients:
+
+    * a `"recording"` whose newest chunk (or start, without chunks) is older
+      than `abandoned_after_seconds` is finished as if the professional had
+      clicked Finalizar (transcribed, or failed `"empty_recording"`);
+    * a `"transcribing"` recording not updated for `stalled_after_seconds`
+      and without a live transcription job becomes `"failed"` (`"stalled"`)
+      and its audio chunks are deleted.
+
+  Returns the counts `%{finalized: n, stalled: m}`.
+  """
+  @spec clean_up_session_recordings(DateTime.t(), pos_integer(), pos_integer()) :: %{
+          finalized: non_neg_integer(),
+          stalled: non_neg_integer()
+        }
+  def clean_up_session_recordings(
+        %DateTime{} = now,
+        abandoned_after_seconds,
+        stalled_after_seconds
+      ) do
+    SessionRecordings.clean_up(now, abandoned_after_seconds, stalled_after_seconds)
+  end
+
+  @doc "Lists an authorized patient's session recordings, newest first."
+  @spec list_session_recordings(Professional.t(), Ecto.UUID.t()) ::
+          {:ok, [SessionRecording.t()]} | {:error, :unauthorized | term()}
+  def list_session_recordings(%Professional{} = professional, patient_id) do
+    with_patient(professional, patient_id, fn patient, _keyring ->
+      {:ok, SessionRecordings.list(patient)}
+    end)
+  end
+
+  @doc """
+  Loads one session recording of an authorized patient. A recording of another
+  patient, or a malformed id, yields `{:error, :not_found}` and writes a
+  content-free denial audit row.
+  """
+  @spec get_session_recording(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, SessionRecording.t()} | {:error, :unauthorized | :not_found}
+  def get_session_recording(%Professional{} = professional, patient_id, recording_id) do
+    with_patient(professional, patient_id, fn patient, _keyring ->
+      fetch_owned_session_recording(professional, patient, recording_id)
+    end)
+  end
+
+  @doc """
+  For a `"needs_speakers"` recording, returns per provider speaker (in order of
+  first appearance) up to two non-blank sample lines:
+  `[%{speaker: 0, samples: ["...", "..."]}, ...]` (session-recording S3).
+  """
+  @spec session_recording_speaker_samples(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, [%{speaker: non_neg_integer(), samples: [String.t()]}]}
+          | {:error, :unauthorized | :not_found | :invalid_status | term()}
+  def session_recording_speaker_samples(%Professional{} = professional, patient_id, recording_id) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, recording} <-
+             fetch_owned_session_recording(professional, patient, recording_id) do
+        SessionRecordings.speaker_samples(recording, keyring)
+      end
+    end)
+  end
+
+  @doc """
+  Maps every provider speaker of a `"needs_speakers"` recording to
+  `"patient"` or `"therapist"` (`%{0 => "therapist", 1 => "patient"}`; keys may
+  be integer strings), then — in one transaction — creates the transcript via
+  `create_session_transcript/3`, links it, marks the recording `"ready"`,
+  drops the stored segments and audits `session_recording_speakers_assigned`
+  (session-recording S3). A mapping that leaves a speaker out, names an
+  unknown speaker or uses another role returns
+  `{:error, :invalid_speaker_mapping}` and changes nothing.
+  """
+  @spec assign_session_recording_speakers(
+          Professional.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          map()
+        ) ::
+          {:ok, SessionRecording.t()}
+          | {:error,
+             :unauthorized
+             | :not_found
+             | :invalid_status
+             | :invalid_speaker_mapping
+             | term()}
+  def assign_session_recording_speakers(
+        %Professional{} = professional,
+        patient_id,
+        recording_id,
+        mapping
+      ) do
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, recording} <-
+             fetch_owned_session_recording(professional, patient, recording_id) do
+        SessionRecordings.assign_speakers(professional, patient, keyring, recording, mapping)
+      end
+    end)
+  end
+
+  @doc """
+  Re-enqueues transcription of a `"failed"` recording whose audio chunks are
+  still stored. Once they were deleted the failure is final:
+  `{:error, :not_retryable}`.
+  """
+  @spec retry_session_recording(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, SessionRecording.t()}
+          | {:error, :unauthorized | :not_found | :not_retryable | term()}
+  def retry_session_recording(%Professional{} = professional, patient_id, recording_id) do
+    with_patient(professional, patient_id, fn patient, _keyring ->
+      with {:ok, recording} <-
+             fetch_owned_session_recording(professional, patient, recording_id) do
+        SessionRecordings.retry(recording)
+      end
+    end)
+  end
+
+  @doc """
+  Transcribes one `"transcribing"` recording on behalf of its professional
+  (`AletheaJobs.SessionTranscriptionWorker`). Two or more provider speakers →
+  `"needs_speakers"`; otherwise the spans get speaker `"unknown"` and the
+  transcript is created (`"ready"`). The audio is the stored chunks
+  concatenated in `seq` order; either way they are deleted. A provider error
+  returns `{:error, code}` (the job retries) unless `final_attempt?: true`,
+  which marks the recording `"failed"` and deletes the chunks. A recording in any other status is left untouched (`{:ok, :skipped}`).
+  """
+  @spec process_session_recording(Ecto.UUID.t(), keyword()) ::
+          {:ok, SessionRecording.t() | :skipped} | {:error, term()}
+  def process_session_recording(recording_id, opts \\ []) do
+    case Repo.get(SessionRecording, recording_id) do
+      %SessionRecording{status: "transcribing"} = recording ->
+        professional = Accounts.get_professional!(recording.professional_id)
+
+        with_patient(professional, recording.patient_id, fn patient, keyring ->
+          SessionRecordings.transcribe(professional, patient, keyring, recording, opts)
+        end)
+
+      _missing_or_settled ->
+        {:ok, :skipped}
+    end
+  end
+
+  defp fetch_owned_session_recording(professional, patient, recording_id) do
+    case SessionRecordings.fetch(patient, recording_id) do
+      {:ok, recording} ->
+        {:ok, recording}
+
+      {:error, :not_found} ->
+        audited_id =
+          case Ecto.UUID.cast(recording_id) do
+            {:ok, uuid} -> uuid
+            :error -> nil
+          end
+
+        log_denied_audit(professional.id, audited_id, "session_recording")
+        {:error, :not_found}
     end
   end
 

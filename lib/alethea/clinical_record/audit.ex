@@ -26,11 +26,13 @@ defmodule Alethea.ClinicalRecord.Audit do
               legal_hold_applied legal_hold_released clinical_record_legally_deleted
               clinical_record_key_destroyed evidence_suggestion_dismissed
               session_transcript_created functional_analysis_version_registered
-              patient_risk_activated patient_risk_deactivated)
+              patient_risk_activated patient_risk_deactivated
+              session_recording_created session_recording_transcribed
+              session_recording_speakers_assigned session_recording_failed)
   @resource_types ~w(target_behavior clinical_note patient consultation_evidence
                      clinician_observation ai_proposal functional_analysis_draft
                      dismissed_evidence_suggestion session_transcript
-                     functional_analysis_version)
+                     functional_analysis_version session_recording)
   @outcomes ~w(success denied)
 
   @primary_key {:id, :binary_id, autogenerate: true}

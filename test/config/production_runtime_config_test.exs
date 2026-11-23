@@ -34,7 +34,10 @@ defmodule Alethea.ProductionRuntimeConfigTest do
     EMOTION_ANALYZER_ENABLED EMOTION_SIDECAR_URL EMOTION_SIDECAR_AUTH_TOKEN
     EMBEDDINGS_ENABLED EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL EMBEDDINGS_AUTH_TOKEN
     EMBEDDINGS_RECEIVE_TIMEOUT_MS
-    WHISPER_ENABLED TRIGGER_MATCHER_ENABLED
+    WHISPER_ENABLED TRANSCRIPTION_PROVIDER WHISPER_RECEIVE_TIMEOUT_MS
+    DEEPGRAM_API_KEY DEEPGRAM_MODEL DEEPGRAM_BASE_URL
+    WHISPER_ENDPOINT_URL WHISPER_API_KEY WHISPER_MODEL
+    TRIGGER_MATCHER_ENABLED
     TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_MODEL
     JEV_API_KEY JEV_BASE_URL JEV_MODEL
     TRIGGER_MATCH_THRESHOLD TRIGGER_MATCH_TIMEOUT_MS
@@ -504,15 +507,41 @@ defmodule Alethea.ProductionRuntimeConfigTest do
                "http://embeddings.internal.test:11434"
     end
 
-    test "transcription is disabled and cannot be enabled without an adapter" do
+    test "transcription is disabled by default and selects a provider when enabled" do
       assert prod_config() |> alethea(:ai_whisper) == Whisper.Disabled
 
       assert prod_config(%{"WHISPER_ENABLED" => "false"}) |> alethea(:ai_whisper) ==
                Whisper.Disabled
 
-      assert_raise RuntimeError, ~r/WHISPER_ENABLED.*no production transcription adapter/, fn ->
+      assert_raise RuntimeError, ~r/TRANSCRIPTION_PROVIDER is missing or empty/, fn ->
         prod_config(%{"WHISPER_ENABLED" => "true"})
       end
+
+      assert_raise RuntimeError, ~r/DEEPGRAM_API_KEY is missing or empty/, fn ->
+        prod_config(%{"WHISPER_ENABLED" => "true", "TRANSCRIPTION_PROVIDER" => "deepgram"})
+      end
+
+      deepgram =
+        prod_config(%{
+          "WHISPER_ENABLED" => "true",
+          "TRANSCRIPTION_PROVIDER" => "deepgram",
+          "DEEPGRAM_API_KEY" => "synthetic-deepgram-key"
+        })
+
+      assert alethea(deepgram, :ai_whisper) == Whisper.Deepgram
+      assert alethea(deepgram, Whisper.Deepgram)[:api_key] == "synthetic-deepgram-key"
+
+      openai =
+        prod_config(%{
+          "WHISPER_ENABLED" => "true",
+          "TRANSCRIPTION_PROVIDER" => "openai_compatible",
+          "WHISPER_ENDPOINT_URL" => "https://api.groq.com/openai/v1"
+        })
+
+      assert alethea(openai, :ai_whisper) == Whisper.OpenAICompatible
+
+      assert alethea(openai, Whisper.OpenAICompatible)[:endpoint_url] ==
+               "https://api.groq.com/openai/v1"
     end
 
     test "reactive-trigger matching uses TriggerMatcher.Jev when enabled and requires an API key" do

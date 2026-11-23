@@ -29,7 +29,17 @@ defmodule Alethea.ClinicalRecord.Rag.Citation do
   """
 
   @enforce_keys [:source_ref, :kind, :occurred_at, :excerpt, :score]
-  defstruct [:source_ref, :kind, :occurred_at, :excerpt, :score, :chunk_index]
+  defstruct [
+    :source_ref,
+    :kind,
+    :occurred_at,
+    :excerpt,
+    :score,
+    :chunk_index,
+    :speaker,
+    :audio_start_seconds,
+    :audio_end_seconds
+  ]
 
   @type t :: %__MODULE__{
           source_ref: String.t(),
@@ -37,14 +47,19 @@ defmodule Alethea.ClinicalRecord.Rag.Citation do
           occurred_at: DateTime.t(),
           excerpt: String.t(),
           score: float(),
-          chunk_index: non_neg_integer()
+          chunk_index: non_neg_integer(),
+          speaker: String.t() | nil,
+          audio_start_seconds: float() | nil,
+          audio_end_seconds: float() | nil
         }
 
   @doc """
   Builds a citation from a single retrieval result map (one entry of
   the `results` list `Alethea.ClinicalRecord.Rag.Retrieval.search/4`
   returns). All four required server anchors must be present; the
-  excerpt must be non-empty.
+  excerpt must be non-empty. Optional session-transcript fields
+  (`speaker`, `audio_start_seconds`, `audio_end_seconds`) are copied when
+  present and default to `nil`.
 
   Raises `FunctionClauseError` if the argument is not a map.
   Raises `ArgumentError` if any required key is missing or if the
@@ -74,7 +89,10 @@ defmodule Alethea.ClinicalRecord.Rag.Citation do
       occurred_at: source_occurred_at,
       excerpt: content,
       score: score,
-      chunk_index: chunk_index
+      chunk_index: chunk_index,
+      speaker: Map.get(result, :speaker),
+      audio_start_seconds: Map.get(result, :audio_start_seconds),
+      audio_end_seconds: Map.get(result, :audio_end_seconds)
     }
   end
 

@@ -105,6 +105,69 @@ defmodule AletheaWeb.CoreComponents.CitationTest do
     end
   end
 
+  describe "<.citation> session transcript speaker and time (S5)" do
+    # Time format reuses `AletheaWeb.TargetBehaviorLive.AudioMarker.format_range/2`
+    # ("min mm:ss – mm:ss", en dash) so citations match the Workbench audio markers.
+    defp transcript_citation(speaker, start, stop) do
+      @valid_result
+      |> Map.merge(%{
+        source_resource_type: "session_transcript",
+        speaker: speaker,
+        audio_start_seconds: start,
+        audio_end_seconds: stop
+      })
+      |> Citation.from_retrieval_result()
+    end
+
+    test "from_retrieval_result/1 carries speaker and audio span" do
+      c = transcript_citation("patient", 760.0, 785.0)
+
+      assert c.speaker == "patient"
+      assert c.audio_start_seconds == 760.0
+      assert c.audio_end_seconds == 785.0
+    end
+
+    test "renders \"Sesión grabada\" with the patient speaker label and time range" do
+      html =
+        render_component(&CoreComponents.citation/1,
+          citation: transcript_citation("patient", 760.0, 785.0)
+        )
+
+      assert html =~ "Sesión grabada"
+      assert html =~ "Paciente · min 12:40 – 13:05"
+      refute html =~ ">session_transcript<"
+    end
+
+    test "labels therapist as Profesional and unknown as Sesión" do
+      therapist =
+        render_component(&CoreComponents.citation/1,
+          citation: transcript_citation("therapist", 5.0, 9.0)
+        )
+
+      unknown =
+        render_component(&CoreComponents.citation/1,
+          citation: transcript_citation("unknown", 5.0, 9.0)
+        )
+
+      assert therapist =~ "Profesional · min 00:05 – 00:09"
+      assert unknown =~ "Sesión · min 00:05 – 00:09"
+    end
+
+    test "a non-transcript citation renders no speaker/time element and the same markup as before" do
+      c = citation(%{}, "clinical_note")
+
+      assert c.speaker == nil
+      assert c.audio_start_seconds == nil
+      assert c.audio_end_seconds == nil
+
+      html = render_component(&CoreComponents.citation/1, citation: c)
+
+      assert html =~ "Nota clínica"
+      refute html =~ "citation__speaker"
+      refute html =~ " · "
+    end
+  end
+
   describe "<.citation> expanded" do
     test "expands by default when the `expanded` attribute is true" do
       c = citation()
