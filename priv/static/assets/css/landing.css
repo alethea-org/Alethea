@@ -350,6 +350,20 @@ body.lx-body { margin: 0; background: var(--colors-canvas); }
 .lx-radio span { font-size: 13px; padding: 6px 12px; border-radius: var(--rounded-pill); border: 1px solid var(--colors-hairline); color: var(--colors-muted); }
 .lx-radio .is-on { border-color: var(--colors-primary); color: var(--colors-on-primary); background: var(--colors-primary); }
 
+/* Psychometrics band */
+.lx-psy__head { max-width: 760px; }
+.lx-psy__head .lx-h2 em { font-style: normal; color: var(--colors-signature-coral); }
+.lx-psy__main {
+  margin-top: var(--spacing-xxl); padding: clamp(28px, 4vw, 56px); border-radius: 20px;
+  background: var(--colors-signature-forest); color: var(--colors-on-primary);
+}
+.lx-psy__main .lx-label { color: var(--colors-signature-peach); }
+.lx-psy__quote { font-size: clamp(22px, 2.4vw, 34px); line-height: 1.35; font-weight: 500; letter-spacing: -0.01em; max-width: 34em; }
+.lx-psy__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-md); margin-top: var(--spacing-md); }
+.lx-psy__card { padding: var(--spacing-xl); border: 1px solid var(--colors-hairline); border-radius: var(--rounded-lg); background: var(--colors-canvas); }
+.lx-psy__card .lx-body { font-size: 16px; }
+@media (max-width: 960px) { .lx-psy__grid { grid-template-columns: 1fr; } }
+
 /* Waitlist — the page's closing call: pitch on forest, form on a white card. */
 .lx-waitlist {
   display: grid; grid-template-columns: 1.1fr 0.9fr; gap: clamp(32px, 5vw, 80px); align-items: center;
