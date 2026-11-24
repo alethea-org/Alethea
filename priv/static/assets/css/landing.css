@@ -432,6 +432,18 @@ body.lx-body { margin: 0; background: var(--colors-canvas); }
 .lx-pin-narrow .lx-stage__visual > :not(.is-focus) { opacity: 0 !important; pointer-events: none; }
 .lx-pin-narrow .lx-stage .lx-chat { height: min(270px, 32svh); }
 @media (max-height: 760px) { .lx-pin-narrow .lx-stage__visual { zoom: 0.88; } }
+/* Snap: one stop per beat (points added by landing.js) plus the plain
+   sections, so a flick never skips a sentence. Sections taller than the
+   screen still scroll freely inside. */
+.lx-snap { display: none; }
+html.lx-pin-narrow { scroll-snap-type: y mandatory; }
+.lx-pin-narrow .lx-scene { position: relative; }
+.lx-pin-narrow .lx-snap {
+  display: block; position: absolute; left: 0; width: 1px; height: 1px;
+  pointer-events: none; scroll-snap-align: start; scroll-snap-stop: always;
+}
+.lx-pin-narrow :is(.lx-hero, .lx-band) { scroll-snap-align: start; scroll-margin-top: 64px; }
+.lx-pin-narrow .lx-footer { scroll-snap-align: end; }
 .lx-pin-narrow .lx-card { padding: 16px; box-shadow: var(--shadow-overlay); }
 .lx-pin-narrow .lx-dots { display: none; }
 
