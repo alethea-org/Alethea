@@ -39,6 +39,27 @@
     beat: -1,
   }));
 
+  // Phone story: one invisible snap point per beat, so each swipe lands on
+  // exactly one sentence however hard the finger flicks. A scene is
+  // `100svh + beats * 70svh` tall (landing.css), so beat i owns the scroll
+  // range starting at (i - 1) * 70svh; points after the first sit 10svh into
+  // their range to stay clear of the boundary. The CSS only turns them on in
+  // `html.lx-pin-narrow`.
+  // One more point halfway through the hand-over to the next section keeps
+  // every gap shorter than a swipe, so mandatory snapping never pulls the
+  // reader back to the last beat.
+  scenes.forEach(({ el, beats }) => {
+    const tops = beats.map((_, i) => (i === 0 ? "0px" : `calc(${i} * 70svh + 10svh)`));
+    tops.push(`calc(${beats.length} * 70svh + 30svh)`);
+    tops.forEach((top) => {
+      const point = document.createElement("i");
+      point.className = "lx-snap";
+      point.setAttribute("aria-hidden", "true");
+      point.style.top = top;
+      el.append(point);
+    });
+  });
+
   const wide = window.matchMedia("(min-width: 1100px) and (min-height: 640px)");
   // Phones and tablets in portrait get the story too, stacked vertically.
   const narrow = window.matchMedia("(max-width: 1099px) and (min-height: 560px)");
