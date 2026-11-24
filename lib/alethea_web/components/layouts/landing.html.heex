@@ -12,6 +12,15 @@
 <!DOCTYPE html>
 <html lang="es">
   <head>
+    <%!-- Google Tag Manager: landing only. App pages hold clinical data and
+         must not load third-party trackers. --%>
+    <script async src="https://www.googletagmanager.com/gtm.js?id=GTM-KJLSHFR4">
+    </script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
