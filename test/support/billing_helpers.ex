@@ -50,7 +50,9 @@ defmodule AletheaWeb.BillingHelpers do
               professional_id && Alethea.Billing.link_token(professional_id)
             end)
         },
-        "items" => [%{"price" => %{"id" => @price_id}, "quantity" => 1}],
+        "items" => [
+          %{"price" => %{"id" => Map.get(overrides, :price_id, @price_id)}, "quantity" => 1}
+        ],
         "current_billing_period" => %{
           "starts_at" => DateTime.to_iso8601(DateTime.utc_now()),
           "ends_at" =>

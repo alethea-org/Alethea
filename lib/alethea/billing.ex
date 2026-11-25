@@ -46,8 +46,9 @@ defmodule Alethea.Billing do
 
   Entitled when the subscription is `trialing`, `active` or `past_due`
   (Paddle keeps `past_due` only while it retries the payment, then
-  cancels), or `canceled` with the paid period still running. Always
-  entitled while billing is disabled.
+  cancels), or `canceled` with the paid period still running, and only
+  for a price listed in `PADDLE_PRICE_IDS`. Always entitled while billing
+  is disabled.
   """
   @spec entitled?(Professional.t() | %{id: binary()}) :: boolean()
   def entitled?(%{id: professional_id}) do
@@ -62,17 +63,24 @@ defmodule Alethea.Billing do
 
   defp subscription_entitled?(nil, _now), do: false
 
-  defp subscription_entitled?(%Subscription{status: status}, _now)
+  # The price is picked client-side in Paddle.js, so a subscription to any
+  # other price the vendor account sells (a test, trial or cheaper plan)
+  # must not unlock the workspace.
+  defp subscription_entitled?(%Subscription{price_id: price_id} = subscription, now) do
+    price_id in config(:price_ids, []) and paid_period?(subscription, now)
+  end
+
+  defp paid_period?(%Subscription{status: status}, _now)
        when status in @entitled_statuses,
        do: true
 
-  defp subscription_entitled?(
+  defp paid_period?(
          %Subscription{status: "canceled", current_period_ends_at: %DateTime{} = ends_at},
          now
        ),
        do: DateTime.compare(ends_at, now) == :gt
 
-  defp subscription_entitled?(_subscription, _now), do: false
+  defp paid_period?(_subscription, _now), do: false
 
   @doc "The professional's subscription record, or `nil`."
   @spec current_subscription(Professional.t() | %{id: binary()}) :: Subscription.t() | nil

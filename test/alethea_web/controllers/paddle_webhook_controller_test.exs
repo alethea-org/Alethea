@@ -278,6 +278,38 @@ defmodule AletheaWeb.PaddleWebhookControllerTest do
     end
   end
 
+  describe "entitlement requires a configured price" do
+    test "an active subscription to a price outside PADDLE_PRICE_IDS grants no access",
+         %{conn: conn, professional: p} do
+      post_paddle(
+        conn,
+        subscription_event("subscription.created", p.id, %{price_id: "pri_other"})
+      )
+
+      drain()
+
+      assert subscription(p).price_id == "pri_other"
+      assert subscription(p).status == "active"
+      refute Alethea.Billing.entitled?(p)
+    end
+
+    test "an active subscription to a configured price still grants access",
+         %{conn: conn, professional: p} do
+      post_paddle(conn, subscription_event("subscription.created", p.id))
+      drain()
+
+      assert Alethea.Billing.entitled?(p)
+    end
+
+    test "a canceled subscription to a configured price keeps access until the period ends",
+         %{conn: conn, professional: p} do
+      post_paddle(conn, subscription_event("subscription.canceled", p.id, %{status: "canceled"}))
+      drain()
+
+      assert Alethea.Billing.entitled?(p)
+    end
+  end
+
   describe "linking a Paddle subscription to a professional" do
     test "a late event from an abandoned subscription does not take over the new one",
          %{conn: conn, professional: p} do
