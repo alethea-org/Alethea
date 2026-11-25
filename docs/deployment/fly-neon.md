@@ -22,8 +22,8 @@ been executed against Fly, Neon or Telegram yet: see
 
 | Piece | Decision | Why |
 | --- | --- | --- |
-| Compute | One Fly Machine in `gru` (São Paulo), 512 MB, in the **landing phase** | Only the public landing and waitlist are in use, so `fly.toml` sets `auto_stop_machines = "suspend"` and `min_machines_running = 0`: the Machine suspends when idle and resumes on the next request. Oban and its cron don't run while it is suspended. Before onboarding patients, switch back to `auto_stop_machines = "off"`, `min_machines_running = 1` and `memory = "1gb"` (Oban queues and cron must run with no HTTP traffic). |
-| Database | Neon project in AWS `sa-east-1`, reached over the public internet with verified TLS | Same metro as `gru`. `ECTO_IPV6` and `DNS_CLUSTER_QUERY` stay unset: no Fly private network, no clustering. |
+| Compute | One always-on Fly Machine in `ord` (Chicago), 1 GB | `fly.toml` sets `auto_stop_machines = "off"` and `min_machines_running = 1`: the Machine never suspends, so no request waits for a resume (a request after a suspend measured 25.6 s) and Oban queues and cron run with no HTTP traffic. |
+| Database | Neon project in AWS `us-east-2` (Ohio), reached over the public internet with verified TLS | The nearest Fly region is `ord`; LiveView navigations run their queries in series, so the app sits next to the database rather than next to users. `ECTO_IPV6` and `DNS_CLUSTER_QUERY` stay unset: no Fly private network, no clustering. |
 | Database host | Neon's **direct** host (no `-pooler` in the name) for everything | The pooler is PgBouncer in transaction mode: it breaks `LISTEN/NOTIFY` (Oban's Postgres notifier) and session advisory locks (migrations). |
 | Migrations | Only from the deploy release command, `/app/bin/release` | Migration `20260618234145` disables the migration lock, so two runners at once are not protected from each other. |
 | Scale to zero | Will not happen on either side | Oban polls the database every second, so the Neon compute never goes idle. Budget for an always-on Neon compute and an always-on Machine. |
@@ -42,7 +42,7 @@ Reconnection uses randomized exponential backoff between 500 ms and 10 s (not co
 ## Neon setup checklist
 
 - [ ] Create a **separate Neon project** for production. Not a branch of the development project: branches share the project's roles, history and access.
-- [ ] Region: AWS `sa-east-1`.
+- [ ] Region: AWS `us-east-2` (the app runs in Fly `ord`, next to it).
 - [ ] PostgreSQL 16, the version CI runs with pgvector (`pgvector/pgvector:pg16`). Another major version is untested here.
 - [ ] Create the application role and database **through the Neon console**. Console-created roles may run `CREATE EXTENSION vector`, which the migrations do; a role created with plain SQL may not.
 - [ ] Copy the connection string with connection pooling **turned off**, so the host has no `-pooler` suffix.
@@ -296,7 +296,7 @@ Never run it while a deploy is in progress: that would be two migration runners 
 **None of these has been run.** Each needs the evidence in issue 402.
 
 - [ ] **Image builds.** `docker build -t alethea:prod .` exits 0 (also the `Release image` CI job).
-- [ ] **Deploy succeeds.** `fly deploy --ha=false` ends with the Machine healthy; `fly status -a alethea-prod` shows one started Machine in `gru`.
+- [ ] **Deploy succeeds.** `fly deploy --ha=false` ends with the Machine healthy; `fly status -a alethea-prod` shows one started Machine in `ord`.
 - [ ] **Migrations applied.** The deploy output shows the migrations, and `select count(*) from schema_migrations;` in the Neon SQL editor matches the number of files in `priv/repo/migrations`.
 - [ ] **Readiness.** `curl -i https://alethea-prod.fly.dev/health/ready` returns 200 with `"database":"ok"` and `"oban":"ok"`.
 - [ ] **LiveView and static assets.** The login page loads over HTTPS, the browser shows a connected LiveView socket (`wss://.../live/websocket`, status 101), and `curl -I https://alethea-prod.fly.dev/assets/js/app.js` returns 200.
@@ -317,3 +317,33 @@ Never run it while a deploy is in progress: that would be two migration runners 
 - **`BotConfig.upsert` does not silence its own query log**; only the bootstrap caller guards the plaintext token. Production logs at `info`, where queries are not printed.
 - **`.env.example` and the README** do not list the variables above.
 - **The image is built on Elixir 1.19 / OTP 28**; local development uses a newer toolchain.
+
+## Navigation latency logs
+
+Every LiveView `mount`, `handle_params` and `handle_event` writes one `:info`
+line (`AletheaWeb.Telemetry.LiveViewTiming`):
+
+```text
+liveview_timing stage=mount view=AletheaWeb.DashboardLive duration_ms=412 queries=14 db_ms=380 queue_ms=3
+```
+
+`duration_ms` is the server time of that stage, `queries` and `db_ms` the Repo
+queries it ran and their total time, `queue_ms` the time spent waiting for a
+pool connection. The `on_mount` hooks run inside `mount` and are included.
+Read them with:
+
+```bash
+fly logs -a alethea-prod | grep liveview_timing
+```
+
+## Moving the Machine to another region
+
+`primary_region` only places new Machines; `fly deploy` updates an existing
+Machine where it is. To move the app (for example from `gru` to `ord`):
+
+```bash
+fly deploy --ha=false                       # new image and config
+fly scale count 1 --region ord -a alethea-prod
+fly machine list -a alethea-prod            # note the old Machine's ID
+fly machine destroy <old-gru-machine-id> -a alethea-prod
+```
