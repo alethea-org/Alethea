@@ -1,8 +1,13 @@
 defmodule AletheaWeb.ObanDashboardLive do
   @moduledoc """
-  Oban Dashboard LiveView for authenticated professionals.
+  Oban Dashboard LiveView, an operator page under `/admin`.
 
-  Shows job queues, states, and allows cancel/retry operations.
+  Shows job queues, states, and allows cancel/retry operations. Job
+  args belong to every tenant (patient messages, outbound replies), so
+  only admins (`Alethea.Accounts.Admin`) may open it: the router mounts
+  it in the `:admin` live_session behind `:require_admin`, and `mount/3`
+  re-checks it so the page stays closed even if it is ever routed
+  elsewhere.
 
   The page used to be written in Tailwind utility classes, which the
   app does not compile — every `bg-gray-50`, `rounded-lg` and
@@ -15,8 +20,9 @@ defmodule AletheaWeb.ObanDashboardLive do
 
   import Ecto.Query, only: [where: 2, where: 3, order_by: 2, limit: 2]
 
-  alias Oban.Job
+  alias Alethea.Accounts.Admin
   alias Alethea.Repo
+  alias Oban.Job
 
   @queues [
     :default,
@@ -37,18 +43,25 @@ defmodule AletheaWeb.ObanDashboardLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok,
-     socket
-     |> assign(:page_title, "Oban Dashboard")
-     |> assign(:queues, @queues)
-     |> assign(:states, @states)
-     # Without this the first render raises: `render/1` reads
-     # `@selected_job` before any `view_job` event can assign it.
-     |> assign(:selected_job, nil)
-     |> assign(:selected_queue, "all")
-     |> assign(:selected_state, "all")
-     |> stream(:jobs, [])
-     |> load_jobs()}
+    if Admin.admin?(socket.assigns[:current_professional]) do
+      {:ok, mount_dashboard(socket)}
+    else
+      {:ok, redirect(socket, to: ~p"/dashboard")}
+    end
+  end
+
+  defp mount_dashboard(socket) do
+    socket
+    |> assign(:page_title, "Oban Dashboard")
+    |> assign(:queues, @queues)
+    |> assign(:states, @states)
+    # Without this the first render raises: `render/1` reads
+    # `@selected_job` before any `view_job` event can assign it.
+    |> assign(:selected_job, nil)
+    |> assign(:selected_queue, "all")
+    |> assign(:selected_state, "all")
+    |> stream(:jobs, [])
+    |> load_jobs()
   end
 
   @impl true

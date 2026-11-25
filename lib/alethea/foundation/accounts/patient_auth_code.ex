@@ -2,8 +2,11 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   @moduledoc """
   Ephemeral onboarding code (C-4, PR #4). Persists both the deep-link
   token (`kind: "deep_link"`, minted by `Alethea.Telegram.DeepLinkToken.mint/0`)
-  and the six-digit web fallback code (`kind: "six_digit"`) that bind a
-  Telegram chat to a `Alethea.Foundation.Accounts.Patient` row.
+  and the six-digit code (`kind: "six_digit"`) that bind a Telegram chat
+  to a `Alethea.Foundation.Accounts.Patient` row. Only the deep link is
+  redeemable today (bot `/start <token>`): the public web fallback that
+  redeemed six-digit codes (`GET /webhooks/telegram/auth`) was removed
+  because it bound a caller-supplied chat_id with no proof of ownership.
 
   ## Lifecycle
 
@@ -14,7 +17,9 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
        rate-limit audit trail on the row itself.
     3. `consume_patient_auth_code/3` — atomically binds the patient's
        `telegram_chat_id_hash` AND marks the code used, in a single
-       `Ecto.Multi` transaction. If the chat is already bound to a
+       `Ecto.Multi` transaction. The same transaction revokes (marks
+       used) the patient's other live, unused codes of every kind, so a
+       leftover sibling code cannot rebind an onboarded patient. If the chat is already bound to a
        DIFFERENT patient, the whole transaction rolls back — the code
        stays unused and retryable (REQ-C4-reject-chat-bound-to-other-patient).
 
@@ -294,7 +299,10 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
 
   A same-patient rebind (the auth code's own patient updating its
   `telegram_chat_id_hash` to a new value) never hits the unique index
-  and succeeds normally.
+  and succeeds normally — but only with a code minted after the last
+  successful consume: that consume revoked every other live code of
+  the patient (deep link and six-digit alike) in the same transaction.
+  A rolled-back consume revokes nothing.
   """
   @spec consume_patient_auth_code(String.t(), String.t(), keyword()) ::
           {:ok, Patient.t()}
@@ -333,6 +341,11 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
       |> Ecto.Multi.update(:consume, fn %{auth_code: auth_code} ->
         changeset(auth_code, %{used_at: used_at})
       end)
+      |> Ecto.Multi.update_all(
+        :revoke_siblings,
+        fn %{auth_code: auth_code} -> live_siblings_query(auth_code, used_at) end,
+        set: [used_at: used_at, updated_at: used_at]
+      )
       |> Repo.transaction()
       |> case do
         {:ok, %{bind: patient}} ->
@@ -352,6 +365,28 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
           {:error, reason}
       end
     end
+  end
+
+  # The patient's OTHER live, unused codes (every kind). Consuming one
+  # code revokes them in the same transaction, so a leftover sibling
+  # (e.g. the six-digit code minted next to a deep link) cannot later
+  # rebind an onboarded patient to another chat. The consumed row is
+  # already locked `FOR UPDATE` by the `:auth_code` step; the siblings
+  # are locked after it with `SKIP LOCKED`, so two concurrent consumes
+  # of two sibling codes never wait on each other's row (no deadlock).
+  # A sibling skipped that way is held by its own consume, which marks
+  # it used itself.
+  defp live_siblings_query(%__MODULE__{} = auth_code, now) do
+    locked_ids =
+      from(a in __MODULE__,
+        where:
+          a.patient_id == ^auth_code.patient_id and a.id != ^auth_code.id and
+            is_nil(a.used_at) and a.expires_at > ^now,
+        select: a.id,
+        lock: "FOR UPDATE SKIP LOCKED"
+      )
+
+    from(a in __MODULE__, where: a.id in subquery(locked_ids))
   end
 
   defp validate_chat_id(nil), do: {:ok, nil}
