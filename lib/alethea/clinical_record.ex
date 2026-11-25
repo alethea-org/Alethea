@@ -307,8 +307,9 @@ defmodule Alethea.ClinicalRecord do
   end
 
   # Read-only variant: loads the CR-scoped DEK but never provisions it. A
-  # patient with no CR key yet gets `clinical_record_dek: nil`, which is
-  # fine because no `encryption_version: 2` row can exist without the key.
+  # patient with no CR key gets `clinical_record_dek: nil`; a v2 row read
+  # without its key (e.g. after terminal erasure) decrypts to the
+  # placeholder via `decrypt_or_placeholder/2`.
   defp with_patient_for_read(%Professional{} = professional, patient_id, fun)
        when is_function(fun, 2) do
     load_if_present = fn patient, kek ->
@@ -1674,8 +1675,7 @@ defmodule Alethea.ClinicalRecord do
        proposal
        |> AIProposal.rekey_changeset(%{
          encrypted_original_text: original_ciphertext,
-         encrypted_text: text_ciphertext,
-         encryption_version: 2
+         encrypted_text: text_ciphertext
        })
        |> Ecto.Changeset.put_change(:status, "edited")}
     end

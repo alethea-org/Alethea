@@ -303,6 +303,71 @@ defmodule Alethea.ClinicalRecord.ClinicalRecordDekWritesTest do
                PatientVault.decrypt(persisted.encrypted_original_text, ctx.patient_dek)
     end
 
+    test "a legacy v1 proposal whose original cannot be decrypted is left untouched", ctx do
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(ctx.professional, ctx.patient.id, "Conducta")
+
+      {:ok, foreign_ciphertext} = PatientVault.encrypt("x", :crypto.strong_rand_bytes(32))
+      {:ok, text_ciphertext} = PatientVault.encrypt("t", ctx.patient_dek)
+      row = insert_v1_proposal!(ctx, target_behavior, foreign_ciphertext, text_ciphertext)
+      before = Repo.get!(AIProposal, row.id)
+
+      assert {:error, _} =
+               ClinicalRecord.edit_ai_proposal(ctx.professional, ctx.patient.id, row.id, "Nuevo")
+
+      assert Repo.get!(AIProposal, row.id) == before
+      assert edit_audits(ctx.professional) == 0
+    end
+
+    test "a re-keyed proposal keeps its distinct original and a second edit leaves it alone",
+         ctx do
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(ctx.professional, ctx.patient.id, "Conducta")
+
+      {:ok, original} = PatientVault.encrypt("ORIGINAL", ctx.patient_dek)
+      {:ok, prior_edit} = PatientVault.encrypt("PRIOR EDIT", ctx.patient_dek)
+      row = insert_v1_proposal!(ctx, target_behavior, original, prior_edit)
+
+      assert {:ok, _} =
+               ClinicalRecord.edit_ai_proposal(ctx.professional, ctx.patient.id, row.id, "NEW")
+
+      {:ok, cr_dek} = Accounts.load_clinical_record_dek(ctx.patient, ctx.kek)
+      first = Repo.get!(AIProposal, row.id)
+      assert first.encryption_version == 2
+      assert {:ok, "ORIGINAL"} = PatientVault.decrypt(first.encrypted_original_text, cr_dek)
+      assert {:ok, "NEW"} = PatientVault.decrypt(first.encrypted_text, cr_dek)
+      assert edit_audits(ctx.professional) == 1
+
+      assert {:ok, _} =
+               ClinicalRecord.edit_ai_proposal(ctx.professional, ctx.patient.id, row.id, "NEW2")
+
+      second = Repo.get!(AIProposal, row.id)
+      assert second.encrypted_original_text == first.encrypted_original_text
+      assert second.encryption_version == 2
+    end
+
+    test "rekey_changeset only applies to v1 rows and always stamps v2", ctx do
+      {:ok, target_behavior} =
+        ClinicalRecord.create_target_behavior(ctx.professional, ctx.patient.id, "Conducta")
+
+      {:ok, ciphertext} = PatientVault.encrypt("o", ctx.patient_dek)
+      row = insert_v1_proposal!(ctx, target_behavior, ciphertext, ciphertext)
+
+      assert_raise FunctionClauseError, fn ->
+        AIProposal.rekey_changeset(%{row | encryption_version: 2}, %{})
+      end
+
+      changeset =
+        AIProposal.rekey_changeset(row, %{
+          encrypted_original_text: ciphertext,
+          encrypted_text: ciphertext,
+          encryption_version: 3
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :encryption_version) == 2
+    end
+
     test "editing a v2 proposal stays v2 under the CR DEK", ctx do
       {:ok, target_behavior} =
         ClinicalRecord.create_target_behavior(ctx.professional, ctx.patient.id, "Conducta")
@@ -361,5 +426,29 @@ defmodule Alethea.ClinicalRecord.ClinicalRecordDekWritesTest do
       )
 
     patient
+  end
+
+  defp insert_v1_proposal!(ctx, target_behavior, original_ciphertext, text_ciphertext) do
+    %AIProposal{}
+    |> AIProposal.changeset(%{
+      encrypted_original_text: original_ciphertext,
+      encrypted_text: text_ciphertext,
+      encryption_version: 1,
+      model_version: "test-model",
+      occurred_at: DateTime.utc_now(),
+      patient_id: ctx.patient.id,
+      professional_id: ctx.professional.id,
+      target_behavior_id: target_behavior.id
+    })
+    |> Repo.insert!()
+  end
+
+  defp edit_audits(professional) do
+    Repo.aggregate(
+      from(a in Alethea.Accounts.AuditLog,
+        where: a.professional_id == ^professional.id and a.action == "ai_proposal_edited"
+      ),
+      :count
+    )
   end
 end

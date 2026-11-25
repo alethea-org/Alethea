@@ -119,8 +119,8 @@ defmodule Alethea.ClinicalRecord.AIProposal do
   """
   def rekey_changeset(%__MODULE__{encryption_version: 1} = ai_proposal, attrs) do
     ai_proposal
-    |> cast(attrs, [:encrypted_original_text, :encrypted_text, :encryption_version])
+    |> cast(attrs, [:encrypted_original_text, :encrypted_text])
     |> validate_required([:encrypted_original_text, :encrypted_text])
-    |> validate_inclusion(:encryption_version, [2])
+    |> put_change(:encryption_version, 2)
   end
 end
