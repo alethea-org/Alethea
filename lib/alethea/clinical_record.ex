@@ -54,15 +54,16 @@ defmodule Alethea.ClinicalRecord do
   a `ClinicalRecord` row, keyed by that row's own `encryption_version` (D1,
   sdd/clinical-record-retention, GitHub #197): `1` decrypts under the
   shared `Alethea.Clinical` patient DEK, `2` under the CR-scoped
-  `"patient_clinical_record"` DEK. `create_target_behavior/3` and
-  `create_clinical_note/3` bypass this seam entirely (see their own
-  moduledocs) and always stay on the shared patient DEK.
+  `"patient_clinical_record"` DEK. Every new `ClinicalRecord` row —
+  including target behaviors, clinical notes and AI proposals — is
+  written as `2` under the CR-scoped DEK, so terminal cryptographic
+  erasure of that key covers it; only legacy rows stay `1`.
   """
   @type keyring :: %{patient_dek: binary(), clinical_record_dek: binary()}
 
   @doc """
-  Authorizes via `Accounts.get_patient_for_professional/2`, encrypts
-  `description` under the patient's DEK, and commits the target
+  Authorizes via `with_patient/3`, encrypts `description` under the
+  patient's clinical-record DEK (`encryption_version: 2`), and commits the target
   behavior row, a content-free audit row, and an outbox job in one
   `Ecto.Multi` — all-or-nothing.
   """
@@ -77,22 +78,16 @@ defmodule Alethea.ClinicalRecord do
              | Ecto.Changeset.t()
              | term()}
   def create_target_behavior(%Professional{} = professional, patient_id, description) do
-    case Accounts.get_patient_for_professional(professional.id, patient_id) do
-      nil ->
-        deny_access(professional.id, patient_id)
-
-      patient ->
-        with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
-             {:ok, ciphertext} <- PatientVault.encrypt(description, dek) do
-          insert_target_behavior(professional, patient, ciphertext)
-        end
-    end
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, ciphertext} <- PatientVault.encrypt(description, keyring.clinical_record_dek) do
+        insert_target_behavior(professional, patient, ciphertext)
+      end
+    end)
   end
 
   @doc """
-  Authorizes via `Accounts.get_patient_for_professional/2`, encrypts
-  `body` under the patient's DEK, and commits the clinical note row, a
+  Authorizes via `with_patient/3`, encrypts `body` under the patient's
+  clinical-record DEK (`encryption_version: 2`), and commits the clinical note row, a
   content-free audit row, and an outbox job in one `Ecto.Multi` —
   all-or-nothing. The resulting `ClinicalNote` row is immutable
   (no update changeset, no `updated_at`, DB-level `BEFORE UPDATE`
@@ -123,22 +118,16 @@ defmodule Alethea.ClinicalRecord do
   def create_clinical_note(%Professional{} = professional, patient_id, body, opts \\ []) do
     risk_change = Keyword.get(opts, :risk_change)
 
-    case Accounts.get_patient_for_professional(professional.id, patient_id) do
-      nil ->
-        deny_access(professional.id, patient_id)
-
-      patient ->
-        with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
-             {:ok, ciphertext} <- PatientVault.encrypt(body, dek) do
-          insert_clinical_note(professional, patient, ciphertext, risk_change)
-        end
-    end
+    with_patient(professional, patient_id, fn patient, keyring ->
+      with {:ok, ciphertext} <- PatientVault.encrypt(body, keyring.clinical_record_dek) do
+        insert_clinical_note(professional, patient, ciphertext, risk_change)
+      end
+    end)
   end
 
   @doc """
   Lists all clinical notes for an authorized patient in reverse-chronological order,
-  decrypting each note's encrypted body under the patient's DEK. Preloads the professional
+  decrypting each note's encrypted body under the DEK of its own `encryption_version`. Preloads the professional
   author.
 
   Returns `{:ok, [ClinicalNote.t()]}` on success, or `{:error, :unauthorized}`
@@ -147,26 +136,21 @@ defmodule Alethea.ClinicalRecord do
   @spec list_clinical_notes(Professional.t(), Ecto.UUID.t()) ::
           {:ok, [ClinicalNote.t()]} | {:error, :unauthorized | term()}
   def list_clinical_notes(%Professional{} = professional, patient_id) do
-    case Accounts.get_patient_for_professional(professional.id, patient_id) do
-      nil ->
-        deny_access(professional.id, patient_id)
+    with_patient(professional, patient_id, fn patient, keyring ->
+      notes =
+        ClinicalNote
+        |> where([n], n.patient_id == ^patient.id)
+        |> order_by([n], desc: n.inserted_at, desc: n.id)
+        |> preload([:professional])
+        |> Repo.all()
+        |> Enum.map(&decrypt_note(&1, keyring))
 
-      patient ->
-        with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
-          notes =
-            ClinicalNote
-            |> where([n], n.patient_id == ^patient.id)
-            |> order_by([n], desc: n.inserted_at, desc: n.id)
-            |> preload([:professional])
-            |> Repo.all()
-            |> Enum.map(fn note ->
-              %{note | body: decrypt_or_placeholder(note.encrypted_body, dek)}
-            end)
+      {:ok, notes}
+    end)
+  end
 
-          {:ok, notes}
-        end
-    end
+  defp decrypt_note(%ClinicalNote{} = note, keyring) do
+    %{note | body: decrypt_or_placeholder(note.encrypted_body, dek_for(note, keyring))}
   end
 
   @clinical_notes_page_size 20
@@ -193,33 +177,24 @@ defmodule Alethea.ClinicalRecord do
   def list_clinical_notes_page(%Professional{} = professional, patient_id, opts) do
     limit = Keyword.get(opts, :limit, @clinical_notes_page_size)
 
-    case Accounts.get_patient_for_professional(professional.id, patient_id) do
-      nil ->
-        deny_access(professional.id, patient_id)
+    with_patient(professional, patient_id, fn patient, keyring ->
+      rows =
+        ClinicalNote
+        |> where([n], n.patient_id == ^patient.id)
+        |> notes_before(Keyword.get(opts, :before))
+        |> order_by([n], desc: n.inserted_at, desc: n.id)
+        |> limit(^(limit + 1))
+        |> Repo.all()
 
-      patient ->
-        with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
-          rows =
-            ClinicalNote
-            |> where([n], n.patient_id == ^patient.id)
-            |> notes_before(Keyword.get(opts, :before))
-            |> order_by([n], desc: n.inserted_at, desc: n.id)
-            |> limit(^(limit + 1))
-            |> Repo.all()
+      {page, rest} = Enum.split(rows, limit)
 
-          {page, rest} = Enum.split(rows, limit)
+      entries =
+        page
+        |> Repo.preload(:professional)
+        |> Enum.map(&decrypt_note(&1, keyring))
 
-          entries =
-            page
-            |> Repo.preload(:professional)
-            |> Enum.map(fn note ->
-              %{note | body: decrypt_or_placeholder(note.encrypted_body, dek)}
-            end)
-
-          {:ok, %{entries: entries, has_more?: rest != []}}
-        end
-    end
+      {:ok, %{entries: entries, has_more?: rest != []}}
+    end)
   end
 
   defp notes_before(query, nil), do: query
@@ -249,35 +224,32 @@ defmodule Alethea.ClinicalRecord do
            ]}
           | {:error, :unauthorized | term()}
   def list_target_behaviors(%Professional{} = professional, patient_id) do
-    case Accounts.get_patient_for_professional(professional.id, patient_id) do
-      nil ->
-        deny_access(professional.id, patient_id)
+    with_patient(professional, patient_id, fn patient, keyring ->
+      target_behaviors =
+        TargetBehavior
+        |> where([target], target.patient_id == ^patient.id)
+        |> order_by([target], desc: target.inserted_at, desc: target.id)
+        |> Repo.all()
 
-      patient ->
-        with {:ok, kek} <- Accounts.load_professional_kek(professional),
-             {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
-          target_behaviors =
-            TargetBehavior
-            |> where([target], target.patient_id == ^patient.id)
-            |> order_by([target], desc: target.inserted_at, desc: target.id)
-            |> Repo.all()
+      {saved_ids, deleted_ids} =
+        functional_analysis_status_ids(patient.id, Enum.map(target_behaviors, & &1.id))
 
-          {saved_ids, deleted_ids} =
-            functional_analysis_status_ids(patient.id, Enum.map(target_behaviors, & &1.id))
+      behaviors =
+        Enum.map(target_behaviors, fn target_behavior ->
+          %{
+            id: target_behavior.id,
+            description:
+              decrypt_or_placeholder(
+                target_behavior.encrypted_description,
+                dek_for(target_behavior, keyring)
+              ),
+            functional_analysis_status:
+              functional_analysis_status(target_behavior.id, saved_ids, deleted_ids)
+          }
+        end)
 
-          behaviors =
-            Enum.map(target_behaviors, fn target_behavior ->
-              %{
-                id: target_behavior.id,
-                description: decrypt_or_placeholder(target_behavior.encrypted_description, dek),
-                functional_analysis_status:
-                  functional_analysis_status(target_behavior.id, saved_ids, deleted_ids)
-              }
-            end)
-
-          {:ok, behaviors}
-        end
-    end
+      {:ok, behaviors}
+    end)
   end
 
   defp functional_analysis_status_ids(_patient_id, []), do: {MapSet.new(), MapSet.new()}
@@ -322,9 +294,8 @@ defmodule Alethea.ClinicalRecord do
   # sdd/alethea/issue-195-clinical-review-workbench, PR2a). Extracted
   # because the auth→KEK→DEK ladder repeats across all the write functions
   # below — see design's Technical Approach. `create_target_behavior/3` and
-  # `create_clinical_note/3` above are intentionally left untouched (design:
-  # refactor only if the diff stays inside the slice budget) — they never
-  # call this seam and always stay on the shared patient DEK.
+  # `create_clinical_note/3` route through it too, so every new row lands
+  # under the destroyable CR-scoped DEK (security-audit-run-1, S5).
   #
   # On a missing/unauthorized patient, logs a denial audit row (no DEK/KEK
   # load happens) and returns `{:error, :unauthorized}` without calling `fun`.
@@ -437,7 +408,7 @@ defmodule Alethea.ClinicalRecord do
 
   defp decrypt_target_behavior(professional, patient, target_behavior) do
     with {:ok, kek} <- Accounts.load_professional_kek(professional),
-         {:ok, dek} <- Accounts.load_patient_dek(patient, kek),
+         {:ok, dek} <- target_behavior_dek(target_behavior, patient, kek),
          {:ok, plaintext} <- PatientVault.decrypt(target_behavior.encrypted_description, dek) do
       %{target_behavior | description: plaintext, patient: patient}
     else
@@ -445,6 +416,14 @@ defmodule Alethea.ClinicalRecord do
         %{target_behavior | description: "[No disponible]", patient: patient}
     end
   end
+
+  # Loads (never creates) only the DEK this row's own `encryption_version`
+  # needs — a read must not provision a CR key.
+  defp target_behavior_dek(%TargetBehavior{encryption_version: 1}, patient, kek),
+    do: Accounts.load_patient_dek(patient, kek)
+
+  defp target_behavior_dek(%TargetBehavior{encryption_version: 2}, patient, kek),
+    do: Accounts.load_clinical_record_dek(patient, kek)
 
   # Picks the correct DEK out of `keyring` for a row per its OWN stored
   # `encryption_version` (AD1, sdd/clinical-record-retention, GitHub #197)
@@ -1632,7 +1611,8 @@ defmodule Alethea.ClinicalRecord do
   @doc """
   Edits an AI proposal's displayed text. `encrypted_original_text` is never
   touched — `AIProposal.update_changeset/2` structurally excludes it from
-  its cast list (design D3, write-once).
+  its cast list (design D3, write-once). The new text is encrypted under
+  the DEK of the row's own `encryption_version`, which is left unchanged.
   """
   @spec edit_ai_proposal(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t(), String.t()) ::
           {:ok, AIProposal.t()}
@@ -1644,11 +1624,14 @@ defmodule Alethea.ClinicalRecord do
           tombstone_gate(professional.id, proposal_id, "ai_proposal")
 
         proposal ->
-          with {:ok, ciphertext} <- PatientVault.encrypt(text, keyring.clinical_record_dek) do
+          # Re-encrypts under the row's OWN version: `encrypted_original_text`
+          # is write-once (D3), so a legacy v1 row cannot be lifted to v2
+          # without leaving v1 ciphertext under a v2 stamp.
+          with {:ok, ciphertext} <- PatientVault.encrypt(text, dek_for(proposal, keyring)) do
             commit_ai_proposal_update(
               professional,
               proposal,
-              %{encrypted_text: ciphertext, encryption_version: 2, status: "edited"},
+              %{encrypted_text: ciphertext, status: "edited"},
               "ai_proposal_edited"
             )
           end
@@ -2951,7 +2934,8 @@ defmodule Alethea.ClinicalRecord do
       TargetBehavior.changeset(%TargetBehavior{}, %{
         patient_id: patient.id,
         professional_id: professional.id,
-        encrypted_description: ciphertext
+        encrypted_description: ciphertext,
+        encryption_version: 2
       })
     )
     |> Ecto.Multi.insert(:audit, fn %{record: record} ->
@@ -2987,6 +2971,7 @@ defmodule Alethea.ClinicalRecord do
         patient_id: patient.id,
         professional_id: professional.id,
         encrypted_body: ciphertext,
+        encryption_version: 2,
         risk_change: risk_change && Atom.to_string(risk_change)
       })
     )

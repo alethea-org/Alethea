@@ -135,7 +135,7 @@ defmodule Alethea.ClinicalRecordTest do
       # proves atomicity via the one failure mode actually reachable today —
       # a raw Postgres exception mid-transaction.
       Repo.query!(
-        "ALTER TABLE target_behaviors ADD CONSTRAINT clinical_record_test_force_failure CHECK (encryption_version <> 1)"
+        "ALTER TABLE target_behaviors ADD CONSTRAINT clinical_record_test_force_failure CHECK (encryption_version <> 2)"
       )
 
       assert_raise Ecto.ConstraintError, fn ->
@@ -533,7 +533,7 @@ defmodule Alethea.ClinicalRecordTest do
       # with no DB constraint of their own, so the only reachable failure
       # mode via the public API is a raw Postgres exception mid-transaction.
       Repo.query!(
-        "ALTER TABLE clinical_notes ADD CONSTRAINT clinical_record_test_force_failure_note CHECK (encryption_version <> 1)"
+        "ALTER TABLE clinical_notes ADD CONSTRAINT clinical_record_test_force_failure_note CHECK (encryption_version <> 2)"
       )
 
       assert_raise Ecto.ConstraintError, fn ->

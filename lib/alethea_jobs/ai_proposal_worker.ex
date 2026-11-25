@@ -9,7 +9,8 @@ defmodule AletheaJobs.AIProposalWorker do
   the requesting professional against the patient, reads the decrypted
   review timeline, sanitizes every string through `Alethea.AI.Sanitizer`
   before it reaches the chain, and — only on chain success — inserts new
-  `Alethea.ClinicalRecord.AIProposal` rows.
+  `Alethea.ClinicalRecord.AIProposal` rows, encrypted under the patient's
+  `"patient_clinical_record"` DEK with `encryption_version: 2`.
 
   Every inserted row is `status: "pending"`; that status is forced by
   `AIProposal.changeset/2`'s own `put_change/3` (design A6) — this
@@ -123,7 +124,7 @@ defmodule AletheaJobs.AIProposalWorker do
     with patient when not is_nil(patient) <-
            Accounts.get_patient_for_professional(professional.id, patient_id),
          {:ok, kek} <- Accounts.load_professional_kek(professional),
-         {:ok, dek} <- Accounts.load_patient_dek(patient, kek) do
+         {:ok, dek} <- Accounts.ensure_clinical_record_dek(patient, kek) do
       occurred_at = DateTime.utc_now()
       model_version = LLMConfig.get(:pattern_proposal).model
 
@@ -223,7 +224,9 @@ defmodule AletheaJobs.AIProposalWorker do
   # includes a `:status` key — `AIProposal.changeset/2` always forces
   # "pending" itself (design A6). `encrypted_original_text` and
   # `encrypted_text` start identical: this is the model's output at
-  # generation time, before any clinician has looked at it.
+  # generation time, before any clinician has looked at it. Both are
+  # encrypted under the patient's destroyable clinical-record DEK and the
+  # row is stamped `encryption_version: 2` (AD1, sdd/clinical-record-retention).
   defp proposal_changeset(
          professional,
          patient,
@@ -238,6 +241,7 @@ defmodule AletheaJobs.AIProposalWorker do
        AIProposal.changeset(%AIProposal{}, %{
          encrypted_original_text: ciphertext,
          encrypted_text: ciphertext,
+         encryption_version: 2,
          model_version: model_version,
          occurred_at: occurred_at,
          patient_id: patient.id,

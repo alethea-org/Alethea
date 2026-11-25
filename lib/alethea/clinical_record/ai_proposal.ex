@@ -29,7 +29,8 @@ defmodule Alethea.ClinicalRecord.AIProposal do
   plaintext fields covers `%Ecto.Changeset{}` inspect, `@derive` covers
   bare struct inspect. Plaintext is never cast here —
   `Alethea.ClinicalRecord.request_ai_proposals/3`'s Oban worker (PR4)
-  encrypts under the patient's DEK before calling into this schema.
+  encrypts under the patient's clinical-record DEK (`encryption_version: 2`)
+  before calling into this schema.
   """
   use Ecto.Schema
   import Ecto.Changeset

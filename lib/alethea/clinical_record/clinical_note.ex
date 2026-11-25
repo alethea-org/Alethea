@@ -12,7 +12,9 @@ defmodule Alethea.ClinicalRecord.ClinicalNote do
       session, or a future context cannot silently mutate a row.
 
   Plaintext is never cast here — `Alethea.ClinicalRecord.create_clinical_note/3`
-  (PR3) encrypts under the patient's DEK before calling `changeset/2`.
+  encrypts under the patient's clinical-record DEK and stamps
+  `encryption_version: 2` before calling `changeset/2`. The schema default
+  `1` only describes legacy rows written under the shared patient DEK.
   """
   use Ecto.Schema
   import Ecto.Changeset
