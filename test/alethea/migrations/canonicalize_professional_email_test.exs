@@ -39,26 +39,40 @@ defmodule Alethea.Migrations.CanonicalizeProfessionalEmailTest do
     end
   end
 
-  test "the collision guard aborts loudly when rows would collide after canonicalization" do
+  alias Alethea.Repo.Migrations.CanonicalizeProfessionalEmail, as: Migration
+
+  test "canonicalization aborts loudly when rows would collide, before changing anything" do
     insert_raw!("guard@example.org")
     # Differs only by whitespace, which lower(email) alone does not fold.
     insert_raw!(" guard@example.org")
 
-    error =
-      assert_raise Postgrex.Error, fn ->
-        Repo.query!(Alethea.Repo.Migrations.CanonicalizeProfessionalEmail.collision_guard_sql())
-      end
+    error = assert_raise RuntimeError, fn -> Migration.canonicalize_emails!(Repo) end
 
     assert Exception.message(error) =~ "professionals.email has duplicates"
+    assert Repo.get_by(Professional, email: " guard@example.org")
   end
 
-  test "the collision guard passes when every email is distinct after canonicalization" do
-    insert_raw!("distinct-one@example.org")
-    insert_raw!("distinct-two@example.org")
+  test "Unicode whitespace that normalize_email/1 strips is folded too" do
+    # A trailing no-break space passes the old format check; SQL trim()
+    # would leave it in place while the app's lookup strips it.
+    insert_raw!("nbsp@example.org\u00A0")
+    insert_raw!("plain@example.org")
+    insert_raw!("\u00A0plain@example.org")
 
-    assert %Postgrex.Result{} =
-             Repo.query!(
-               Alethea.Repo.Migrations.CanonicalizeProfessionalEmail.collision_guard_sql()
-             )
+    error = assert_raise RuntimeError, fn -> Migration.canonicalize_emails!(Repo) end
+    assert Exception.message(error) =~ "1 colliding address"
+  end
+
+  test "rows are rewritten to exactly Professional.normalize_email/1" do
+    raw = ["\u00A0Nbsp@Example.org\u00A0", " Mixed@Example.ORG ", "JOSÉ@Example.org"]
+    rows = Enum.map(raw, &insert_raw!/1)
+
+    assert :ok = Migration.canonicalize_emails!(Repo)
+
+    for {row, email} <- Enum.zip(rows, raw) do
+      assert Repo.get!(Professional, row.id).email == Professional.normalize_email(email)
+    end
+
+    assert %Professional{} = Alethea.Accounts.get_professional_by_email("nbsp@example.org")
   end
 end

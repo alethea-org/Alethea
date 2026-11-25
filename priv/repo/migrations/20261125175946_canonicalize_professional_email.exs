@@ -4,13 +4,12 @@ defmodule Alethea.Repo.Migrations.CanonicalizeProfessionalEmail do
 
   `up/0`:
 
-    1. Aborts with a clear error when two rows would collide once their
-       emails are trimmed and lowercased. It never merges or deletes
-       accounts: an operator must resolve the duplicates first, e.g. by
-       inspecting `SELECT lower(trim(email)), count(*) FROM professionals
-       GROUP BY 1 HAVING count(*) > 1`.
-    2. Canonicalizes existing rows to `lower(trim(email))`, matching
-       `Alethea.Accounts.Professional.normalize_email/1`.
+    1. Aborts with a clear error, before changing anything, when two rows
+       would collide once their emails are canonicalized exactly like
+       `Alethea.Accounts.Professional.normalize_email/1` (Unicode-aware
+       trim, then downcase). It never merges or deletes accounts: an
+       operator must resolve the duplicates first.
+    2. Rewrites every non-canonical row to that canonical form.
     3. Replaces the case-sensitive unique index with a unique index on
        `lower(email)`, keeping the name `professionals_email_index` that
        `Professional.changeset/2`'s `unique_constraint(:email)` expects.
@@ -23,31 +22,39 @@ defmodule Alethea.Repo.Migrations.CanonicalizeProfessionalEmail do
   use Ecto.Migration
 
   @doc false
-  def collision_guard_sql do
-    """
-    DO $$
-    DECLARE
-      duplicates integer;
-    BEGIN
-      SELECT count(*) INTO duplicates FROM (
-        SELECT lower(trim(email)) FROM professionals GROUP BY 1 HAVING count(*) > 1
-      ) AS collisions;
+  # Canonicalizes in Elixir with exactly the steps of
+  # `Alethea.Accounts.Professional.normalize_email/1` (inlined so this
+  # migration never depends on application code that may change later).
+  # SQL `trim()` only strips ASCII spaces, so it would leave e.g. a
+  # trailing no-break space that the application's lookup strips, and
+  # that account could no longer sign in.
+  def canonicalize_emails!(repo) do
+    %{rows: rows} = repo.query!("SELECT id, email FROM professionals")
 
-      IF duplicates > 0 THEN
-        RAISE EXCEPTION 'professionals.email has duplicates after lower(trim(email)): % colliding address(es). Resolve them manually before migrating; this migration never merges or deletes accounts.', duplicates;
-      END IF;
-    END
-    $$;
-    """
+    planned = Enum.map(rows, fn [id, email] -> {id, email, canonical(email)} end)
+
+    collisions =
+      planned
+      |> Enum.group_by(fn {_id, _email, canonical} -> canonical end)
+      |> Enum.count(fn {_canonical, group} -> length(group) > 1 end)
+
+    if collisions > 0 do
+      raise "professionals.email has duplicates after canonicalization: " <>
+              "#{collisions} colliding address(es). Resolve them manually before " <>
+              "migrating; this migration never merges or deletes accounts."
+    end
+
+    for {id, email, canonical} <- planned, email != canonical do
+      repo.query!("UPDATE professionals SET email = $1 WHERE id = $2", [canonical, id])
+    end
+
+    :ok
   end
 
-  def up do
-    execute(collision_guard_sql())
+  defp canonical(email), do: email |> String.trim() |> String.downcase()
 
-    execute("""
-    UPDATE professionals SET email = lower(trim(email))
-    WHERE email <> lower(trim(email))
-    """)
+  def up do
+    canonicalize_emails!(repo())
 
     drop index(:professionals, [:email], name: :professionals_email_index)
 
