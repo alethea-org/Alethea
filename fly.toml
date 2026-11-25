@@ -10,8 +10,11 @@
 # PHX_HOST below must follow it (or the custom domain that replaces it).
 app = "alethea-prod"
 
-# São Paulo, next to the Neon project in AWS sa-east-1.
-primary_region = "gru"
+# Chicago, the closest Fly region to the Neon project in AWS us-east-2
+# (Ohio). Every LiveView navigation runs its queries in series, so the
+# app-to-database round trip dominates click latency; the extra distance to
+# users in South America is paid once per click instead.
+primary_region = "ord"
 
 # The BEAM shuts down in order on SIGTERM; Fly's default is SIGINT.
 kill_signal = "SIGTERM"
@@ -68,19 +71,13 @@ kill_timeout = 40
   # Fly's proxy redirects HTTP to HTTPS; the app's own force_ssl does the same
   # for anything that reaches it with `x-forwarded-proto: http`.
   force_https = true
-  # Landing phase (only the public landing page and the launch waitlist are
-  # in use): the Machine suspends when idle and the proxy resumes it on the
-  # next request, so an idle app costs only its disk. While suspended, Oban
-  # and its cron (Telegram delivery sweep, daily scheduler, retention sweep)
-  # do not run.
-  #
-  # Before onboarding real patients, go back to always on:
-  #   auto_stop_machines = "off"
-  #   min_machines_running = 1
-  # and memory = "1gb" below, then `fly deploy`.
-  auto_stop_machines = "suspend"
+  # Always on: one Machine stays running so a click never waits for a resume
+  # from suspend (a cold request measured 25.6 s on 2026-11-25), and Oban and
+  # its cron (Telegram delivery sweep, daily scheduler, retention sweep) keep
+  # running.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     # LiveView holds one long-lived WebSocket per open page, so the proxy
@@ -107,6 +104,5 @@ kill_timeout = 40
   # Modest default. Capacity is a pending decision: revisit after observing
   # memory under the synthetic-data run.
   size = "shared-cpu-1x"
-  # Landing phase: 512 MB is enough (no ML runs in-process). Use 1gb when
-  # the clinical workspace goes live.
-  memory = "512mb"
+  # 1 GB for the clinical workspace (no ML runs in-process).
+  memory = "1gb"

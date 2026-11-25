@@ -410,9 +410,10 @@ let liveSocket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
   hooks: { ConsultationScroll, ConsultationComposer, PaddleCheckout, SessionRecorder },
 });
 
-// Page loading indicator — a centered spinner shown while LiveView
-// navigates. It only appears after a short delay so fast loads don't flash.
-const PAGE_LOADER_DELAY_MS = 250;
+// Page loading indicator — a thin progress bar along the top edge while
+// LiveView navigates. It never covers or blocks the page, and only appears
+// after a short delay so fast loads don't flash it.
+const PAGE_LOADER_DELAY_MS = 120;
 let pageLoaderTimer = null;
 
 const pageLoader = () => {
@@ -421,9 +422,9 @@ const pageLoader = () => {
     el = document.createElement("div");
     el.id = "page-loader";
     el.className = "page-loader";
-    el.setAttribute("role", "status");
-    el.setAttribute("aria-live", "polite");
-    el.innerHTML = '<span class="page-loader__spinner" aria-hidden="true"></span><span class="sr-only">Cargando…</span>';
+    el.setAttribute("role", "progressbar");
+    el.setAttribute("aria-label", "Cargando");
+    el.innerHTML = '<span class="page-loader__bar" aria-hidden="true"></span>';
     document.body.appendChild(el);
   }
   return el;

@@ -9,6 +9,7 @@ defmodule AletheaWeb.Telemetry do
   @impl true
   def init(_arg) do
     Alethea.Telemetry.DatabaseMonitoring.attach()
+    AletheaWeb.Telemetry.LiveViewTiming.attach()
 
     children = [
       # Telemetry poller will execute the given period measurements
