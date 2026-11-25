@@ -34,6 +34,42 @@ defmodule Alethea.Accounts.EmailIdentityTest do
     Accounts.create_professional(%{email: email, password: @password, full_name: "Dr. Canon"})
   end
 
+  describe "follow-ups from the native review" do
+    test "clearing an existing professional's email is a validation error, not a crash" do
+      {:ok, professional} = create("clear-me@example.org")
+
+      changeset = Professional.changeset(professional, %{email: ""})
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).email
+    end
+
+    test "the email lookup is served by the lower(email) unique index" do
+      {:ok, _} = create("indexed@example.org")
+      handler = "email-lookup-sql-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:alethea, :repo, :query],
+        fn _event, _measurements, metadata, _ ->
+          if metadata.source == "professionals",
+            do: send(test_pid, {:sql, metadata.query, metadata.params})
+        end,
+        nil
+      )
+
+      assert %Professional{} = Accounts.get_professional_by_email(" Indexed@Example.org ")
+      :telemetry.detach(handler)
+
+      assert_received {:sql, sql, params}
+      Repo.query!("SET LOCAL enable_seqscan = off")
+      %{rows: plan} = Repo.query!("EXPLAIN " <> sql, params)
+
+      assert plan |> List.flatten() |> Enum.join("\n") =~ "professionals_email_index"
+    end
+  end
+
   describe "Professional.changeset/2 canonical email" do
     test "stores a trimmed, lowercased email" do
       assert {:ok, professional} = create("  Dr.Canon@Example.ORG ")

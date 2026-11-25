@@ -360,14 +360,35 @@ defmodule Alethea.Foundation.Accounts do
   """
   @spec professional_by_email(String.t()) :: {:ok, Professional.t()} | :not_found
   def professional_by_email(email) when is_binary(email) do
-    # Foundation rows copied the email as typed, while legacy emails are
-    # canonical (trimmed, lowercased), so the bridge compares case-insensitively.
-    canonical = Alethea.Accounts.Professional.normalize_email(email)
+    case Repo.get_by(Professional, email: email) do
+      nil -> :not_found
+      %Professional{} = professional -> {:ok, professional}
+    end
+  end
 
-    query =
-      from p in Professional, where: fragment("lower(trim(?))", p.email) == ^canonical, limit: 1
+  @doc """
+  Resolves the foundation professional that mirrors a legacy professional.
 
-    case Repo.one(query) do
+  Matches on `legacy_professional_id`, the link written when the
+  foundation row is provisioned from the legacy one, so email casing
+  plays no part. Foundation rows that predate the link fall back to an
+  exact email match, and only while they are still unlinked: a linked
+  row, or an unlinked case variant of the email, never resolves to
+  another professional's legacy account.
+  """
+  @spec foundation_professional_for_legacy(Alethea.Accounts.Professional.t()) ::
+          {:ok, Professional.t()} | :not_found
+  def foundation_professional_for_legacy(%Alethea.Accounts.Professional{} = legacy) do
+    linked = Repo.get_by(Professional, legacy_professional_id: legacy.id)
+
+    found =
+      linked ||
+        Repo.one(
+          from p in Professional,
+            where: p.email == ^legacy.email and is_nil(p.legacy_professional_id)
+        )
+
+    case found do
       nil -> :not_found
       %Professional{} = professional -> {:ok, professional}
     end
@@ -558,8 +579,18 @@ defmodule Alethea.Foundation.Accounts do
   # `{:error, :legacy_not_found}` when no legacy counterpart exists —
   # deliberately NOT `:not_found`, so a caller cannot distinguish "no
   # legacy pro" from "no legacy patient" (zero leakage).
+  defp legacy_professional_for(%Professional{legacy_professional_id: legacy_id})
+       when is_binary(legacy_id) do
+    case Repo.get(Alethea.Accounts.Professional, legacy_id) do
+      nil -> {:error, :legacy_not_found}
+      %Alethea.Accounts.Professional{} = legacy_pro -> {:ok, legacy_pro}
+    end
+  end
+
+  # Rows that predate the `legacy_professional_id` link keep the
+  # exact-email bridge they always had; no case-insensitive match.
   defp legacy_professional_for(%Professional{email: email}) when is_binary(email) do
-    case Alethea.Accounts.get_professional_by_email(email) do
+    case Repo.get_by(Alethea.Accounts.Professional, email: email) do
       nil -> {:error, :legacy_not_found}
       %Alethea.Accounts.Professional{} = legacy_pro -> {:ok, legacy_pro}
     end

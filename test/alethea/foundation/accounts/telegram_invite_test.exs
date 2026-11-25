@@ -29,29 +29,68 @@ defmodule Alethea.Foundation.Accounts.TelegramInviteTest do
       assert Accounts.professional_by_email(email) == :not_found
     end
 
-    test "matches a foundation row stored with different casing" do
-      professional =
-        professional_fixture(%{
-          email: "Mixed.Case-#{System.unique_integer([:positive])}@Example.com"
-        })
+    test "matches the email exactly, as before the canonical-email change" do
+      professional = professional_fixture()
 
-      assert {:ok, %{id: id}} =
-               Accounts.professional_by_email(String.downcase(professional.email))
-
-      assert id == professional.id
+      assert Accounts.professional_by_email(String.upcase(professional.email)) == :not_found
     end
   end
 
-  describe "invite_patient_to_telegram/2 email bridge" do
-    test "bridges a foundation professional whose stored email casing differs from the canonical legacy email" do
+  describe "foundation_professional_for_legacy/1" do
+    test "resolves the foundation row linked by legacy_professional_id, whatever its email casing" do
       legacy_pro = legacy_professional_fixture()
-      foundation_pro = professional_fixture(%{email: String.upcase(legacy_pro.email)})
+
+      foundation_pro =
+        professional_fixture(%{
+          email: String.upcase(legacy_pro.email),
+          legacy_professional_id: legacy_pro.id
+        })
+
+      assert {:ok, %{id: id}} = Accounts.foundation_professional_for_legacy(legacy_pro)
+      assert id == foundation_pro.id
+    end
+
+    test "falls back to an exact email match only for unlinked foundation rows" do
+      legacy_pro = legacy_professional_fixture()
+      foundation_pro = professional_fixture(%{email: legacy_pro.email})
+
+      assert {:ok, %{id: id}} = Accounts.foundation_professional_for_legacy(legacy_pro)
+      assert id == foundation_pro.id
+    end
+
+    test "an unlinked case variant of the legacy email is not resolved" do
+      legacy_pro = legacy_professional_fixture()
+      _variant = professional_fixture(%{email: String.upcase(legacy_pro.email)})
+
+      assert Accounts.foundation_professional_for_legacy(legacy_pro) == :not_found
+    end
+  end
+
+  describe "invite_patient_to_telegram/2 legacy bridge" do
+    test "bridges through legacy_professional_id even when the stored email casing differs" do
+      legacy_pro = legacy_professional_fixture()
+
+      foundation_pro =
+        professional_fixture(%{
+          email: String.upcase(legacy_pro.email),
+          legacy_professional_id: legacy_pro.id
+        })
+
       legacy_patient = legacy_patient_fixture(legacy_pro)
 
       assert {:ok, %{foundation_patient: foundation_patient}} =
                Accounts.invite_patient_to_telegram(legacy_patient.id, foundation_pro)
 
       assert foundation_patient.legacy_patient_id == legacy_patient.id
+    end
+
+    test "an unlinked case-variant foundation account cannot bridge to another professional's patients" do
+      legacy_pro = legacy_professional_fixture()
+      variant = professional_fixture(%{email: String.upcase(legacy_pro.email)})
+      legacy_patient = legacy_patient_fixture(legacy_pro)
+
+      assert Accounts.invite_patient_to_telegram(legacy_patient.id, variant) ==
+               {:error, :legacy_not_found}
     end
   end
 

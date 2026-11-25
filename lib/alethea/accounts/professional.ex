@@ -33,7 +33,11 @@ defmodule Alethea.Accounts.Professional do
       :welcome_message,
       :timezone
     ])
-    |> update_change(:email, &normalize_email/1)
+    # A cleared email casts to nil; leave it for validate_required.
+    |> update_change(:email, fn
+      email when is_binary(email) -> normalize_email(email)
+      email -> email
+    end)
     |> validate_required([:email, :full_name])
     |> validate_password_required(professional)
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must have the @ sign and no spaces")
