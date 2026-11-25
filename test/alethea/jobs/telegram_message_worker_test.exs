@@ -40,7 +40,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
   alias Alethea.Clinical
   alias Alethea.Clinical.{Message, SessionManager}
   alias Alethea.Repo
-  alias Alethea.Telegram.{ChatIdHash, Client.Fake, GenerationFailureNotice, Pacer}
+  alias Alethea.Telegram.{ChatIdHash, Client.Fake, GenerationFailureNotice, JobPayload, Pacer}
   alias AletheaJobs.{ClinicalRecordOutboxWorker, EmotionAnalysisWorker}
 
   import Alethea.FoundationTestHelper
@@ -162,13 +162,42 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
         |> Oban.insert!()
         |> then(&Repo.get!(Oban.Job, &1.id))
 
-      assert %{"message" => %{"chat" => %{"id" => @chat_id}}} = persisted_job.args
-      assert :ok = TelegramMessageWorker.perform(persisted_job)
+      # The message map is sealed at rest (security audit run-1, S4).
+      refute Map.has_key?(persisted_job.args, "message")
+      refute Jason.encode!(persisted_job.args) =~ ~s("text")
 
-      assert_enqueued(
-        worker: TelegramOutboundWorker,
-        args: %{chat_id_hash: @chat_id_hash, body: @unregistered_copy, lane: :safe}
-      )
+      assert %{"message" => %{"chat" => %{"id" => @chat_id}}} =
+               JobPayload.open_fields(persisted_job.args)
+
+      assert :ok = TelegramMessageWorker.perform(persisted_job)
+      assert_unregistered_reply_enqueued()
+    end
+
+    test "perform/1 still accepts the legacy plaintext args shape (jobs enqueued before sealing)" do
+      legacy_args =
+        "hola"
+        |> build_args(telegram_message_id: 98, telegram_update_id: 98)
+        |> Jason.encode!()
+        |> Jason.decode!()
+
+      assert %{"message" => %{"text" => "hola"}} = legacy_args
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: legacy_args})
+      assert_unregistered_reply_enqueued()
+    end
+
+    test "the outbound reply args carry neither the body nor the raw chat id in clear" do
+      args = build_args("hola", telegram_message_id: 97, telegram_update_id: 97)
+
+      assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
+
+      [job] = all_enqueued(worker: TelegramOutboundWorker)
+      raw_args = Jason.encode!(job.args)
+
+      refute raw_args =~ @unregistered_copy
+      refute raw_args =~ to_string(@chat_id)
+      assert job.args["chat_id_hash"] == @chat_id_hash
+      assert JobPayload.fetch!(job.args, :body) == @unregistered_copy
+      assert JobPayload.fetch!(job.args, :chat_id) == @chat_id
     end
   end
 
@@ -181,11 +210,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       args = build_args("hola", telegram_message_id: 100, telegram_update_id: 1)
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
-
-      assert_enqueued(
-        worker: TelegramOutboundWorker,
-        args: %{chat_id_hash: @chat_id_hash, body: @unregistered_copy, lane: :safe}
-      )
+      assert_unregistered_reply_enqueued()
     end
 
     test "no Message row is persisted for an unknown patient" do
@@ -260,7 +285,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert decrypted_outbound_body(reply) == Alethea.Telegram.RiskSignal.uncertainty_copy()
       refute_enqueued(worker: TelegramBurstReplyWorker)
       assert_enqueued(worker: TelegramOutboundWorker, args: %{message_id: reply.id})
-      [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
+      [outbound_job] = opened(all_enqueued(worker: TelegramOutboundWorker))
       assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: outbound_job.args})
       assert [%{text: body}] = Fake.sends()
       assert body == Alethea.Telegram.RiskSignal.uncertainty_copy()
@@ -303,11 +328,11 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       args = build_args("private", telegram_message_id: 388, telegram_update_id: 388)
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
-      [first_job] = all_enqueued(worker: TelegramOutboundWorker)
+      [first_job] = opened(all_enqueued(worker: TelegramOutboundWorker))
       assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: first_job.args})
       assert Fake.sends() == []
 
-      [retry_job] = all_enqueued(worker: TelegramOutboundWorker, state: "scheduled")
+      [retry_job] = opened(all_enqueued(worker: TelegramOutboundWorker, state: "scheduled"))
       assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: retry_job.args})
       assert [%{text: body}] = Fake.sends()
       assert body == Alethea.Telegram.RiskSignal.uncertainty_copy()
@@ -371,11 +396,11 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert Repo.get!(Message, ordinary.id).replied_by_message_id == fixed_reply.id
       assert Repo.aggregate(from(m in Message, where: m.direction == "outbound"), :count) == 1
 
-      refute Enum.any?(all_enqueued(worker: TelegramOutboundWorker), fn job ->
+      refute Enum.any?(opened(all_enqueued(worker: TelegramOutboundWorker)), fn job ->
                job.args["body"] == "stale generated response"
              end)
 
-      [fixed_job] = all_enqueued(worker: TelegramOutboundWorker)
+      [fixed_job] = opened(all_enqueued(worker: TelegramOutboundWorker))
       assert :ok = TelegramOutboundWorker.perform(%Oban.Job{args: fixed_job.args})
       assert [%{text: sent}] = Fake.sends()
       assert sent == Alethea.Telegram.RiskSignal.uncertainty_copy()
@@ -390,7 +415,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       Phoenix.PubSub.subscribe(Alethea.PubSub, "psychologist:alerts")
       args = build_args("private", telegram_message_id: 387, telegram_update_id: 387)
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
-      [job] = all_enqueued(worker: TelegramOutboundWorker)
+      [job] = opened(all_enqueued(worker: TelegramOutboundWorker))
       Fake.queue_responses([{:error, {:rate_limited, 1}}])
 
       assert :ok =
@@ -456,7 +481,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert Repo.get!(Message, ordinary.id).replied_by_message_id == fixed_reply.id
       assert Repo.get!(Message, uncertain.id).replied_by_message_id == fixed_reply.id
 
-      jobs = all_enqueued(worker: TelegramOutboundWorker)
+      jobs = opened(all_enqueued(worker: TelegramOutboundWorker))
       ordinary_job = Enum.find(jobs, &(&1.args["message_id"] == ordinary_reply.id))
       fixed_job = Enum.find(jobs, &(&1.args["message_id"] == fixed_reply.id))
       assert ordinary_job
@@ -1501,14 +1526,16 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
       assert Repo.get!(Message, inbound.id).replied_by_message_id == notice.id
 
-      assert_enqueued(
-        worker: TelegramOutboundWorker,
-        args: %{
-          message_id: notice.id,
-          body: GenerationFailureNotice.text(recorded?: true),
-          lane: :safe
-        }
-      )
+      notice_id = notice.id
+      notice_body = GenerationFailureNotice.text(recorded?: true)
+
+      assert Enum.any?(
+               opened(all_enqueued(worker: TelegramOutboundWorker)),
+               &match?(
+                 %{"message_id" => ^notice_id, "body" => ^notice_body, "lane" => "safe"},
+                 &1.args
+               )
+             )
 
       assert Repo.aggregate(Alethea.Foundation.Accounts.OutboundDeadLetter, :count, :id) == 0
     end
@@ -2023,7 +2050,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
       assert crisis_inbound.replied_by_message_id == crisis_reply.id
 
       assert [%Oban.Job{queue: "telegram_outbound_crisis"}] =
-               all_enqueued(worker: TelegramOutboundWorker)
+               opened(all_enqueued(worker: TelegramOutboundWorker))
     end
 
     test "after the crisis, a later ordinary inbound starts uncovered (a new burst)", ctx do
@@ -2610,7 +2637,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
 
   # Executes the single enqueued outbound delivery job (journaling lane).
   defp run_outbound_delivery do
-    [job] = all_enqueued(worker: TelegramOutboundWorker)
+    [job] = opened(all_enqueued(worker: TelegramOutboundWorker))
     TelegramOutboundWorker.perform(%Oban.Job{args: job.args})
   end
 
@@ -2710,5 +2737,22 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
     {:ok, dek} = Alethea.Clinical.patient_dek(legacy_patient)
     {:ok, plaintext} = Alethea.Clinical.decrypt_message_content(message, dek)
     plaintext
+  end
+
+  # Outbound args are sealed at rest (security audit run-1, S4).
+  defp opened(jobs), do: Enum.map(jobs, &%{&1 | args: JobPayload.open_fields(&1.args)})
+
+  defp assert_unregistered_reply_enqueued do
+    assert Enum.any?(
+             opened(all_enqueued(worker: TelegramOutboundWorker)),
+             &match?(
+               %{
+                 "chat_id_hash" => @chat_id_hash,
+                 "body" => @unregistered_copy,
+                 "lane" => "safe"
+               },
+               &1.args
+             )
+           )
   end
 end

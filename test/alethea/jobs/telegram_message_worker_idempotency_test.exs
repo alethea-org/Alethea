@@ -32,7 +32,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   alias Alethea.Jobs.{IdempotencyOutboundEnqueueMock, IdempotencyTelegramClientMock}
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
-  alias Alethea.Telegram.{ChatIdHash, Client.Fake, Pacer}
+  alias Alethea.Telegram.{ChatIdHash, Client.Fake, JobPayload, Pacer}
 
   alias AletheaJobs.{
     ClinicalRecordOutboxWorker,
@@ -138,7 +138,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert_received {:generation_for, ^inbound_id}
 
       assert [%Oban.Job{args: %{"body" => @reply}}] =
-               all_enqueued(worker: TelegramOutboundWorker)
+               opened(all_enqueued(worker: TelegramOutboundWorker))
     end
 
     test "resuming does not repeat the work the first execution completed for the inbound" do
@@ -193,6 +193,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       chat_ids =
         [worker: TelegramOutboundWorker]
         |> all_enqueued()
+        |> opened()
         |> Enum.map(& &1.args["chat_id"])
         |> Enum.sort()
 
@@ -242,7 +243,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       outbound_id = outbound.id
 
       assert [%Oban.Job{args: %{"message_id" => ^outbound_id, "body" => @reply}}] =
-               all_enqueued(worker: TelegramOutboundWorker)
+               opened(all_enqueued(worker: TelegramOutboundWorker))
     end
 
     test "two concurrent executions of the same inbound job produce one inbound row and one armed burst job" do
@@ -278,7 +279,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       outbound_id = outbound.id
 
       assert [%Oban.Job{args: %{"message_id" => ^outbound_id}}] =
-               all_enqueued(worker: TelegramOutboundWorker)
+               opened(all_enqueued(worker: TelegramOutboundWorker))
     end
 
     test "a save-transaction failure after generation rolls back everything; the burst job's own retry recovers by regenerating (design AD9)" do
@@ -336,7 +337,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
                  queue: "telegram_outbound",
                  args: %{"message_id" => ^outbound_id, "body" => @reply, "chat_id" => @chat_id}
                }
-             ] = all_enqueued(worker: TelegramOutboundWorker)
+             ] = opened(all_enqueued(worker: TelegramOutboundWorker))
     end
   end
 
@@ -370,7 +371,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
                    "lane" => "crisis"
                  }
                }
-             ] = all_enqueued(worker: TelegramOutboundWorker)
+             ] = opened(all_enqueued(worker: TelegramOutboundWorker))
     end
 
     test "a crisis reply persisted without a delivery job is delivered on resume with its persisted content" do
@@ -407,7 +408,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
                  priority: 0,
                  args: %{"message_id" => ^outbound_id, "body" => @crisis_message}
                }
-             ] = all_enqueued(worker: TelegramOutboundWorker)
+             ] = opened(all_enqueued(worker: TelegramOutboundWorker))
 
       # The psychologist alert is re-raised on resume (at-least-once): a
       # lost crisis alert is worse than a repeated one.
@@ -422,7 +423,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
       assert :ok = run_burst_reply()
-      [job] = all_enqueued(worker: TelegramOutboundWorker)
+      [job] = opened(all_enqueued(worker: TelegramOutboundWorker))
 
       Phoenix.PubSub.subscribe(Alethea.PubSub, "ops:alerts")
 
@@ -529,6 +530,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
         assert [retry] =
                  [worker: TelegramOutboundWorker]
                  |> all_enqueued()
+                 |> opened()
                  |> Enum.filter(&(&1.args["_attempt"] == 2))
 
         assert retry.queue == "telegram_outbound"
@@ -637,7 +639,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       args = build_args(@chat_id, @crisis_text, telegram_message_id: 800, telegram_update_id: 60)
 
       assert :ok = TelegramMessageWorker.perform(%Oban.Job{args: args})
-      [job] = all_enqueued(worker: TelegramOutboundWorker)
+      [job] = opened(all_enqueued(worker: TelegramOutboundWorker))
 
       %{patient: patient, job: job}
     end
@@ -651,6 +653,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert [retry] =
                [worker: TelegramOutboundWorker]
                |> all_enqueued()
+               |> opened()
                |> Enum.filter(&(&1.args["_attempt"] == 2))
 
       assert retry.queue == "telegram_outbound_crisis"
@@ -806,4 +809,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
   end
 
   defp unique_int, do: System.unique_integer([:positive])
+
+  # Outbound args are sealed at rest (security audit run-1, S4).
+  defp opened(jobs), do: Enum.map(jobs, &%{&1 | args: JobPayload.open_fields(&1.args)})
 end

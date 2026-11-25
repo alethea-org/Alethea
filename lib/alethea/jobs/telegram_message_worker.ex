@@ -49,8 +49,12 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
   ## R-1 (PHI hygiene)
 
-  The args map carries the raw `chat_id` in `message.chat.id`. The
-  worker hashes it before any DB lookup or log line. The controller
+  The Telegram message map (patient text, `chat.id`, sender profile) is
+  sealed by `new/2` into `"encrypted_message"` with
+  `Alethea.Telegram.JobPayload`, so it is never stored in clear in
+  `oban_jobs.args`; only `telegram_update_id` stays in clear (uniqueness).
+  Jobs enqueued before sealing (plaintext `"message"`) are still accepted.
+  The worker hashes the `chat_id` before any DB lookup or log line. The controller
   (TASK-2-3) also does not log the body. Logger lines may include the
   first 8 chars of the hash as a correlation token (REQ-C2-no-plaintext-in-logs
   "the line may include the first 8 chars of the hash and SHALL NOT
@@ -79,7 +83,7 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   alias Alethea.Clinical.{Message, RunningSummary, SessionManager}
   alias Alethea.Accounts.SessionSchedule
   alias Alethea.Foundation.Accounts, as: FoundationAccounts
-  alias Alethea.Telegram.{ChatIdHash, LogRedactor, RiskSignal}
+  alias Alethea.Telegram.{ChatIdHash, JobPayload, LogRedactor, RiskSignal}
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker, TelegramVoiceNoteWorker}
 
   alias AletheaJobs.{
@@ -97,9 +101,20 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   # `message_id: nil`).
   @pausa_confirmation "Listo, pausamos tus mensajes programados. Podés escribirme cuando quieras."
 
+  @doc """
+  Builds the job changeset with the Telegram `message` map sealed (see
+  "R-1 (PHI hygiene)" in the moduledoc).
+  """
+  @impl Oban.Worker
+  def new(args, opts) when is_map(args) and is_list(opts) do
+    args
+    |> JobPayload.seal_fields([:message])
+    |> super(opts)
+  end
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    message = Map.get(args, "message") || Map.fetch!(args, :message)
+    message = JobPayload.fetch!(args, :message)
     update_id = Map.get(args, "telegram_update_id") || Map.get(args, :telegram_update_id)
 
     # Textless updates (voice, photo, sticker) carry no "text" key at all.
@@ -261,6 +276,8 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
 
     %{
       telegram_update_id: Keyword.fetch!(opts, :telegram_update_id),
+      # In clear: the per-patient transcription cap counts jobs by it.
+      patient_id: foundation_patient.id,
       message: Keyword.fetch!(opts, :message)
     }
     |> TelegramVoiceNoteWorker.new()

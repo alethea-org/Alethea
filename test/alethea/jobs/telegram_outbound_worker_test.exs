@@ -28,7 +28,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Repo
-  alias Alethea.Telegram.{Pacer, Client.Fake}
+  alias Alethea.Telegram.{Pacer, Client.Fake, JobPayload}
 
   import Ecto.Query
   import Alethea.FoundationTestHelper
@@ -170,6 +170,72 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     test "a job struct without an id still sends" do
       assert :ok = perform(Map.put(build_args(), "session_id", @session_id))
       assert [_sent] = Fake.sends()
+    end
+  end
+
+  # ----------------------------------------------------------------
+  # Sealed args (security audit run-1, S4)
+  # ----------------------------------------------------------------
+
+  describe "new/2 — body and chat_id are sealed in oban_jobs.args" do
+    test "the persisted args hold neither the body nor the raw chat id" do
+      job =
+        %{
+          chat_id: @chat_id,
+          chat_id_hash: @chat_id_hash,
+          body: "DUMMY-PHI reply",
+          patient_id: nil
+        }
+        |> TelegramOutboundWorker.new()
+        |> Oban.insert!()
+
+      persisted = Repo.get!(Oban.Job, job.id)
+      raw_args = Jason.encode!(persisted.args)
+
+      refute raw_args =~ "DUMMY-PHI"
+      refute raw_args =~ to_string(@chat_id)
+      refute Map.has_key?(persisted.args, "body")
+      refute Map.has_key?(persisted.args, "chat_id")
+      assert persisted.args["chat_id_hash"] == @chat_id_hash
+      assert Map.has_key?(persisted.args, "patient_id")
+    end
+
+    test "a sealed job sends the decrypted body to the decrypted chat id" do
+      job =
+        %{chat_id: @chat_id, chat_id_hash: @chat_id_hash, body: @body, patient_id: nil}
+        |> TelegramOutboundWorker.new()
+        |> Oban.insert!()
+
+      assert :ok = TelegramOutboundWorker.perform(Repo.get!(Oban.Job, job.id))
+      assert [%{chat_id: @chat_id, text: @body}] = Fake.sends()
+    end
+
+    test "a job in the legacy plaintext shape (enqueued before sealing) still sends" do
+      legacy_args = build_args() |> Jason.encode!() |> Jason.decode!()
+
+      assert %{"body" => @body, "chat_id" => @chat_id} = legacy_args
+      assert :ok = perform(legacy_args)
+      assert [%{chat_id: @chat_id, text: @body}] = Fake.sends()
+    end
+
+    test "a retry of a sealed job stays sealed and keeps its body" do
+      Fake.queue_responses([{:error, {:server_error, 503}}])
+
+      job =
+        %{chat_id: @chat_id, chat_id_hash: @chat_id_hash, body: @body, patient_id: nil}
+        |> TelegramOutboundWorker.new()
+        |> Oban.insert!()
+
+      assert :ok = TelegramOutboundWorker.perform(Repo.get!(Oban.Job, job.id))
+
+      [retry] =
+        [worker: TelegramOutboundWorker]
+        |> all_enqueued()
+        |> Enum.filter(&(&1.args["_attempt"] == 2))
+
+      refute Jason.encode!(retry.args) =~ @body
+      assert JobPayload.fetch!(retry.args, :body) == @body
+      assert JobPayload.fetch!(retry.args, :chat_id) == @chat_id
     end
   end
 

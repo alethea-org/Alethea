@@ -27,6 +27,8 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
   """
 
   use Alethea.DataCase, async: false
+
+  alias Alethea.Telegram.JobPayload
   use Oban.Testing, repo: Alethea.Repo
   import Mox
   import Ecto.Query
@@ -439,7 +441,7 @@ defmodule Alethea.Jobs.TelegramTopicExplorationTest do
       inbound: inbound,
       reply: reply,
       persisted_body: decrypted_body(ctx, reply),
-      job_body: job.args["body"],
+      job_body: JobPayload.fetch!(job.args, :body),
       diagnosis_response: diagnosis.ai_response
     }
   end

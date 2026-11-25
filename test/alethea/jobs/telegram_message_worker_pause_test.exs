@@ -24,7 +24,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerPauseTest do
   alias Alethea.Clinical.Message
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
-  alias Alethea.Telegram.ChatIdHash
+  alias Alethea.Telegram.{ChatIdHash, JobPayload}
   alias Alethea.Triggers
   alias Alethea.Triggers.Trigger
   alias AletheaJobs.ActiveTriggerWorker
@@ -80,10 +80,17 @@ defmodule Alethea.Jobs.TelegramMessageWorkerPauseTest do
       assert Repo.aggregate(Message, :count, :id) == 0
 
       # Fixed confirmation enqueued with no message_id (no clinical journal entry).
-      assert_enqueued(
-        worker: TelegramOutboundWorker,
-        args: %{chat_id_hash: @chat_id_hash, body: @pausa_confirmation, message_id: nil}
-      )
+      assert Enum.any?(
+               opened_outbound_args(),
+               &match?(
+                 %{
+                   "chat_id_hash" => @chat_id_hash,
+                   "body" => @pausa_confirmation,
+                   "message_id" => nil
+                 },
+                 &1
+               )
+             )
     end
 
     test "case/whitespace variant is recognized the same way", %{
@@ -105,10 +112,17 @@ defmodule Alethea.Jobs.TelegramMessageWorkerPauseTest do
       assert Repo.get!(Trigger, trigger.id).status == "paused_by_patient"
       assert Repo.aggregate(Message, :count, :id) == 0
 
-      assert_enqueued(
-        worker: TelegramOutboundWorker,
-        args: %{chat_id_hash: @chat_id_hash, body: @pausa_confirmation, message_id: nil}
-      )
+      assert Enum.any?(
+               opened_outbound_args(),
+               &match?(
+                 %{
+                   "chat_id_hash" => @chat_id_hash,
+                   "body" => @pausa_confirmation,
+                   "message_id" => nil
+                 },
+                 &1
+               )
+             )
     end
 
     test "near-misses are NOT recognized as the pause command", %{
@@ -136,7 +150,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerPauseTest do
       # Message rows, not short-circuited like the real command.
       assert Repo.aggregate(Message, :count, :id) == 2
 
-      refute_enqueued(worker: TelegramOutboundWorker, args: %{body: @pausa_confirmation})
+      refute Enum.any?(opened_outbound_args(), &(&1["body"] == @pausa_confirmation))
     end
   end
 
@@ -184,4 +198,9 @@ defmodule Alethea.Jobs.TelegramMessageWorkerPauseTest do
   end
 
   defp unique_int, do: System.unique_integer([:positive])
+
+  # Outbound args are sealed at rest (security audit run-1, S4).
+  defp opened_outbound_args do
+    for job <- all_enqueued(worker: TelegramOutboundWorker), do: JobPayload.open_fields(job.args)
+  end
 end

@@ -72,12 +72,13 @@ defmodule AletheaJobs.SessionTimeoutWorker do
 
   ## PHI at rest — `chat_id` in `oban_jobs.args` (Round 1 — WARNING #1)
 
-  The raw Telegram `chat_id` IS persisted at rest in `oban_jobs.args`
-  (JSONB column), alongside the HMAC `chat_id_hash`. This was
-  already the case for `TelegramOutboundWorker` (#84, pre-existing)
-  and is now also true here in PR-1 #86 for the goodbye dispatch
-  path. The codebase comment that previously said "chat_id is never
-  persisted at rest" was inaccurate and has been corrected.
+  The raw Telegram `chat_id` IS persisted at rest in this worker's
+  `oban_jobs.args` (JSONB column), alongside the HMAC `chat_id_hash`.
+  The goodbye it enqueues does not repeat it in clear:
+  `TelegramOutboundWorker.new/2` seals `chat_id` and `body` with
+  `Alethea.Telegram.JobPayload` (security audit run-1, S4). The
+  codebase comment that previously said "chat_id is never persisted at
+  rest" was inaccurate and has been corrected.
 
   Threat model acknowledgement (bounded PHI-at-rest surface):
 
@@ -113,16 +114,12 @@ defmodule AletheaJobs.SessionTimeoutWorker do
           correlation token).
     * **Known gaps** (open follow-ups — NOT promises of current
       protection):
-        - NO `Oban.Plugins.Pruner` is configured in `config/*.exs`
-          (`config/config.exs:91-96` only enables
-          `Oban.Plugins.Cron`). Completed / discarded `oban_jobs`
-          rows survive forever in the DB. Removing or
-          anonymizing `chat_id` after a window is a follow-up
-          issue — until that lands, `chat_id` and `chat_id_hash`
-          accumulate in `oban_jobs.args` for the lifetime of the
-          table. (A previous version of this moduledoc claimed
-          Oban's prune settings were configured; that claim was
-          aspirational, not actual, and has been removed in R2.)
+        - `Oban.Plugins.Pruner` (`config/config.exs`) deletes
+          completed / cancelled / discarded `oban_jobs` rows after
+          7 days, so this worker's `chat_id` lives in the table for
+          the job's lifetime plus that window (and in DB backups
+          for their retention). Sealing `chat_id` in this worker's
+          own args is a follow-up; it is not patient content.
         - NO global Logger redaction backend is configured —
           `SafeReason.for_log/1` is per-call. If a future error
           site forgets to apply it, a Changeset's `changes` would
@@ -134,9 +131,8 @@ defmodule AletheaJobs.SessionTimeoutWorker do
       would force a DB lookup by `chat_id_hash` at goodbye
       dispatch time, adding latency and a new failure mode (DB
       unavailable) at exactly the wrong moment. The chosen
-      design keeps `chat_id` in args; this is the same posture as
-      the pre-existing `TelegramOutboundWorker` and is not a
-      regression introduced by #86.
+      design keeps `chat_id` in args; it is not a regression
+      introduced by #86.
   """
 
   use Oban.Worker,
