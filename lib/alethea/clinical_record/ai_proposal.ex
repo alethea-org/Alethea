@@ -109,4 +109,18 @@ defmodule Alethea.ClinicalRecord.AIProposal do
     |> cast(attrs, [:encrypted_text, :encryption_version, :status])
     |> validate_inclusion(:status, @statuses)
   end
+
+  @doc """
+  Re-key changeset for moving a legacy `encryption_version: 1` row to the
+  CR-scoped DEK (`2`). It may replace `encrypted_original_text`, but only
+  with the same plaintext re-encrypted under the new key (the caller
+  decrypts and re-encrypts it), and only on the v1 → v2 transition, so the
+  write-once rule of design D3 still holds for the plaintext.
+  """
+  def rekey_changeset(%__MODULE__{encryption_version: 1} = ai_proposal, attrs) do
+    ai_proposal
+    |> cast(attrs, [:encrypted_original_text, :encrypted_text, :encryption_version])
+    |> validate_required([:encrypted_original_text, :encrypted_text])
+    |> validate_inclusion(:encryption_version, [2])
+  end
 end

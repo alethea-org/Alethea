@@ -1551,8 +1551,21 @@ defmodule Alethea.ClinicalRecordTest do
                )
 
       assert edited.status == "edited"
-      assert edited.encrypted_original_text == proposal.encrypted_original_text
       refute edited.encrypted_text == proposal.encrypted_text
+
+      # Write-once is about the plaintext: a legacy v1 fixture is re-keyed to
+      # the CR-scoped DEK on edit, so the ciphertext changes but the text does not.
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, cr_dek} = Accounts.load_clinical_record_dek(patient, kek)
+
+      assert Alethea.Encryption.PatientVault.decrypt(edited.encrypted_original_text, cr_dek) ==
+               Alethea.Encryption.PatientVault.decrypt(
+                 proposal.encrypted_original_text,
+                 dek_for_version(proposal, patient_dek, cr_dek)
+               )
+
+      assert edited.encryption_version == 2
 
       rows =
         AuditLog
@@ -4013,4 +4026,7 @@ defmodule Alethea.ClinicalRecordTest do
              |> Repo.all() == []
     end
   end
+
+  defp dek_for_version(%{encryption_version: 1}, patient_dek, _cr_dek), do: patient_dek
+  defp dek_for_version(%{encryption_version: 2}, _patient_dek, cr_dek), do: cr_dek
 end

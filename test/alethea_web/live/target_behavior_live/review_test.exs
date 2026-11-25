@@ -600,8 +600,15 @@ defmodule AletheaWeb.TargetBehaviorLive.ReviewTest do
 
       reloaded = Repo.get!(AIProposal, proposal.id)
       assert reloaded.status == "edited"
-      assert reloaded.encrypted_original_text == proposal.encrypted_original_text
       refute reloaded.encrypted_text == proposal.encrypted_text
+
+      # The legacy v1 row is re-keyed to the CR-scoped DEK on edit; the
+      # original AI text itself is preserved.
+      {:ok, kek} = Alethea.Accounts.load_professional_kek(professional)
+      {:ok, cr_dek} = Alethea.Accounts.load_clinical_record_dek(patient, kek)
+
+      assert {:ok, "Texto original de la IA"} =
+               Alethea.Encryption.PatientVault.decrypt(reloaded.encrypted_original_text, cr_dek)
     end
 
     test "discarding a proposal marks it discarded but keeps it visible on the timeline", %{

@@ -136,7 +136,7 @@ defmodule Alethea.ClinicalRecord do
   @spec list_clinical_notes(Professional.t(), Ecto.UUID.t()) ::
           {:ok, [ClinicalNote.t()]} | {:error, :unauthorized | term()}
   def list_clinical_notes(%Professional{} = professional, patient_id) do
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_patient_for_read(professional, patient_id, fn patient, keyring ->
       notes =
         ClinicalNote
         |> where([n], n.patient_id == ^patient.id)
@@ -177,7 +177,7 @@ defmodule Alethea.ClinicalRecord do
   def list_clinical_notes_page(%Professional{} = professional, patient_id, opts) do
     limit = Keyword.get(opts, :limit, @clinical_notes_page_size)
 
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_patient_for_read(professional, patient_id, fn patient, keyring ->
       rows =
         ClinicalNote
         |> where([n], n.patient_id == ^patient.id)
@@ -224,7 +224,7 @@ defmodule Alethea.ClinicalRecord do
            ]}
           | {:error, :unauthorized | term()}
   def list_target_behaviors(%Professional{} = professional, patient_id) do
-    with_patient(professional, patient_id, fn patient, keyring ->
+    with_patient_for_read(professional, patient_id, fn patient, keyring ->
       target_behaviors =
         TargetBehavior
         |> where([target], target.patient_id == ^patient.id)
@@ -303,6 +303,25 @@ defmodule Alethea.ClinicalRecord do
           result | {:error, :unauthorized}
         when result: {:ok, term()} | {:error, term()}
   defp with_patient(%Professional{} = professional, patient_id, fun) when is_function(fun, 2) do
+    with_patient(professional, patient_id, &Accounts.ensure_clinical_record_dek/2, fun)
+  end
+
+  # Read-only variant: loads the CR-scoped DEK but never provisions it. A
+  # patient with no CR key yet gets `clinical_record_dek: nil`, which is
+  # fine because no `encryption_version: 2` row can exist without the key.
+  defp with_patient_for_read(%Professional{} = professional, patient_id, fun)
+       when is_function(fun, 2) do
+    load_if_present = fn patient, kek ->
+      case Accounts.load_clinical_record_dek(patient, kek) do
+        {:error, :not_found} -> {:ok, nil}
+        other -> other
+      end
+    end
+
+    with_patient(professional, patient_id, load_if_present, fun)
+  end
+
+  defp with_patient(professional, patient_id, clinical_record_dek_fun, fun) do
     case Accounts.get_patient_for_professional(professional.id, patient_id) do
       nil ->
         deny_access(professional.id, patient_id)
@@ -310,7 +329,7 @@ defmodule Alethea.ClinicalRecord do
       patient ->
         with {:ok, kek} <- Accounts.load_professional_kek(professional),
              {:ok, patient_dek} <- Accounts.load_patient_dek(patient, kek),
-             {:ok, clinical_record_dek} <- Accounts.ensure_clinical_record_dek(patient, kek) do
+             {:ok, clinical_record_dek} <- clinical_record_dek_fun.(patient, kek) do
           fun.(patient, %{patient_dek: patient_dek, clinical_record_dek: clinical_record_dek})
         end
     end
@@ -1612,7 +1631,8 @@ defmodule Alethea.ClinicalRecord do
   Edits an AI proposal's displayed text. `encrypted_original_text` is never
   touched — `AIProposal.update_changeset/2` structurally excludes it from
   its cast list (design D3, write-once). The new text is encrypted under
-  the DEK of the row's own `encryption_version`, which is left unchanged.
+  the CR-scoped DEK; a legacy `encryption_version: 1` row is moved whole to
+  that key (original text re-encrypted unchanged) and stamped `2`.
   """
   @spec edit_ai_proposal(Professional.t(), Ecto.UUID.t(), Ecto.UUID.t(), String.t()) ::
           {:ok, AIProposal.t()}
@@ -1624,19 +1644,41 @@ defmodule Alethea.ClinicalRecord do
           tombstone_gate(professional.id, proposal_id, "ai_proposal")
 
         proposal ->
-          # Re-encrypts under the row's OWN version: `encrypted_original_text`
-          # is write-once (D3), so a legacy v1 row cannot be lifted to v2
-          # without leaving v1 ciphertext under a v2 stamp.
-          with {:ok, ciphertext} <- PatientVault.encrypt(text, dek_for(proposal, keyring)) do
-            commit_ai_proposal_update(
-              professional,
-              proposal,
-              %{encrypted_text: ciphertext, status: "edited"},
-              "ai_proposal_edited"
-            )
+          with {:ok, changeset} <- edited_proposal_changeset(proposal, text, keyring) do
+            commit_ai_proposal_update(professional, changeset, "ai_proposal_edited")
           end
       end
     end)
+  end
+
+  # A v2 row keeps its key. A legacy v1 row is moved whole to the
+  # destroyable CR-scoped DEK: the original text is decrypted and
+  # re-encrypted unchanged (its plaintext stays write-once, D3), the edited
+  # text is encrypted under the same key, and the row is stamped v2, so the
+  # clinician's edit never lands under the non-destroyable journaling key.
+  defp edited_proposal_changeset(%AIProposal{encryption_version: 2} = proposal, text, keyring) do
+    with {:ok, ciphertext} <- PatientVault.encrypt(text, keyring.clinical_record_dek) do
+      {:ok,
+       AIProposal.update_changeset(proposal, %{encrypted_text: ciphertext, status: "edited"})}
+    end
+  end
+
+  defp edited_proposal_changeset(%AIProposal{encryption_version: 1} = proposal, text, keyring) do
+    cr_dek = keyring.clinical_record_dek
+
+    with {:ok, original} <-
+           PatientVault.decrypt(proposal.encrypted_original_text, keyring.patient_dek),
+         {:ok, original_ciphertext} <- PatientVault.encrypt(original, cr_dek),
+         {:ok, text_ciphertext} <- PatientVault.encrypt(text, cr_dek) do
+      {:ok,
+       proposal
+       |> AIProposal.rekey_changeset(%{
+         encrypted_original_text: original_ciphertext,
+         encrypted_text: text_ciphertext,
+         encryption_version: 2
+       })
+       |> Ecto.Changeset.put_change(:status, "edited")}
+    end
   end
 
   @doc """
@@ -2576,6 +2618,8 @@ defmodule Alethea.ClinicalRecord do
   defp kind_rank(:ai_proposal), do: 2
   defp kind_rank(:legally_deleted), do: 3
 
+  defp decrypt_or_placeholder(_ciphertext, nil), do: "[Error al descifrar]"
+
   defp decrypt_or_placeholder(ciphertext, dek) do
     case PatientVault.decrypt(ciphertext, dek) do
       {:ok, plaintext} -> plaintext
@@ -2617,13 +2661,17 @@ defmodule Alethea.ClinicalRecord do
         tombstone_gate(professional.id, proposal_id, "ai_proposal")
 
       proposal ->
-        commit_ai_proposal_update(professional, proposal, attrs, action)
+        commit_ai_proposal_update(
+          professional,
+          AIProposal.update_changeset(proposal, attrs),
+          action
+        )
     end
   end
 
-  defp commit_ai_proposal_update(professional, proposal, attrs, action) do
+  defp commit_ai_proposal_update(professional, %Ecto.Changeset{} = changeset, action) do
     Ecto.Multi.new()
-    |> Ecto.Multi.update(:record, AIProposal.update_changeset(proposal, attrs))
+    |> Ecto.Multi.update(:record, changeset)
     |> Ecto.Multi.insert(:audit, fn %{record: record} ->
       Audit.changeset(%Audit{
         professional_id: professional.id,

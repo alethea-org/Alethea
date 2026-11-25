@@ -185,6 +185,28 @@ defmodule Alethea.ClinicalRecord.ClinicalRecordDekWritesTest do
     end
   end
 
+  describe "reads never provision the clinical-record DEK" do
+    test "listing notes and target behaviors of a patient without a CR key creates none", ctx do
+      cr_keys = fn ->
+        Repo.aggregate(
+          from(k in EncryptionKey,
+            where: k.patient_id == ^ctx.patient.id and k.type == "patient_clinical_record"
+          ),
+          :count
+        )
+      end
+
+      assert cr_keys.() == 0
+      assert {:ok, []} = ClinicalRecord.list_clinical_notes(ctx.professional, ctx.patient.id)
+      assert {:ok, []} = ClinicalRecord.list_target_behaviors(ctx.professional, ctx.patient.id)
+
+      assert {:ok, %{entries: []}} =
+               ClinicalRecord.list_clinical_notes_page(ctx.professional, ctx.patient.id, [])
+
+      assert cr_keys.() == 0
+    end
+  end
+
   describe "legacy encryption_version 1 rows keep reading" do
     test "v1 notes and target behaviors decrypt under the shared patient DEK alongside v2 rows",
          ctx do
@@ -235,7 +257,7 @@ defmodule Alethea.ClinicalRecord.ClinicalRecordDekWritesTest do
       assert Repo.get!(ClinicalNote, legacy_note.id).encryption_version == 1
     end
 
-    test "editing a legacy v1 proposal keeps its version consistent with the key used", ctx do
+    test "editing a legacy v1 proposal moves the whole row to the CR DEK at v2", ctx do
       {:ok, target_behavior} =
         ClinicalRecord.create_target_behavior(ctx.professional, ctx.patient.id, "Conducta")
 
@@ -263,12 +285,22 @@ defmodule Alethea.ClinicalRecord.ClinicalRecordDekWritesTest do
                  "Editado"
                )
 
-      assert edited.encryption_version == 1
-      assert edited.encrypted_original_text == ciphertext
-      assert {:ok, "Editado"} = PatientVault.decrypt(edited.encrypted_text, ctx.patient_dek)
+      {:ok, cr_dek} = Accounts.load_clinical_record_dek(ctx.patient, ctx.kek)
+      persisted = Repo.get!(AIProposal, legacy.id)
 
+      assert persisted.encryption_version == 2
+      assert persisted.status == "edited"
+      assert edited.encryption_version == 2
+      assert {:ok, "Editado"} = PatientVault.decrypt(persisted.encrypted_text, cr_dek)
+
+      # Same original plaintext, re-encrypted under the destroyable key.
       assert {:ok, "Original legado"} =
-               PatientVault.decrypt(edited.encrypted_original_text, ctx.patient_dek)
+               PatientVault.decrypt(persisted.encrypted_original_text, cr_dek)
+
+      assert {:error, _} = PatientVault.decrypt(persisted.encrypted_text, ctx.patient_dek)
+
+      assert {:error, _} =
+               PatientVault.decrypt(persisted.encrypted_original_text, ctx.patient_dek)
     end
 
     test "editing a v2 proposal stays v2 under the CR DEK", ctx do
