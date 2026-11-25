@@ -152,8 +152,9 @@ defmodule AletheaJobs.AIProposalWorkerTest do
       assert Enum.any?(proposals, &(&1.id == previous.id))
 
       persisted = Enum.find(proposals, &(&1.id != previous.id))
+      assert persisted.encryption_version == 2
       {:ok, kek} = Accounts.load_professional_kek(professional)
-      {:ok, dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, dek} = Accounts.load_clinical_record_dek(patient, kek)
 
       assert {:ok, ^returned_proposal} =
                Alethea.Encryption.PatientVault.decrypt(persisted.encrypted_text, dek)

@@ -35,4 +35,28 @@ defmodule AletheaWeb.RouterTest do
       refute Code.ensure_loaded?(AletheaWeb.PatientLive.ClinicalSearch)
     end
   end
+
+  describe "retired Telegram web-auth fallback (security audit run-1)" do
+    # The anonymous GET let any caller pair a guessed six-digit code with
+    # a chat_id of their choosing. Onboarding now happens only through
+    # the bot's `/start <token>` (the secret-token-checked POST webhook).
+    test "GET /webhooks/telegram/auth no longer resolves to any route", %{conn: conn} do
+      conn = get(conn, "/webhooks/telegram/auth?code=123456&chat_id=111")
+
+      assert conn.status == 404
+      assert Oban.Job |> Alethea.Repo.all() |> Enum.empty?()
+    end
+
+    test "control: the bot webhook POST still resolves to its controller" do
+      assert %{plug: AletheaWeb.TelegramWebhookController, plug_opts: :update} =
+               Phoenix.Router.route_info(AletheaWeb.Router, "POST", "/webhooks/telegram/", "")
+
+      assert Phoenix.Router.route_info(AletheaWeb.Router, "GET", "/webhooks/telegram/auth", "") ==
+               :error
+    end
+
+    test "the TelegramAuthController module no longer exists" do
+      refute Code.ensure_loaded?(AletheaWeb.TelegramAuthController)
+    end
+  end
 end

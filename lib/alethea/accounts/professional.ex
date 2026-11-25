@@ -33,14 +33,37 @@ defmodule Alethea.Accounts.Professional do
       :welcome_message,
       :timezone
     ])
+    # A cleared email casts to nil; leave it for validate_required.
+    |> update_change(:email, fn
+      email when is_binary(email) -> normalize_email(email)
+      email -> email
+    end)
     |> validate_required([:email, :full_name])
     |> validate_password_required(professional)
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must have the @ sign and no spaces")
     |> validate_length(:password, min: 12, max: 72)
     |> validate_length(:welcome_message, max: 4096)
     |> Alethea.Accounts.Timezone.validate_timezone(:timezone)
-    |> unique_constraint(:email)
+    # The index is on `lower(email)` (see the
+    # `canonicalize_professional_email` migration) and keeps this name.
+    |> unique_constraint(:email, name: :professionals_email_index)
     |> put_password_hash()
+  end
+
+  @doc """
+  Returns the canonical form of a professional email: trimmed and
+  lowercased.
+
+  The email is the professional's identity. Storage, lookup
+  (`Alethea.Accounts.get_professional_by_email/1`), the admin role
+  (`Alethea.Accounts.Admin.admin?/1`) and the demo admission allowlist
+  (`Alethea.Accounts.AdmissionPolicy.allowed_email?/1`) all compare this
+  form, and the database enforces uniqueness on `lower(email)`, so case
+  or whitespace variants can never become separate accounts.
+  """
+  @spec normalize_email(String.t()) :: String.t()
+  def normalize_email(email) when is_binary(email) do
+    email |> String.trim() |> String.downcase()
   end
 
   # `:password` is virtual and never reloaded from the DB, so a

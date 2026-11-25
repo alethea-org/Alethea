@@ -20,8 +20,18 @@ defmodule Alethea.Accounts do
 
   def get_professional!(id), do: Repo.get!(Professional, id)
 
+  @doc """
+  Finds a professional by email, ignoring case and surrounding
+  whitespace (see `Professional.normalize_email/1`).
+  """
   def get_professional_by_email(email) when is_binary(email) do
-    Repo.get_by(Professional, email: email)
+    canonical = Professional.normalize_email(email)
+
+    # Stored emails are already canonical; filtering on lower(email) lets the
+    # unique `professionals_email_index` (an index on lower(email)) serve it.
+    Professional
+    |> where([p], fragment("lower(?)", p.email) == ^canonical)
+    |> Repo.one()
   end
 
   def create_professional(attrs \\ %{}) do

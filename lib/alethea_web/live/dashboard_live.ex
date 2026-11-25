@@ -75,7 +75,7 @@ defmodule AletheaWeb.DashboardLive do
       if use_mock? do
         nil
       else
-        case FoundationAccounts.professional_by_email(professional.email) do
+        case FoundationAccounts.foundation_professional_for_legacy(professional) do
           {:ok, fp} -> fp
           :not_found -> nil
         end

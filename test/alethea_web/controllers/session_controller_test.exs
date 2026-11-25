@@ -100,6 +100,25 @@ defmodule AletheaWeb.SessionControllerTest do
       assert redirected_to(conn) == ~p"/dashboard"
       assert get_session(conn, :professional_id) == professional.id
     end
+
+    test "login with different casing and surrounding whitespace authenticates the same account",
+         %{conn: conn} do
+      Application.put_env(:alethea, :demo_restricted_access, false)
+
+      professional =
+        create_professional(%{email: "casing-#{System.unique_integer()}@example.com"})
+
+      conn =
+        post(conn, ~p"/login", %{
+          "professional" => %{
+            "email" => "  " <> String.upcase(professional.email) <> " ",
+            "password" => @password
+          }
+        })
+
+      assert redirected_to(conn) == ~p"/dashboard"
+      assert get_session(conn, :professional_id) == professional.id
+    end
   end
 
   describe "fetch_current_professional plug (session gating)" do

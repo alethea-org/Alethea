@@ -91,14 +91,17 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   reschedule. The retry counter (`_attempt`) is passed in the args
   and incremented by the worker itself.
 
-  ## Why the chat_id is in the args (PHI surface)
+  ## Sensitive args are sealed (PHI surface)
 
-  The args carry BOTH `chat_id_hash` (for the Pacer key) AND
-  `chat_id` (the plaintext Telegram identifier, required by
-  `Client.send_message/2`). The chat_id is the Telegram API's
-  addressing primitive; without it the send cannot happen. The
-  hash is the rate-limit key (PHI hygiene: logs carry the prefix
-  only). Both surfaces are intentional and documented.
+  `Client.send_message/2` needs the raw Telegram `chat_id` and the reply
+  `body`, so both travel with the job. `new/2` seals them into
+  `"encrypted_chat_id"` / `"encrypted_body"` with
+  `Alethea.Telegram.JobPayload` (global vault), so neither is stored in
+  clear in `oban_jobs.args`. `chat_id_hash` (the Pacer key; logs carry
+  its prefix only), `patient_id`, `message_id`, `session_id`, `lane` and
+  `priority` stay in clear because routing and uniqueness read them.
+  Jobs enqueued before sealing (plaintext `"chat_id"` / `"body"`) are
+  still accepted.
 
   ## Out of scope (PR #3b)
 
@@ -117,7 +120,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
 
   alias Alethea.Clinical
   alias Alethea.Clinical.Message
-  alias Alethea.Telegram.{Pacer, Client, LogRedactor}
+  alias Alethea.Telegram.{Pacer, Client, JobPayload, LogRedactor}
   alias Alethea.Foundation.Accounts.OutboundDeadLetter
   alias Alethea.Jobs.TelegramBurstReplyWorker
   alias Alethea.Repo
@@ -127,6 +130,19 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   @max_backoff_ms 300_000
   @jitter_ratio 0.25
   @send_started_key "send_started"
+  @sealed_fields [:chat_id, :body]
+
+  @doc """
+  Builds the job changeset with `chat_id` and `body` sealed (see
+  "Sensitive args are sealed" in the moduledoc). Every enqueuer goes
+  through here, so no caller stores them in clear.
+  """
+  @impl Oban.Worker
+  def new(args, opts) when is_map(args) and is_list(opts) do
+    args
+    |> JobPayload.seal_fields(@sealed_fields)
+    |> super(opts)
+  end
 
   @impl Oban.Worker
   def perform(%Oban.Job{id: job_id, args: args, attempt: _oban_attempt, priority: oban_priority}) do
@@ -394,19 +410,36 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     if trigger_job?(args, lane) do
       resolve_trigger_payload(message_id)
     else
-      chat_id = Map.fetch!(args, "chat_id")
       chat_id_hash = Map.fetch!(args, "chat_id_hash")
-      body = Map.fetch!(args, "body")
       patient_id = Map.get(args, "patient_id")
 
-      {:ok,
-       %{
-         chat_id: chat_id,
-         chat_id_hash: chat_id_hash,
-         body: body,
-         patient_id: patient_id,
-         lane: lane
-       }}
+      with {:ok, chat_id} <- open_sealed(args, :chat_id),
+           {:ok, body} <- open_sealed(args, :body) do
+        {:ok,
+         %{
+           chat_id: chat_id,
+           chat_id_hash: chat_id_hash,
+           body: body,
+           patient_id: patient_id,
+           lane: lane
+         }}
+      else
+        {:error, :undecryptable} ->
+          # A sealed payload the vault can no longer open (key change or
+          # corruption). Retrying cannot help, so it is dead-lettered and
+          # alerted like an exhausted delivery instead of raising out of
+          # perform and being discarded silently.
+          dead_letter_and_broadcast(
+            chat_id_hash,
+            patient_id,
+            "[undecryptable payload]",
+            :undecryptable_payload,
+            Map.get(args, "_attempt", 1),
+            lane
+          )
+
+          {:cancel, :undecryptable_payload}
+      end
     end
   end
 
@@ -596,9 +629,9 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     # The inbound worker converts its in-process atom-keyed args to
     # string keys before calling this function (see
     # `escalate_to_perform_now/2` in `TelegramMessageWorker`).
-    chat_id = Map.fetch!(args, "chat_id")
+    chat_id = JobPayload.fetch!(args, :chat_id)
     chat_id_hash = Map.fetch!(args, "chat_id_hash")
-    body = Map.fetch!(args, "body")
+    body = JobPayload.fetch!(args, :body)
     lane = Map.get(args, "lane", :safe)
     patient_id = Map.get(args, "patient_id")
     message_id = Map.get(args, "message_id")
@@ -715,6 +748,16 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # ----------------------------------------------------------------
   # Dead-letter + PubSub broadcast
   # ----------------------------------------------------------------
+
+  # `JobPayload.fetch/2` for a field these args must carry: a missing
+  # field still raises (a malformed enqueue is a bug), an undecryptable
+  # one is returned for the caller to settle.
+  defp open_sealed(args, field) do
+    case JobPayload.fetch(args, field) do
+      :error -> {:ok, JobPayload.fetch!(args, field)}
+      result -> result
+    end
+  end
 
   # `outcome` is `"failed"` for an exhausted delivery (known not to have
   # arrived) and `"ambiguous"` for one that may have arrived and was not

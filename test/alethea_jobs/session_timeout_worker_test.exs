@@ -10,6 +10,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
   alias Alethea.AI.EmotionAnalyzer
   alias Alethea.Clinical.{Session, SessionManager, Summary, Trend}
   alias Alethea.Jobs.TelegramOutboundWorker
+  alias Alethea.Telegram.JobPayload
   alias AletheaJobs.SessionTimeoutWorker
 
   setup :set_mox_from_context
@@ -155,7 +156,6 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       assert_enqueued(
         worker: TelegramOutboundWorker,
         args: %{
-          chat_id: 987_654_321,
           chat_id_hash: "test_chat_id_hash_abcdef",
           patient_id: nil
         }
@@ -167,7 +167,11 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       [job] =
         Repo.all(from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker")
 
-      assert job.args["body"] =~ "Tu sesión de hoy ha concluido"
+      # `chat_id` and `body` are sealed at rest (security audit run-1, S4).
+      refute Map.has_key?(job.args, "body")
+      refute Map.has_key?(job.args, "chat_id")
+      assert JobPayload.fetch!(job.args, :chat_id) == 987_654_321
+      assert JobPayload.fetch!(job.args, :body) =~ "Tu sesión de hoy ha concluido"
 
       # Close-flow side effects (primary-path coverage): the session is
       # closed and its trends + summary are persisted.
@@ -440,7 +444,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       assert Repo.get!(Session, session.id).status == "closed"
       assert session_summaries(patient) == []
       assert [goodbye] = goodbye_jobs()
-      assert goodbye.args["body"] =~ "Tu sesión de hoy ha concluido"
+      assert JobPayload.fetch!(goodbye.args, :body) =~ "Tu sesión de hoy ha concluido"
       # Trends come from the analyzer, which did succeed.
       assert Repo.aggregate(Trend, :count) == 5
     end
@@ -970,7 +974,7 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       # The closure went on: session closed, goodbye enqueued, no summary.
       assert Repo.get!(Session, session.id).status == "closed"
       assert [goodbye] = goodbye_jobs()
-      assert goodbye.args["body"] =~ "Tu sesión de hoy ha concluido"
+      assert JobPayload.fetch!(goodbye.args, :body) =~ "Tu sesión de hoy ha concluido"
       assert session_summaries(patient) == []
     end
 

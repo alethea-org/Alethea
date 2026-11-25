@@ -38,6 +38,7 @@ defmodule AletheaWeb.TelegramWebhookControllerTest do
   import Phoenix.ConnTest
 
   alias Alethea.Jobs.{TelegramMessageWorker, TelegramOnboardingWorker}
+  alias Alethea.Telegram.JobPayload
   alias AletheaWeb.TelegramWebhookController
 
   @moduletag :telegram
@@ -59,11 +60,11 @@ defmodule AletheaWeb.TelegramWebhookControllerTest do
 
       assert_enqueued(Alethea.Repo,
         worker: TelegramMessageWorker,
-        args: %{telegram_update_id: 123_456, message: body["message"]}
+        args: %{telegram_update_id: 123_456}
       )
     end
 
-    test "the enqueued job carries the original message in args (no transformation at the entrypoint)",
+    test "the enqueued job carries the original message, sealed (decrypts unchanged)",
          %{conn: conn} do
       message = %{
         "message_id" => 42,
@@ -77,13 +78,30 @@ defmodule AletheaWeb.TelegramWebhookControllerTest do
       conn = Phoenix.ConnTest.dispatch(conn, TelegramWebhookController, :post, :update, body)
       assert conn.status == 200
 
-      # `Oban.Testing.assert_enqueued/1` does a JSON-containment match
-      # on the `oban_jobs.args` column, so the message map is compared
-      # structurally — no pin operator needed (and not supported here).
-      assert_enqueued(Alethea.Repo,
-        worker: TelegramMessageWorker,
-        args: %{telegram_update_id: 123_456, message: message}
-      )
+      job = Alethea.Repo.one!(Oban.Job)
+      assert job.worker == inspect(TelegramMessageWorker)
+      assert job.args["telegram_update_id"] == 123_456
+      refute Map.has_key?(job.args, "message")
+      assert JobPayload.fetch!(job.args, :message) == message
+    end
+  end
+
+  describe "update/2 — no plaintext patient content in oban_jobs.args (S4)" do
+    test "the persisted args hold neither the message text nor the raw chat id",
+         %{conn: conn} do
+      body =
+        build_update(%{"text" => "DUMMY-PHI", "chat" => %{"id" => 999_777, "type" => "private"}})
+
+      conn = Phoenix.ConnTest.dispatch(conn, TelegramWebhookController, :post, :update, body)
+      assert conn.status == 200
+
+      %Oban.Job{args: args} = Alethea.Repo.one!(Oban.Job)
+      raw_args = Jason.encode!(args)
+
+      refute raw_args =~ "DUMMY-PHI"
+      refute raw_args =~ "999777"
+      assert args["telegram_update_id"] == 123_456
+      assert is_binary(args["encrypted_message"])
     end
   end
 

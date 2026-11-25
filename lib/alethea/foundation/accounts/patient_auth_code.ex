@@ -2,8 +2,11 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
   @moduledoc """
   Ephemeral onboarding code (C-4, PR #4). Persists both the deep-link
   token (`kind: "deep_link"`, minted by `Alethea.Telegram.DeepLinkToken.mint/0`)
-  and the six-digit web fallback code (`kind: "six_digit"`) that bind a
-  Telegram chat to a `Alethea.Foundation.Accounts.Patient` row.
+  and the six-digit code (`kind: "six_digit"`) that bind a Telegram chat
+  to a `Alethea.Foundation.Accounts.Patient` row. Only the deep link is
+  redeemable today (bot `/start <token>`): the public web fallback that
+  redeemed six-digit codes (`GET /webhooks/telegram/auth`) was removed
+  because it bound a caller-supplied chat_id with no proof of ownership.
 
   ## Lifecycle
 
@@ -14,7 +17,9 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
        rate-limit audit trail on the row itself.
     3. `consume_patient_auth_code/3` — atomically binds the patient's
        `telegram_chat_id_hash` AND marks the code used, in a single
-       `Ecto.Multi` transaction. If the chat is already bound to a
+       `Ecto.Multi` transaction. The same transaction revokes (marks
+       used) the patient's other live, unused codes of every kind, so a
+       leftover sibling code cannot rebind an onboarded patient. If the chat is already bound to a
        DIFFERENT patient, the whole transaction rolls back — the code
        stays unused and retryable (REQ-C4-reject-chat-bound-to-other-patient).
 
@@ -294,7 +299,10 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
 
   A same-patient rebind (the auth code's own patient updating its
   `telegram_chat_id_hash` to a new value) never hits the unique index
-  and succeeds normally.
+  and succeeds normally — but only with a code minted after the last
+  successful consume: that consume revoked every other live code of
+  the patient (deep link and six-digit alike) in the same transaction.
+  A rolled-back consume revokes nothing.
   """
   @spec consume_patient_auth_code(String.t(), String.t(), keyword()) ::
           {:ok, Patient.t()}
@@ -306,16 +314,31 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
     with {:ok, chat_id_int} <- validate_chat_id(raw_chat_id) do
       used_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
+      # Lock order: patient row, then the code, then its siblings. Every
+      # consume for one patient queues on the patient row first, so two
+      # consumes of sibling codes serialize instead of skipping (or
+      # deadlocking on) each other's code.
       Ecto.Multi.new()
-      |> Ecto.Multi.run(:auth_code, fn repo, _changes ->
-        case fetch_by_code_and_kind_for_update(repo, code, kind) do
+      |> Ecto.Multi.run(:patient, fn repo, _changes ->
+        case repo.one(code_query(code, kind)) do
           nil -> {:error, :already_used}
-          %__MODULE__{used_at: %DateTime{}} -> {:error, :already_used}
-          auth_code -> {:ok, auth_code}
+          unlocked -> {:ok, repo.one!(patient_for_update_query(unlocked.patient_id))}
         end
       end)
-      |> Ecto.Multi.run(:patient, fn repo, %{auth_code: auth_code} ->
-        {:ok, repo.get!(Patient, auth_code.patient_id)}
+      |> Ecto.Multi.run(:auth_code, fn repo, %{patient: patient} ->
+        case fetch_by_code_and_kind_for_update(repo, code, kind) do
+          nil ->
+            {:error, :already_used}
+
+          %__MODULE__{used_at: %DateTime{}} ->
+            {:error, :already_used}
+
+          %__MODULE__{patient_id: patient_id} = auth_code when patient_id == patient.id ->
+            {:ok, auth_code}
+
+          _other_patient ->
+            {:error, :already_used}
+        end
       end)
       |> maybe_encrypt_chat_id(chat_id_int)
       |> Ecto.Multi.update(:bind, fn changes ->
@@ -333,12 +356,17 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
       |> Ecto.Multi.update(:consume, fn %{auth_code: auth_code} ->
         changeset(auth_code, %{used_at: used_at})
       end)
+      |> Ecto.Multi.update_all(
+        :revoke_siblings,
+        fn %{auth_code: auth_code} -> live_siblings_query(auth_code, used_at) end,
+        set: [used_at: used_at, updated_at: used_at]
+      )
       |> Repo.transaction()
       |> case do
         {:ok, %{bind: patient}} ->
           {:ok, patient}
 
-        {:error, :auth_code, :already_used, _changes} ->
+        {:error, step, :already_used, _changes} when step in [:patient, :auth_code] ->
           {:error, :already_used}
 
         {:error, :bind, %Ecto.Changeset{} = changeset, _changes} ->
@@ -352,6 +380,36 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
           {:error, reason}
       end
     end
+  end
+
+  @doc false
+  # The patient's OTHER live, unused codes (every kind). Consuming one
+  # code revokes them in the same transaction, so a leftover sibling
+  # (e.g. the six-digit code minted next to a deep link) cannot later
+  # rebind an onboarded patient to another chat. The consume already
+  # holds the patient row, so this update simply waits for any other
+  # lock on a sibling (a concurrent verify) and never skips a row.
+  # Exposed for the lock-shape regression test.
+  def live_siblings_query(%__MODULE__{} = auth_code, now) do
+    from(a in __MODULE__,
+      where:
+        a.patient_id == ^auth_code.patient_id and a.id != ^auth_code.id and
+          is_nil(a.used_at) and a.expires_at > ^now
+    )
+  end
+
+  @doc false
+  # The per-patient serialization point taken first by every consume.
+  # Exposed for the lock-shape regression test.
+  def patient_for_update_query(patient_id) do
+    from(p in Patient, where: p.id == ^patient_id, lock: "FOR UPDATE")
+  end
+
+  defp code_query(code, kind) do
+    __MODULE__
+    |> where([a], a.code == ^code and a.kind == ^kind)
+    |> order_by(desc: :inserted_at)
+    |> limit(1)
   end
 
   defp validate_chat_id(nil), do: {:ok, nil}

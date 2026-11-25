@@ -11,6 +11,8 @@ defmodule Alethea.Jobs.TelegramVoiceNoteTest do
   """
 
   use Alethea.DataCase, async: false
+
+  alias Alethea.Telegram.JobPayload
   use Oban.Testing, repo: Alethea.Repo
   import Mox
 
@@ -66,8 +68,8 @@ defmodule Alethea.Jobs.TelegramVoiceNoteTest do
   end
 
   describe "Oban contract" do
-    test "runs on the :transcription queue, 3 attempts, unique per Telegram update" do
-      assert TelegramVoiceNoteWorker.__opts__()[:queue] == :transcription
+    test "runs on the :telegram_voice queue, 3 attempts, unique per Telegram update" do
+      assert TelegramVoiceNoteWorker.__opts__()[:queue] == :telegram_voice
       assert TelegramVoiceNoteWorker.__opts__()[:max_attempts] == 3
 
       assert TelegramVoiceNoteWorker.__opts__()[:unique] ==
@@ -83,7 +85,7 @@ defmodule Alethea.Jobs.TelegramVoiceNoteTest do
 
       assert_enqueued(
         worker: TelegramVoiceNoteWorker,
-        queue: :transcription,
+        queue: :telegram_voice,
         args: %{telegram_update_id: 700}
       )
 
@@ -368,7 +370,8 @@ defmodule Alethea.Jobs.TelegramVoiceNoteTest do
   defp assert_only_notice(copy) do
     assert [job] = all_enqueued(worker: TelegramOutboundWorker)
 
-    assert %{"body" => ^copy, "chat_id_hash" => @chat_id_hash, "message_id" => nil} = job.args
+    assert %{"body" => ^copy, "chat_id_hash" => @chat_id_hash, "message_id" => nil} =
+             JobPayload.open_fields(job.args)
 
     assert job.queue == "telegram_outbound"
     assert Repo.aggregate(Message, :count, :id) == 0

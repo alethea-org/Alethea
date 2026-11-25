@@ -54,6 +54,13 @@ config :phoenix, :json_library, Jason
 #     lane. Higher priority than `telegram_outbound` so a crisis message
 #     is not blocked by a backlog of safe-path replies. The worker lands
 #     in PR #3b; the queue is registered here for the same reason.
+# Per-patient bounds on Telegram voice-note transcription (security audit
+# run-1, S7). See `Alethea.Jobs.TelegramVoiceNoteWorker`.
+config :alethea, Alethea.Jobs.TelegramVoiceNoteWorker,
+  max_file_bytes: 20 * 1024 * 1024,
+  max_notes_per_window: 30,
+  window_seconds: 3600
+
 config :alethea, Oban,
   engine: Oban.Engines.Basic,
   queues: [
@@ -65,6 +72,10 @@ config :alethea, Oban,
     # Session-recording transcription (speech-to-text provider calls can
     # take minutes per recording).
     transcription: 2,
+    # Patient Telegram voice notes (Alethea.Jobs.TelegramVoiceNoteWorker).
+    # Own queue so a flood of patient notes never takes the session
+    # recordings' `transcription` slots (security audit run-1, S7).
+    telegram_voice: 2,
     telegram_inbound: 10,
     # Paddle Billing webhook notifications (Alethea.Jobs.PaddleEventWorker).
     billing: 5,
@@ -120,6 +131,10 @@ config :alethea, Oban,
   ],
   repo: Alethea.Repo,
   plugins: [
+    # Deletes completed, cancelled and discarded jobs older than
+    # `max_age` seconds (7 days), so job args do not accumulate forever
+    # in `oban_jobs` (security audit run-1, S4).
+    {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
     {Oban.Plugins.Cron,
      crontab: [
        {"0 0 * * *", AletheaJobs.DailySchedulerWorker},

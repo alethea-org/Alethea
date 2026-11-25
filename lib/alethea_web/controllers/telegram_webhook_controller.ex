@@ -41,9 +41,13 @@ defmodule AletheaWeb.TelegramWebhookController do
 
   ## PHI hygiene (R-1)
 
-  The args map carries the raw `chat_id` (Telegram's API delivers it
-  in plaintext). The controller does **not** log the body. The worker
-  (PR #3a) is responsible for HMAC-hashing the `chat_id` via
+  The message map (patient text, raw `chat_id`, sender profile) is not
+  stored in clear: `TelegramMessageWorker.new/2` seals it into
+  `"encrypted_message"` (`Alethea.Telegram.JobPayload`), leaving only
+  `telegram_update_id` in clear for uniqueness. The `/start` onboarding
+  args still carry the raw `chat_id` (no patient content). The controller
+  does **not** log the body. The worker (PR #3a) is responsible for
+  HMAC-hashing the `chat_id` via
   `Alethea.Telegram.ChatIdHash.hash/2` before any DB lookup or log
   line. The `update_id` is safe to log (Telegram's monotonic counter,
   not patient data) but the controller does not log it either, to

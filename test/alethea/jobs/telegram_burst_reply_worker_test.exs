@@ -19,7 +19,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
   alias Alethea.Clinical.Message
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramOutboundWorker}
   alias Alethea.Repo
-  alias Alethea.Telegram.ChatIdHash
+  alias Alethea.Telegram.{ChatIdHash, JobPayload}
   alias Alethea.Triggers.TriggerFiring
 
   @pepper "telegram-chat-id-pepper-v1-test-only-min-32-bytes-padding-xyz"
@@ -175,7 +175,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
       assert diagnosis
 
       assert [%Oban.Job{args: %{"message_id" => ^reply_id, "body" => @reply, "priority" => 9}}] =
-               all_enqueued(worker: TelegramOutboundWorker)
+               opened(all_enqueued(worker: TelegramOutboundWorker))
     end
   end
 
@@ -782,4 +782,7 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
       chat_id_hash: chat_id_hash
     }
   end
+
+  # Outbound args are sealed at rest (security audit run-1, S4).
+  defp opened(jobs), do: Enum.map(jobs, &%{&1 | args: JobPayload.open_fields(&1.args)})
 end

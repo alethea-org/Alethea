@@ -352,6 +352,63 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
       assert %DateTime{} = reloaded_code.used_at
     end
 
+    test "consuming one code revokes the patient's other live codes of every kind", %{
+      patient: patient,
+      auth_code: deep_link
+    } do
+      {:ok, six_digit} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "six_digit")
+      {:ok, other_link} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+
+      other_patient = patient_fixture(professional_fixture())
+
+      {:ok, unrelated} =
+        PatientAuthCode.create_patient_auth_code(other_patient.id, kind: "six_digit")
+
+      hash = String.duplicate("a", 64)
+
+      assert {:ok, %Patient{telegram_chat_id_hash: ^hash}} =
+               PatientAuthCode.consume_patient_auth_code(deep_link.code, hash, kind: "deep_link")
+
+      # A leftover sibling can no longer verify, nor rebind the patient.
+      assert PatientAuthCode.verify_patient_auth_code(six_digit.code, "2.2.2.2",
+               kind: "six_digit"
+             ) == :already_used
+
+      assert {:error, :already_used} =
+               PatientAuthCode.consume_patient_auth_code(
+                 six_digit.code,
+                 String.duplicate("b", 64),
+                 kind: "six_digit"
+               )
+
+      assert Repo.get!(Patient, patient.id).telegram_chat_id_hash == hash
+      assert %DateTime{} = Repo.get!(PatientAuthCode, six_digit.id).used_at
+      assert %DateTime{} = Repo.get!(PatientAuthCode, other_link.id).used_at
+
+      # Another patient's code is untouched.
+      assert Repo.get!(PatientAuthCode, unrelated.id).used_at == nil
+
+      assert PatientAuthCode.verify_patient_auth_code(unrelated.code, "3.3.3.3",
+               kind: "six_digit"
+             ) == :ok
+    end
+
+    test "a rolled-back consume leaves the sibling codes live", %{auth_code: auth_code_b} do
+      patient_b = Repo.get!(Patient, auth_code_b.patient_id)
+      {:ok, six_digit} = PatientAuthCode.create_patient_auth_code(patient_b.id, kind: "six_digit")
+
+      hash = String.duplicate("c", 64)
+      patient_a = patient_fixture(professional_fixture())
+      {:ok, _} = patient_a |> Patient.changeset(%{telegram_chat_id_hash: hash}) |> Repo.update()
+
+      assert {:error, :chat_bound_to_other_patient} =
+               PatientAuthCode.consume_patient_auth_code(auth_code_b.code, hash,
+                 kind: "deep_link"
+               )
+
+      assert Repo.get!(PatientAuthCode, six_digit.id).used_at == nil
+    end
+
     test "second consume attempt fails because the code is already used", %{
       auth_code: auth_code
     } do
@@ -410,10 +467,15 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
     } do
       shared_code = deep_link_code.code
 
+      # The colliding six-digit row belongs to ANOTHER patient: consuming
+      # a code revokes the consumer's own siblings by design, so only a
+      # different patient's row shows that `kind` scopes the resolution.
+      other_patient = patient_fixture(professional_fixture())
+
       {:ok, six_digit_code} =
         %PatientAuthCode{}
         |> PatientAuthCode.changeset(%{
-          patient_id: patient.id,
+          patient_id: other_patient.id,
           code: shared_code,
           kind: "six_digit",
           expires_at:
@@ -452,6 +514,27 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
     # `PatientAuthCodeConcurrencyTest` (a separate `async: false`
     # module, mirroring `BotConfigTest`'s F-07 guard) rather than here,
     # since this whole file is `async: true`.
+    test "consume serializes on the patient row and revokes siblings without skipping locked rows" do
+      {patient_sql, _} =
+        Ecto.Adapters.SQL.to_sql(
+          :all,
+          Repo,
+          PatientAuthCode.patient_for_update_query(Ecto.UUID.generate())
+        )
+
+      assert patient_sql =~ "FOR UPDATE"
+
+      sibling_query =
+        PatientAuthCode.live_siblings_query(
+          %PatientAuthCode{id: Ecto.UUID.generate(), patient_id: Ecto.UUID.generate()},
+          DateTime.utc_now()
+        )
+
+      {sibling_sql, _} = Ecto.Adapters.SQL.to_sql(:all, Repo, sibling_query)
+
+      refute sibling_sql =~ "SKIP LOCKED"
+    end
+
     test "the row-lock mechanism used by consume_patient_auth_code/3 compiles to FOR UPDATE SQL" do
       query = PatientAuthCode.for_update_query("any-code", "deep_link")
 

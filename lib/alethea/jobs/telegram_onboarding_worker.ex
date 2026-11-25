@@ -3,16 +3,17 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   Oban worker for the Telegram patient onboarding flow (C-4, PR #4).
 
   Binds a Telegram chat to a `Alethea.Foundation.Accounts.Patient` row
-  using either a deep-link token (from `/start <token>`, via the
-  webhook controller) or a six-digit / deep-link code submitted through
-  the web fallback (via `AletheaWeb.TelegramAuthController.consume/2`).
-  Both entry points enqueue this same worker so the bind logic lives
-  in exactly one place.
+  using a deep-link token from `/start <token>`, enqueued by the
+  webhook controller. The former public web fallback
+  (`GET /webhooks/telegram/auth`, which accepted a six-digit or
+  deep-link code plus a caller-supplied `chat_id`) was removed: it
+  bound a chat with no proof the caller owned it. The `kind` and `ip`
+  args are kept so jobs enqueued before that removal still run.
 
   ## Args shape
 
       %{
-        telegram_update_id: integer() | nil,  # nil for web-originated jobs
+        telegram_update_id: integer() | nil,  # nil for legacy web-originated jobs
         token: binary() | nil,                # the code/token to redeem
         chat_id: pos_integer(),                # required — Telegram's chat id
         kind: "deep_link" | "six_digit",       # optional, defaults to "deep_link"
@@ -39,8 +40,8 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
 
   ## Why the webhook path always uses `kind: "deep_link"`
 
-  `/start` is the bot-conversation entry point; per
-  `REQ-C4-six-digit-fallback`, a six-digit code is web-only. The
+  `/start` is the bot-conversation entry point; a six-digit code was
+  only ever redeemable through the (now removed) web fallback. The
   webhook controller never sets `kind` in the args, so this worker
   defaults to `"deep_link"`. A patient who types `/start <6-digit
   code>` is naturally rejected: `verify_patient_auth_code/3` scopes
@@ -55,9 +56,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   to rate-limit on at this layer. The sentinel constant scopes the
   rate limit to the auth-code ROW itself (5 attempts/hour for that
   SPECIFIC token, regardless of which Telegram relay IP delivered the
-  message), which still protects against brute-forcing one token. The
-  web fallback controller (`TelegramAuthController`) passes the real
-  `conn.remote_ip`, which IS meaningful there.
+  message), which still protects against brute-forcing one token.
 
   ## PHI hygiene (R-1)
 
@@ -90,6 +89,16 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   @scheduling_disclosure "Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea."
 
   @impl Oban.Worker
+  # Six-digit codes were only redeemable through the removed public
+  # `GET /webhooks/telegram/auth` fallback, whose `chat_id` was never
+  # proven to belong to the caller. A job of that kind still queued from
+  # before the removal is dropped: nothing is bound and, because the chat
+  # is unverified, no reply is sent to it.
+  def perform(%Oban.Job{args: %{"kind" => "six_digit"}}) do
+    Logger.info("TelegramOnboardingWorker: dropped legacy six-digit web-fallback job")
+    :ok
+  end
+
   def perform(%Oban.Job{args: args}) do
     token = Map.get(args, "token")
     chat_id = Map.fetch!(args, "chat_id")

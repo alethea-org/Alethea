@@ -3,7 +3,9 @@ defmodule Alethea.ClinicalRecord.TargetBehavior do
   Encrypted target-behavior row authored by a patient's responsible
   professional (sdd/clinical-record-foundation, GitHub #194). Plaintext
   is never cast here — `Alethea.ClinicalRecord.create_target_behavior/3`
-  (PR2) encrypts under the patient's DEK before calling `changeset/2`.
+  encrypts under the patient's clinical-record DEK and stamps
+  `encryption_version: 2` before calling `changeset/2`. The schema default
+  `1` only describes legacy rows written under the shared patient DEK.
   """
   use Ecto.Schema
   import Ecto.Changeset

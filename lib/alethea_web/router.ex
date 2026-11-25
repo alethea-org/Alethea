@@ -64,16 +64,15 @@ defmodule AletheaWeb.Router do
     get("/ready", HealthController, :readiness)
   end
 
-  # Telegram webhook + auth routes.
+  # Telegram webhook route.
   #
   # The POST `/webhooks/telegram/` route is behind the
   # `TelegramSecretToken` plug (validates the
   # `X-Telegram-Bot-Api-Secret-Token` header against
-  # `BotConfig.secret_token/0`). The GET `/webhooks/telegram/auth`
-  # route is a public patient-facing URL with a 10-minute TTL token —
-  # the secret-token check does NOT apply (design §8 rationale: the
-  # auth route carries its own TTL'd token in the query string, the
-  # plug is the auth surface for the POST).
+  # `BotConfig.secret_token/0`). Patient onboarding happens only through
+  # the bot's `/start <token>` on this route. The former public GET
+  # `/webhooks/telegram/auth` web fallback was removed: it bound a
+  # caller-supplied chat_id with no proof the caller owned that chat.
   pipeline :telegram_webhook do
     plug(:accepts, ["json"])
     plug(AletheaWeb.Plugs.TelegramSecretToken)
@@ -83,12 +82,6 @@ defmodule AletheaWeb.Router do
     pipe_through(:telegram_webhook)
 
     post("/", TelegramWebhookController, :update)
-  end
-
-  scope "/webhooks/telegram", AletheaWeb do
-    pipe_through(:api)
-
-    get("/auth", TelegramAuthController, :consume)
   end
 
   # Paddle Billing webhook. `PaddleSignature` verifies the
@@ -141,6 +134,7 @@ defmodule AletheaWeb.Router do
         {AletheaWeb.Plugs.ProfessionalAuth, :require_admin}
       ] do
       live("/waitlist", Admin.WaitlistLive, :index)
+      live("/oban-dashboard", ObanDashboardLive, :index)
     end
   end
 
@@ -192,7 +186,6 @@ defmodule AletheaWeb.Router do
 
       live("/prototype/clinical-review", ClinicalReviewPrototypeLive, :index)
       live("/prototype/eorc-shape", EorcShapeComparisonPrototypeLive, :index)
-      live("/admin/oban-dashboard", ObanDashboardLive, :index)
     end
   end
 end

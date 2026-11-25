@@ -14,7 +14,7 @@ defmodule AletheaJobs.SessionReminderWorkerTest do
 
   alias Alethea.Jobs.TelegramOutboundWorker
   alias Alethea.Repo
-  alias Alethea.Telegram.{Client.Fake, Pacer}
+  alias Alethea.Telegram.{Client.Fake, JobPayload, Pacer}
   alias AletheaJobs.SessionReminderWorker
 
   @chat_id 555_666_777
@@ -72,7 +72,6 @@ defmodule AletheaJobs.SessionReminderWorkerTest do
       assert_enqueued(
         worker: TelegramOutboundWorker,
         args: %{
-          chat_id: @chat_id,
           chat_id_hash: @chat_id_hash,
           patient_id: nil
         }
@@ -85,7 +84,10 @@ defmodule AletheaJobs.SessionReminderWorkerTest do
           )
         )
 
-      assert job.args["body"] =~ "Recordatorio"
+      # `chat_id` and `body` are sealed at rest (security audit run-1, S4).
+      refute Map.has_key?(job.args, "chat_id")
+      assert JobPayload.fetch!(job.args, :chat_id) == @chat_id
+      assert JobPayload.fetch!(job.args, :body) =~ "Recordatorio"
     end
 
     test "the enqueued outbound job delivers the static Spanish reminder via the Fake client" do

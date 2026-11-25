@@ -27,6 +27,8 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
   """
 
   use Alethea.DataCase, async: false
+
+  alias Alethea.Telegram.JobPayload
   use Oban.Testing, repo: Alethea.Repo
 
   import Alethea.FoundationTestHelper
@@ -97,9 +99,9 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert_enqueued(worker: TelegramOutboundWorker, queue: "telegram_outbound")
 
       [job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert job.args["chat_id"] == @chat_id
+      assert JobPayload.fetch!(job.args, :chat_id) == @chat_id
       assert job.args["chat_id_hash"] == @chat_id_hash
-      assert job.args["body"] =~ "Ana"
+      assert JobPayload.fetch!(job.args, :body) =~ "Ana"
       # Regression (WARNING fix): the bound patient's id must be
       # threaded onto the outbound job args — `TelegramOutboundWorker`
       # reads `patient_id` to attribute dead-letter rows / `ops:alerts`
@@ -122,6 +124,29 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     end
   end
 
+  describe "perform/1 — legacy six-digit jobs from the removed web fallback" do
+    test "a queued kind: six_digit job binds nothing and messages nobody" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional) |> bind_patient_to_legacy_professional()
+      {:ok, six_digit} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "six_digit")
+
+      job = %Oban.Job{
+        args: %{
+          "token" => six_digit.code,
+          "kind" => "six_digit",
+          "chat_id" => @chat_id,
+          "ip" => "203.0.113.7"
+        }
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      assert Repo.get!(Patient, patient.id).telegram_chat_id_hash == nil
+      assert Repo.get!(PatientAuthCode, six_digit.id).used_at == nil
+      assert all_enqueued(worker: TelegramOutboundWorker) == []
+    end
+  end
+
   describe "perform/1 — welcome copy without a profile_name" do
     test "falls back to a generic greeting when the patient has no first name" do
       professional = professional_fixture()
@@ -136,7 +161,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "vinculada"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "vinculada"
     end
   end
 
@@ -172,7 +197,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert reloaded_patient.telegram_chat_id_hash == nil
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "venció"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "venció"
     end
 
     test "already-used token: no bind, localized message enqueued", %{auth_code: auth_code} do
@@ -189,7 +214,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "ya fue usado"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "ya fue usado"
     end
 
     test "rate-limited token: no bind, localized message enqueued", %{auth_code: auth_code} do
@@ -211,7 +236,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "intentos"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "intentos"
     end
 
     test "nil token (cold-open, no professional pre-minted link) sends a rejection reply" do
@@ -222,7 +247,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["chat_id"] == @chat_id
+      assert JobPayload.fetch!(outbound_job.args, :chat_id) == @chat_id
     end
   end
 
@@ -246,7 +271,9 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == "¡Hola Ana! Este es tu espacio seguro. " <> @disclosure
+
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
+               "¡Hola Ana! Este es tu espacio seguro. " <> @disclosure
     end
 
     test "appends the scheduling disclosure after a custom welcome_message, not instead of it" do
@@ -263,9 +290,12 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "¡Hola Ana! Este es tu espacio seguro."
-      assert outbound_job.args["body"] =~ @disclosure
-      assert String.ends_with?(outbound_job.args["body"], @disclosure)
+
+      assert JobPayload.fetch!(outbound_job.args, :body) =~
+               "¡Hola Ana! Este es tu espacio seguro."
+
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ @disclosure
+      assert String.ends_with?(JobPayload.fetch!(outbound_job.args, :body), @disclosure)
     end
 
     test "returns the professional's custom message verbatim when it has no %{name} placeholder" do
@@ -282,7 +312,9 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == "Bienvenido a tu espacio. " <> @disclosure
+
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
+               "Bienvenido a tu espacio. " <> @disclosure
     end
 
     test "falls back to the system default when the professional's welcome_message is nil" do
@@ -300,7 +332,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
 
-      assert outbound_job.args["body"] ==
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
                "¡Hola, Ana! Tu cuenta de Telegram fue vinculada correctamente. " <>
                  "A partir de ahora podés escribirme por acá. " <> @disclosure
     end
@@ -319,9 +351,9 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "vinculada correctamente"
-      assert outbound_job.args["body"] =~ @disclosure
-      assert String.ends_with?(outbound_job.args["body"], @disclosure)
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "vinculada correctamente"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ @disclosure
+      assert String.ends_with?(JobPayload.fetch!(outbound_job.args, :body), @disclosure)
     end
 
     test "collapses the %{name} gap to a single space when the patient has no first name" do
@@ -338,7 +370,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == "Hola bienvenido. " <> @disclosure
+      assert JobPayload.fetch!(outbound_job.args, :body) == "Hola bienvenido. " <> @disclosure
     end
 
     test "collapses multiple %{name} occurrences with no known patient name and leaves no double/triple spaces" do
@@ -360,7 +392,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       # an orphan space before punctuation ("Hola , ¿cómo estás ?"),
       # since a single stray space isn't a double space. Asserting the
       # full string is what actually catches that regression.
-      assert outbound_job.args["body"] == "Hola, ¿cómo estás? " <> @disclosure
+      assert JobPayload.fetch!(outbound_job.args, :body) == "Hola, ¿cómo estás? " <> @disclosure
     end
 
     test "collapses a pre-existing double space anywhere in the template when the patient has no known name" do
@@ -394,7 +426,8 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
 
-      assert outbound_job.args["body"] == "Bienvenido!! Espero que estés bien. " <> @disclosure
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
+               "Bienvenido!! Espero que estés bien. " <> @disclosure
     end
 
     test "a %{name} placeholder directly adjacent to punctuation leaves no orphan space" do
@@ -411,7 +444,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == "Bienvenido! " <> @disclosure
+      assert JobPayload.fetch!(outbound_job.args, :body) == "Bienvenido! " <> @disclosure
     end
 
     test "a %{name} placeholder adjacent to a non-punctuation character (quotes, parens, mid-word) leaves no orphan space" do
@@ -428,7 +461,9 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == "Hola \"\" (bienvenido) " <> @disclosure
+
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
+               "Hola \"\" (bienvenido) " <> @disclosure
     end
 
     # Judgment Day Round 3 (CRITICAL, both judges): a template made up
@@ -451,7 +486,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       # Exact-string assertion (Judgment Day Round 4, both judges): a
       # substring/refute check would still pass on a garbled fallback.
-      assert outbound_job.args["body"] ==
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
                "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá. " <>
                  @disclosure
     end
@@ -476,7 +511,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
 
-      assert outbound_job.args["body"] ==
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
                "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá. " <>
                  @disclosure
     end
@@ -499,7 +534,9 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert :ok = TelegramOnboardingWorker.perform(job)
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] == "Hola Bienvenido a tu espacio. " <> @disclosure
+
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
+               "Hola Bienvenido a tu espacio. " <> @disclosure
     end
 
     test "fails with retryable error and does not bind when the patient has no legacy bridge yet (:not_linked)" do
@@ -584,7 +621,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
 
-      assert outbound_job.args["body"] ==
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
                "¡Hola, Ana! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá. " <>
                  @disclosure
     end
@@ -614,7 +651,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
 
-      assert outbound_job.args["body"] ==
+      assert JobPayload.fetch!(outbound_job.args, :body) ==
                "¡Hola! Tu cuenta de Telegram fue vinculada correctamente. A partir de ahora podés escribirme por acá. " <>
                  @disclosure
     end
@@ -652,7 +689,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert reloaded_code_b.used_at == nil
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "otro paciente"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "otro paciente"
     end
 
     test "same patient rebinding their own chat succeeds normally" do
@@ -674,7 +711,7 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
       assert reloaded.telegram_chat_id_hash == @chat_id_hash
 
       [outbound_job] = all_enqueued(worker: TelegramOutboundWorker)
-      assert outbound_job.args["body"] =~ "vinculada"
+      assert JobPayload.fetch!(outbound_job.args, :body) =~ "vinculada"
     end
   end
 

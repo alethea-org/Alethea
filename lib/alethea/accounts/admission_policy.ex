@@ -5,7 +5,10 @@ defmodule Alethea.Accounts.AdmissionPolicy do
   When `demo_restricted_access` is enabled (production only, via `DEMO_RESTRICTED_ACCESS=true`),
   only emails explicitly enumerated in `demo_allowed_emails` (from `DEMO_ALLOWED_EMAILS`)
   are admitted. When restricted access is off, open registration and login operate normally.
+  Emails are compared in canonical form (`Alethea.Accounts.Professional.normalize_email/1`).
   """
+
+  alias Alethea.Accounts.Professional
 
   @doc """
   Returns true only when the demonstration access restriction is explicitly enabled.
@@ -27,7 +30,7 @@ defmodule Alethea.Accounts.AdmissionPolicy do
     if restricted?() do
       case email do
         binary when is_binary(binary) ->
-          normalized = binary |> String.trim() |> String.downcase()
+          normalized = Professional.normalize_email(binary)
           normalized != "" and normalized in allowed_emails()
 
         _other ->
@@ -43,7 +46,7 @@ defmodule Alethea.Accounts.AdmissionPolicy do
       emails when is_list(emails) ->
         emails
         |> Enum.filter(&is_binary/1)
-        |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+        |> Enum.map(&Professional.normalize_email/1)
         |> Enum.reject(&(&1 == ""))
 
       _other ->

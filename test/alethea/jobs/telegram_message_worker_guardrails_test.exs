@@ -27,7 +27,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
   alias Alethea.Clinical.Message
   alias Alethea.Jobs.{TelegramBurstReplyWorker, TelegramMessageWorker, TelegramOutboundWorker}
   alias Alethea.Repo
-  alias Alethea.Telegram.ChatIdHash
+  alias Alethea.Telegram.{ChatIdHash, JobPayload}
   alias AletheaJobs.EmotionAnalysisWorker
 
   @pepper "telegram-chat-id-pepper-v1-test-only-min-32-bytes-padding-xyz"
@@ -229,7 +229,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
 
       refute body =~ "Me pregunto si"
       assert_neutral_exploratory(body)
-      assert job.args["body"] == body
+      assert JobPayload.fetch!(job.args, :body) == body
     end
 
     test "a complete reply reported as not truncated is delivered unchanged" do
@@ -298,7 +298,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerGuardrailsTest do
     outbound = Repo.one!(from m in Message, where: m.direction == "outbound")
     [job] = all_enqueued(worker: TelegramOutboundWorker)
 
-    %{persisted_body: decrypted_body(outbound), job_body: job.args["body"]}
+    %{persisted_body: decrypted_body(outbound), job_body: JobPayload.fetch!(job.args, :body)}
   end
 
   # #391: executes the single armed burst-reply job the way Oban would.

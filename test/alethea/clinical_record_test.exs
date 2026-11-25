@@ -135,7 +135,7 @@ defmodule Alethea.ClinicalRecordTest do
       # proves atomicity via the one failure mode actually reachable today —
       # a raw Postgres exception mid-transaction.
       Repo.query!(
-        "ALTER TABLE target_behaviors ADD CONSTRAINT clinical_record_test_force_failure CHECK (encryption_version <> 1)"
+        "ALTER TABLE target_behaviors ADD CONSTRAINT clinical_record_test_force_failure CHECK (encryption_version <> 2)"
       )
 
       assert_raise Ecto.ConstraintError, fn ->
@@ -533,7 +533,7 @@ defmodule Alethea.ClinicalRecordTest do
       # with no DB constraint of their own, so the only reachable failure
       # mode via the public API is a raw Postgres exception mid-transaction.
       Repo.query!(
-        "ALTER TABLE clinical_notes ADD CONSTRAINT clinical_record_test_force_failure_note CHECK (encryption_version <> 1)"
+        "ALTER TABLE clinical_notes ADD CONSTRAINT clinical_record_test_force_failure_note CHECK (encryption_version <> 2)"
       )
 
       assert_raise Ecto.ConstraintError, fn ->
@@ -1551,8 +1551,21 @@ defmodule Alethea.ClinicalRecordTest do
                )
 
       assert edited.status == "edited"
-      assert edited.encrypted_original_text == proposal.encrypted_original_text
       refute edited.encrypted_text == proposal.encrypted_text
+
+      # Write-once is about the plaintext: a legacy v1 fixture is re-keyed to
+      # the CR-scoped DEK on edit, so the ciphertext changes but the text does not.
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+      {:ok, patient_dek} = Accounts.load_patient_dek(patient, kek)
+      {:ok, cr_dek} = Accounts.load_clinical_record_dek(patient, kek)
+
+      assert Alethea.Encryption.PatientVault.decrypt(edited.encrypted_original_text, cr_dek) ==
+               Alethea.Encryption.PatientVault.decrypt(
+                 proposal.encrypted_original_text,
+                 dek_for_version(proposal, patient_dek, cr_dek)
+               )
+
+      assert edited.encryption_version == 2
 
       rows =
         AuditLog
@@ -4013,4 +4026,7 @@ defmodule Alethea.ClinicalRecordTest do
              |> Repo.all() == []
     end
   end
+
+  defp dek_for_version(%{encryption_version: 1}, patient_dek, _cr_dek), do: patient_dek
+  defp dek_for_version(%{encryption_version: 2}, _patient_dek, cr_dek), do: cr_dek
 end
