@@ -410,19 +410,36 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     if trigger_job?(args, lane) do
       resolve_trigger_payload(message_id)
     else
-      chat_id = JobPayload.fetch!(args, :chat_id)
       chat_id_hash = Map.fetch!(args, "chat_id_hash")
-      body = JobPayload.fetch!(args, :body)
       patient_id = Map.get(args, "patient_id")
 
-      {:ok,
-       %{
-         chat_id: chat_id,
-         chat_id_hash: chat_id_hash,
-         body: body,
-         patient_id: patient_id,
-         lane: lane
-       }}
+      with {:ok, chat_id} <- open_sealed(args, :chat_id),
+           {:ok, body} <- open_sealed(args, :body) do
+        {:ok,
+         %{
+           chat_id: chat_id,
+           chat_id_hash: chat_id_hash,
+           body: body,
+           patient_id: patient_id,
+           lane: lane
+         }}
+      else
+        {:error, :undecryptable} ->
+          # A sealed payload the vault can no longer open (key change or
+          # corruption). Retrying cannot help, so it is dead-lettered and
+          # alerted like an exhausted delivery instead of raising out of
+          # perform and being discarded silently.
+          dead_letter_and_broadcast(
+            chat_id_hash,
+            patient_id,
+            "[undecryptable payload]",
+            :undecryptable_payload,
+            Map.get(args, "_attempt", 1),
+            lane
+          )
+
+          {:cancel, :undecryptable_payload}
+      end
     end
   end
 
@@ -731,6 +748,16 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # ----------------------------------------------------------------
   # Dead-letter + PubSub broadcast
   # ----------------------------------------------------------------
+
+  # `JobPayload.fetch/2` for a field these args must carry: a missing
+  # field still raises (a malformed enqueue is a bug), an undecryptable
+  # one is returned for the caller to settle.
+  defp open_sealed(args, field) do
+    case JobPayload.fetch(args, field) do
+      :error -> {:ok, JobPayload.fetch!(args, field)}
+      result -> result
+    end
+  end
 
   # `outcome` is `"failed"` for an exhausted delivery (known not to have
   # arrived) and `"ambiguous"` for one that may have arrived and was not

@@ -26,6 +26,8 @@ defmodule Alethea.Telegram.JobPayload do
   covered without knowing about it.
   """
 
+  require Logger
+
   alias Alethea.Encryption.Vault
 
   @doc """
@@ -69,6 +71,40 @@ defmodule Alethea.Telegram.JobPayload do
     |> Base.decode64!()
     |> Vault.decrypt!()
     |> Jason.decode!()
+  end
+
+  @doc """
+  Non-raising variant of `fetch!/2`: `{:ok, value}`, `:error` when the
+  field is absent, or `{:error, :undecryptable}` when the sealed form can
+  no longer be opened (a vault key change or a corrupt row). Workers use
+  it so such a job ends visibly instead of raising and being discarded.
+  """
+  @spec fetch(map(), atom()) :: {:ok, term()} | :error | {:error, :undecryptable}
+  def fetch(args, field) do
+    lookup(args, field)
+  rescue
+    _exception -> {:error, :undecryptable}
+  end
+
+  @doc """
+  Tells operators that `worker`'s job `job_id` carried a sealed payload
+  that could not be decrypted: one PHI-free error log line and an
+  `{:job_payload_undecryptable, %{worker:, job_id:}}` event on
+  `"ops:alerts"`.
+  """
+  @spec report_undecryptable(module(), term()) :: :ok
+  def report_undecryptable(worker, job_id) do
+    worker_name = inspect(worker)
+
+    Logger.error("#{worker_name}: sealed job payload could not be decrypted (job_id=#{job_id})")
+
+    Phoenix.PubSub.broadcast(
+      Alethea.PubSub,
+      "ops:alerts",
+      {:job_payload_undecryptable, %{worker: worker_name, job_id: job_id}}
+    )
+
+    :ok
   end
 
   @doc """

@@ -113,12 +113,19 @@ defmodule Alethea.Jobs.TelegramMessageWorker do
   end
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
-    message = JobPayload.fetch!(args, :message)
-    update_id = Map.get(args, "telegram_update_id") || Map.get(args, :telegram_update_id)
+  def perform(%Oban.Job{id: job_id, args: args}) do
+    case JobPayload.fetch(args, :message) do
+      {:ok, message} ->
+        update_id = Map.get(args, "telegram_update_id") || Map.get(args, :telegram_update_id)
 
-    # Textless updates (voice, photo, sticker) carry no "text" key at all.
-    handle_inbound(message, Map.get(message, "text"), telegram_update_id: update_id)
+        # Textless updates (voice, photo, sticker) carry no "text" key at all.
+        handle_inbound(message, Map.get(message, "text"), telegram_update_id: update_id)
+
+      {:error, :undecryptable} ->
+        # Retrying cannot help; end the job visibly instead of raising.
+        JobPayload.report_undecryptable(__MODULE__, job_id)
+        {:cancel, :undecryptable_payload}
+    end
   end
 
   @doc """

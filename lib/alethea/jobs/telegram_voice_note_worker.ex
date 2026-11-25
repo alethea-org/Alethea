@@ -99,8 +99,19 @@ defmodule Alethea.Jobs.TelegramVoiceNoteWorker do
   end
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts} = job) do
-    message = JobPayload.fetch!(args, :message)
+  def perform(%Oban.Job{args: args} = job) do
+    case JobPayload.fetch(args, :message) do
+      {:ok, message} ->
+        handle_voice(job, message)
+
+      {:error, :undecryptable} ->
+        # Retrying cannot help; end the job visibly instead of raising.
+        JobPayload.report_undecryptable(__MODULE__, job.id)
+        {:cancel, :undecryptable_payload}
+    end
+  end
+
+  defp handle_voice(%Oban.Job{attempt: attempt, max_attempts: max_attempts} = job, message) do
     voice = TelegramMessageWorker.voice_payload(message)
 
     cond do

@@ -397,6 +397,26 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
     end
   end
 
+  describe "perform/1 — undecryptable sealed payload" do
+    test "is dead-lettered and alerted instead of raising and vanishing" do
+      corrupted = Base.encode64(:crypto.strong_rand_bytes(48))
+
+      args =
+        build_args()
+        |> Map.drop(["chat_id", "body"])
+        |> Map.merge(%{"encrypted_chat_id" => corrupted, "encrypted_body" => corrupted})
+
+      assert {:cancel, :undecryptable_payload} = perform(args)
+
+      dl = Repo.one(OutboundDeadLetter)
+      assert dl.chat_id_hash == @chat_id_hash
+      assert dl.last_error =~ "undecryptable_payload"
+      refute dl.text =~ corrupted
+
+      assert_receive {:outbound_dead_letter, %{chat_id_hash: @chat_id_hash}}, 1_000
+    end
+  end
+
   # ----------------------------------------------------------------
   # Pacer integration (REQ-C7-pacer-per-chat-limit)
   # ----------------------------------------------------------------
