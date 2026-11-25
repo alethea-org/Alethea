@@ -328,8 +328,9 @@ liveview_timing stage=mount view=AletheaWeb.DashboardLive duration_ms=412 querie
 ```
 
 `duration_ms` is the server time of that stage, `queries` and `db_ms` the Repo
-queries it ran and their total time, `queue_ms` the time spent waiting for a
-pool connection. The `on_mount` hooks run inside `mount` and are included.
+queries it ran and their total time, `queue_ms` the part of `db_ms` spent
+waiting for a pool connection (`db_ms` already includes it). `event` is quoted
+and truncated, as it comes from the client. The `on_mount` hooks run inside `mount` and are included.
 Read them with:
 
 ```bash

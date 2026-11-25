@@ -71,8 +71,27 @@ defmodule AletheaWeb.Telemetry.LiveViewTimingTest do
         span(:handle_event, %{event: "select_patient"}, fn -> query(1) end)
       end)
 
-    assert log =~ "stage=handle_event view=AletheaWeb.DashboardLive event=select_patient"
+    assert log =~ "stage=handle_event view=AletheaWeb.DashboardLive event=\"select_patient\""
     assert log =~ "queries=1"
+  end
+
+  test "escapes and bounds the client-supplied event name" do
+    forged = "a\nliveview_timing forged=1" <> String.duplicate("x", 500)
+
+    log =
+      capture_log([level: :info], fn ->
+        LiveViewTiming.handle_event(
+          [:phoenix, :live_view, :handle_event, :exception],
+          %{duration: 1},
+          %{socket: socket(), event: forged},
+          nil
+        )
+      end)
+
+    [line] = log |> String.split("\n", trim: true) |> Enum.filter(&(&1 =~ "liveview_timing"))
+    assert line =~ ~s(event="a\\nliveview_timing forged=1)
+    assert line =~ "exception=true"
+    refute line =~ String.duplicate("x", 200)
   end
 
   test "covers handle_params" do

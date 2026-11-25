@@ -11,6 +11,8 @@ defmodule AletheaWeb.Telemetry.LiveViewTiming do
   One line per stage, at `:info`:
 
       liveview_timing stage=mount view=AletheaWeb.DashboardLive duration_ms=412 queries=14 db_ms=380 queue_ms=3
+
+  `db_ms` is the queries' total time and includes `queue_ms`.
   """
 
   require Logger
@@ -19,6 +21,7 @@ defmodule AletheaWeb.Telemetry.LiveViewTiming do
   @stages [:mount, :handle_params, :handle_event]
   @query_event [:alethea, :repo, :query]
   @acc_key {__MODULE__, :acc}
+  @event_name_limit 64
 
   def attach do
     events =
@@ -78,7 +81,11 @@ defmodule AletheaWeb.Telemetry.LiveViewTiming do
 
   defp view_name(_metadata), do: "unknown"
 
-  defp event_part(%{event: event}) when is_binary(event), do: " event=#{event}"
+  # The event name comes from the client: inspect/2 escapes control
+  # characters (no forged log lines) and the limit bounds its length.
+  defp event_part(%{event: event}) when is_binary(event),
+    do: " event=" <> inspect(event, printable_limit: @event_name_limit)
+
   defp event_part(_metadata), do: ""
 
   defp to_ms(nil), do: 0
