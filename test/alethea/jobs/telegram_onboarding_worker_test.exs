@@ -124,6 +124,29 @@ defmodule Alethea.Jobs.TelegramOnboardingWorkerTest do
     end
   end
 
+  describe "perform/1 — legacy six-digit jobs from the removed web fallback" do
+    test "a queued kind: six_digit job binds nothing and messages nobody" do
+      professional = professional_fixture()
+      patient = patient_fixture(professional) |> bind_patient_to_legacy_professional()
+      {:ok, six_digit} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "six_digit")
+
+      job = %Oban.Job{
+        args: %{
+          "token" => six_digit.code,
+          "kind" => "six_digit",
+          "chat_id" => @chat_id,
+          "ip" => "203.0.113.7"
+        }
+      }
+
+      assert :ok = TelegramOnboardingWorker.perform(job)
+
+      assert Repo.get!(Patient, patient.id).telegram_chat_id_hash == nil
+      assert Repo.get!(PatientAuthCode, six_digit.id).used_at == nil
+      assert all_enqueued(worker: TelegramOutboundWorker) == []
+    end
+  end
+
   describe "perform/1 — welcome copy without a profile_name" do
     test "falls back to a generic greeting when the patient has no first name" do
       professional = professional_fixture()

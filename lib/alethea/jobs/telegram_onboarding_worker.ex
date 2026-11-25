@@ -89,6 +89,16 @@ defmodule Alethea.Jobs.TelegramOnboardingWorker do
   @scheduling_disclosure "Tu psicólogo/a también puede programarte mensajes puntuales desde Alethea."
 
   @impl Oban.Worker
+  # Six-digit codes were only redeemable through the removed public
+  # `GET /webhooks/telegram/auth` fallback, whose `chat_id` was never
+  # proven to belong to the caller. A job of that kind still queued from
+  # before the removal is dropped: nothing is bound and, because the chat
+  # is unverified, no reply is sent to it.
+  def perform(%Oban.Job{args: %{"kind" => "six_digit"}}) do
+    Logger.info("TelegramOnboardingWorker: dropped legacy six-digit web-fallback job")
+    :ok
+  end
+
   def perform(%Oban.Job{args: args}) do
     token = Map.get(args, "token")
     chat_id = Map.fetch!(args, "chat_id")

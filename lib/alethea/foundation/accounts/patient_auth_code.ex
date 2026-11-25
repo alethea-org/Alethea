@@ -314,16 +314,31 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
     with {:ok, chat_id_int} <- validate_chat_id(raw_chat_id) do
       used_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
+      # Lock order: patient row, then the code, then its siblings. Every
+      # consume for one patient queues on the patient row first, so two
+      # consumes of sibling codes serialize instead of skipping (or
+      # deadlocking on) each other's code.
       Ecto.Multi.new()
-      |> Ecto.Multi.run(:auth_code, fn repo, _changes ->
-        case fetch_by_code_and_kind_for_update(repo, code, kind) do
+      |> Ecto.Multi.run(:patient, fn repo, _changes ->
+        case repo.one(code_query(code, kind)) do
           nil -> {:error, :already_used}
-          %__MODULE__{used_at: %DateTime{}} -> {:error, :already_used}
-          auth_code -> {:ok, auth_code}
+          unlocked -> {:ok, repo.one!(patient_for_update_query(unlocked.patient_id))}
         end
       end)
-      |> Ecto.Multi.run(:patient, fn repo, %{auth_code: auth_code} ->
-        {:ok, repo.get!(Patient, auth_code.patient_id)}
+      |> Ecto.Multi.run(:auth_code, fn repo, %{patient: patient} ->
+        case fetch_by_code_and_kind_for_update(repo, code, kind) do
+          nil ->
+            {:error, :already_used}
+
+          %__MODULE__{used_at: %DateTime{}} ->
+            {:error, :already_used}
+
+          %__MODULE__{patient_id: patient_id} = auth_code when patient_id == patient.id ->
+            {:ok, auth_code}
+
+          _other_patient ->
+            {:error, :already_used}
+        end
       end)
       |> maybe_encrypt_chat_id(chat_id_int)
       |> Ecto.Multi.update(:bind, fn changes ->
@@ -351,7 +366,7 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
         {:ok, %{bind: patient}} ->
           {:ok, patient}
 
-        {:error, :auth_code, :already_used, _changes} ->
+        {:error, step, :already_used, _changes} when step in [:patient, :auth_code] ->
           {:error, :already_used}
 
         {:error, :bind, %Ecto.Changeset{} = changeset, _changes} ->
@@ -367,26 +382,34 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCode do
     end
   end
 
+  @doc false
   # The patient's OTHER live, unused codes (every kind). Consuming one
   # code revokes them in the same transaction, so a leftover sibling
   # (e.g. the six-digit code minted next to a deep link) cannot later
-  # rebind an onboarded patient to another chat. The consumed row is
-  # already locked `FOR UPDATE` by the `:auth_code` step; the siblings
-  # are locked after it with `SKIP LOCKED`, so two concurrent consumes
-  # of two sibling codes never wait on each other's row (no deadlock).
-  # A sibling skipped that way is held by its own consume, which marks
-  # it used itself.
-  defp live_siblings_query(%__MODULE__{} = auth_code, now) do
-    locked_ids =
-      from(a in __MODULE__,
-        where:
-          a.patient_id == ^auth_code.patient_id and a.id != ^auth_code.id and
-            is_nil(a.used_at) and a.expires_at > ^now,
-        select: a.id,
-        lock: "FOR UPDATE SKIP LOCKED"
-      )
+  # rebind an onboarded patient to another chat. The consume already
+  # holds the patient row, so this update simply waits for any other
+  # lock on a sibling (a concurrent verify) and never skips a row.
+  # Exposed for the lock-shape regression test.
+  def live_siblings_query(%__MODULE__{} = auth_code, now) do
+    from(a in __MODULE__,
+      where:
+        a.patient_id == ^auth_code.patient_id and a.id != ^auth_code.id and
+          is_nil(a.used_at) and a.expires_at > ^now
+    )
+  end
 
-    from(a in __MODULE__, where: a.id in subquery(locked_ids))
+  @doc false
+  # The per-patient serialization point taken first by every consume.
+  # Exposed for the lock-shape regression test.
+  def patient_for_update_query(patient_id) do
+    from(p in Patient, where: p.id == ^patient_id, lock: "FOR UPDATE")
+  end
+
+  defp code_query(code, kind) do
+    __MODULE__
+    |> where([a], a.code == ^code and a.kind == ^kind)
+    |> order_by(desc: :inserted_at)
+    |> limit(1)
   end
 
   defp validate_chat_id(nil), do: {:ok, nil}

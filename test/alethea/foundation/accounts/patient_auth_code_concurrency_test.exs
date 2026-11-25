@@ -79,4 +79,37 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeConcurrencyTest do
     reloaded_code = Repo.get!(PatientAuthCode, auth_code.id)
     assert %DateTime{} = reloaded_code.used_at
   end
+
+  # Sibling revocation must not be best-effort: when two sibling codes
+  # of one patient are consumed at the same time, exactly one binds and
+  # the other sees its code already revoked. Consumes serialize on the
+  # patient row, so neither can skip the other's code.
+  test "concurrent consumes of two sibling codes bind exactly once and leave no live code" do
+    professional = professional_fixture()
+    patient = patient_fixture(professional)
+
+    codes =
+      for _ <- 1..4 do
+        {:ok, code} = PatientAuthCode.create_patient_auth_code(patient.id, kind: "deep_link")
+        code
+      end
+
+    results =
+      codes
+      |> Enum.with_index()
+      |> Enum.map(fn {code, i} ->
+        Task.async(fn ->
+          hash = String.duplicate("#{i + 1}", 64)
+          PatientAuthCode.consume_patient_auth_code(code.code, hash, kind: "deep_link")
+        end)
+      end)
+      |> Task.await_many(5_000)
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &match?({:error, :already_used}, &1)) == 3
+
+    for code <- codes do
+      assert %DateTime{} = Repo.get!(PatientAuthCode, code.id).used_at
+    end
+  end
 end

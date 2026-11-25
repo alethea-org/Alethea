@@ -514,6 +514,27 @@ defmodule Alethea.Foundation.Accounts.PatientAuthCodeTest do
     # `PatientAuthCodeConcurrencyTest` (a separate `async: false`
     # module, mirroring `BotConfigTest`'s F-07 guard) rather than here,
     # since this whole file is `async: true`.
+    test "consume serializes on the patient row and revokes siblings without skipping locked rows" do
+      {patient_sql, _} =
+        Ecto.Adapters.SQL.to_sql(
+          :all,
+          Repo,
+          PatientAuthCode.patient_for_update_query(Ecto.UUID.generate())
+        )
+
+      assert patient_sql =~ "FOR UPDATE"
+
+      sibling_query =
+        PatientAuthCode.live_siblings_query(
+          %PatientAuthCode{id: Ecto.UUID.generate(), patient_id: Ecto.UUID.generate()},
+          DateTime.utc_now()
+        )
+
+      {sibling_sql, _} = Ecto.Adapters.SQL.to_sql(:all, Repo, sibling_query)
+
+      refute sibling_sql =~ "SKIP LOCKED"
+    end
+
     test "the row-lock mechanism used by consume_patient_auth_code/3 compiles to FOR UPDATE SQL" do
       query = PatientAuthCode.for_update_query("any-code", "deep_link")
 
