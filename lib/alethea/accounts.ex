@@ -20,8 +20,12 @@ defmodule Alethea.Accounts do
 
   def get_professional!(id), do: Repo.get!(Professional, id)
 
+  @doc """
+  Finds a professional by email, ignoring case and surrounding
+  whitespace (see `Professional.normalize_email/1`).
+  """
   def get_professional_by_email(email) when is_binary(email) do
-    Repo.get_by(Professional, email: email)
+    Repo.get_by(Professional, email: Professional.normalize_email(email))
   end
 
   def create_professional(attrs \\ %{}) do

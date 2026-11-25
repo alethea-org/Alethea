@@ -360,7 +360,14 @@ defmodule Alethea.Foundation.Accounts do
   """
   @spec professional_by_email(String.t()) :: {:ok, Professional.t()} | :not_found
   def professional_by_email(email) when is_binary(email) do
-    case Repo.get_by(Professional, email: email) do
+    # Foundation rows copied the email as typed, while legacy emails are
+    # canonical (trimmed, lowercased), so the bridge compares case-insensitively.
+    canonical = Alethea.Accounts.Professional.normalize_email(email)
+
+    query =
+      from p in Professional, where: fragment("lower(trim(?))", p.email) == ^canonical, limit: 1
+
+    case Repo.one(query) do
       nil -> :not_found
       %Professional{} = professional -> {:ok, professional}
     end
@@ -390,7 +397,10 @@ defmodule Alethea.Foundation.Accounts do
      (alias mirrored from the legacy row, `legacy_patient_id` set).
   4. Mint `deep_link` AND `six_digit` auth codes against the
      foundation patient via `PatientAuthCode.create_patient_auth_code/2`
-     (same 10-minute TTL as the /start flow).
+     (same 10-minute TTL as the /start flow). Only the deep link is
+     redeemable (bot `/start <token>`); the public six-digit web
+     fallback was removed. Consuming either code revokes the other
+     (see `PatientAuthCode.consume_patient_auth_code/3`).
 
   Returns `{:ok, %{deep_link_token:, six_digit_code:, expires_at:,
   foundation_patient:}}` or `{:error, :legacy_not_found}` (dangling /
@@ -549,7 +559,7 @@ defmodule Alethea.Foundation.Accounts do
   # deliberately NOT `:not_found`, so a caller cannot distinguish "no
   # legacy pro" from "no legacy patient" (zero leakage).
   defp legacy_professional_for(%Professional{email: email}) when is_binary(email) do
-    case Repo.get_by(Alethea.Accounts.Professional, email: email) do
+    case Alethea.Accounts.get_professional_by_email(email) do
       nil -> {:error, :legacy_not_found}
       %Alethea.Accounts.Professional{} = legacy_pro -> {:ok, legacy_pro}
     end

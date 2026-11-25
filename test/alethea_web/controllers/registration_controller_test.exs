@@ -4,6 +4,8 @@ defmodule AletheaWeb.RegistrationControllerTest do
   alias Alethea.Accounts.Professional
   alias Alethea.Repo
 
+  import Ecto.Query, only: [from: 2]
+
   @password "password12345"
 
   setup do
@@ -101,7 +103,38 @@ defmodule AletheaWeb.RegistrationControllerTest do
       conn = post(conn, ~p"/register", professional: params)
 
       assert redirected_to(conn) == ~p"/login"
-      assert Repo.get_by(Professional, email: email)
+      # Stored in canonical form (S3, security-audit-run-1).
+      assert Repo.get_by(Professional, email: String.downcase(email))
+    end
+
+    test "a case variant of an existing email is rejected as taken and creates no row", %{
+      conn: conn
+    } do
+      Application.put_env(:alethea, :demo_restricted_access, true)
+      Application.put_env(:alethea, :demo_allowed_emails, ["admin@example.org"])
+
+      {:ok, _admin} =
+        Alethea.Accounts.create_professional(%{
+          "email" => "admin@example.org",
+          "full_name" => "Real Admin",
+          "password" => @password
+        })
+
+      count_before = Repo.aggregate(Professional, :count)
+
+      params = %{
+        "email" => "ADMIN@example.org",
+        "full_name" => "Impostor",
+        "password" => "impostor-password1"
+      }
+
+      conn = post(conn, ~p"/register", professional: params)
+
+      assert html_response(conn, 200) =~ "has already been taken"
+      assert Repo.aggregate(Professional, :count) == count_before
+
+      assert [%Professional{full_name: "Real Admin"}] =
+               Repo.all(from p in Professional, where: p.email == "admin@example.org")
     end
   end
 end

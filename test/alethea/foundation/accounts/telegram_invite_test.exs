@@ -28,6 +28,31 @@ defmodule Alethea.Foundation.Accounts.TelegramInviteTest do
 
       assert Accounts.professional_by_email(email) == :not_found
     end
+
+    test "matches a foundation row stored with different casing" do
+      professional =
+        professional_fixture(%{
+          email: "Mixed.Case-#{System.unique_integer([:positive])}@Example.com"
+        })
+
+      assert {:ok, %{id: id}} =
+               Accounts.professional_by_email(String.downcase(professional.email))
+
+      assert id == professional.id
+    end
+  end
+
+  describe "invite_patient_to_telegram/2 email bridge" do
+    test "bridges a foundation professional whose stored email casing differs from the canonical legacy email" do
+      legacy_pro = legacy_professional_fixture()
+      foundation_pro = professional_fixture(%{email: String.upcase(legacy_pro.email)})
+      legacy_patient = legacy_patient_fixture(legacy_pro)
+
+      assert {:ok, %{foundation_patient: foundation_patient}} =
+               Accounts.invite_patient_to_telegram(legacy_patient.id, foundation_pro)
+
+      assert foundation_patient.legacy_patient_id == legacy_patient.id
+    end
   end
 
   describe "invite_patient_to_telegram/2" do
