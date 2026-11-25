@@ -83,7 +83,12 @@ defmodule Alethea.Telegram.JobPayload do
   def fetch(args, field) do
     lookup(args, field)
   rescue
-    _exception -> {:error, :undecryptable}
+    # Only failures of the stored value itself: bad base64, a ciphertext
+    # the configured key cannot open, or a cipher label no longer
+    # configured. Anything else, notably `Cloak.VaultNotStarted` while the
+    # vault restarts, propagates so Oban retries the job.
+    _exception in [ArgumentError, Cloak.MissingCipher, Jason.DecodeError] ->
+      {:error, :undecryptable}
   end
 
   @doc """

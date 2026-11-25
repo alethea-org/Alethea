@@ -28,6 +28,16 @@ defmodule Alethea.Telegram.JobPayloadTest do
                JobPayload.fetch(%{"encrypted_body" => corrupted()}, :body)
     end
 
+    test "reports a value sealed under a cipher label the vault no longer has" do
+      {:ok, ciphertext} = Alethea.Encryption.Vault.encrypt("\"hola\"")
+      # Rewrite the Cloak label byte header to an unknown label.
+      <<_type, len, _label::binary-size(len), rest::binary>> = ciphertext
+      foreign = <<1, 7, "retired", rest::binary>>
+
+      assert {:error, :undecryptable} =
+               JobPayload.fetch(%{"encrypted_body" => Base.encode64(foreign)}, :body)
+    end
+
     test "reports a missing field" do
       assert :error = JobPayload.fetch(%{}, :body)
     end
