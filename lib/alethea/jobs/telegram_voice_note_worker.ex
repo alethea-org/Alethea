@@ -160,7 +160,7 @@ defmodule Alethea.Jobs.TelegramVoiceNoteWorker do
       from(j in Oban.Job,
         where:
           j.worker == ^worker and
-            fragment("? ->> 'patient_id' = ?", j.args, ^patient_id) and
+            fragment("? @> ?", j.args, ^%{"patient_id" => patient_id}) and
             j.inserted_at >= ^since,
         select: count(j.id)
       )
