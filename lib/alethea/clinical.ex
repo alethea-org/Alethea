@@ -1201,15 +1201,31 @@ defmodule Alethea.Clinical do
     end
   end
 
-  # Fills the virtual `summary_text` of each row from `encrypted_summary`,
-  # unwrapping the DEK once per call and only when there is something to
-  # decrypt. Without a key (or for an unreadable row) the text is `nil`,
-  # so readers degrade instead of crashing.
-  defp decrypt_summaries([], _patient_id), do: []
+  @doc """
+  Resolves the patient DEK used to read summaries: one KEK unwrap and one
+  `PII_DECRYPT` audit row. Pass the result as the `:dek` option of the
+  summary readers so a single user-facing load pays for it once.
+  """
+  @spec summary_reading_dek(binary()) :: {:ok, binary()} | {:error, term()}
+  def summary_reading_dek(patient_id), do: summary_dek(patient_id, "summary_loading")
 
-  defp decrypt_summaries(summaries, patient_id) do
+  # Fills the virtual `summary_text` of each row from `encrypted_summary`,
+  # using the `:dek` option when given (the caller already resolved it) and
+  # otherwise unwrapping the DEK once per call, only when there is something
+  # to decrypt. Without a key (or for an unreadable row) the text is `nil`,
+  # so readers degrade instead of crashing.
+  defp decrypt_summaries(summaries, patient_id, opts \\ [])
+  defp decrypt_summaries([], _patient_id, _opts), do: []
+
+  defp decrypt_summaries(summaries, patient_id, opts) do
+    dek_result =
+      case Keyword.fetch(opts, :dek) do
+        {:ok, result} -> result
+        :error -> summary_reading_dek(patient_id)
+      end
+
     dek =
-      case summary_dek(patient_id, "summary_loading") do
+      case dek_result do
         {:ok, dek} -> dek
         {:error, _reason} -> nil
       end
@@ -1249,6 +1265,8 @@ defmodule Alethea.Clinical do
     * `:limit` — page size (default #{@session_summaries_page_size}).
     * `:before` — `{period_end, id}` of the last item of the previous page;
       only items strictly after it in the ordering are returned.
+    * `:dek` — a result of `summary_reading_dek/1` already resolved by the
+      caller; when absent the DEK is resolved here.
   """
   @spec list_session_summaries_page(binary(), DateTime.t(), keyword()) ::
           {[Summary.t()], boolean()}
@@ -1277,7 +1295,7 @@ defmodule Alethea.Clinical do
       end
 
     rows = Repo.all(query)
-    {rows |> Enum.take(limit) |> decrypt_summaries(patient_id), length(rows) > limit}
+    {rows |> Enum.take(limit) |> decrypt_summaries(patient_id, opts), length(rows) > limit}
   end
 
   @doc """
@@ -1285,9 +1303,12 @@ defmodule Alethea.Clinical do
 
   No filtra por fecha: un reporte semanal cubre la semana *anterior*, así que su
   `period_start` casi siempre queda fuera de una ventana de 7 días.
+
+  Acepta `dek:` (resultado de `summary_reading_dek/1`) para no volver a
+  resolver la llave del paciente.
   """
-  @spec latest_weekly_summary(binary()) :: Summary.t() | nil
-  def latest_weekly_summary(patient_id) do
+  @spec latest_weekly_summary(binary(), keyword()) :: Summary.t() | nil
+  def latest_weekly_summary(patient_id, opts \\ []) do
     Repo.one(
       from(s in Summary,
         where: s.patient_id == ^patient_id and s.type == "weekly",
@@ -1296,7 +1317,7 @@ defmodule Alethea.Clinical do
       )
     )
     |> List.wrap()
-    |> decrypt_summaries(patient_id)
+    |> decrypt_summaries(patient_id, opts)
     |> List.first()
   end
 

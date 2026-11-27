@@ -69,6 +69,56 @@ defmodule AletheaWeb.DashboardLiveSessionsPaginationTest do
     end
   end
 
+  describe "summary key resolution (security-audit-run-2 S6c)" do
+    test "one dashboard load unwraps the patient key once for all summaries", %{
+      conn: conn,
+      patient: patient
+    } do
+      insert_sessions(patient, 3)
+
+      {:ok, _weekly} =
+        Alethea.Clinical.save_summary(%{
+          period_start: DateTime.utc_now() |> DateTime.truncate(:second),
+          period_end: DateTime.utc_now() |> DateTime.truncate(:second),
+          summary_text: "Semana estable.",
+          status_level: "Estable",
+          type: "weekly",
+          patient_id: patient.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/#{patient.id}")
+      before = audit_counts(patient)
+
+      send(view.pid, {:emotion_trends_updated, patient.id})
+      html = render(view)
+
+      assert html =~ "Semana estable."
+      assert html =~ "Sesión número 1."
+
+      after_load = audit_counts(patient)
+      assert after_load.kek_load - before.kek_load == 1
+      assert after_load.summary_decrypt - before.summary_decrypt == 1
+    end
+  end
+
+  defp audit_counts(patient) do
+    import Ecto.Query
+
+    logs = Alethea.Repo.all(from(a in Alethea.Accounts.AuditLog))
+
+    %{
+      kek_load: Enum.count(logs, &(&1.action == "KEK_LOAD")),
+      summary_decrypt:
+        Enum.count(
+          logs,
+          &(&1.action == "PII_DECRYPT" and &1.resource_id == patient.id and
+              reason(&1) == "summary_loading")
+        )
+    }
+  end
+
+  defp reason(%{details: details}), do: details["reason"] || details[:reason]
+
   defp session_item_count(view) do
     view
     |> render()

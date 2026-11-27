@@ -651,7 +651,7 @@ defmodule AletheaWeb.DashboardLive do
 
   # Session summaries (last 30 days), paginated newest first so the
   # "Sesiones anteriores" panel never loads the whole history at once.
-  defp load_first_session_summaries_page(socket, patient, true = _use_mock?) do
+  defp load_first_session_summaries_page(socket, patient, true = _use_mock?, _summary_dek) do
     summaries = MockData.list_mock_summaries(patient.id, "session")
 
     socket
@@ -662,9 +662,11 @@ defmodule AletheaWeb.DashboardLive do
     |> assign(:session_summaries_empty?, Enum.empty?(summaries))
   end
 
-  defp load_first_session_summaries_page(socket, patient, false = _use_mock?) do
+  defp load_first_session_summaries_page(socket, patient, false = _use_mock?, summary_dek) do
     since = DateTime.utc_now() |> DateTime.add(-30, :day)
-    {summaries, more?} = Alethea.Clinical.list_session_summaries_page(patient.id, since)
+
+    {summaries, more?} =
+      Alethea.Clinical.list_session_summaries_page(patient.id, since, dek: summary_dek)
 
     socket
     |> stream(:session_summaries, summaries, reset: true)
@@ -712,12 +714,16 @@ defmodule AletheaWeb.DashboardLive do
   defp load_patient_details(socket, patient) do
     use_mock? = socket.assigns.use_mock_data
 
+    # One DEK unwrap (and one PII_DECRYPT audit) per load for every summary
+    # reader below. Kept local: the key never goes into assigns.
+    summary_dek = if use_mock?, do: nil, else: Alethea.Clinical.summary_reading_dek(patient.id)
+
     # Weekly summary
     weekly_summary =
       if use_mock? do
         List.first(MockData.list_mock_summaries(patient.id, "weekly"))
       else
-        Alethea.Clinical.latest_weekly_summary(patient.id)
+        Alethea.Clinical.latest_weekly_summary(patient.id, dek: summary_dek)
       end
 
     # Trends (last 7 days)
@@ -758,7 +764,7 @@ defmodule AletheaWeb.DashboardLive do
       to_form(%{"timezone" => patient.timezone || "Etc/UTC"})
     )
     |> assign(:weekly_summary, weekly_summary)
-    |> load_first_session_summaries_page(patient, use_mock?)
+    |> load_first_session_summaries_page(patient, use_mock?, summary_dek)
     |> assign(:emotion_rows, emotion_rows)
     |> assign(:emotion_chart_data, emotion_chart_data)
     |> assign(:mood_signal, calculate_mood_signal(trends, patient))
