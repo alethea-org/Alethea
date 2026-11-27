@@ -532,11 +532,14 @@ defmodule AletheaWeb.DashboardLiveTest do
       Application.put_env(:alethea, :use_mock_data, false)
       on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
 
+      # Summaries are encrypted under the patient DEK, so the patient needs one.
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+
       {:ok, patient} =
-        Accounts.create_patient(%{
-          alias: "Paciente Real",
-          professional_id: professional.id
-        })
+        Accounts.create_patient(
+          %{alias: "Paciente Real", professional_id: professional.id},
+          kek
+        )
 
       %{patient: patient}
     end
@@ -685,11 +688,14 @@ defmodule AletheaWeb.DashboardLiveTest do
       Application.put_env(:alethea, :use_mock_data, false)
       on_exit(fn -> Application.put_env(:alethea, :use_mock_data, false) end)
 
+      # Summaries are encrypted under the patient DEK, so the patient needs one.
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+
       {:ok, patient} =
-        Accounts.create_patient(%{
-          alias: "Paciente Real",
-          professional_id: professional.id
-        })
+        Accounts.create_patient(
+          %{alias: "Paciente Real", professional_id: professional.id},
+          kek
+        )
 
       %{patient: patient}
     end

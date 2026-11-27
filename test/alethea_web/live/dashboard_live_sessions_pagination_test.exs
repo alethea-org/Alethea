@@ -5,8 +5,6 @@ defmodule AletheaWeb.DashboardLiveSessionsPaginationTest do
   import Alethea.FoundationTestHelper
 
   alias Alethea.Accounts
-  alias Alethea.Clinical.Summary
-  alias Alethea.Repo
 
   setup [:register_and_log_in_professional]
 
@@ -102,16 +100,17 @@ defmodule AletheaWeb.DashboardLiveSessionsPaginationTest do
     for n <- 1..count do
       period_end = DateTime.add(now, -n, :hour)
 
-      %Summary{}
-      |> Summary.changeset(%{
-        period_start: period_end,
-        period_end: period_end,
-        summary_text: "Sesión número #{n}.",
-        status_level: "Estable",
-        type: "session",
-        patient_id: patient.id
-      })
-      |> Repo.insert!()
+      {:ok, summary} =
+        Alethea.Clinical.save_summary(%{
+          period_start: period_end,
+          period_end: period_end,
+          summary_text: "Sesión número #{n}.",
+          status_level: "Estable",
+          type: "session",
+          patient_id: patient.id
+        })
+
+      summary
     end
   end
 end

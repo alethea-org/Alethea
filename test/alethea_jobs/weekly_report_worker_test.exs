@@ -139,7 +139,8 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
       Repo.all(from s in Summary, where: s.patient_id == ^patient.id and s.type == "weekly")
 
     assert length(weekly_summaries) == 1
-    [summary] = weekly_summaries
+    # The narrative is stored encrypted; the context reader decrypts it.
+    summary = Clinical.latest_weekly_summary(patient.id)
     assert summary.summary_text =~ "está estable"
     assert summary.status_level == "Estable"
   end

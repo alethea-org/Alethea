@@ -22,10 +22,11 @@ defmodule AletheaJobs.WeeklyReportWorker do
     aggregated_trends = Clinical.aggregate_trends(patient_id, seven_days_ago)
 
     # Sanitizar los resúmenes antes de enviarlos a la IA
+    # A summary whose patient key is gone decrypts to `nil` and is skipped.
     sanitized_summaries =
-      Enum.map(summaries, fn summary ->
-        %{summary | summary_text: Sanitizer.sanitize(summary.summary_text)}
-      end)
+      for %{summary_text: text} = summary <- summaries, is_binary(text) do
+        %{summary | summary_text: Sanitizer.sanitize(text)}
+      end
 
     # The week's own patient messages let the report describe what happened,
     # even before any session has been closed and summarized.

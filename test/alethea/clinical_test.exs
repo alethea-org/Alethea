@@ -25,11 +25,13 @@ defmodule Alethea.ClinicalTest do
           full_name: "Dra. Test"
         })
 
+      {:ok, kek} = Accounts.load_professional_kek(professional)
+
       {:ok, patient} =
-        Accounts.create_patient(%{
-          alias: "Paciente Semanal",
-          professional_id: professional.id
-        })
+        Accounts.create_patient(
+          %{alias: "Paciente Semanal", professional_id: professional.id},
+          kek
+        )
 
       %{patient: patient}
     end
@@ -66,11 +68,13 @@ defmodule Alethea.ClinicalTest do
           full_name: "Dr. Otro"
         })
 
+      {:ok, other_kek} = Accounts.load_professional_kek(other_professional)
+
       {:ok, other_patient} =
-        Accounts.create_patient(%{
-          alias: "Otro Paciente",
-          professional_id: other_professional.id
-        })
+        Accounts.create_patient(
+          %{alias: "Otro Paciente", professional_id: other_professional.id},
+          other_kek
+        )
 
       insert_summary(other_patient, "weekly", days_ago: 1)
 

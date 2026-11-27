@@ -1161,11 +1161,71 @@ defmodule Alethea.Clinical do
     save_trends(fake_patient, emotion_scores, nil)
   end
 
+  @doc """
+  Persists an AI summary with its narrative encrypted under the patient DEK
+  (`encrypted_summary`); the plaintext `summary_text` is never stored.
+
+  Returns `{:error, changeset}` (error on `:summary_text`) when the patient
+  has no usable key, so nothing is written in clear.
+  """
   def save_summary(attrs) do
     %Summary{}
     |> Summary.changeset(attrs)
+    |> encrypt_summary_text()
     |> Repo.insert()
   end
+
+  defp encrypt_summary_text(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+
+  defp encrypt_summary_text(changeset) do
+    text = Ecto.Changeset.get_field(changeset, :summary_text)
+    patient_id = Ecto.Changeset.get_field(changeset, :patient_id)
+
+    with {:ok, dek} <- summary_dek(patient_id, "summary_writing"),
+         {:ok, ciphertext} <- PatientVault.encrypt(text, dek) do
+      Ecto.Changeset.put_change(changeset, :encrypted_summary, ciphertext)
+    else
+      _no_key -> Ecto.Changeset.add_error(changeset, :summary_text, "could not be encrypted")
+    end
+  end
+
+  # The DEK of the patient that owns the summaries. A patient without a
+  # key (never created or destroyed) is an error, never a raise.
+  defp summary_dek(patient_id, reason) do
+    case Repo.get(Alethea.Accounts.Patient, patient_id) do
+      %{encryption_key_id: key_id} = patient when not is_nil(key_id) ->
+        patient_dek(patient, reason)
+
+      _no_key ->
+        {:error, :missing_encryption_key}
+    end
+  end
+
+  # Fills the virtual `summary_text` of each row from `encrypted_summary`,
+  # unwrapping the DEK once per call and only when there is something to
+  # decrypt. Without a key (or for an unreadable row) the text is `nil`,
+  # so readers degrade instead of crashing.
+  defp decrypt_summaries([], _patient_id), do: []
+
+  defp decrypt_summaries(summaries, patient_id) do
+    dek =
+      case summary_dek(patient_id, "summary_loading") do
+        {:ok, dek} -> dek
+        {:error, _reason} -> nil
+      end
+
+    Enum.map(summaries, &decrypt_summary(&1, dek))
+  end
+
+  defp decrypt_summary(%Summary{encrypted_summary: ciphertext} = summary, dek)
+       when is_binary(ciphertext) and is_binary(dek) do
+    case PatientVault.decrypt(ciphertext, dek) do
+      {:ok, text} -> %{summary | summary_text: text}
+      {:error, _reason} -> %{summary | summary_text: nil}
+    end
+  end
+
+  defp decrypt_summary(%Summary{} = summary, _dek), do: %{summary | summary_text: nil}
 
   def list_session_summaries(patient_id, since) do
     Repo.all(
@@ -1176,6 +1236,7 @@ defmodule Alethea.Clinical do
             s.period_start >= ^since
       )
     )
+    |> decrypt_summaries(patient_id)
   end
 
   @session_summaries_page_size 20
@@ -1216,7 +1277,7 @@ defmodule Alethea.Clinical do
       end
 
     rows = Repo.all(query)
-    {Enum.take(rows, limit), length(rows) > limit}
+    {rows |> Enum.take(limit) |> decrypt_summaries(patient_id), length(rows) > limit}
   end
 
   @doc """
@@ -1234,6 +1295,9 @@ defmodule Alethea.Clinical do
         limit: 1
       )
     )
+    |> List.wrap()
+    |> decrypt_summaries(patient_id)
+    |> List.first()
   end
 
   @spec list_daily_emotion_scores(binary(), DateTime.t()) :: [map()]
