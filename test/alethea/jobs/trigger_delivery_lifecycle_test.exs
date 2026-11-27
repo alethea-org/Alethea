@@ -726,6 +726,46 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
       assert Repo.get!(Message, message.id).delivery_state == "pending"
     end
 
+    test "a pending message of a fired one-shot is not sent after the patient sent /pausa",
+         %{patient: patient, enc_text: enc_text} do
+      {trigger, message} = pending_trigger_message(patient, enc_text, %{status: "fired"})
+
+      firing =
+        %Alethea.Triggers.TriggerFiring{}
+        |> Alethea.Triggers.TriggerFiring.changeset(%{
+          trigger_id: trigger.id,
+          message_id: message.id,
+          status: "fired",
+          fired_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Repo.insert!()
+
+      assert {:ok, 0} =
+               Alethea.Triggers.pause_active_triggers_for_patient(patient.legacy_patient.id)
+
+      assert Repo.get!(Trigger, trigger.id).status == "fired"
+      assert Repo.get!(Alethea.Triggers.TriggerFiring, firing.id).status == "not_delivered"
+
+      assert :ok = perform_trigger_delivery(trigger, message)
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, message.id).delivery_state == "superseded"
+    end
+
+    test "/pausa of one patient leaves another patient's fired one-shot deliverable",
+         %{patient: patient, enc_text: enc_text} do
+      {trigger, message} = pending_trigger_message(patient, enc_text, %{status: "fired"})
+      other = bind_patient("other_pause_hash" |> String.pad_trailing(64, "0"))
+
+      assert {:ok, 0} =
+               Alethea.Triggers.pause_active_triggers_for_patient(other.legacy_patient.id)
+
+      assert :ok = perform_trigger_delivery(trigger, message)
+
+      assert [%{chat_id: @chat_id, text: "Mensaje proactivo"}] = Fake.sends()
+      assert Repo.get!(Message, message.id).delivery_state == "sent"
+    end
+
     test "a fired, unarchived one-shot still delivers", %{patient: patient, enc_text: enc_text} do
       {trigger, message} = pending_trigger_message(patient, enc_text, %{status: "fired"})
 
