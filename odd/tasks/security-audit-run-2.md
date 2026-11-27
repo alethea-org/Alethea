@@ -14,9 +14,10 @@ Objective: fix the five highest-priority `needs_validation` leads from the deep 
 
 - [ ] T1 — S1 + S3 (summary.ex shared). Route: delegated writer A (context backstop; parallel with T2). Risk: item 1 (migration of stored data), item 2 (encryption). Commit: —
 - [ ] T2 — S2 + S5 (telegram_outbound_worker.ex shared). Route: delegated writer B (parallel with T1). Risk: item 1 (clears stored data). Commit: —
-- [ ] T3 — S4. Route: inline (config + worker queue, ~10 lines). Risk: item 4 (queue topology). Commit: —
+- [x] T3 — S4. Route: inline (config + worker queue, ~10 lines). Risk: item 4 (queue topology). Commit: b46e546
 
 ## Log
 
 - **L1** (2026-11-27, user): "cerremos los 3 pendientes y después vamos con los 5"
 - **L2** (2026-11-27): the 5 = REPORT.md section 5 items 1-5 of audit run-2. Writers are delegated under the long-session context backstop, with disjoint edit surfaces; T3 inline.
+- **L3** (2026-11-27): T3 RED: 2 new queue tests failed (job.queue "telegram_inbound"). GREEN: TelegramBurstReplyWorker on `telegram_reply: 10`; `mix test test/alethea/jobs`: 308 passed; compile --warnings-as-errors and format clean. Audit run-2 closed complete (85/85 agents, 20 needs_validation, 3 rejected).
