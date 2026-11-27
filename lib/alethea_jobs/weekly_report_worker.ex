@@ -29,6 +29,8 @@ defmodule AletheaJobs.WeeklyReportWorker do
         %{summary | summary_text: Sanitizer.sanitize(text)}
       end
 
+    log_skipped_summaries(patient_id, length(summaries) - length(sanitized_summaries))
+
     # The week's own patient messages let the report describe what happened,
     # even before any session has been closed and summarized.
     sanitized_messages =
@@ -77,4 +79,14 @@ defmodule AletheaJobs.WeeklyReportWorker do
     do: {:invalid_changeset, changeset.errors |> Keyword.keys() |> Enum.uniq()}
 
   defp job_reason(reason), do: reason
+
+  # Count only: the skipped rows could not be decrypted, and no text is logged.
+  defp log_skipped_summaries(_patient_id, 0), do: :ok
+
+  defp log_skipped_summaries(patient_id, count) do
+    Logger.warning(
+      "WeeklyReportWorker skipped #{count} undecryptable session summary(ies) " <>
+        "for patient #{patient_id}"
+    )
+  end
 end

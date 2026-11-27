@@ -212,4 +212,56 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
       assert Repo.all(from s in Summary, where: s.patient_id == ^patient.id) == []
     end
   end
+
+  describe "S6d: undecryptable session summaries (security-audit-run-2)" do
+    test "skipped summaries are logged as a count only and the readable ones still reach the chain",
+         %{patient: patient} do
+      yesterday = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-1, :day)
+
+      save = fn text ->
+        {:ok, summary} =
+          Clinical.save_summary(%{
+            period_start: yesterday,
+            period_end: yesterday,
+            summary_text: text,
+            status_level: "Estable",
+            type: "session",
+            patient_id: patient.id
+          })
+
+        summary
+      end
+
+      save.("Sesión legible de la semana.")
+      broken = save.("Sesión que quedará ilegible.")
+
+      Repo.update_all(from(s in Summary, where: s.id == ^broken.id),
+        set: [encrypted_summary: "not-a-valid-ciphertext"]
+      )
+
+      Alethea.AI.WeeklySummaryChainMock
+      |> expect(:run, fn %{summaries: summaries} ->
+        assert [%{summary_text: "Sesión legible de la semana."}] = summaries
+
+        {:ok,
+         %{
+           summary_text: "Semana estable.",
+           status_level: "Estable",
+           anxiety_score: nil,
+           social_score: nil,
+           emotional_range: nil,
+           crisis_events: 0,
+           session_count: 1
+         }}
+      end)
+
+      {result, log} =
+        with_log(fn -> perform_job(WeeklyReportWorker, %{"patient_id" => patient.id}) end)
+
+      assert result == :ok
+      assert log =~ "skipped 1 undecryptable session summary"
+      refute log =~ "Sesión"
+      refute log =~ "ilegible"
+    end
+  end
 end
