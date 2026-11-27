@@ -11,6 +11,8 @@ defmodule Alethea.Clinical.SummaryEncryptionMigrationTest do
 
   use Alethea.DataCase, async: false
 
+  require Logger
+
   alias Alethea.{Accounts, Clinical, Repo}
   alias Alethea.Repo.Migrations.EncryptClinicalSummaries, as: Migration
 
@@ -101,16 +103,53 @@ defmodule Alethea.Clinical.SummaryEncryptionMigrationTest do
     assert Migration.encrypt_existing!(Repo) == %{encrypted: 0, cleared: 0}
   end
 
-  test "rows of a patient without a key lose their plaintext and stay unreadable", %{
+  test "plaintext of a patient without a recoverable key aborts the migration and keeps every row",
+       %{professional: professional} do
+    keyed = keyed_patient(professional)
+    keyed_id = insert_legacy!(keyed, "Texto de paciente con llave", "weekly")
+
+    {:ok, keyless} =
+      Accounts.create_patient(%{alias: "Sin llave", professional_id: professional.id})
+
+    keyless_id = insert_legacy!(keyless, "Texto de paciente sin llave", "weekly")
+
+    error = assert_raise RuntimeError, fn -> Migration.encrypt_existing!(Repo) end
+
+    assert error.message =~ "1 summary row(s)"
+    refute error.message =~ "Texto"
+
+    assert {"Texto de paciente con llave", nil} = raw(keyed_id)
+    assert {"Texto de paciente sin llave", nil} = raw(keyless_id)
+  end
+
+  test "empty text of a patient without a key is cleared without aborting", %{
     professional: professional
   } do
     {:ok, keyless} =
       Accounts.create_patient(%{alias: "Sin llave", professional_id: professional.id})
 
-    id = insert_legacy!(keyless, "Texto de paciente sin llave", "weekly")
+    id = insert_legacy!(keyless, "", "weekly")
 
     assert Migration.encrypt_existing!(Repo) == %{encrypted: 0, cleared: 1}
     assert {nil, nil} = raw(id)
-    assert %{summary_text: nil} = Clinical.latest_weekly_summary(keyless.id)
+  end
+
+  test "a successful run logs the encrypted and cleared counts, never the text", %{
+    professional: professional
+  } do
+    patient = keyed_patient(professional)
+    insert_legacy!(patient, "Texto que no debe aparecer en logs", "weekly")
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert Migration.encrypt_existing!(Repo) == %{encrypted: 1, cleared: 0}
+      end)
+
+    assert log =~ "encrypted=1"
+    assert log =~ "cleared=0"
+    refute log =~ "Texto que no debe"
   end
 end
