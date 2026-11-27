@@ -12,7 +12,7 @@ Objective: fix the five highest-priority `needs_validation` leads from the deep 
 
 ## Tasks
 
-- [ ] T1 — S1 + S3 (summary.ex shared). Route: delegated writer A (context backstop; parallel with T2). Risk: item 1 (migration of stored data), item 2 (encryption). Commit: —
+- [x] T1 — S1 + S3 (summary.ex shared). Route: delegated writer A (context backstop; parallel with T2). Risk: item 1 (migration of stored data), item 2 (encryption). Commit: `09e89f5` (S1), `dd79a16` (S3)
 - [ ] T2 — S2 + S5 (telegram_outbound_worker.ex shared). Route: delegated writer B (parallel with T1). Risk: item 1 (clears stored data). Commit: —
 - [x] T3 — S4. Route: inline (config + worker queue, ~10 lines). Risk: item 4 (queue topology). Commit: b46e546
 
@@ -21,3 +21,4 @@ Objective: fix the five highest-priority `needs_validation` leads from the deep 
 - **L1** (2026-11-27, user): "cerremos los 3 pendientes y después vamos con los 5"
 - **L2** (2026-11-27): the 5 = REPORT.md section 5 items 1-5 of audit run-2. Writers are delegated under the long-session context backstop, with disjoint edit surfaces; T3 inline.
 - **L3** (2026-11-27): T3 RED: 2 new queue tests failed (job.queue "telegram_inbound"). GREEN: TelegramBurstReplyWorker on `telegram_reply: 10`; `mix test test/alethea/jobs`: 308 passed; compile --warnings-as-errors and format clean. Audit run-2 closed complete (85/85 agents, 20 needs_validation, 3 rejected).
+- **L4** (2026-11-27, writer A, T1): S1 → `summary_text` virtual+redacted, ciphertext in `encrypted_summary` (PatientVault under patient DEK via `Clinical.patient_dek/2`); readers decrypt once per call, `nil` text without key; migration `20261127132555` encrypts + nulls plaintext then drops the column, irreversible `down`. S3 → WeeklyReportWorker logs via `SafeReason`, returns `{:invalid_changeset, keys}`; range check stays in `Summary.changeset/2`. RED observed (5 + 1 failing) before GREEN. Evidence: focused 3+5+4 pass; full suite `MIX_TEST_PARTITION=11 mix test` → 3153 passed (6 doctests, 3147 tests), 5 skipped; `mix compile --warnings-as-errors` and `mix format --check-formatted` clean. Residual: `encrypted_summary` nullable (a direct `Repo.insert` bypassing `save_summary/1` stores no text, e.g. `priv/repo/seeds_fake_data.exs`); old tuples/backups keep plaintext until vacuum/backup expiry.
