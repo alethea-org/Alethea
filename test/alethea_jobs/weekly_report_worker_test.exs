@@ -4,6 +4,7 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
 
   import Mox
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias Alethea.{Accounts, Repo, Clinical}
   alias Alethea.Clinical.{Summary, Trend}
@@ -176,5 +177,39 @@ defmodule AletheaJobs.WeeklyReportWorkerTest do
       Repo.all(from s in Summary, where: s.patient_id == ^patient.id and s.type == "weekly")
 
     assert weekly_summaries == []
+  end
+
+  describe "S3: out-of-range LLM scores (security-audit-run-2)" do
+    @narrative "DUMMY-NARRATIVE-#{System.unique_integer([:positive])}"
+
+    test "an out-of-range score fails safely: no summary text in the log or the Oban error", %{
+      patient: patient
+    } do
+      Alethea.AI.WeeklySummaryChainMock
+      |> expect(:run, fn _input ->
+        {:ok,
+         %{
+           summary_text: @narrative,
+           status_level: "Estable",
+           anxiety_score: 7.0,
+           social_score: 0.5,
+           emotional_range: nil,
+           crisis_events: 0,
+           session_count: 0
+         }}
+      end)
+
+      {result, log} =
+        with_log(fn -> perform_job(WeeklyReportWorker, %{"patient_id" => patient.id}) end)
+
+      assert {:error, reason} = result
+      refute inspect(reason) =~ @narrative
+      refute match?(%Ecto.Changeset{}, reason)
+      assert log =~ "WeeklyReportWorker failed for patient #{patient.id}"
+      assert log =~ "anxiety_score"
+      refute log =~ @narrative
+
+      assert Repo.all(from s in Summary, where: s.patient_id == ^patient.id) == []
+    end
   end
 end

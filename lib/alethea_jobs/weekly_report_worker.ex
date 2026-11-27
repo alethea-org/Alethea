@@ -7,6 +7,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
   use Oban.Worker, queue: :reports, max_attempts: 3
 
   alias Alethea.{Accounts, Clinical, AI.Sanitizer}
+  alias AletheaJobs.SafeReason
 
   require Logger
 
@@ -59,8 +60,21 @@ defmodule AletheaJobs.WeeklyReportWorker do
       :ok
     else
       {:error, reason} ->
-        Logger.error("WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}")
-        {:error, reason}
+        Logger.error(
+          "WeeklyReportWorker failed for patient #{patient_id}: #{SafeReason.for_log(reason)}"
+        )
+
+        {:error, job_reason(reason)}
     end
   end
+
+  # Oban stores the returned reason in `oban_jobs.errors`, outside the
+  # patient-level encryption. A `Summary` changeset carries the weekly
+  # narrative in `changes` (e.g. when the model returns a score outside
+  # 0.0..1.0 and `Summary.changeset/2` rejects it), so only the keys of
+  # the failed fields are kept.
+  defp job_reason(%Ecto.Changeset{} = changeset),
+    do: {:invalid_changeset, changeset.errors |> Keyword.keys() |> Enum.uniq()}
+
+  defp job_reason(reason), do: reason
 end
