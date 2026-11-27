@@ -272,6 +272,14 @@ defmodule AletheaWeb.DashboardLiveTest do
       assert render(view) =~ "Tendencias Emocionales"
     end
 
+    test "labels both emotion cards as not clinically validated", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/dashboard/patients/p1")
+
+      disclaimer = "Estimación automática, sin validación clínica."
+      assert view |> element("#emotion-trends") |> render() =~ disclaimer
+      assert view |> element("#emotion-chart") |> render() =~ disclaimer
+    end
+
     @tag :skip
     test "decrypts chat history and logs audit action", %{conn: conn, professional: _professional} do
       Application.put_env(:alethea, :use_mock_data, true)
