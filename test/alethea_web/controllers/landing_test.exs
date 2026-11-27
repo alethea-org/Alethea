@@ -20,6 +20,12 @@ defmodule AletheaWeb.LandingTest do
       refute html =~ "phoenix_live_view.js"
     end
 
+    test "says the emotion analysis is not clinically validated", %{conn: conn} do
+      html = conn |> get(~p"/") |> html_response(200)
+
+      assert html =~ "Es una estimación automática, sin validación clínica."
+    end
+
     test "loads Google Tag Manager on the landing but not on app pages", %{conn: conn} do
       assert conn |> get(~p"/") |> html_response(200) =~
                "googletagmanager.com/gtm.js?id=GTM-KJLSHFR4"
