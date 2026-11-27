@@ -4,6 +4,7 @@
 import Ecto.Query
 alias Alethea.Repo
 alias Alethea.Accounts
+alias Alethea.Clinical
 alias Alethea.Clinical.{Trend, Summary, Message}
 
 # Get the only patient (Lucca Giordana)
@@ -62,30 +63,32 @@ else
 
   Repo.delete_all(from(s in Summary, where: s.patient_id == ^patient.id))
 
-  # Weekly summary
-  %Summary{}
-  |> Summary.changeset(%{
-    type: "weekly",
-    summary_text:
-      "Lucca ha mostrado una tendencia positiva esta semana. La comunicación sigue siendo abierta y colaborativa. Se observan mejoras en la gestión del estrés, aunque persisten algunos episodios de ansiedad moderada los días de alta demanda laboral.",
-    status_level: "Estable",
-    period_start:
-      NaiveDateTime.utc_now() |> NaiveDateTime.add(-7 * 86400) |> NaiveDateTime.truncate(:second),
-    period_end: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
-    patient_id: patient.id,
-    anxiety_score: 0.62,
-    social_score: 0.41,
-    emotional_range: %{
-      "joy" => 0.34,
-      "sadness" => 0.21,
-      "anger" => 0.08,
-      "fear" => 0.17,
-      "neutral" => 0.52
-    },
-    crisis_events: 1,
-    session_count: 5
-  })
-  |> Repo.insert!()
+  # Weekly summary. Goes through Clinical.save_summary/1 so the text is
+  # encrypted under the patient's key (a direct insert would store no text).
+  {:ok, _} =
+    Clinical.save_summary(%{
+      type: "weekly",
+      summary_text:
+        "Lucca ha mostrado una tendencia positiva esta semana. La comunicación sigue siendo abierta y colaborativa. Se observan mejoras en la gestión del estrés, aunque persisten algunos episodios de ansiedad moderada los días de alta demanda laboral.",
+      status_level: "Estable",
+      period_start:
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(-7 * 86400)
+        |> NaiveDateTime.truncate(:second),
+      period_end: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second),
+      patient_id: patient.id,
+      anxiety_score: 0.62,
+      social_score: 0.41,
+      emotional_range: %{
+        "joy" => 0.34,
+        "sadness" => 0.21,
+        "anger" => 0.08,
+        "fear" => 0.17,
+        "neutral" => 0.52
+      },
+      crisis_events: 1,
+      session_count: 5
+    })
 
   # Session summaries
   session_summaries = [
@@ -117,16 +120,15 @@ else
   ]
 
   Enum.each(session_summaries, fn {period_end, text, status} ->
-    %Summary{}
-    |> Summary.changeset(%{
-      type: "session",
-      summary_text: text,
-      status_level: status,
-      period_start: period_end,
-      period_end: period_end,
-      patient_id: patient.id
-    })
-    |> Repo.insert!()
+    {:ok, _} =
+      Clinical.save_summary(%{
+        type: "session",
+        summary_text: text,
+        status_level: status,
+        period_start: period_end,
+        period_end: period_end,
+        patient_id: patient.id
+      })
   end)
 
   IO.puts("    ✓ Created 1 weekly + 5 session summaries")
