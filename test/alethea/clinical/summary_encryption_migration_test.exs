@@ -11,8 +11,6 @@ defmodule Alethea.Clinical.SummaryEncryptionMigrationTest do
 
   use Alethea.DataCase, async: false
 
-  require Logger
-
   alias Alethea.{Accounts, Clinical, Repo}
   alias Alethea.Repo.Migrations.EncryptClinicalSummaries, as: Migration
 
