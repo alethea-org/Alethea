@@ -2569,7 +2569,7 @@ defmodule Alethea.Jobs.TelegramMessageWorkerTest do
                       %{
                         patient_id: patient_id,
                         chat_id_hash: chat_id_hash,
-                        text: _,
+                        message_id: _,
                         error: _,
                         attempts: 5,
                         at: _
