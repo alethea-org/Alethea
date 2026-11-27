@@ -76,8 +76,11 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorker do
   it under the same coverage/claim rules as a generated reply.
   """
 
+  # Own queue (security audit run-2, S4): the burst reply runs a slow,
+  # provider-bound LLM call, so it must never hold the `telegram_inbound`
+  # slots that crisis intake (`TelegramMessageWorker`) needs.
   use Oban.Worker,
-    queue: :telegram_inbound,
+    queue: :telegram_reply,
     max_attempts: 3,
     unique: [keys: [:patient_id], period: :infinity, states: :scheduled],
     replace: [scheduled: [:scheduled_at]]

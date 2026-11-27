@@ -1161,11 +1161,87 @@ defmodule Alethea.Clinical do
     save_trends(fake_patient, emotion_scores, nil)
   end
 
+  @doc """
+  Persists an AI summary with its narrative encrypted under the patient DEK
+  (`encrypted_summary`); the plaintext `summary_text` is never stored.
+
+  Returns `{:error, changeset}` (error on `:summary_text`) when the patient
+  has no usable key, so nothing is written in clear.
+  """
   def save_summary(attrs) do
     %Summary{}
     |> Summary.changeset(attrs)
+    |> encrypt_summary_text()
     |> Repo.insert()
   end
+
+  defp encrypt_summary_text(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+
+  defp encrypt_summary_text(changeset) do
+    text = Ecto.Changeset.get_field(changeset, :summary_text)
+    patient_id = Ecto.Changeset.get_field(changeset, :patient_id)
+
+    with {:ok, dek} <- summary_dek(patient_id, "summary_writing"),
+         {:ok, ciphertext} <- PatientVault.encrypt(text, dek) do
+      Ecto.Changeset.put_change(changeset, :encrypted_summary, ciphertext)
+    else
+      _no_key -> Ecto.Changeset.add_error(changeset, :summary_text, "could not be encrypted")
+    end
+  end
+
+  # The DEK of the patient that owns the summaries. A patient without a
+  # key (never created or destroyed) is an error, never a raise.
+  defp summary_dek(patient_id, reason) do
+    case Repo.get(Alethea.Accounts.Patient, patient_id) do
+      %{encryption_key_id: key_id} = patient when not is_nil(key_id) ->
+        patient_dek(patient, reason)
+
+      _no_key ->
+        {:error, :missing_encryption_key}
+    end
+  end
+
+  @doc """
+  Resolves the patient DEK used to read summaries: one KEK unwrap and one
+  `PII_DECRYPT` audit row. Pass the result as the `:dek` option of the
+  summary readers so a single user-facing load pays for it once.
+  """
+  @spec summary_reading_dek(binary()) :: {:ok, binary()} | {:error, term()}
+  def summary_reading_dek(patient_id), do: summary_dek(patient_id, "summary_loading")
+
+  # Fills the virtual `summary_text` of each row from `encrypted_summary`,
+  # using the `:dek` option when given (the caller already resolved it) and
+  # otherwise unwrapping the DEK once per call, only when there is something
+  # to decrypt. Without a key (or for an unreadable row) the text is `nil`,
+  # so readers degrade instead of crashing.
+  defp decrypt_summaries(summaries, patient_id, opts \\ [])
+  defp decrypt_summaries([], _patient_id, _opts), do: []
+
+  defp decrypt_summaries(summaries, patient_id, opts) do
+    dek_result =
+      case Keyword.fetch(opts, :dek) do
+        {:ok, result} -> result
+        :error -> summary_reading_dek(patient_id)
+      end
+
+    dek =
+      case dek_result do
+        {:ok, dek} -> dek
+        {:error, _reason} -> nil
+      end
+
+    Enum.map(summaries, &decrypt_summary(&1, dek))
+  end
+
+  defp decrypt_summary(%Summary{encrypted_summary: ciphertext} = summary, dek)
+       when is_binary(ciphertext) and is_binary(dek) do
+    case PatientVault.decrypt(ciphertext, dek) do
+      {:ok, text} -> %{summary | summary_text: text}
+      {:error, _reason} -> %{summary | summary_text: nil}
+    end
+  end
+
+  defp decrypt_summary(%Summary{} = summary, _dek), do: %{summary | summary_text: nil}
 
   def list_session_summaries(patient_id, since) do
     Repo.all(
@@ -1176,6 +1252,7 @@ defmodule Alethea.Clinical do
             s.period_start >= ^since
       )
     )
+    |> decrypt_summaries(patient_id)
   end
 
   @session_summaries_page_size 20
@@ -1188,6 +1265,8 @@ defmodule Alethea.Clinical do
     * `:limit` — page size (default #{@session_summaries_page_size}).
     * `:before` — `{period_end, id}` of the last item of the previous page;
       only items strictly after it in the ordering are returned.
+    * `:dek` — a result of `summary_reading_dek/1` already resolved by the
+      caller; when absent the DEK is resolved here.
   """
   @spec list_session_summaries_page(binary(), DateTime.t(), keyword()) ::
           {[Summary.t()], boolean()}
@@ -1216,7 +1295,7 @@ defmodule Alethea.Clinical do
       end
 
     rows = Repo.all(query)
-    {Enum.take(rows, limit), length(rows) > limit}
+    {rows |> Enum.take(limit) |> decrypt_summaries(patient_id, opts), length(rows) > limit}
   end
 
   @doc """
@@ -1224,9 +1303,12 @@ defmodule Alethea.Clinical do
 
   No filtra por fecha: un reporte semanal cubre la semana *anterior*, así que su
   `period_start` casi siempre queda fuera de una ventana de 7 días.
+
+  Acepta `dek:` (resultado de `summary_reading_dek/1`) para no volver a
+  resolver la llave del paciente.
   """
-  @spec latest_weekly_summary(binary()) :: Summary.t() | nil
-  def latest_weekly_summary(patient_id) do
+  @spec latest_weekly_summary(binary(), keyword()) :: Summary.t() | nil
+  def latest_weekly_summary(patient_id, opts \\ []) do
     Repo.one(
       from(s in Summary,
         where: s.patient_id == ^patient_id and s.type == "weekly",
@@ -1234,6 +1316,9 @@ defmodule Alethea.Clinical do
         limit: 1
       )
     )
+    |> List.wrap()
+    |> decrypt_summaries(patient_id, opts)
+    |> List.first()
   end
 
   @spec list_daily_emotion_scores(binary(), DateTime.t()) :: [map()]

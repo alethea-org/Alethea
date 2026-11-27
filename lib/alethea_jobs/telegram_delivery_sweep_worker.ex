@@ -18,9 +18,10 @@ defmodule AletheaJobs.TelegramDeliverySweepWorker do
   A watchdog scheduled with every claim would add an Oban job to every
   reply sent, would have to carry the reply body in its args (a second
   plaintext copy), and would still miss a claim whose watchdog insert was
-  lost. The sweep costs nothing per send, keeps job args empty, reads the
-  content from the encrypted row only when it has something to report,
-  and catches every stuck row regardless of how it got there.
+  lost. The sweep costs nothing per send, keeps job args empty, never
+  decrypts the reply (the dead letter references it by `message_id`,
+  security-audit-run-2 S2), and catches every stuck row regardless of
+  how it got there.
 
   ## Safety
 
@@ -68,7 +69,6 @@ defmodule AletheaJobs.TelegramDeliverySweepWorker do
   alias Alethea.Repo
 
   @default_claim_timeout_seconds 600
-  @unreadable_reply "[reply content unavailable]"
 
   @doc """
   How long a delivery claim may be held before it is considered
@@ -147,7 +147,7 @@ defmodule AletheaJobs.TelegramDeliverySweepWorker do
         TelegramOutboundWorker.surface_ambiguous_delivery(%{
           chat_id_hash: chat_id_hash,
           patient_id: patient.id,
-          body: reply_text(patient, reply),
+          message_id: reply.id,
           reason: {:ambiguous, :claim_expired},
           attempts: 1
         })
@@ -161,13 +161,6 @@ defmodule AletheaJobs.TelegramDeliverySweepWorker do
         )
 
         :ok
-    end
-  end
-
-  defp reply_text(patient, reply) do
-    case Clinical.telegram_reply_text(patient, reply) do
-      {:ok, text} when is_binary(text) and text != "" -> text
-      _unreadable -> @unreadable_reply
     end
   end
 

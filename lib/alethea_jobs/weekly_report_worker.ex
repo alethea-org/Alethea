@@ -7,6 +7,7 @@ defmodule AletheaJobs.WeeklyReportWorker do
   use Oban.Worker, queue: :reports, max_attempts: 3
 
   alias Alethea.{Accounts, Clinical, AI.Sanitizer}
+  alias AletheaJobs.SafeReason
 
   require Logger
 
@@ -22,10 +23,13 @@ defmodule AletheaJobs.WeeklyReportWorker do
     aggregated_trends = Clinical.aggregate_trends(patient_id, seven_days_ago)
 
     # Sanitizar los resúmenes antes de enviarlos a la IA
+    # A summary whose patient key is gone decrypts to `nil` and is skipped.
     sanitized_summaries =
-      Enum.map(summaries, fn summary ->
-        %{summary | summary_text: Sanitizer.sanitize(summary.summary_text)}
-      end)
+      for %{summary_text: text} = summary <- summaries, is_binary(text) do
+        %{summary | summary_text: Sanitizer.sanitize(text)}
+      end
+
+    log_skipped_summaries(patient_id, length(summaries) - length(sanitized_summaries))
 
     # The week's own patient messages let the report describe what happened,
     # even before any session has been closed and summarized.
@@ -58,8 +62,31 @@ defmodule AletheaJobs.WeeklyReportWorker do
       :ok
     else
       {:error, reason} ->
-        Logger.error("WeeklyReportWorker failed for patient #{patient_id}: #{inspect(reason)}")
-        {:error, reason}
+        Logger.error(
+          "WeeklyReportWorker failed for patient #{patient_id}: #{SafeReason.for_log(reason)}"
+        )
+
+        {:error, job_reason(reason)}
     end
+  end
+
+  # Oban stores the returned reason in `oban_jobs.errors`, outside the
+  # patient-level encryption. A `Summary` changeset carries the weekly
+  # narrative in `changes` (e.g. when the model returns a score outside
+  # 0.0..1.0 and `Summary.changeset/2` rejects it), so only the keys of
+  # the failed fields are kept.
+  defp job_reason(%Ecto.Changeset{} = changeset),
+    do: {:invalid_changeset, changeset.errors |> Keyword.keys() |> Enum.uniq()}
+
+  defp job_reason(reason), do: reason
+
+  # Count only: the skipped rows could not be decrypted, and no text is logged.
+  defp log_skipped_summaries(_patient_id, 0), do: :ok
+
+  defp log_skipped_summaries(patient_id, count) do
+    Logger.warning(
+      "WeeklyReportWorker skipped #{count} undecryptable session summary(ies) " <>
+        "for patient #{patient_id}"
+    )
   end
 end

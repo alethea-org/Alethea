@@ -1,4 +1,14 @@
 defmodule Alethea.Clinical.Summary do
+  @moduledoc """
+  An AI-generated clinical summary (`"session"` or `"weekly"`).
+
+  The narrative is stored only as `encrypted_summary`: ciphertext under the
+  patient's DEK (`Alethea.Encryption.PatientVault`, the same scheme as
+  `Alethea.Clinical.Message`). The plaintext lives in the virtual, redacted
+  `summary_text` field: `Alethea.Clinical.save_summary/1` encrypts it on
+  write and the `Alethea.Clinical` readers decrypt it on read (`nil` when
+  the patient's key is gone). Insert only through `save_summary/1`.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -7,7 +17,8 @@ defmodule Alethea.Clinical.Summary do
   schema "clinical_summaries" do
     field :period_start, :utc_datetime
     field :period_end, :utc_datetime
-    field :summary_text, :string
+    field :summary_text, :string, virtual: true, redact: true
+    field :encrypted_summary, :binary, redact: true
     field :status_level, :string
     field :type, :string, default: "session"
 

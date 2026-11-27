@@ -23,7 +23,7 @@ Modelar la conducta verbal, detectar crisis y organizar el diario del paciente d
 ...
     *   `patient_id` (FK -> `patients.id`)
     *   `period_start`, `period_end`
-    *   `summary_text` (Consolidated diagnosis)
+    *   `encrypted_summary` (AES-256 under the patient DEK; decrypted into the virtual, redacted `summary_text` by `Alethea.Clinical` readers, `nil` once the key is gone)
     *   `status_level` (Estable, Alerta, Intervención Requerida)
 *   **Table `clinical_trends`**:
     *   `id` (UUIDv4)

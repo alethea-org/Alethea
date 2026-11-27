@@ -131,6 +131,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   @jitter_ratio 0.25
   @send_started_key "send_started"
   @sealed_fields [:chat_id, :body]
+  @deliverable_statuses ~w(active fired)
 
   @doc """
   Builds the job changeset with `chat_id` and `body` sealed (see
@@ -207,8 +208,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
                 priority: priority,
                 chat_id_hash: chat_id_hash,
                 patient_id: patient_id,
-                message_id: message_id,
-                body: body
+                message_id: message_id
               })
           end
       end
@@ -264,7 +264,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
               surface_ambiguous_delivery(%{
                 chat_id_hash: ctx.chat_id_hash,
                 patient_id: ctx.patient_id,
-                body: ctx.body,
+                message_id: ctx.message_id,
                 reason: reason,
                 attempts: ctx.attempt
               })
@@ -287,7 +287,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     dead_letter_and_broadcast(
       ctx.chat_id_hash,
       ctx.patient_id,
-      ctx.body,
+      ctx.message_id,
       reason,
       attempt,
       ctx.lane
@@ -360,14 +360,15 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
             nil ->
               {:skip, "trigger_missing"}
 
-            %Alethea.Triggers.Trigger{status: "inactive"} ->
-              {:skip, "trigger_inactive"}
+            # Allowlist (security-audit-run-2 S5): only an `active` or
+            # `fired` trigger that is not archived may deliver. Every other
+            # status (inactive, paused_by_crisis, paused_by_delivery_failures,
+            # paused_by_patient, and any status added later) suppresses.
+            %Alethea.Triggers.Trigger{status: status} when status not in @deliverable_statuses ->
+              {:skip, "trigger_#{status}"}
 
-            %Alethea.Triggers.Trigger{status: "paused_by_crisis"} ->
-              {:skip, "trigger_paused_by_crisis"}
-
-            %Alethea.Triggers.Trigger{status: "paused_by_delivery_failures"} ->
-              {:skip, "trigger_paused_by_delivery_failures"}
+            %Alethea.Triggers.Trigger{archived_at: %DateTime{}} ->
+              {:skip, "trigger_archived"}
 
             %Alethea.Triggers.Trigger{approved_text: nil} ->
               {:skip, "trigger_unapproved"}
@@ -432,7 +433,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
           dead_letter_and_broadcast(
             chat_id_hash,
             patient_id,
-            "[undecryptable payload]",
+            Map.get(args, "message_id"),
             :undecryptable_payload,
             Map.get(args, "_attempt", 1),
             lane
@@ -565,7 +566,8 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   Goes through the same dead-letter row and `"ops:alerts"` broadcast as
   an exhausted delivery, with `outcome: "ambiguous"` so it is not
   mistaken for a definite failure (and not replayed blindly). The payload
-  is the one an exhausted delivery already carries.
+  is the one an exhausted delivery already carries: the reply's
+  `message_id`, never its text.
 
   Called by this worker when it observes an ambiguous outcome, and by
   `AletheaJobs.TelegramDeliverySweepWorker` when a delivery claim expires
@@ -575,21 +577,21 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   @spec surface_ambiguous_delivery(%{
           chat_id_hash: String.t(),
           patient_id: binary() | nil,
-          body: String.t(),
+          message_id: binary(),
           reason: term(),
           attempts: pos_integer()
         }) :: :ok
   def surface_ambiguous_delivery(%{
         chat_id_hash: chat_id_hash,
         patient_id: patient_id,
-        body: body,
+        message_id: message_id,
         reason: reason,
         attempts: attempts
       }) do
     dead_letter_and_broadcast(
       chat_id_hash,
       patient_id,
-      body,
+      message_id,
       reason,
       attempts,
       :safe,
@@ -668,7 +670,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
         # failure — the `:crisis_queue_full` PubSub broadcast carries
         # the outcome so operator dashboards don't react to a "queue
         # full" event and replay an already-succeeded send.
-        dead_letter_and_broadcast(chat_id_hash, patient_id, body, reason, 1, lane)
+        dead_letter_and_broadcast(chat_id_hash, patient_id, message_id, reason, 1, lane)
         record_delivery(delivery, message_id, :failed)
         {:error, reason}
     end
@@ -762,10 +764,15 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   # `outcome` is `"failed"` for an exhausted delivery (known not to have
   # arrived) and `"ambiguous"` for one that may have arrived and was not
   # resent (#390). Both use the same row, broadcast, and log.
+  #
+  # The reply body is never written or broadcast (security-audit-run-2,
+  # S2): its clinical copy stays encrypted under the patient key in
+  # `messages`, and the row and event carry only `message_id` (nil for
+  # untracked sends) so an operator can still find it.
   defp dead_letter_and_broadcast(
          chat_id_hash,
          patient_id,
-         body,
+         message_id,
          reason,
          attempt,
          lane,
@@ -801,11 +808,13 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
     # no 64-char hex is present.
     safe_error = LogRedactor.redact(last_error)
 
+    dead_letter_message_id = if tracked_message_id?(message_id), do: message_id
+
     {:ok, _row} =
       %OutboundDeadLetter{}
       |> OutboundDeadLetter.changeset(%{
         chat_id_hash: chat_id_hash,
-        text: body,
+        message_id: dead_letter_message_id,
         last_error: last_error,
         attempts: attempt,
         failed_at: DateTime.utc_now() |> DateTime.truncate(:second),
@@ -829,7 +838,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
       {:outbound_dead_letter,
        %{
          chat_id_hash: chat_id_hash,
-         text: body,
+         message_id: dead_letter_message_id,
          error: safe_error,
          attempts: attempt,
          # Round 1 (WARNING-5): the lane is normalized to a string
@@ -868,7 +877,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
          %{
            patient_id: patient_id,
            chat_id_hash: chat_id_hash,
-           text: body,
+           message_id: dead_letter_message_id,
            error: safe_error,
            attempts: attempt,
            at: now

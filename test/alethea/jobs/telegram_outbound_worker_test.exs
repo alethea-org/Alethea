@@ -369,19 +369,23 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       dl = Repo.one(OutboundDeadLetter)
       assert dl
       assert dl.chat_id_hash == @chat_id_hash
-      assert dl.text == @body
       assert dl.last_error =~ "rate_limited"
       assert dl.attempts == 5
       assert %DateTime{} = dl.failed_at
 
-      # The PubSub event was broadcast.
+      # security-audit-run-2 S2: the reply body is never stored in clear.
+      assert [[nil]] = Repo.query!("SELECT text FROM foundation_outbound_dead_letters").rows
+      refute inspect(Repo.query!("SELECT * FROM foundation_outbound_dead_letters").rows) =~ @body
+
+      # The PubSub event was broadcast, without the reply body.
       assert_receive {:outbound_dead_letter,
-                      %{chat_id_hash: hash, text: text, error: error, attempts: 5}},
+                      %{chat_id_hash: hash, error: error, attempts: 5} = payload},
                      1_000
 
       assert hash == @chat_id_hash
-      assert text == @body
       assert error =~ "rate_limited"
+      refute Map.has_key?(payload, :text)
+      refute inspect(payload) =~ @body
 
       # The exhaustion path returns :ok so Oban does NOT schedule a
       # 6th retry. Assert no NEW job (state "scheduled") was created
@@ -411,7 +415,9 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       dl = Repo.one(OutboundDeadLetter)
       assert dl.chat_id_hash == @chat_id_hash
       assert dl.last_error =~ "undecryptable_payload"
-      refute dl.text =~ corrupted
+
+      refute inspect(Repo.query!("SELECT * FROM foundation_outbound_dead_letters").rows) =~
+               corrupted
 
       assert_receive {:outbound_dead_letter, %{chat_id_hash: @chat_id_hash}}, 1_000
     end
@@ -488,16 +494,18 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
                       %{
                         patient_id: patient_id,
                         chat_id_hash: chat_id_hash,
-                        text: text,
+                        message_id: _,
                         error: _,
                         attempts: 5,
                         at: at
-                      }},
+                      } = crisis_payload},
                      1_000
 
       assert patient_id == uuid
       assert chat_id_hash == @chat_id_hash
-      assert text == @body
+      # security-audit-run-2 S2: the crisis incident never carries the reply body.
+      refute Map.has_key?(crisis_payload, :text)
+      refute inspect(crisis_payload) =~ @body
       assert is_struct(at, DateTime)
 
       # Round 1 (WARNING-5): the persisted dead-letter row carries
@@ -528,7 +536,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
                )
 
       assert_receive {:crisis_dead_letter,
-                      %{patient_id: ^uuid, chat_id_hash: _, text: _, error: _, attempts: 1}},
+                      %{patient_id: ^uuid, chat_id_hash: _, message_id: _, error: _, attempts: 1}},
                      1_000
 
       # The generic event also fires (existing behavior).
@@ -654,7 +662,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
 
       # The PubSub event was broadcast with lane: :crisis.
       assert_receive {:outbound_dead_letter,
-                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: "crisis"}},
+                      %{chat_id_hash: _, message_id: _, error: _, attempts: 1, lane: "crisis"}},
                      1_000
     end
 
@@ -670,7 +678,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorkerTest do
       # Storing `lane` on the dead_letter row is a TASK-3b-4 concern (the schema
       # column lands then; here we just assert the broadcast shape).
       assert_receive {:outbound_dead_letter,
-                      %{chat_id_hash: _, text: _, error: _, attempts: 1, lane: "crisis"}},
+                      %{chat_id_hash: _, message_id: _, error: _, attempts: 1, lane: "crisis"}},
                      1_000
     end
 

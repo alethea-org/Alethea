@@ -11,12 +11,14 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
 
   ## Schema vs `messages`
 
-  The dead-letter table is **not** a clinical record. The `text`
-  column is plaintext by design (see migration moduledoc). It is the
-  replay / audit surface for an operator who needs to know "which
-  outbound messages failed and why". A clinical-grade copy of the
-  message lives on `messages.encrypted_content`; the dead-letter is a
-  debug record of the network failure.
+  The dead-letter table is **not** a clinical record and never holds
+  the reply body (security-audit-run-2, S2). It is the audit surface
+  for an operator who needs to know "which outbound messages failed
+  and why": chat hash, patient, lane, outcome, error and, for a
+  tracked reply, `message_id`, the row whose content stays encrypted
+  under the patient key in `messages.encrypted_content`. The legacy
+  `text` column is not mapped here and is always NULL
+  (`RedactOutboundDeadLetterText` migration).
 
   ## No FK to patients
 
@@ -33,7 +35,11 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
 
   schema "foundation_outbound_dead_letters" do
     field :chat_id_hash, :string
-    field :text, :string
+
+    # The tracked reply (`messages.id`) this dead letter is about, or nil
+    # for untracked sends (unregistered chat, onboarding, reminders). No
+    # FK, for the same reason as `patient_id` (see moduledoc).
+    field :message_id, :binary_id
     field :last_error, :string
     field :attempts, :integer
     field :failed_at, :utc_datetime
@@ -67,7 +73,7 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
     dead_letter
     |> cast(attrs, [
       :chat_id_hash,
-      :text,
+      :message_id,
       :last_error,
       :attempts,
       :failed_at,
@@ -75,7 +81,7 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetter do
       :lane,
       :outcome
     ])
-    |> validate_required([:chat_id_hash, :text, :last_error, :attempts, :failed_at, :lane])
+    |> validate_required([:chat_id_hash, :last_error, :attempts, :failed_at, :lane])
     |> validate_length(:chat_id_hash, is: 64)
     |> validate_number(:attempts, greater_than: 0)
     |> validate_inclusion(:lane, ["safe", "crisis"])

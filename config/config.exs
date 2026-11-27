@@ -77,6 +77,10 @@ config :alethea, Oban,
     # recordings' `transcription` slots (security audit run-1, S7).
     telegram_voice: 2,
     telegram_inbound: 10,
+    # LLM-generated journaling replies (Alethea.Jobs.TelegramBurstReplyWorker).
+    # Own queue so slow or throttled LLM calls never delay crisis intake on
+    # `telegram_inbound` (security audit run-2, S4).
+    telegram_reply: 10,
     # Paddle Billing webhook notifications (Alethea.Jobs.PaddleEventWorker).
     billing: 5,
     telegram_outbound: 10,

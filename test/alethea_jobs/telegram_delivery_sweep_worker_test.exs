@@ -68,10 +68,15 @@ defmodule AletheaJobs.TelegramDeliverySweepWorkerTest do
     assert_receive {:outbound_dead_letter,
                     %{outcome: "ambiguous", lane: "safe", chat_id_hash: @chat_id_hash} = payload}
 
-    # Same payload an exhausted delivery carries: the reply text, never
-    # the patient's own words.
-    assert dead_letter.text == @reply
-    assert payload.text == @reply
+    # security-audit-run-2 S2: the row points at the encrypted reply
+    # instead of copying its text; neither the row nor the broadcast
+    # carries the reply or the patient's own words.
+    assert dead_letter.message_id == reply.id
+    assert payload.message_id == reply.id
+    assert [[nil]] = Repo.query!("SELECT text FROM foundation_outbound_dead_letters").rows
+    refute inspect(Repo.query!("SELECT * FROM foundation_outbound_dead_letters").rows) =~ @reply
+    refute Map.has_key?(payload, :text)
+    refute inspect(payload) =~ @reply
     refute inspect(dead_letter) =~ @patient_words
     refute inspect(payload) =~ @patient_words
   end

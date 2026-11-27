@@ -1090,6 +1090,12 @@ defmodule Alethea.Triggers do
   Moves status to `paused_by_patient`, cancels scheduled Oban jobs, writes content-free
   audit logs, and broadcasts a professional notification. Trigger reactivo is untouched
   (the `kind` filter below is the fix `pause_active_triggers_for_crisis/1` is missing).
+
+  A one-shot that already fired keeps its `fired` status, but its message that
+  is still waiting to be sent is marked `superseded` (and its firing
+  `not_delivered`), so no trigger message reaches the patient after `/pausa`
+  (security-audit-run-2 S6b). A message already being sent is not touched.
+  The returned count is the number of paused triggers.
   """
   @spec pause_active_triggers_for_patient(binary()) :: {:ok, integer()} | {:error, term()}
   def pause_active_triggers_for_patient(patient_id) when is_binary(patient_id) do
@@ -1120,6 +1126,8 @@ defmodule Alethea.Triggers do
           enqueue_trigger_rag_event(%{trigger | status: "paused_by_patient"})
         end
 
+        suppress_pending_fired_messages!(valid_patient_id)
+
         if triggers != [] do
           broadcast_patient_pause(valid_patient_id, triggers)
         end
@@ -1129,6 +1137,36 @@ defmodule Alethea.Triggers do
     else
       :error -> {:error, :invalid_patient_id}
     end
+  end
+
+  # Pending outbound messages of the patient's fired one-shots. Uses the
+  # same conditional `pending` guard as `Clinical.claim_trigger_delivery/1`,
+  # so a claim and this update cannot both win; the outbound worker then
+  # skips the message as `superseded`.
+  defp suppress_pending_fired_messages!(patient_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    fired_trigger_ids =
+      from(t in Trigger,
+        where: t.patient_id == ^patient_id and t.status == "fired",
+        select: t.id
+      )
+
+    {_count, message_ids} =
+      from(m in Message,
+        where:
+          m.patient_id == ^patient_id and m.trigger_id in subquery(fired_trigger_ids) and
+            m.delivery_state == "pending",
+        select: m.id
+      )
+      |> Repo.update_all(set: [delivery_state: "superseded", updated_at: now])
+
+    if message_ids != [] do
+      from(f in TriggerFiring, where: f.message_id in ^message_ids and f.status == "fired")
+      |> Repo.update_all(set: [status: "not_delivered", updated_at: now])
+    end
+
+    :ok
   end
 
   defp broadcast_patient_pause(patient_id, triggers) do

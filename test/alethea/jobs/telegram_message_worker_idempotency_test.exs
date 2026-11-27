@@ -488,9 +488,16 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
                         %{outcome: "ambiguous", lane: "safe", chat_id_hash: ^chat_id_hash} =
                           payload}
 
-        # Nothing beyond what an exhausted delivery already carries: the
-        # reply text, never the patient's words or the plaintext chat id.
-        assert payload.text == @reply
+        # security-audit-run-2 S2: a pointer to the encrypted reply,
+        # never the reply text, the patient's words or the plaintext chat id.
+        assert dead_letter.message_id == reply(patient).id
+        assert payload.message_id == dead_letter.message_id
+        refute Map.has_key?(payload, :text)
+        refute inspect(payload) =~ @reply
+
+        refute inspect(Repo.query!("SELECT * FROM foundation_outbound_dead_letters").rows) =~
+                 @reply
+
         refute inspect(payload) =~ "#{@chat_id}"
         refute inspect(dead_letter) =~ "#{@chat_id}"
         refute inspect(payload) =~ "hola"
@@ -592,7 +599,9 @@ defmodule Alethea.Jobs.TelegramMessageWorkerIdempotencyTest do
       assert %Message{delivery_state: "ambiguous"} = reply(patient)
       assert [dead_letter] = Repo.all(OutboundDeadLetter)
       assert dead_letter.outcome == "ambiguous"
-      assert_receive {:outbound_dead_letter, %{outcome: "ambiguous", text: @reply}}
+      reply_id = reply(patient).id
+      assert dead_letter.message_id == reply_id
+      assert_receive {:outbound_dead_letter, %{outcome: "ambiguous", message_id: ^reply_id}}
 
       # Still never resent, by the delivery job or by a second sweep.
       assert :ok = run_outbound(job)

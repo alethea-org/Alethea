@@ -41,6 +41,32 @@ defmodule Alethea.Jobs.TelegramBurstReplyWorkerTest do
   # arm/1 — debounce (R1, design AD1)
   # ----------------------------------------------------------------
 
+  # ----------------------------------------------------------------
+  # Queue isolation (security audit run-2, S4): LLM-bound burst replies
+  # must never hold the telegram_inbound slots that crisis intake needs.
+  # ----------------------------------------------------------------
+
+  describe "queue" do
+    test "runs on its own configured queue, not telegram_inbound" do
+      queue = TelegramBurstReplyWorker.__opts__()[:queue]
+
+      assert queue == :telegram_reply
+      refute queue == :telegram_inbound
+
+      queues = Application.fetch_env!(:alethea, Oban)[:queues]
+      assert queues[:telegram_reply] > 0
+    end
+
+    test "an armed burst job is enqueued on telegram_reply" do
+      patient = bind_patient()
+
+      TelegramBurstReplyWorker.arm(arm_args(patient))
+
+      assert [job] = all_enqueued(worker: TelegramBurstReplyWorker)
+      assert job.queue == "telegram_reply"
+    end
+  end
+
   describe "arm/1" do
     test "renews the single scheduled job per patient, replacing scheduled_at strictly later" do
       patient = bind_patient()

@@ -26,7 +26,7 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetterTest do
   @valid_hash String.duplicate("a", 64)
   @valid_attrs %{
     chat_id_hash: @valid_hash,
-    text: "hola, buen día",
+    message_id: "4b0f6a2e-0d7c-4c55-9a7e-5c1f3b2d8e01",
     last_error: "{:rate_limited, 2}",
     attempts: 5,
     failed_at: ~U[2026-06-20 22:00:00Z],
@@ -46,7 +46,7 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetterTest do
                |> Repo.insert()
 
       assert row.chat_id_hash == @valid_hash
-      assert row.text == "hola, buen día"
+      assert row.message_id == "4b0f6a2e-0d7c-4c55-9a7e-5c1f3b2d8e01"
       assert row.last_error == "{:rate_limited, 2}"
       assert row.attempts == 5
       assert %DateTime{} = row.failed_at
@@ -109,15 +109,28 @@ defmodule Alethea.Foundation.Accounts.OutboundDeadLetterTest do
       assert %{chat_id_hash: [_ | _]} = errors_on(changeset)
     end
 
-    test "rejects nil text" do
-      attrs = Map.delete(@valid_attrs, :text)
+    test "never stores a reply body, even when one is passed (security-audit-run-2 S2)" do
+      attrs = Map.put(@valid_attrs, :text, "hola, buen día")
 
-      assert {:error, changeset} =
+      assert {:ok, row} =
                %OutboundDeadLetter{}
                |> OutboundDeadLetter.changeset(attrs)
                |> Repo.insert()
 
-      assert %{text: [_ | _]} = errors_on(changeset)
+      assert %{rows: [[nil]]} =
+               Repo.query!(
+                 "SELECT text FROM foundation_outbound_dead_letters WHERE id = $1",
+                 [Ecto.UUID.dump!(row.id)]
+               )
+    end
+
+    test "accepts a dead letter without a message reference (untracked sends)" do
+      assert {:ok, row} =
+               %OutboundDeadLetter{}
+               |> OutboundDeadLetter.changeset(Map.delete(@valid_attrs, :message_id))
+               |> Repo.insert()
+
+      assert row.message_id == nil
     end
 
     test "rejects nil last_error" do

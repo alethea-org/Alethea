@@ -341,8 +341,10 @@ defmodule AletheaJobs.SessionTimeoutWorkerTest do
       Repo.all(from j in Oban.Job, where: j.worker == "Alethea.Jobs.TelegramOutboundWorker")
     end
 
+    # Through the context reader: the narrative is stored encrypted under
+    # the patient DEK and only the reader decrypts it.
     defp session_summaries(patient) do
-      Repo.all(from(s in Summary, where: s.patient_id == ^patient.id))
+      Alethea.Clinical.list_session_summaries(patient.id, ~U[1970-01-01 00:00:00Z])
     end
 
     test "a disabled analyzer is not an error: summary and goodbye complete, no trends recorded",
