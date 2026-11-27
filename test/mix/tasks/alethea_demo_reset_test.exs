@@ -199,7 +199,6 @@ defmodule Mix.Tasks.Alethea.Demo.ResetTest do
     Repo.insert!(%Alethea.Foundation.Accounts.OutboundDeadLetter{
       patient_id: foundation_patient.id,
       chat_id_hash: String.duplicate("a", 64),
-      text: "synthetic",
       last_error: "synthetic",
       attempts: 1,
       failed_at: now,

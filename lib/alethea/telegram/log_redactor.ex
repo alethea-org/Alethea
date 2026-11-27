@@ -20,7 +20,7 @@ defmodule Alethea.Telegram.LogRedactor do
   This module centralises the "first 8 chars" rule. Previously each
   worker computed it inline as `String.slice(chat_id_hash, 0, 8)`
   (see `TelegramMessageWorker.process_bound_message/6` and
-  `TelegramOutboundWorker.dead_letter_and_broadcast/6`). Centralising
+  `TelegramOutboundWorker.dead_letter_and_broadcast/7`). Centralising
   here means:
 
     - The prefix length lives in ONE place. Changing it from 8 to 6
