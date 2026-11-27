@@ -131,6 +131,7 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
   @jitter_ratio 0.25
   @send_started_key "send_started"
   @sealed_fields [:chat_id, :body]
+  @deliverable_statuses ~w(active fired)
 
   @doc """
   Builds the job changeset with `chat_id` and `body` sealed (see
@@ -359,14 +360,15 @@ defmodule Alethea.Jobs.TelegramOutboundWorker do
             nil ->
               {:skip, "trigger_missing"}
 
-            %Alethea.Triggers.Trigger{status: "inactive"} ->
-              {:skip, "trigger_inactive"}
+            # Allowlist (security-audit-run-2 S5): only an `active` or
+            # `fired` trigger that is not archived may deliver. Every other
+            # status (inactive, paused_by_crisis, paused_by_delivery_failures,
+            # paused_by_patient, and any status added later) suppresses.
+            %Alethea.Triggers.Trigger{status: status} when status not in @deliverable_statuses ->
+              {:skip, "trigger_#{status}"}
 
-            %Alethea.Triggers.Trigger{status: "paused_by_crisis"} ->
-              {:skip, "trigger_paused_by_crisis"}
-
-            %Alethea.Triggers.Trigger{status: "paused_by_delivery_failures"} ->
-              {:skip, "trigger_paused_by_delivery_failures"}
+            %Alethea.Triggers.Trigger{archived_at: %DateTime{}} ->
+              {:skip, "trigger_archived"}
 
             %Alethea.Triggers.Trigger{approved_text: nil} ->
               {:skip, "trigger_unapproved"}

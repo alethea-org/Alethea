@@ -633,6 +633,118 @@ defmodule Alethea.Jobs.TriggerDeliveryLifecycleTest do
     end
   end
 
+  describe "TelegramOutboundWorker delivers only for active or fired, unarchived triggers (security-audit-run-2 S5)" do
+    defp pending_trigger_message(patient, enc_text, attrs) do
+      trigger =
+        %Trigger{}
+        |> Trigger.changeset(
+          Map.merge(
+            %{
+              patient_id: patient.legacy_patient.id,
+              professional_id: patient.legacy_patient.professional_id,
+              instruction: enc_text,
+              draft_message: enc_text,
+              approved_text: enc_text,
+              scheduled_at: DateTime.utc_now() |> DateTime.truncate(:second),
+              timezone: "America/Santiago",
+              schedule_type: "once",
+              status: "active",
+              approval_revision: 1
+            },
+            attrs
+          )
+        )
+        |> Repo.insert!()
+
+      message =
+        %Message{}
+        |> Message.changeset(%{
+          patient_id: patient.legacy_patient.id,
+          direction: "outbound",
+          behavior_type: "spontaneous",
+          encrypted_content: enc_text,
+          timestamp: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+        |> Ecto.Changeset.put_change(:trigger_id, trigger.id)
+        |> Repo.insert!()
+
+      Repo.update_all(from(m in Message, where: m.id == ^message.id),
+        set: [delivery_state: "pending"]
+      )
+
+      {trigger, message}
+    end
+
+    defp perform_trigger_delivery(trigger, message) do
+      TelegramOutboundWorker.perform(%Oban.Job{
+        args: %{
+          "trigger_id" => trigger.id,
+          "message_id" => message.id,
+          "lane" => "trigger",
+          "approval_revision" => 1
+        },
+        attempt: 1,
+        priority: 0
+      })
+    end
+
+    test "a pending message is not sent after the patient paused the trigger with /pausa",
+         %{patient: patient, enc_text: enc_text} do
+      {trigger, message} = pending_trigger_message(patient, enc_text, %{})
+
+      assert {:ok, 1} =
+               Alethea.Triggers.pause_active_triggers_for_patient(patient.legacy_patient.id)
+
+      assert Repo.get!(Trigger, trigger.id).status == "paused_by_patient"
+
+      assert :ok = perform_trigger_delivery(trigger, message)
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, message.id).delivery_state == "pending"
+    end
+
+    test "a pending message of a fired one-shot is not sent after the trigger was archived",
+         %{patient: patient, enc_text: enc_text} do
+      {trigger, message} = pending_trigger_message(patient, enc_text, %{status: "fired"})
+
+      professional =
+        Repo.get!(Alethea.Accounts.Professional, patient.legacy_patient.professional_id)
+
+      assert {:ok, archived} =
+               Alethea.Triggers.archive_trigger(
+                 professional,
+                 patient.legacy_patient.id,
+                 trigger.id
+               )
+
+      assert archived.status == "fired"
+      assert %DateTime{} = archived.archived_at
+
+      assert :ok = perform_trigger_delivery(trigger, message)
+
+      assert Fake.sends() == []
+      assert Repo.get!(Message, message.id).delivery_state == "pending"
+    end
+
+    test "a fired, unarchived one-shot still delivers", %{patient: patient, enc_text: enc_text} do
+      {trigger, message} = pending_trigger_message(patient, enc_text, %{status: "fired"})
+
+      assert :ok = perform_trigger_delivery(trigger, message)
+
+      assert [%{chat_id: @chat_id, text: "Mensaje proactivo"}] = Fake.sends()
+      assert Repo.get!(Message, message.id).delivery_state == "sent"
+    end
+
+    test "an active trigger still delivers", %{patient: patient, enc_text: enc_text} do
+      {trigger, message} = pending_trigger_message(patient, enc_text, %{})
+
+      assert :ok = perform_trigger_delivery(trigger, message)
+
+      assert [%{chat_id: @chat_id, text: "Mensaje proactivo"}] = Fake.sends()
+      assert Repo.get!(Message, message.id).delivery_state == "sent"
+    end
+  end
+
   describe "Trigger delivery failures and pause lifecycle (#445)" do
     alias Alethea.Accounts.AuditLog
     alias Alethea.Foundation.Accounts.OutboundDeadLetter
